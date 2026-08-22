@@ -136,6 +136,8 @@ PAGE = r'''<!doctype html>
     .openai-card { max-width: 620px; }
     .openai-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
     .openai-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .topbar-version { margin-right: 14px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: transparent; color: #cbd5e5; padding: 5px 12px; font-size: 12px; font-weight: 700; }
+    .topbar-version:hover { color: white; border-color: rgba(255,255,255,.45); }
     .settings-footer { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
     .settings-error { flex: 1; margin: 0; color: var(--red); font-size: 13px; }
     .help-shell { display: grid; gap: 14px; padding-bottom: 30px; }
@@ -239,6 +241,7 @@ PAGE = r'''<!doctype html>
       <button type="button" data-page="help">Help</button>
       <button type="button" data-page="legal">Legal</button>
     </nav>
+    <button type="button" class="topbar-version" id="update-open" title="Version and updates"><span id="app-version">…</span></button>
     <div class="connection"><span class="connection-dot" aria-hidden="true"></span><span>Manager connected</span></div>
   </header>
 
@@ -265,6 +268,7 @@ PAGE = r'''<!doctype html>
       <div class="list-head"><h2>All projects</h2><span class="list-note">One project can be open at a time</span></div>
       <div id="projects" aria-busy="true"><div class="skeleton"><div class="spinner" aria-label="Loading projects"></div></div></div>
       <div class="confidentiality" id="codex-notice" hidden></div>
+
     </section>
 
     <section id="settings-page" hidden>
@@ -303,7 +307,7 @@ PAGE = r'''<!doctype html>
             <li>The app runs on this Mac only and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
             <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
-            <li>The app updates itself when a new version lands, but <strong>never while a project is open</strong>. If an update is waiting, it applies the next time you close or pause the open project.</li>
+            <li>The top bar shows the installed version (for example <strong>v0.1.7</strong>). Click it to open the <strong>Software Update</strong> dialog: it checks this installation's own GitHub origin — nothing is sent anywhere else — and either confirms you are up to date or names the newer version with a <strong>What changed</strong> link to the release notes. <strong>Update now</strong> is always your click: fast-forward only, allowed only when no project is running (paused is fine), and it never touches your projects, boards, or settings.</li>
           </ul>
         </section>
 
@@ -459,6 +463,7 @@ PAGE = r'''<!doctype html>
               <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI or Anthropic account ran out of credit or hit its usage limit. <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
               <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
               <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
+              <tr><td>"Update now" does not appear although a newer version exists</td><td>A project is running. Pause or close it and check again — the app never restarts under running work. If the dialog reports local changes instead, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command.</td></tr>
               <tr><td>Leftover app processes ("ghost shells")</td><td>Run <strong>bash scripts/stop_all.sh</strong> from the installation folder — it stops only that installation's processes and its auto-start service; --list previews first.</td></tr>
               <tr><td>Something else</td><td>The app's log is at ~/Library/Logs/harness-next.log — its last lines usually name the problem.</td></tr>
             </tbody>
@@ -516,6 +521,8 @@ PAGE = r'''<!doctype html>
   </main>
 
   <div id="status" class="notice" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="update-dialog" aria-labelledby="update-dialog-title"><div class="modal"><h2 id="update-dialog-title">Software update</h2><p>Version <strong id="update-installed">…</strong>. The check asks only this installation's own GitHub origin; nothing is sent anywhere else.</p><p class="notice" id="update-status" role="status" aria-live="polite"></p><p id="update-consent" hidden>Updating fast-forwards this installation and restarts the app. Your projects, boards, and settings are not touched.</p><div class="modal-actions"><a id="update-notes" class="button secondary" href="https://github.com/nomorehappypath/nomorehappypath/releases" target="_blank" rel="noopener" hidden>What changed</a><button type="button" class="button secondary" id="update-check">Check again</button><button type="button" class="button" id="update-apply" hidden>Update now</button><button type="button" class="button secondary" id="update-close">Close</button></div></div></dialog>
 
   <dialog id="create-dialog" aria-labelledby="create-title">
     <form class="modal" id="create-form" novalidate>
@@ -770,6 +777,46 @@ PAGE = r'''<!doctype html>
       q('#openai-test').onclick = () => openaiAction('test', () => api('/api/settings/openai-key/test', {method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'}));
       q('#openai-remove').onclick = () => openaiAction('remove', () => api('/api/settings/openai-key', {method: 'DELETE'}));
     }
+    async function loadVersion() {
+      try {
+        const version = (await api('/api/version')).version;
+        q('#app-version').textContent = version;
+        q('#update-installed').textContent = version;
+      } catch (error) { q('#app-version').textContent = 'version'; }
+    }
+    loadVersion();
+    let pendingUpdate = null;
+    async function runUpdateCheck() {
+      const status = q('#update-status'), apply = q('#update-apply'), notes = q('#update-notes'), consent = q('#update-consent');
+      status.textContent = 'Checking this installation\u2019s origin\u2026';
+      apply.hidden = true; notes.hidden = true; consent.hidden = true; pendingUpdate = null;
+      try {
+        const result = await api('/api/update/check', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        status.textContent = result.message;
+        if (result.update_available) {
+          pendingUpdate = result;
+          notes.href = result.release_notes_url; notes.hidden = false;
+          const anyOpen = [...projectsById.values()].some((project) => project.active && !project.paused);
+          if (anyOpen) status.textContent = result.message + ' Close or pause your open project to apply it.';
+          else { apply.hidden = false; consent.hidden = false; }
+        }
+      } catch (error) { status.textContent = error.message; }
+    }
+    q('#update-open').onclick = () => { q('#update-dialog').showModal(); runUpdateCheck(); };
+    q('#update-close').onclick = () => q('#update-dialog').close();
+    q('#update-check').onclick = runUpdateCheck;
+    q('#update-apply').onclick = async () => {
+      if (!pendingUpdate) return;
+      const status = q('#update-status');
+      q('#update-apply').disabled = true;
+      status.textContent = 'Updating and restarting\u2026 this page reloads when the app is back.';
+      try {
+        await api('/api/update/apply', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        const poll = setInterval(async () => {
+          try { await api('/api/version'); clearInterval(poll); window.location.reload(); } catch (error) {}
+        }, 1500);
+      } catch (error) { status.textContent = error.message; q('#update-apply').disabled = false; }
+    };
     let projectsById = new Map();
     const loadedPageVersion = '__PAGE_VERSION__';
     async function refresh() {

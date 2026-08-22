@@ -7,7 +7,8 @@
 set -euo pipefail
 
 source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out="${1:?usage: make_public_release.sh <output-dir> (must not exist)}"
+out="${1:?usage: make_public_release.sh <output-dir> [version] (dir must not exist)}"
+version="${2:-}"
 [[ -e "$out" ]] && { echo "REFUSED: output exists: $out" >&2; exit 1; }
 
 echo "== Gate 0: assemble the standing cut"
@@ -19,6 +20,11 @@ for item in harness web engine tests scripts directives profile.template \
 done
 find "$out" \( -name __pycache__ -o -name .DS_Store -o -name "*.pyc" \) -prune -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$out/web/node_modules" 2>/dev/null || true
+
+if [[ -n "$version" ]]; then
+  printf '%s\n' "$version" > "$out/VERSION"
+  echo "   stamped VERSION=$version"
+fi
 
 echo "== Gate 1: provenance/decoder refusal"
 if find "$out" -iname "*provenance*" | grep -q .; then
