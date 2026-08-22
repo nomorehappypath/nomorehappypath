@@ -29,6 +29,13 @@ OPENAI_PROVIDER = "openai"
 SECRET_MAX_BYTES = 512
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$")
 PROVIDER_SEARCH_DIRECTORIES = (
+    # User-level installers first, the way a login shell orders PATH: Claude
+    # Code's official installer targets ~/.local/bin, which no launchd PATH
+    # and no system prefix contains. The app must find CLIs the way the owner
+    # installed them - without a login shell's profile or a process restart -
+    # and the owner's deliberate user-level install outranks a system copy.
+    os.path.expanduser("~/.local/bin"),
+    os.path.expanduser("~/bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",

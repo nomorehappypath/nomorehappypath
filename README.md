@@ -64,7 +64,8 @@ cd nomorehappypath && bash install.sh
 The installer checks every requirement above, tells you plainly what is
 missing and where to get it, then either installs the auto-start service or
 runs once in the foreground — your choice. `bash install.sh --uninstall`
-removes the service. Or skip the installer entirely:
+removes the service; `bash scripts/stop_all.sh` stops every process of this
+installation (and only this one) — `--list` shows what it would stop. Or skip the installer entirely:
 
 ```bash
 python3 harness/project_manager.py   # opens Mission Control on 127.0.0.1:8740

@@ -56,3 +56,37 @@ class InstallScriptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopAllScriptTests(unittest.TestCase):
+    SCRIPT = ROOT / "scripts" / "stop_all.sh"
+
+    def test_script_parses_and_has_help(self):
+        self.assertEqual(subprocess.run(["bash", "-n", str(self.SCRIPT)],
+                                        capture_output=True, timeout=10).returncode, 0)
+        completed = subprocess.run(["bash", str(self.SCRIPT), "--help"],
+                                   capture_output=True, text=True, timeout=10)
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("--list", completed.stdout)
+
+    def test_list_mode_stops_nothing_and_scopes_by_this_installation(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            completed = subprocess.run(
+                ["bash", str(self.SCRIPT), "--list"], capture_output=True,
+                text=True, timeout=15, env={"PATH": "/usr/bin:/bin", "HOME": home},
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(str(ROOT), completed.stdout, "must announce ITS installation path")
+        self.assertNotIn("force-stopped", completed.stdout)
+
+    def test_stop_run_with_nothing_running_touches_nothing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            completed = subprocess.run(
+                ["bash", str(self.SCRIPT)], capture_output=True, text=True,
+                timeout=15, env={"PATH": "/usr/bin:/bin", "HOME": home},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("untouched", completed.stdout)
+            self.assertFalse((Path(home) / "Library" / "LaunchAgents").exists())

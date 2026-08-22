@@ -454,6 +454,8 @@ PAGE = r'''<!doctype html>
               <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
               <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes.</td></tr>
               <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
+              <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
+              <tr><td>Leftover app processes ("ghost shells")</td><td>Run <strong>bash scripts/stop_all.sh</strong> from the installation folder — it stops only that installation's processes and its auto-start service; --list previews first.</td></tr>
               <tr><td>Something else</td><td>The app's log is at ~/Library/Logs/harness-next.log — its last lines usually name the problem.</td></tr>
             </tbody>
           </table>

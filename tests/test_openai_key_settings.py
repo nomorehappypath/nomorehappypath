@@ -796,3 +796,34 @@ class RenderedUnsafeKeyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderUserDirResolutionTests(unittest.TestCase):
+    """A CLI installed only in a user-level dir is found without any shell PATH.
+
+    First public-install field defect: Claude Code's installer targets
+    ~/.local/bin; the console found it via the zsh profile, the app did not.
+    """
+
+    def test_cli_in_user_local_bin_is_found_with_a_launchd_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            local_bin = home / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            fake = local_bin / "claude"
+            fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            with mock.patch.dict(os.environ, {}, clear=False), \
+                 mock.patch("os.path.expanduser",
+                            side_effect=lambda p: str(home) + p[1:] if p.startswith("~") else p):
+                import importlib
+                from harness import global_settings as gs
+                importlib.reload(gs)
+                try:
+                    found = gs.provider_executable(
+                        "claude",
+                        source_environment={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                    )
+                finally:
+                    importlib.reload(gs)
+            self.assertEqual(found, str(fake), "user-level install dir not searched")
