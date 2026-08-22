@@ -27,6 +27,18 @@ SECRETS_DIRECTORY = "secrets"
 OPENAI_API_KEY_FILENAME = "openai_api_key"
 OPENAI_PROVIDER = "openai"
 SECRET_MAX_BYTES = 512
+CONNECTION_TEST_TIMEOUT_SECONDS = 90.0
+CONNECTION_TEST_PROMPT = "Reply with the single word: ready"
+# Signals a CLI emits when the account or the CLI build cannot run the model.
+MODEL_UNAVAILABLE_SIGNALS = (
+    "requires a newer version",
+    "model not found",
+    "unknown model",
+    "does not have access",
+    "invalid_request_error",
+    "unsupported model",
+    "model_not_found",
+)
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$")
 PROVIDER_SEARCH_DIRECTORIES = (
     # User-level installers first, the way a login shell orders PATH: Claude
@@ -525,10 +537,16 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
         raise ValueError(f"{provider.title()} does not support '{effort}'. Choose {choices}.")
     configured = os.environ.get(control.PROVIDERS[provider]["binary_env"], provider)
     executable = provider_executable(provider)
+    # A --help probe exits 0 whatever model is named: it proves the flags parse,
+    # never that the model RUNS. That false green let an older Codex CLI pass
+    # this test and then fail every real task with HTTP 400. The test now makes
+    # the smallest possible REAL request through the CLI the agents will use.
     command = (
-        [executable, "--model", model, "-c", f"model_reasoning_effort={effort}", "--help"]
+        [executable, "exec", "--model", model, "-c", f"model_reasoning_effort={effort}",
+         "--skip-git-repo-check", CONNECTION_TEST_PROMPT]
         if executable and provider == "codex"
-        else [executable, "--model", model, "--effort", effort, "--help"] if executable else []
+        else [executable, "--model", model, "-p", CONNECTION_TEST_PROMPT]
+        if executable else []
     )
     tested_at = _now()
     if not executable:
@@ -541,7 +559,7 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
     try:
         completed = subprocess.run(
             command, cwd=str(Path(workspace).resolve()), capture_output=True, text=True,
-            timeout=10, env=provider_environment(executable),
+            timeout=CONNECTION_TEST_TIMEOUT_SECONDS, env=provider_environment(executable),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         message = f"{provider.title()} CLI could not be started: {error}"
@@ -550,9 +568,20 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
             "tested_at": tested_at, "message": message,
         })
         raise ValueError(message) from error
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "the CLI rejected its startup options").strip().splitlines()[-1]
-        message = f"{provider.title()} CLI rejected model {model} or effort {effort}: {detail}"
+    output = f"{completed.stdout}\n{completed.stderr}"
+    unavailable = any(signal in output.lower() for signal in MODEL_UNAVAILABLE_SIGNALS)
+    if completed.returncode != 0 or unavailable:
+        detail = (completed.stderr or completed.stdout or "the CLI rejected the request").strip()
+        detail = detail.splitlines()[-1] if detail.splitlines() else detail
+        if unavailable:
+            message = (
+                f"{provider.title()} could not run {model}. This usually means the "
+                f"installed {provider.title()} CLI is older than the model, or your "
+                f"account has no access to it. Update the CLI, or choose a different "
+                f"model above. The CLI said: {detail}"
+            )
+        else:
+            message = f"{provider.title()} CLI rejected model {model} or effort {effort}: {detail}"
         _record_connectivity(home, provider, {
             "ok": False, "model": model, "effort": effort,
             "tested_at": tested_at, "message": message,
@@ -561,7 +590,7 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
     result = {
         "ok": True, "provider": provider, "model": model, "effort": effort,
         "tested_at": tested_at,
-        "message": f"{provider.title()} is installed and accepts model {model} with {effort} effort. No task was launched or billed.",
+        "message": f"{provider.title()} ran a one-word test with model {model} at {effort} effort and answered. This was a real request on your own account and costs a fraction of a cent.",
     }
     recorded = _record_connectivity(
         home, provider, {key: value for key, value in result.items() if key != "provider"},

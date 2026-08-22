@@ -356,6 +356,7 @@ PAGE = r'''<!doctype html>
         <section class="help-section" aria-labelledby="help-go-title">
           <h2 id="help-go-title">When To Say Go Ahead</h2>
           <ol class="help-steps">
+            <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once.</li>
             <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long.</li>
             <li>The conversation happens in the <strong>Delivery agent's terminal window</strong> — the visible CLI shell that opened when you started the agent, not in Mission Control. Delivery answers there with final agreed requirements or questions. Read this carefully; it becomes the task contract.</li>
             <li>Type <strong>go ahead</strong> in that same terminal window, and only when the requirements match what you want built and the exclusions are acceptable.</li>
@@ -454,6 +455,7 @@ PAGE = r'''<!doctype html>
               <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
               <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes.</td></tr>
               <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
+              <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
               <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
               <tr><td>Leftover app processes ("ghost shells")</td><td>Run <strong>bash scripts/stop_all.sh</strong> from the installation folder — it stops only that installation's processes and its auto-start service; --list previews first.</td></tr>
               <tr><td>Something else</td><td>The app's log is at ~/Library/Logs/harness-next.log — its last lines usually name the problem.</td></tr>

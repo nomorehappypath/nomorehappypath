@@ -284,9 +284,11 @@ class ProjectManagerTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertTrue(settings["connectivity"]["codex"]["ok"])
         arguments = capture.read_text().splitlines()
-        self.assertEqual(arguments[:2], ["--model", "gpt-5.6-terra"])
+        # A real run, not a --help probe: --help exits 0 for any model name and
+        # once let an older CLI pass this test then fail every task (field defect).
+        self.assertEqual(arguments[:3], ["exec", "--model", "gpt-5.6-terra"])
         self.assertIn("model_reasoning_effort=xhigh", arguments)
-        self.assertIn("--help", arguments)
+        self.assertNotIn("--help", arguments)
 
         with patch.dict(os.environ, {"HARNESS_CODEX_BIN": str(self.base / "missing")}, clear=False):
             with self.served() as (base, _):
@@ -1219,6 +1221,8 @@ class HelpPageCoverageTests(unittest.TestCase):
             "BUILT_WITH.md",
             "A task needs all three roles running",
             "Talking To The Agents Directly",
+            "asks whether you trust that folder",
+            "requires a newer version",
             "Why It Takes Its Time (No Happy Path)",
             "Cross-checking by a competing vendor",
             "Ledgers.",
