@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, cto, control
+from tests.requirements_support import agreed_requirements
 
 
 class EndToEndHarnessTests(unittest.TestCase):
@@ -53,7 +54,7 @@ class EndToEndHarnessTests(unittest.TestCase):
             developer = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
             board.record_owner_direction(root, session["id"], "Prove a clean end-to-end harness release")
             board.begin_task(root, developer["id"], "TASK-E2E")
-            board.record_requirement_confirmation(root, developer["id"], "Final agreed requirements: prove the clean release flow end to end.")
+            agreed_requirements(root, developer["id"], "Final agreed requirements: prove the clean release flow end to end.")
             board.define_delivery_plan(root, developer["id"], "atomic", "One cohesive end-to-end release proof")
             review = board.request_review(
                 root, developer["id"], str(ledger.relative_to(root)),

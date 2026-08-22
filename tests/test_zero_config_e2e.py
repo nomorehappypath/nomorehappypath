@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, cto, control
+from tests.requirements_support import agreed_requirements
 
 
 class ZeroConfigThreeCliE2E(unittest.TestCase):
@@ -34,7 +35,7 @@ class ZeroConfigThreeCliE2E(unittest.TestCase):
             delivery = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
             board.record_owner_direction(root, session["id"], "Deliver without owner configuration")
             board.begin_task(root, delivery["id"], "TASK-ZERO")
-            board.record_requirement_confirmation(root, delivery["id"], "Final agreed requirements: deliver the zero-configuration release flow and verify it end to end.")
+            agreed_requirements(root, delivery["id"], "Final agreed requirements: deliver the zero-configuration release flow and verify it end to end.")
             reviewer = board.register(root, "qa", "REVIEW-QUEUE", vendor="Anthropic")
             board.define_delivery_plan(root, delivery["id"], "chunked", "Core and UX are bounded reviewable outcomes")
             board.declare_chunks(root, delivery["id"], [("core", "focused core behavior"), ("ux", "focused visible behavior")])

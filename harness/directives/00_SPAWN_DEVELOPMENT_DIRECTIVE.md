@@ -47,9 +47,12 @@ owner’s approval, rationale, and date.
 ## Proportional product decomposition
 
 Before selecting a delivery mode, Product Management must clarify the request
-with the owner when needed. After the owner says “go ahead,” record the final
-requirements confirmation with `confirm-requirements`; preserve the original
-direction unchanged and archive the confirmation directly after it.
+with the owner when needed. When the requirements are agreed, file them with
+`propose-requirements` and WAIT for the owner's recorded Go ahead on the
+board — terminal prose is not authorization. On the [OWNER DECISION] GO AHEAD
+message, record the accepted text verbatim with `confirm-requirements`; on
+MODIFY, revise and file a new proposal. Preserve the original direction
+unchanged and archive the confirmation directly after it.
 
 Before implementation, Product Management records exactly one delivery mode:
 

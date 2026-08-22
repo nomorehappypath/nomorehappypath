@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control, cto
+from tests.requirements_support import agreed_requirements
 
 
 class AdaptivePlanningSimulationTests(unittest.TestCase):
@@ -32,7 +33,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         board.record_owner_direction(self.root, session["id"], objective)
         board.begin_task(self.root, agent["id"], task)
         contract.create_contract(self.root, task, objective, ["delivery"])
-        board.record_requirement_confirmation(self.root, agent["id"], f"Final agreed requirements for {task}: deliver the requested objective and verify all relevant scenarios.")
+        agreed_requirements(self.root, agent["id"], f"Final agreed requirements for {task}: deliver the requested objective and verify all relevant scenarios.")
         return agent
 
     def ledger(self, name: str, reviewer: bool = False) -> str:
@@ -109,7 +110,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         self.assertEqual(confirmation["version"], 1)
         self.assertEqual(confirmation["owner_direction"], "OWNER DIRECTION — REQUIREMENTS-CONFIRMATION")
         with self.assertRaisesRegex(ValueError, "already confirmed"):
-            board.record_requirement_confirmation(self.root, agent["id"], "A silent scope rewrite")
+            agreed_requirements(self.root, agent["id"], "A silent scope rewrite")
         self.assertTrue(any(event["kind"] == "requirements_confirmed" for event in state["events"]))
 
     def test_delivery_plan_is_blocked_until_owner_go_ahead_confirmation(self):
@@ -122,7 +123,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "final requirements confirmation"):
             board.define_delivery_plan(self.root, agent["id"], "atomic", "Must not start before agreement")
         self.assertNotIn("WAIT-FOR-GO-AHEAD", board.snapshot(self.root)["delivery_plans"])
-        board.record_requirement_confirmation(self.root, agent["id"], "Final agreed requirements: proceed with the exact owner direction and verify it end to end.")
+        agreed_requirements(self.root, agent["id"], "Final agreed requirements: proceed with the exact owner direction and verify it end to end.")
         plan = board.define_delivery_plan(self.root, agent["id"], "atomic", "One cohesive agreed objective")
         self.assertEqual(plan["mode"], "atomic")
 
@@ -132,7 +133,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         with board.locked_state(self.root) as state:
             state["agents"][agent["id"]].update({"task": "NO-OWNER-DIRECTION", "status": "task_defined"})
         with self.assertRaisesRegex(ValueError, "preserved original owner direction"):
-            board.record_requirement_confirmation(self.root, agent["id"], "Final agreed requirements without an owner request")
+            agreed_requirements(self.root, agent["id"], "Final agreed requirements without an owner request")
 
     def test_real_board_cli_records_application_plan_and_subtasks(self):
         agent = self.delivery("CLI-APP")

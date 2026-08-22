@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from harness import board, board_viewer, contract, control
 from tests.environment_support import require_loopback
+from tests.requirements_support import agreed_requirements
 
 
 class BoardViewerTests(unittest.TestCase):
@@ -674,7 +675,7 @@ globalThis.fetch=async path=>{calls.push(path);return{ok:true,json:async()=>({})
             evidence.write_text("command: python3 -m unittest\nresult: PASS\n")
             contract.add_evidence(root, task, "live viewer integration", [evidence])
             board.begin_task(root, live_agent["id"], task)
-            board.record_requirement_confirmation(root, live_agent["id"], "Final agreed requirements: prove the live viewer objective, preserve task lineage, and verify the complete workflow.")
+            agreed_requirements(root, live_agent["id"], "Final agreed requirements: prove the live viewer objective, preserve task lineage, and verify the complete workflow.")
             board.define_delivery_plan(root, live_agent["id"], "chunked", "Four bounded viewer risks require separate review")
             board.declare_chunks(root, live_agent["id"], [
                 ("directive-and-status-ui", "directive and status"),
@@ -842,7 +843,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
             board.record_owner_direction(root, session["id"], direction)
             board.begin_task(root, agent["id"], "VIEW-1")
             contract.create_contract(root, "VIEW-1", direction, ["viewer progress"])
-            board.record_requirement_confirmation(root, agent["id"], "Final agreed requirements: show clear delivery progress and preserve the owner direction.")
+            agreed_requirements(root, agent["id"], "Final agreed requirements: show clear delivery progress and preserve the owner direction.")
             board.task_brief(root, agent["id"], "I will make progress easy to understand.", "Preparing the first reviewable change.")
             data = board_viewer.dashboard_payload(root)
             html = board_viewer.rendered_page()
@@ -1174,7 +1175,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
                 self.assertEqual(moved[0]["text"], "Go ahead, and preserve the screenshot requirement.")
                 self.assertEqual(moved[0]["task"], "VIEWER-COMPOSER-TASK")
                 contract.create_contract(root, "VIEWER-COMPOSER-TASK", "Use the viewer composer for this complete task.", ["delivery"])
-                board.record_requirement_confirmation(root, agent["id"], "Final agreed requirements: use the composer and test the full task.")
+                agreed_requirements(root, agent["id"], "Final agreed requirements: use the composer and test the full task.")
                 body, content_type = multipart({"message_type": "clarification", "text": "Add a provider-swap edge case."}, [("attachments", "notes.txt", "text/plain", b"EDGE")])
                 request = Request(base + f"/api/agents/{agent['id']}/owner-message", data=body, headers={"Content-Type": content_type}, method="POST")
                 response = json.loads(urlopen(request, timeout=3).read())
@@ -1383,7 +1384,7 @@ process.stdout.write(JSON.stringify(nodes.agents.children.map(row=>row.dataset.a
             board.record_owner_direction(root, session["id"], original)
             board.begin_task(root, agent["id"], "REQUIREMENTS-VIEW")
             contract.create_contract(root, "REQUIREMENTS-VIEW", original, ["delivery"])
-            board.record_requirement_confirmation(root, agent["id"], "Final agreed requirements: include the clarified behavior and its edge cases.")
+            agreed_requirements(root, agent["id"], "Final agreed requirements: include the clarified behavior and its edge cases.")
             data = board_viewer.dashboard_payload(root)
             cards = self.rendered_task_cards(data["state"], data["contracts"], data["owner_directions"], data["live_tasks"], data["requirement_confirmations"])
             html = cards[0]["html"]
@@ -1476,7 +1477,7 @@ process.stdout.write(JSON.stringify(nodes.agents.children.map(row=>row.dataset.a
             board.record_owner_direction(root, session["id"], "Keep accepted work live through CTO release checks.")
             board.begin_task(root, agent["id"], "RELEASE-WINDOW")
             contract.create_contract(root, "RELEASE-WINDOW", "Keep accepted work live through CTO release checks.", ["truthful release window"])
-            board.record_requirement_confirmation(root, agent["id"], "Final agreed requirements: keep accepted work live through CTO release checks.")
+            agreed_requirements(root, agent["id"], "Final agreed requirements: keep accepted work live through CTO release checks.")
             with board.locked_state(root) as state:
                 state["agents"][agent["id"]].update({"active": False, "status": "done"})
                 state["archive"].append({"kind": "qa_request", "archived_at": "2026-08-12T12:10:00+00:00", "value": {
@@ -1720,7 +1721,7 @@ process.stdout.write(JSON.stringify(nodes.agents.children.map(row=>row.dataset.a
                 board.record_owner_direction(root, session["id"], direction)
                 board.begin_task(root, agent["id"], task)
                 contract.create_contract(root, task, direction, ["history directive"])
-                board.record_requirement_confirmation(root, agent["id"], f"Final agreed requirements for {task}: preserve the directive and archive the confirmed scope.")
+                agreed_requirements(root, agent["id"], f"Final agreed requirements for {task}: preserve the directive and archive the confirmed scope.")
                 with board.locked_state(root) as state:
                     state["agents"][agent["id"]].update({"active": False, "status": "done"})
                     state["task_chunks"][task] = {"history": {"status": "passed", "description": "history directive"}}

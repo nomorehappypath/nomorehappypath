@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control, repair_package
+from tests.requirements_support import agreed_requirements
 
 
 class RepairPackageTests(unittest.TestCase):
@@ -75,7 +76,7 @@ class RepairPackageBoardIntegrationTests(unittest.TestCase):
         )
         board.record_owner_direction(self.root, session["id"], "Repair the grouped findings")
         board.begin_task(self.root, self.delivery["id"], "REPAIR-TASK")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, self.delivery["id"], "Repair every grouped finding and preserve review depth.",
         )
         contract.create_contract(

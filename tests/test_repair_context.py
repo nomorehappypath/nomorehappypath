@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control, execution_identity as xid
+from tests.requirements_support import agreed_requirements
 
 
 HEADER = ("| ID | What was tested | Scenario | Simulation command | Expected system response | "
@@ -51,7 +52,7 @@ class RepairContextTests(unittest.TestCase):
                              vendor="OpenAI", session_id=session["id"])
         board.record_owner_direction(self.root, session["id"], "Ship repair flow")
         board.begin_task(self.root, dev["id"], "TASK-R")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, dev["id"], "Final agreed requirements: ship the repair flow with evidence.")
         board.define_delivery_plan(self.root, dev["id"], self._mode, "One cohesive task")
         return dev

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 class StagedReviewAuthoringTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class StagedReviewAuthoringTests(unittest.TestCase):
         )
         board.record_owner_direction(self.root, session["id"], "Build the staged review fixture")
         board.begin_task(self.root, self.delivery["id"], "STAGED-REVIEW")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, self.delivery["id"],
             "Review work may overlap Delivery tests, but review execution and verdict remain independent.",
         )

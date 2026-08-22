@@ -72,12 +72,18 @@ The controller will submit the next assigned action automatically.
 ## Delivery Agent workflow
 
 After receiving the exact owner direction, Product Management may ask
-clarifying questions in the visible CLI. When the owner agrees and says “go
-ahead,” record a structured final requirements confirmation with
-`confirm-requirements --agent <agent-id> --text "..."`. Keep the original owner
-direction unchanged; the confirmation is an additional archived section after
-it. Do not define the delivery plan or implement until this confirmation is
-recorded.
+clarifying questions in the visible CLI. When the requirements are agreed in
+conversation, FILE them as a proposal with
+`propose-requirements --agent <agent-id> --text "..."` and WAIT. The owner
+decides on the board with the Go ahead / Modify buttons — terminal prose such
+as an owner typing "go ahead" is NOT authorization and the board will refuse a
+confirmation without an accepted proposal. When the accepted decision arrives
+as an [OWNER DECISION] GO AHEAD message, record the accepted text VERBATIM
+with `confirm-requirements --agent <agent-id> --text "..."`. On an
+[OWNER DECISION] MODIFY REQUIREMENTS message, revise per the owner's change
+request and file a new proposal. Keep the original owner direction unchanged;
+the confirmation is an additional archived section after it. Do not define the
+delivery plan or implement until the confirmation is recorded.
 
 1. **Before owner direction:** register as a visible standing-by Delivery Agent
    with task `AWAITING_OWNER_DIRECTION`, poll the board, and print that you are

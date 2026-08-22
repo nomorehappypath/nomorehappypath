@@ -3067,6 +3067,106 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
     return {"message": message, "event": event}
 
 
+def record_requirement_proposal(root: Path, agent_id: str, text: str) -> dict[str, Any]:
+    """File the final agreed requirements as a PROPOSAL awaiting the owner.
+
+    The owner's go-ahead is a contract signature; it must be a recorded board
+    decision, not terminal prose. The Delivery agent files the agreed text
+    here, the owner decides on the board (Go ahead / Modify), and only an
+    accepted proposal can be confirmed as the contract.
+    """
+    text = contract.normalize_owner_direction(text)
+    if not text or len(text) > 12000:
+        raise ValueError("the requirements proposal is required and must be 12000 characters or fewer")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION or not agent.get("active"):
+            raise ValueError("only an active Delivery Agent with a task may propose requirements")
+        task = agent["task"]
+        if state.get("requirement_confirmations", {}).get(task):
+            raise ValueError("final requirements are already confirmed for this task; start a new owner-directed task for scope changes")
+        if state.get("delivery_plans", {}).get(task) or _task_requests(state, task):
+            raise ValueError("requirements must be proposed before planning or review work starts")
+        direction = owner_direction_for_task(state, agent_id, task)
+        if not direction:
+            raise ValueError("cannot propose requirements without the preserved original owner direction")
+        existing = state.setdefault("requirement_proposals", {}).get(task)
+        if existing and existing.get("status") == "awaiting_owner":
+            raise ValueError("a requirements proposal is already awaiting the owner's decision")
+        if existing and existing.get("status") == "accepted":
+            raise ValueError("the owner already accepted a proposal; record it with confirm-requirements")
+        version = int(existing.get("version", 0)) + 1 if existing else 1
+        proposal = {
+            "task": task, "agent_id": agent_id, "text": text,
+            "owner_direction": direction, "version": version,
+            "proposed_at": now(), "status": "awaiting_owner",
+        }
+        state["requirement_proposals"][task] = proposal
+        agent.update({"status": "requirements_proposed", "status_note": "final requirements proposed; waiting for the owner's Go ahead on the board", "last_status_at": now()})
+        return _event(state, "requirements_proposed", agent, {
+            "task": task, "version": version,
+            "message": "final agreed requirements filed; the owner decides Go ahead or Modify on the board",
+        })
+
+
+def record_requirements_decision(root: Path, task: str, decision: str, text: str = "") -> dict[str, Any]:
+    """Record the OWNER's decision on a filed requirements proposal.
+
+    "go_ahead" accepts the proposal and tells the Delivery terminal to record
+    the contract. "modify" returns it with the owner's change request, routed
+    to the terminal like a clarification. Both are timestamped board events -
+    the signature half of the contract.
+    """
+    decision = str(decision or "").strip().lower()
+    if decision not in {"go_ahead", "modify"}:
+        raise ValueError("the decision must be go_ahead or modify")
+    text = contract.normalize_owner_direction(text) if text else ""
+    if decision == "modify" and not text:
+        raise ValueError("describe what should change in the requirements")
+    if text and len(text) > 12000:
+        raise ValueError("the change request must be 12000 characters or fewer")
+    session_id = ""
+    routed = ""
+    with locked_state(root) as state:
+        proposal = state.get("requirement_proposals", {}).get(str(task))
+        if not proposal:
+            raise ValueError("no requirements proposal is filed for this task")
+        if proposal.get("status") != "awaiting_owner":
+            raise ValueError("this proposal is not awaiting an owner decision")
+        agent = _require_writable_agent(state, str(proposal.get("agent_id", "")))
+        session_id = str(agent.get("session_id", "")).strip()
+        decided_at = now()
+        if decision == "go_ahead":
+            proposal.update({"status": "accepted", "decided_at": decided_at})
+            routed = (
+                f"[OWNER DECISION] GO AHEAD - the owner accepted your requirements "
+                f"proposal (version {proposal.get('version', 1)}) on the board at {decided_at}. "
+                f"Record the accepted text verbatim with confirm-requirements, then begin delivery."
+            )
+            agent.update({"status": "requirements_accepted", "status_note": "owner accepted the requirements on the board; record the contract and begin", "last_status_at": decided_at})
+        else:
+            proposal.update({"status": "modify_requested", "decided_at": decided_at, "owner_change_request": text})
+            routed = (
+                f"[OWNER DECISION] MODIFY REQUIREMENTS - the owner reviewed your proposal "
+                f"(version {proposal.get('version', 1)}) and requests changes:\n{text}\n"
+                f"Revise, agree the update with the owner if needed, and file a new "
+                f"requirements proposal with propose-requirements."
+            )
+            agent.update({"status": "requirements_change_requested", "status_note": "owner requested requirements changes on the board", "last_status_at": decided_at})
+        event = _event(state, f"requirements_{decision}", agent, {
+            "task": str(task), "version": proposal.get("version", 1),
+            "message": "owner accepted the requirements proposal on the board" if decision == "go_ahead" else "owner requested requirements changes on the board",
+            **({"owner_change_request": text} if text else {}),
+        })
+    if session_id and routed:
+        try:
+            from harness import control
+            control.enqueue_instruction(root, session_id, routed, source=f"owner-requirements-{decision}")
+        except (OSError, ValueError):
+            pass
+    return event
+
+
 def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dict[str, Any]:
     """Persist the final, clarified requirements after the owner says go ahead.
 
@@ -3090,6 +3190,15 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
         existing = state.setdefault("requirement_confirmations", {}).get(task)
         if existing:
             raise ValueError("final requirements are already confirmed for this task; start a new owner-directed task for scope changes")
+        proposal = state.get("requirement_proposals", {}).get(task)
+        if not proposal or proposal.get("status") != "accepted":
+            raise ValueError(
+                "the owner has not accepted a requirements proposal on the board; "
+                "file it with propose-requirements and wait for the owner's Go ahead - "
+                "terminal prose is not authorization"
+            )
+        if contract.normalize_owner_direction(str(proposal.get("text", ""))) != text:
+            raise ValueError("the confirmation must be the accepted proposal text verbatim")
         confirmation = {
             "task": task, "agent_id": agent_id, "text": text,
             "owner_direction": direction, "version": 1,
@@ -8519,6 +8628,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("reconcile-baseline"); p.add_argument("--agent", required=True)
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
+    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("confirm-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("record-finding"); p.add_argument("--task", required=True); p.add_argument("--title", required=True); p.add_argument("--description", required=True); p.add_argument("--evidence", default=""); p.add_argument("--affects-current-task", action="store_true")
     p = sub.add_parser("finding-decision"); p.add_argument("--finding", required=True); p.add_argument("--decision", required=True, choices=["fix", "do_not_fix"])
@@ -8578,6 +8688,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reconcile-baseline": out = reconcile_inherited_baseline(root, args.agent)
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
+        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text)
         elif args.command == "confirm-requirements": out = record_requirement_confirmation(root, args.agent, args.text)
         elif args.command == "record-finding": out = record_finding(root, args.task, args.title, args.description, args.affects_current_task, args.evidence)
         elif args.command == "finding-decision": out = record_finding_decision(root, args.finding, args.decision)

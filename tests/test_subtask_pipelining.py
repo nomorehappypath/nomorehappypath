@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control, execution_identity as xid, git_broker
+from tests.requirements_support import agreed_requirements
 
 
 class SubtaskPipeliningTests(unittest.TestCase):
@@ -41,7 +42,7 @@ class SubtaskPipeliningTests(unittest.TestCase):
         contract.create_contract(
             self.root, "PIPELINE", "Build the pipelined application", ["delivery"],
         )
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, self.delivery["id"],
             "Build and independently verify every declared application subtask.",
         )

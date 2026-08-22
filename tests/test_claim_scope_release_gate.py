@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control, cto
+from tests.requirements_support import agreed_requirements
 
 LEDGER = (
     "| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n"
@@ -45,7 +46,7 @@ class ClaimScopeReleaseGateTests(unittest.TestCase):
                              vendor="OpenAI", session_id=session["id"])
         board.record_owner_direction(self.root, session["id"], direction)
         board.begin_task(self.root, dev["id"], task)
-        board.record_requirement_confirmation(self.root, dev["id"], confirmation)
+        agreed_requirements(self.root, dev["id"], confirmation)
         contract.create_contract(self.root, task, confirmation, ["delivery"])
         ledger = self.root / f"{task}-ledger.md"
         ledger.write_text(LEDGER)

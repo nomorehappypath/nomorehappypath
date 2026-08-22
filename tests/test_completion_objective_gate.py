@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 DIRECTION = ("TASK B — PAUSE/RESUME. The complete owner directive is the file "
@@ -57,7 +58,7 @@ class CompletionObjectiveGateTests(unittest.TestCase):
         # The sanctioned flow always records a confirmation before planning;
         # the confirm=False variants strip it afterwards to simulate a
         # legacy/imported board, which is the only way that state can exist.
-        board.record_requirement_confirmation(
+        agreed_requirements(
             root, dev["id"], "Final agreed requirements: " + objective)
         board.define_delivery_plan(root, dev["id"], "atomic", "One cohesive task")
         qa = board.register(root, "qa", "QA-QUEUE", vendor="Anthropic")

@@ -91,7 +91,7 @@ class ProjectManagerTests(unittest.TestCase):
                 help_page = response.read().decode()
             self.assertIn('id="help-page"', help_page)
             self.assertIn("Create Or Adopt A Project", help_page)
-            self.assertIn("When To Say Go Ahead", help_page)
+            self.assertIn("Agree The Requirements And Say Go Ahead", help_page)
             self.assertIn("showPage(new URLSearchParams(window.location.search).get('page'))", settings_page)
             status, value = self.request(base, "/api/projects")
         self.assertEqual(status, 200)
@@ -1222,6 +1222,9 @@ class HelpPageCoverageTests(unittest.TestCase):
             "A task needs all three roles running",
             "Talking To The Agents Directly",
             "asks whether you trust that folder",
+            "Go ahead — this is the contract",
+            "Agree The Requirements And Say Go Ahead",
+            "files them on the board",
             "requires a newer version",
             "out of credit",
             "The app does not crash",

@@ -444,7 +444,12 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const structureChanges=Array.isArray(facts.plan.structure_changes)?facts.plan.structure_changes.slice(-3):[];
   const changeHistory=structureChanges.map(change=>`<div class="scope-change"><strong>Work added after planning</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc((change.added||[]).join(', '))}</small></div>`).join('');
   const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${facts.subtasks.map(item=>`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div><div class="requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small></div>`:`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request. No implementation or review may begin until you say go ahead and the final requirements are recorded.</div>`;
+  const proposal=(state.requirement_proposals||{})[name]||{};
+  const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?`<div class="requirements-confirmation requirements-proposal"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small><div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">Go ahead — this is the contract</button><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div><p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`
+    :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
+    :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.</div>`
+    :'';
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div><div class="requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small></div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
@@ -902,6 +907,7 @@ function openAgents(state,contracts,sessionItems=[]){
 }
 
 function openOwnerMessageDialog(agentId,type){
+  requirementsModifyTask='';
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -919,7 +925,11 @@ async function submitOwnerMessage(event){
   for(const file of Array.from(el('#owner-message-attachments').files||[]))form.append('attachments',file,file.name);
   const submit=el('#owner-message-submit'); submit.disabled=true; error.textContent='';
   try{
-    await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
+    if(requirementsModifyTask){
+      const task=requirementsModifyTask;
+      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'modify',text:el('#owner-message-text').value});
+      requirementsModifyTask='';
+    }else await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
     el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':'Your clarification and attachments were sent to the current Delivery Agent.'; await refresh();
   }catch(failure){error.textContent=failure.message;}
   finally{submit.disabled=false;}
@@ -1233,6 +1243,32 @@ async function cancelChat(){
 function clearChat(){
   if(chatController)return;
   chatTurns.splice(0);renderChat();el('#project-chat-status').textContent='Conversation cleared. Project facts were not changed.';el('#project-chat-input').focus();
+}
+document.addEventListener('click',async event=>{
+  const go=event.target.closest('[data-req-go]'),mod=event.target.closest('[data-req-modify]');
+  if(!go&&!mod)return;
+  const task=(go||mod).dataset.reqGo||(go||mod).dataset.reqModify;
+  if(go){
+    if(!confirm('Accept these requirements as the task contract? Delivery will record them and begin work.'))return;
+    go.disabled=true;
+    const note=el(`#req-decision-note-${CSS.escape(task)}`);
+    try{
+      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead'});
+      if(note)note.textContent='Recorded. Delivery has been told to record the contract and begin.';
+      await refresh();
+    }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;}
+    return;
+  }
+  openRequirementsModify(task);
+});
+let requirementsModifyTask='';
+function openRequirementsModify(task){
+  requirementsModifyTask=task;
+  el('#owner-message-title').textContent='Modify the requirements';
+  el('#owner-message-help').textContent='Describe what should change in the proposed requirements. Delivery revises them and files a new proposal for your Go ahead. Sent as one complete message.';
+  el('#owner-message-submit').textContent='Send requirements change';
+  el('#owner-message-text').value=''; el('#owner-message-directive-file').value=''; el('#owner-message-attachments').value=''; el('#owner-message-error').textContent=''; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
+  el('#owner-message-dialog').showModal();
 }
 const chatForm=el('#project-chat-form');
 if(chatForm){
@@ -2717,6 +2753,17 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(raw or b"{}")
                     response = board.record_release_decision(root, task, str(data.get("decision", "")), str(data.get("reason", "")))
                     self.send_json(201, {"decision": response}); return
+                req_prefix, req_suffix = "/api/tasks/", "/requirements-decision"
+                if path.startswith(req_prefix) and path.endswith(req_suffix):
+                    task = unquote(path[len(req_prefix):-len(req_suffix)])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the decision payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    event = board.record_requirements_decision(
+                        root, task, str(data.get("decision", "")), str(data.get("text", "")),
+                    )
+                    self.send_json(201, {"decision": event}); return
                 owner_prefix, owner_suffix = "/api/agents/", "/owner-message"
                 if path.startswith(owner_prefix) and path.endswith(owner_suffix):
                     agent_id = unquote(path[len(owner_prefix):-len(owner_suffix)])

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, board_viewer, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 HEADER = (
@@ -54,7 +55,7 @@ class FailedReviewEvidenceDurabilityTests(unittest.TestCase):
         )
         board.record_owner_direction(self.root, session["id"], "Keep failed evidence")
         board.begin_task(self.root, self.dev["id"], "TASK-DUR")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, self.dev["id"],
             "Keep every failed attempt's exact owner-readable evidence.",
         )

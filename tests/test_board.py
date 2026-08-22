@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, board_viewer, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 class BoardTests(unittest.TestCase):
@@ -62,7 +63,7 @@ class BoardTests(unittest.TestCase):
         objective = f"OWNER DIRECTION — {task}"
         board.record_owner_direction(self.root, session["id"], objective)
         board.begin_task(self.root, agent["id"], task)
-        board.record_requirement_confirmation(self.root, agent["id"], f"Final agreed requirements for {task}: preserve the requested delivery and verify it end to end.")
+        agreed_requirements(self.root, agent["id"], f"Final agreed requirements for {task}: preserve the requested delivery and verify it end to end.")
         if create_contract:
             contract.create_contract(self.root, task, objective, ["delivery"])
         return agent
@@ -88,7 +89,7 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(board.snapshot(self.root)["owner_directions"][session["id"]]["text"], "Review the harness from the viewer and preserve the full directive.")
         board.begin_task(self.root, dev["id"], "VIEWER-DIRECTION-TASK")
         contract.create_contract(self.root, "VIEWER-DIRECTION-TASK", "Review the harness from the viewer and preserve the full directive.", ["delivery"])
-        board.record_requirement_confirmation(self.root, dev["id"], "Final agreed requirements: preserve the directive, attachments, and review evidence.")
+        agreed_requirements(self.root, dev["id"], "Final agreed requirements: preserve the directive, attachments, and review evidence.")
         clarification = board.record_owner_message(
             self.root, dev["id"], "Also verify the provider setting with a non-happy-path test.", "clarification",
             [{"filename": "notes.docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "data": b"DOCX-CLARIFICATION"}],
@@ -223,7 +224,7 @@ class BoardTests(unittest.TestCase):
         self.assertIn("product.txt", state["task_baselines"]["EXTERNAL-PRODUCT"]["dirty_files"])
 
         contract.create_contract(self.root, "EXTERNAL-PRODUCT", objective, ["verify product candidate"])
-        board.record_requirement_confirmation(self.root, dev["id"], "Final agreed requirements: verify the external product candidate end to end.")
+        agreed_requirements(self.root, dev["id"], "Final agreed requirements: verify the external product candidate end to end.")
         board.define_delivery_plan(self.root, dev["id"], "atomic", "One cohesive external candidate verification")
         committed = board.broker_stage_commit(
             self.root, dev["id"], ["product.txt"], "candidate",
@@ -741,7 +742,7 @@ class BoardTests(unittest.TestCase):
         begun = board.begin_task(self.root, dev["id"], "OWNER-DIRECTED-TASK")
         self.assertEqual(begun["task"], "OWNER-DIRECTED-TASK")
         contract.create_contract(self.root, "OWNER-DIRECTED-TASK", "OWNER DIRECTION — designed work", ["delivery"])
-        board.record_requirement_confirmation(self.root, dev["id"], "Final agreed requirements: implement the designed owner-directed work and verify it.")
+        agreed_requirements(self.root, dev["id"], "Final agreed requirements: implement the designed owner-directed work and verify it.")
         self.declare_chunks(dev["id"], [("designed", "owner-directed work")])
 
     def test_delivery_can_declare_a_newly_discovered_chunk_without_rewriting_existing_state(self):
@@ -891,7 +892,7 @@ class BoardTests(unittest.TestCase):
         board.record_owner_direction(self.root, session["id"], "OWNER DIRECTION — TASK-ROUTE")
         board.begin_task(self.root, dev["id"], "TASK-ROUTE")
         contract.create_contract(self.root, "TASK-ROUTE", "OWNER DIRECTION — TASK-ROUTE", ["delivery"])
-        board.record_requirement_confirmation(self.root, dev["id"], "Final agreed requirements: route the QA result and repair the requested task.")
+        agreed_requirements(self.root, dev["id"], "Final agreed requirements: route the QA result and repair the requested task.")
         self.atomic_plan(dev["id"])
         qa = board.register(self.root, "qa", "QA-QUEUE", vendor="Anthropic")
         request = board.request_qa(self.root, dev["id"], self.ledger("route.md"), "run QA")

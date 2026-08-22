@@ -48,7 +48,7 @@ ALL_BOARD_OPERATIONS = {
     "register", "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline",
-    "owner-direction", "owner-message", "confirm-requirements", "record-finding",
+    "owner-direction", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
@@ -62,7 +62,7 @@ ALL_BOARD_OPERATIONS = {
 COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "task-brief", "migrate-contract-scope", "expand-contract", "begin-task",
-    "resume-task", "reconcile-baseline", "confirm-requirements", "record-finding",
+    "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "resolve-repair-package", "complete", "claim-release-repair",
@@ -110,7 +110,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "attach-challenge-ledger",

@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from harness import board, certified_execution, contract, control, execution_identity
+from tests.requirements_support import agreed_requirements
 
 
 class DeliveryExecutionReuseTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class DeliveryExecutionReuseTests(unittest.TestCase):
         )
         board.record_owner_direction(self.root, session["id"], "Deliver once")
         board.begin_task(self.root, delivery["id"], task)
-        board.record_requirement_confirmation(self.root, delivery["id"], "Deliver once with exact evidence.")
+        agreed_requirements(self.root, delivery["id"], "Deliver once with exact evidence.")
         board.define_delivery_plan(self.root, delivery["id"], "atomic", "One cohesive task")
         original = certified_execution.subprocess.Popen
         calls = 0
