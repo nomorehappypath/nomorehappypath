@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, board_surface, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity
+from harness import board, board_surface, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
 from harness import workspace_settings
 from harness.project_manager_page import PAGE
@@ -295,6 +295,11 @@ class ProjectManager:
                 )
         global_settings.initialize(self.home, roots)
         self.execution_root = Path.cwd().resolve()
+        self.installation_root = Path(__file__).resolve().parents[1]
+        # Overridable seam: production sends SIGTERM so the KeepAlive service
+        # (or the private launcher) relaunches on the new code; tests inject
+        # a recorder instead of killing the test process.
+        self.request_restart = self._request_restart
         self.board_port = board_port
         self.worker_start_timeout = max(0.05, float(worker_start_timeout))
         self.manager_url = manager_url or f"http://127.0.0.1:{MANAGER_PORT}/"
@@ -643,6 +648,48 @@ class ProjectManager:
             "runtime": runtime_identity.public(self.runtime),
         }
 
+    def _request_restart(self) -> None:
+        import threading
+
+        def stop() -> None:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Timer(0.7, stop).start()
+
+    def _open_project_blocks_update(self) -> bool:
+        """True only for a live, UNPAUSED project - pause is the app's own
+        safe parking, so a paused project must not block the update the app
+        told the user pausing enables (review finding r1)."""
+        if not self.worker or self.worker.poll() is not None:
+            return False
+        entry = None
+        try:
+            entry = registry._find(registry.load(self.home), self.worker_project)
+        except (OSError, ValueError, KeyError):
+            return True
+        try:
+            context = registry.context_for_entry(entry)
+            return board.pause_state(context).get("status") not in {"paused", "resuming"}
+        except (OSError, ValueError, KeyError):
+            return True
+
+    def apply_update(self) -> dict[str, Any]:
+        if getattr(self, "_update_in_progress", False):
+            raise ValueError("An update is already being applied; the app is restarting.")
+        if self._open_project_blocks_update():
+            raise ValueError(
+                "A project is open. Close or pause it first - the app never "
+                "restarts under running work."
+            )
+        self._update_in_progress = True
+        try:
+            result = update_check.apply_update(self.installation_root)
+        except Exception:
+            self._update_in_progress = False
+            raise
+        self.request_restart()
+        return result
+
     def readiness_payload(self) -> dict[str, Any]:
         """Report the code loaded by this process and its exact active worker."""
         self._reconcile_worker()
@@ -979,6 +1026,10 @@ def make_handler(manager: ProjectManager):
                 return self._send(200, manager.projects_payload())
             if request_path == "/api/settings":
                 return self._send(200, manager.settings_payload())
+            if request_path == "/api/version":
+                return self._send(200, {
+                    "version": update_check.installed_version(manager.installation_root),
+                })
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
@@ -1007,6 +1058,10 @@ def make_handler(manager: ProjectManager):
                         manager.home, value.get("agent_settings", value),
                     )
                     return self._send(200, {**manager.settings_payload(), **updated})
+                if self.path == "/api/update/check":
+                    return self._send(200, update_check.check(manager.installation_root))
+                if self.path == "/api/update/apply":
+                    return self._send(200, manager.apply_update())
                 if self.path == "/api/settings/openai-key":
                     return self._send(200, manager.save_openai_api_key(self._body().get("key", "")))
                 if self.path == "/api/settings/openai-key/test":

@@ -1223,6 +1223,8 @@ class HelpPageCoverageTests(unittest.TestCase):
             "Talking To The Agents Directly",
             "asks whether you trust that folder",
             "Go ahead — this is the contract",
+            "Software Update",
+            "paused is fine",
             "Agree The Requirements And Say Go Ahead",
             "files them on the board",
             "requires a newer version",
