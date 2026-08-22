@@ -1,0 +1,23 @@
+# OS / editor cruft
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# A *filled* profile holds real secrets/keys — NEVER commit it.
+# The blank template (profile.template/) IS tracked; a user's copy (profile/) is not.
+profile/
+.env
+*.key
+*.pem
+secrets.*
+
+# Generated artifacts (composed active directive set)
+build/
+
+# Clean v0.2 development worktrees are local Git metadata, not harness source.
+.worktrees/
+
+# Per-project runtime board state. It is durable locally but never source code.
+.harness/

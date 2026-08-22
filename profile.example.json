@@ -1,0 +1,13 @@
+{
+  "project_name": "Example Project",
+  "default_branch": "main",
+  "test_command": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+  "build_command": "<project build command>",
+  "health_command": "<main-branch health check command>",
+  "deployment_channels": ["local-dev"],
+  "agent_poll_interval_seconds": 300,
+  "agent_commands": {
+    "OpenAI": "<approved launcher template>",
+    "Anthropic": "<approved launcher template>"
+  }
+}
