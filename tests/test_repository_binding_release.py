@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 class RepositoryBindingReleaseTests(unittest.TestCase):
@@ -32,7 +33,7 @@ class RepositoryBindingReleaseTests(unittest.TestCase):
         objective = f"OWNER DIRECTION — {task}"
         board.record_owner_direction(self.root, session["id"], objective)
         board.begin_task(self.root, agent["id"], task)
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, agent["id"],
             f"Final agreed requirements for {task}: preserve the requested delivery and verify it end to end.")
         contract.create_contract(self.root, task, objective, ["delivery"])

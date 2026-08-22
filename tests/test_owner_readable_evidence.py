@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 HEADER = (
@@ -91,7 +92,7 @@ class OwnerReadableEvidenceContractTests(unittest.TestCase):
         )
         board.record_owner_direction(self.root, session["id"], "Deliver one safe behavior.")
         board.begin_task(self.root, delivery["id"], "ATOMIC-WORDING")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, delivery["id"], "Confirm one safe behavior and its evidence.",
         )
         contract.create_contract(self.root, "ATOMIC-WORDING", "Deliver safely.", ["safe behavior"])

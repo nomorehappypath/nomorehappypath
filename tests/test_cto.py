@@ -8,6 +8,7 @@ from pathlib import Path
 
 from harness import board, contract, control
 from harness import cto, execution_identity
+from tests.requirements_support import agreed_requirements
 
 
 def ledger_text(*rows, command="python3 -m unittest test_smoke"):
@@ -163,7 +164,7 @@ class CtoLedgerTests(unittest.TestCase):
             dev = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
             board.record_owner_direction(root, session["id"], owner)
             board.begin_task(root, dev["id"], task)
-            board.record_requirement_confirmation(root, dev["id"], "Final agreed requirements: " + translated)
+            agreed_requirements(root, dev["id"], "Final agreed requirements: " + translated)
             contract.create_contract(root, task, owner, [translated])
             ledger = root / "ledger.md"
             ledger.write_text(ledger_text(("S-001", "translated scope", "PASS")))
@@ -197,7 +198,7 @@ class CtoLedgerTests(unittest.TestCase):
             owner = "Build a resilient widget with restart recovery and an audit trail"
             board.record_owner_direction(root, session["id"], owner)
             board.begin_task(root, dev["id"], task)
-            board.record_requirement_confirmation(root, dev["id"], "Final requirements: resilient widget restart recovery")
+            agreed_requirements(root, dev["id"], "Final requirements: resilient widget restart recovery")
             contract.create_contract(root, task, "Resilient widget restart recovery", ["restart recovery"])
             ledger = root / "ledger.md"; ledger.write_text(ledger_text(("S-001", "scope", "PASS")))
             translated = cto.release_check(root, task, ledger, root)
@@ -240,7 +241,7 @@ class CtoLedgerTests(unittest.TestCase):
             dev = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
             board.record_owner_direction(root, session["id"], "Ship task")
             board.begin_task(root, dev["id"], "TASK-1")
-            board.record_requirement_confirmation(root, dev["id"], "Final agreed requirements: ship the task with executable release evidence.")
+            agreed_requirements(root, dev["id"], "Final agreed requirements: ship the task with executable release evidence.")
             board.define_delivery_plan(root, dev["id"], "atomic", "One cohesive release-gate task")
             qa = board.register(root, "qa", "QA-QUEUE", vendor="Anthropic")
             review = board.request_review(

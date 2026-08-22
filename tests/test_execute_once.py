@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 
 class ExecuteOnceTests(unittest.TestCase):
@@ -43,7 +44,7 @@ class ExecuteOnceTests(unittest.TestCase):
                              vendor="OpenAI", session_id=session["id"])
         board.record_owner_direction(self.root, session["id"], "Ship task")
         board.begin_task(self.root, dev["id"], "TASK-1")
-        board.record_requirement_confirmation(
+        agreed_requirements(
             self.root, dev["id"], "Final agreed requirements: ship the task with executable evidence.")
         board.define_delivery_plan(self.root, dev["id"], "atomic", "One cohesive task")
         qa = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic")

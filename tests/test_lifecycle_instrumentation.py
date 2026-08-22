@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control, cto, lifecycle
+from tests.requirements_support import agreed_requirements
 
 
 class LifecycleInstrumentationTests(unittest.TestCase):
@@ -147,7 +148,7 @@ class LifecycleInstrumentationTests(unittest.TestCase):
             )
             board.record_owner_direction(root, session["id"], "Instrument the lifecycle")
             board.begin_task(root, developer["id"], "TASK")
-            board.record_requirement_confirmation(root, developer["id"], "Instrument and verify each phase.")
+            agreed_requirements(root, developer["id"], "Instrument and verify each phase.")
             contract.create_contract(root, "TASK", "Instrument the lifecycle", ["telemetry"])
             board.define_delivery_plan(root, developer["id"], "application", "Telemetry is a product capability.")
             board.declare_subtasks(root, developer["id"], [{

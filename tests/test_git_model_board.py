@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 from harness import board, board_viewer, contract, control
 from tests.environment_support import require_loopback
+from tests.requirements_support import agreed_requirements
 
 
 class GitModelBoardIntegrationTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
         board.record_owner_direction(self.root, session["id"], "Implement one governed Git change in this repository.")
         self.begun = board.begin_task(self.root, self.delivery["id"], "GIT-MODEL")
         contract.create_contract(self.root, "GIT-MODEL", "Implement one governed Git change in this repository.", ["governed change"])
-        board.record_requirement_confirmation(self.root, self.delivery["id"], "Implement and verify the governed change.")
+        agreed_requirements(self.root, self.delivery["id"], "Implement and verify the governed change.")
         board.define_delivery_plan(self.root, self.delivery["id"], "atomic", "One cohesive Git-model integration fixture")
 
     def tearDown(self):

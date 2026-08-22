@@ -354,12 +354,13 @@ PAGE = r'''<!doctype html>
         </section>
 
         <section class="help-section" aria-labelledby="help-go-title">
-          <h2 id="help-go-title">When To Say Go Ahead</h2>
+          <h2 id="help-go-title">Agree The Requirements And Say Go Ahead</h2>
           <ol class="help-steps">
             <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once.</li>
             <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long.</li>
-            <li>The conversation happens in the <strong>Delivery agent's terminal window</strong> — the visible CLI shell that opened when you started the agent, not in Mission Control. Delivery answers there with final agreed requirements or questions. Read this carefully; it becomes the task contract.</li>
-            <li>Type <strong>go ahead</strong> in that same terminal window, and only when the requirements match what you want built and the exclusions are acceptable.</li>
+            <li>Delivery may ask clarifying questions in its terminal window — answer there; that conversation shapes the requirements.</li>
+            <li>When the requirements are agreed, Delivery <strong>files them on the board</strong>. The task card then shows <strong>"Final agreed requirements — your decision"</strong> with the full text and two buttons. Nothing is built before your decision.</li>
+            <li>Read the text as the task contract it is. Click <strong>Go ahead — this is the contract</strong> when it matches what you want built; click <strong>Modify…</strong> to describe changes — Delivery revises and files a new version for your decision. Every click is recorded with a timestamp; typing "go ahead" in the terminal is not authorization.</li>
             <li>After work starts, use <strong>Send clarification</strong> for necessary corrections. New feature ideas should usually become a new task after the current one is accepted.</li>
           </ol>
         </section>

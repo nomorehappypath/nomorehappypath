@@ -20,6 +20,7 @@ from harness import board, board_viewer, browser_acceptance, contract, control, 
 from harness.board_surface import SessionTokenAuthority
 from tests.test_project_manager_rendered import proxy_handler
 from tests.environment_support import require_loopback
+from tests.requirements_support import agreed_requirements
 
 
 HEAD = "TASK-D-LONG-DIRECTIVE-HEAD-7C4A"
@@ -261,7 +262,7 @@ class LongDirectiveUITests(unittest.TestCase):
             board.begin_task(self.root, agent["id"], task)
             self.assertEqual(board.snapshot(self.root)["task_owner_directions"][task], expected)
             contract.create_contract(self.root, task, expected, ["preserve exact long directive"])
-            board.record_requirement_confirmation(self.root, agent["id"], expected)
+            agreed_requirements(self.root, agent["id"], expected)
             active = self.render(origin, active_render_script(expected))
             self.assertTrue(active["exactDirection"])
             self.assertTrue(active["exactConfirmation"])

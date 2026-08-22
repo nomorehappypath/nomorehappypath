@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control
+from tests.requirements_support import agreed_requirements
 
 def _ledger_text(command, scenario):
     return (
@@ -66,7 +67,7 @@ class CtoRealtimeWake(unittest.TestCase):
     def _run_review(self, phase, result, *, contract_ready=True):
         if contract_ready and not contract.contract_complete(self.root, "APP")[0]:
             contract.add_evidence(self.root, "APP", "ship", [self.acceptance])
-        board.record_requirement_confirmation(self.root, self.dev["id"],
+        agreed_requirements(self.root, self.dev["id"],
                                               "Final agreed requirements for APP: ship it end to end.")
         board.define_delivery_plan(self.root, self.dev["id"], "atomic", "one cohesive task")
         request = board.request_review(self.root, self.dev["id"], self._ledger("delivery"),
