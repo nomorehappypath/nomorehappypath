@@ -541,3 +541,30 @@ class ReleaseCardRenderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuggestedCommandTests(unittest.TestCase):
+    def test_node_project_with_dev_script_gets_a_one_click_command(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "package.json").write_text(
+                '{"scripts": {"dev": "vite"}}', encoding="utf-8",
+            )
+            suggestion = release_preview.suggest_command(workspace)
+            self.assertIn("npm run dev", suggestion["command"])
+            self.assertIn("{port}", suggestion["command"])
+            self.assertIn("dev", suggestion["reason"])
+
+    def test_static_site_gets_a_python_http_server(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "index.html").write_text("<h1>hi</h1>", encoding="utf-8")
+            suggestion = release_preview.suggest_command(workspace)
+            self.assertIn("http.server {port}", suggestion["command"])
+            self.assertIn("--bind 127.0.0.1", suggestion["command"])
+
+    def test_unknown_shapes_suggest_nothing(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "notes.txt").write_text("just files", encoding="utf-8")
+            self.assertEqual(release_preview.suggest_command(workspace), {})
+
+    def test_missing_workspace_suggests_nothing(self):
+        self.assertEqual(release_preview.suggest_command(""), {})

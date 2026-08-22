@@ -30,6 +30,20 @@ SECRET_MAX_BYTES = 512
 CONNECTION_TEST_TIMEOUT_SECONDS = 90.0
 CONNECTION_TEST_PROMPT = "Reply with the single word: ready"
 # Signals a CLI emits when the account or the CLI build cannot run the model.
+# Signals that the ACCOUNT is out of money/quota, as opposed to a bad model.
+CREDIT_EXHAUSTED_SIGNALS = (
+    "insufficient credit",
+    "insufficient_quota",
+    "exceeded your current quota",
+    "billing hard limit",
+    "credit balance is too low",
+    "payment required",
+    "usage limit",
+    "rate_limit_exceeded",
+    "upgrade your plan",
+    "status\":402",
+    "http 402",
+)
 MODEL_UNAVAILABLE_SIGNALS = (
     "requires a newer version",
     "model not found",
@@ -569,11 +583,21 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
         })
         raise ValueError(message) from error
     output = f"{completed.stdout}\n{completed.stderr}"
-    unavailable = any(signal in output.lower() for signal in MODEL_UNAVAILABLE_SIGNALS)
-    if completed.returncode != 0 or unavailable:
+    lowered = output.lower()
+    out_of_credit = any(signal in lowered for signal in CREDIT_EXHAUSTED_SIGNALS)
+    unavailable = any(signal in lowered for signal in MODEL_UNAVAILABLE_SIGNALS)
+    if completed.returncode != 0 or unavailable or out_of_credit:
         detail = (completed.stderr or completed.stdout or "the CLI rejected the request").strip()
         detail = detail.splitlines()[-1] if detail.splitlines() else detail
-        if unavailable:
+        if out_of_credit:
+            account = "OpenAI" if provider == "codex" else "Anthropic"
+            message = (
+                f"Your {account} account is out of credit or over its usage limit - "
+                f"the agents cannot work until it is topped up or the plan is "
+                f"upgraded on the {account} side. The app itself is fine. "
+                f"The CLI said: {detail}"
+            )
+        elif unavailable:
             message = (
                 f"{provider.title()} could not run {model}. This usually means the "
                 f"installed {provider.title()} CLI is older than the model, or your "

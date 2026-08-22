@@ -82,3 +82,31 @@ control_env = "HARNESS_CODEX_BIN"
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CreditExhaustionTests(RealConnectionTestTests):
+    def test_out_of_credit_names_the_account_not_the_app(self):
+        body = (
+            'cat <<EOF\n'
+            '{"type":"error","error":{"type":"insufficient_quota","message":'
+            '"You exceeded your current quota, please check your plan and billing"}}\n'
+            'EOF\n'
+            "exit 1\n"
+        )
+        with self.assertRaises(ValueError) as raised:
+            self.run_test(body)
+        message = str(raised.exception)
+        self.assertIn("out of credit or over its usage limit", message)
+        self.assertIn("OpenAI", message)
+        self.assertIn("The app itself is fine", message)
+
+    def test_anthropic_credit_error_names_anthropic(self):
+        body = 'echo "Your credit balance is too low to access the Anthropic API" >&2\nexit 1\n'
+        fake_cli(self.bin, "claude", body)
+        with mock.patch.dict(os.environ, {"HARNESS_CLAUDE_BIN": str(self.bin / "claude")}):
+            with self.assertRaises(ValueError) as raised:
+                global_settings.test_connection(
+                    self.home, "claude", "opus", "high", self.workspace,
+                )
+        self.assertIn("Anthropic", str(raised.exception))
+        self.assertIn("out of credit", str(raised.exception))

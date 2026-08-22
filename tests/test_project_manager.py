@@ -1223,6 +1223,8 @@ class HelpPageCoverageTests(unittest.TestCase):
             "Talking To The Agents Directly",
             "asks whether you trust that folder",
             "requires a newer version",
+            "out of credit",
+            "The app does not crash",
             "Why It Takes Its Time (No Happy Path)",
             "Cross-checking by a competing vendor",
             "Ledgers.",

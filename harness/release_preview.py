@@ -80,6 +80,52 @@ APP_BUNDLE_GLOBS = (
 )
 
 
+def suggest_command(workspace: str) -> dict[str, str]:
+    """Offer a ready-to-run preview command for common project shapes.
+
+    The owner at acceptance should meet a button, not a blank box. Detection
+    is deliberately conservative: only shapes whose start command is
+    unambiguous are suggested; anything else keeps the type-it-yourself path.
+    """
+    root = Path(workspace or "")
+    if not workspace or not root.is_dir():
+        return {}
+    if (root / "package.json").is_file():
+        try:
+            import json as _json
+            package = _json.loads((root / "package.json").read_text(encoding="utf-8"))
+            scripts = package.get("scripts") or {}
+        except (OSError, ValueError):
+            scripts = {}
+        for script in ("dev", "start", "serve", "preview"):
+            if script in scripts:
+                return {
+                    "command": f"npm install >/dev/null 2>&1 && npm run {script} -- --port {{port}}",
+                    "reason": f"package.json defines an '{script}' script",
+                }
+    for entry in ("index.html", "public/index.html", "site/index.html", "dist/index.html"):
+        candidate = root / entry
+        if candidate.is_file():
+            serve_dir = str(Path(entry).parent)
+            return {
+                "command": f"python3 -m http.server {{port}} --bind 127.0.0.1 --directory {serve_dir}",
+                "reason": f"{entry} looks like a static site",
+            }
+    for entry in ("app.py", "main.py", "server.py"):
+        if (root / entry).is_file():
+            text = ""
+            try:
+                text = (root / entry).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                pass
+            if "http.server" in text or "flask" in text.lower() or "fastapi" in text.lower():
+                return {
+                    "command": f"python3 {entry}",
+                    "reason": f"{entry} looks like the server entry point",
+                }
+    return {}
+
+
 def find_app_bundle(workspace: str) -> Path | None:
     """The newest built macOS app bundle in a candidate workspace, if any."""
     base = Path(workspace or "")
@@ -301,12 +347,19 @@ class ReleasePreviewSupervisor:
                         "branch": branch,
                     })
                 return
-            if recorded.get("status") != "unconfigured" or preview is not None:
+            suggestion = suggest_command(workspace)
+            if (
+                recorded.get("status") != "unconfigured"
+                or recorded.get("suggested_command") != suggestion.get("command", "")
+                or preview is not None
+            ):
                 self._record(task, {
                     "status": "unconfigured",
                     "head_commit": head_commit,
                     "workspace": workspace,
                     "branch": branch,
+                    "suggested_command": suggestion.get("command", ""),
+                    "suggested_reason": suggestion.get("reason", ""),
                 })
             return
         preview = self.previews.get(task)
