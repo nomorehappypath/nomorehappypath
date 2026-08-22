@@ -48,9 +48,22 @@ class InstallScriptTests(unittest.TestCase):
         self.assertNotIn("Choose 1 or 2", completed.stdout)
 
     def test_readme_prerequisites_match_the_installer_story(self):
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        # Whitespace is collapsed so a reflowed line can never break a pin -
+        # wrapped phrases evade plain substring checks (a lesson learned twice).
+        readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
         for marker in ("What you need", "Codex CLI", "Claude Code CLI",
-                       "OpenAI API key", "your own accounts", "install.sh", "First run:"):
+                       "OpenAI API key", "your own accounts", "install.sh", "First run:",
+                       "## FAQ",
+                       "Why not just Claude Code?",
+                       "Why not just Codex?",
+                       "hires the judge",
+                       "What does the CTO role add",
+                       "the CTO watches the",
+                       "real, serious products",
+                       "carry revenue",
+                       "paying for the right to trust",
+                       "cannot alter or",
+                       "When should I NOT use it?"):
             self.assertIn(marker, readme)
 
 
