@@ -544,15 +544,27 @@ if __name__ == "__main__":
 
 
 class SuggestedCommandTests(unittest.TestCase):
-    def test_node_project_with_dev_script_gets_a_one_click_command(self):
+    def test_candidate_authored_code_is_never_suggested(self):
+        # Review finding: a destructive dev script must not sit behind an
+        # endorsed one-click button. npm scripts and Python entries execute
+        # candidate code, so they are never suggested.
         with tempfile.TemporaryDirectory() as workspace:
             Path(workspace, "package.json").write_text(
-                '{"scripts": {"dev": "vite"}}', encoding="utf-8",
+                '{"scripts": {"dev": "rm -rf $HOME"}}', encoding="utf-8",
             )
+            self.assertEqual(release_preview.suggest_command(workspace), {})
+            Path(workspace, "app.py").write_text(
+                "import shutil, os\nshutil.rmtree(os.path.expanduser('~'))\n# flask",
+                encoding="utf-8",
+            )
+            self.assertEqual(release_preview.suggest_command(workspace), {})
+
+    def test_suggested_command_only_ever_serves_static_files(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "index.html").write_text("<h1>hi</h1>", encoding="utf-8")
             suggestion = release_preview.suggest_command(workspace)
-            self.assertIn("npm run dev", suggestion["command"])
-            self.assertIn("{port}", suggestion["command"])
-            self.assertIn("dev", suggestion["reason"])
+            self.assertTrue(suggestion["command"].startswith("python3 -m http.server"))
+            self.assertIn("without running any candidate code", suggestion["reason"])
 
     def test_static_site_gets_a_python_http_server(self):
         with tempfile.TemporaryDirectory() as workspace:

@@ -7,6 +7,9 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# pgrep -f takes a REGEX: every metacharacter in the path must be escaped or
+# /tmp/harness.next would also match /tmp/harnessXnext - and kill it.
+root_re="$(printf '%s' "$root" | sed -e 's/[][\.^$*+?(){}|/]/\\&/g')"
 label="com.nomorehappypath.app"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 
@@ -17,7 +20,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 echo "NoMoreHappyPath — stopping processes of: $root"
-matches="$(pgrep -fl "python3.*$root/harness/(project_manager|project_worker)\.py" || true)"
+matches="$(pgrep -fl "python3.*$root_re\/harness\/(project_manager|project_worker)\.py" || true)"
 if [[ "${1:-}" == "--list" ]]; then
   if [[ -n "$matches" ]]; then echo "$matches"; else echo "  (none running from this installation)"; fi
   [[ -f "$plist" ]] && echo "  auto-start service installed: $plist (a plain run also removes it for this stop)"
@@ -36,7 +39,7 @@ if [[ -n "$matches" ]]; then
     echo "  ✔ stopped pid $pid"
   done
   sleep 1
-  leftover="$(pgrep -f "python3.*$root/harness/(project_manager|project_worker)\.py" || true)"
+  leftover="$(pgrep -f "python3.*$root_re\/harness\/(project_manager|project_worker)\.py" || true)"
   if [[ -n "$leftover" ]]; then
     echo "$leftover" | xargs kill -9 2>/dev/null || true
     echo "  ✔ force-stopped stubborn processes"

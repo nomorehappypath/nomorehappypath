@@ -90,3 +90,25 @@ class StopAllScriptTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("untouched", completed.stdout)
             self.assertFalse((Path(home) / "Library" / "LaunchAgents").exists())
+
+
+class StopAllRegexScopingTests(unittest.TestCase):
+    def test_dotted_install_path_cannot_match_a_foreign_path(self):
+        # Review finding: unescaped $root let /tmp/harness.next match
+        # /tmp/harnessXnext. The escaped pattern must match only itself.
+        import re
+        import subprocess as sp
+        script = (ROOT / "scripts" / "stop_all.sh").read_text(encoding="utf-8")
+        escape_line = [l for l in script.splitlines() if l.startswith("root_re=")]
+        self.assertTrue(escape_line, "stop_all.sh must escape root for the regex")
+        probe = sp.run(
+            ["bash", "-c",
+             'root="/tmp/harness.next"; '
+             + escape_line[0].replace('"$root"', '"$root"') + '; '
+             + 'printf "%s" "$root_re"'],
+            capture_output=True, text=True, timeout=10,
+        )
+        pattern = "python3.*" + probe.stdout + r"\/harness\/(project_manager|project_worker)\.py"
+        self.assertTrue(re.search(pattern, "python3 /tmp/harness.next/harness/project_manager.py --home x"))
+        self.assertFalse(re.search(pattern, "python3 /tmp/harnessXnext/harness/project_manager.py --home x"),
+                         "foreign installation must never match")
