@@ -110,3 +110,23 @@ class CreditExhaustionTests(RealConnectionTestTests):
                 )
         self.assertIn("Anthropic", str(raised.exception))
         self.assertIn("out of credit", str(raised.exception))
+
+
+class SignalFalsePositiveTests(RealConnectionTestTests):
+    def test_a_clean_answer_mentioning_quota_words_is_not_a_failure(self):
+        # Review finding: exit-0 output CONTAINING a signal phrase was
+        # misclassified. Signals count only inside an error context.
+        body = 'echo "ready - note: docs mention insufficient_quota handling"\nexit 0\n'
+        result = self.run_test(body)
+        self.assertTrue(result["ok"])
+
+    def test_an_exit_zero_error_envelope_still_fails(self):
+        body = (
+            'cat <<EOF\n'
+            '{"type":"error","error":{"type":"insufficient_quota","message":"exceeded your current quota"}}\n'
+            'EOF\n'
+            "exit 0\n"
+        )
+        with self.assertRaises(ValueError) as raised:
+            self.run_test(body)
+        self.assertIn("out of credit", str(raised.exception))

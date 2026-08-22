@@ -584,8 +584,13 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
         raise ValueError(message) from error
     output = f"{completed.stdout}\n{completed.stderr}"
     lowered = output.lower()
-    out_of_credit = any(signal in lowered for signal in CREDIT_EXHAUSTED_SIGNALS)
-    unavailable = any(signal in lowered for signal in MODEL_UNAVAILABLE_SIGNALS)
+    # Review finding: a clean exit-0 answer that merely MENTIONS a signal
+    # phrase must never be classified as a failure. Signals are consulted only
+    # in an error context: a nonzero exit, or an explicit error envelope in
+    # the payload (the CLI prints its API error JSON and still exits 0).
+    error_context = completed.returncode != 0 or '"type":"error"' in lowered.replace(" ", "")
+    out_of_credit = error_context and any(signal in lowered for signal in CREDIT_EXHAUSTED_SIGNALS)
+    unavailable = error_context and any(signal in lowered for signal in MODEL_UNAVAILABLE_SIGNALS)
     if completed.returncode != 0 or unavailable or out_of_credit:
         detail = (completed.stderr or completed.stdout or "the CLI rejected the request").strip()
         detail = detail.splitlines()[-1] if detail.splitlines() else detail
