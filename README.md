@@ -159,6 +159,19 @@ to hold up under someone else's scrutiny. Rule of thumb: use an assistant
 when being wrong costs a shrug; use NoMoreHappyPath when being wrong costs
 a client, a weekend, or your reputation.
 
+**Can I run it inside a virtual machine?**
+Yes. On an Apple Silicon Mac, you can run the agents inside a macOS virtual
+machine, and some owners prefer that. It gives the agents real freedom inside
+the folder you point them at while keeping that work separate from your main
+Mac environment. Tools such as VirtualBuddy, UTM, and Parallels can create
+macOS guests on Apple Silicon Macs; install the tooling inside the guest, keep
+the projects inside the guest, and take a snapshot before the first run. That
+snapshot lets you revert the whole environment, not just a Git commit. This is
+optional: running directly on your Mac is normal too. Either way, point the
+agents at the exact project folder and keep it in version control. Practical
+limit: Apple allows macOS guests only on Apple hardware, so a VM is not a
+workaround for running macOS on a Windows PC.
+
 ## Your responsibility
 
 Using this software is entirely at your own risk and responsibility; it is
