@@ -41,3 +41,20 @@ def require_sandbox_exec() -> None:
             raise unittest.SkipTest(f"environment denies sandbox-exec: {detail or completed.returncode}")
     except (OSError, subprocess.SubprocessError) as error:
         raise unittest.SkipTest(f"environment denies sandbox-exec: {error}")
+
+
+def require_process_table() -> None:
+    """SkipTest where the environment forbids reading the OS process table.
+
+    Certified execution proves which processes it owned by reading ``ps``.
+    Review shells that deny process execution make that evidence impossible to
+    collect, and a test cannot pass without it - so it says so out loud instead
+    of failing as though the product were broken. Capable environments run the
+    assertions in full.
+    """
+    from harness import browser_acceptance
+
+    try:
+        browser_acceptance._process_table()
+    except browser_acceptance.ProcessTableUnavailable as error:
+        raise unittest.SkipTest(str(error)) from error

@@ -105,7 +105,18 @@ independent review:
    each site with hostile inputs the way the reviewer did, and record that
    sweep in the resubmission's ledger. Resubmitting with another instance of
    an already-named class is the specific failure this rule exists to prevent.
-4. Long-running checks (full suites, builds, sweeps) run under the execution-
+4. **Reproduce the condition that would break you, and run under it.** Step 2
+   puts you in the right place; this puts you in the wrong one on purpose.
+   When a finding, an acceptance scenario, or a gate names a restrictive
+   condition — a command the environment denies, a path outside the approved
+   workspace, a missing binary or file, a different operating system —
+   construct that condition locally and run the candidate and every affected
+   acceptance scenario under it. Never infer another agent's or another
+   platform's behavior from its transcript; reproduce it. If a condition
+   cannot be reproduced, declare it and name what stays unproven rather than
+   presenting the runs you could do as coverage. A reproduction you will need
+   twice belongs in the repository as a script or a test, not in your memory.
+5. Long-running checks (full suites, builds, sweeps) run under the execution-
    heartbeat lease (`review-execution-*` commands emitting
    `review_execution_started` and heartbeats) — never as "EXECUTION HEARTBEAT"
    prose in status updates. The watchdog reads the liveness field, not
@@ -171,3 +182,9 @@ and re-test it before review. If it does not affect the current objective,
 mention it briefly in the review summary only. Do not record a deferred
 finding, create board work, request an owner decision, wake the CTO, or delay
 the current task.
+
+Behavior an Independent Reviewer has already accepted, including anything it
+marked non-blocking, is out of scope for later rounds. Never weaken or
+downgrade a protective refusal, gate, or guard on your own inference about an
+environment you have not reproduced. To change accepted behavior at all, raise
+it as a new claim with executed evidence that the old behavior was wrong.

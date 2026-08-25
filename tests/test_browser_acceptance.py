@@ -11,7 +11,140 @@ from unittest import mock
 from harness import browser_acceptance
 
 
+class ProcessTableAvailabilityTests(unittest.TestCase):
+    """A process table that cannot be read is a named refusal, not a raw OSError.
+
+    Found in review: an environment that forbids executing ``ps`` crashed the
+    certified-execution evidence path with
+    ``PermissionError: [Errno 1] Operation not permitted: 'ps'`` raised from the
+    middle of ``_process_table``. Process identity is evidence; being unable to
+    collect it must be said plainly, and must never read as an empty table -
+    "nothing was running" is a different and much more dangerous claim.
+    """
+
+    def test_denied_ps_becomes_a_named_condition_not_a_raw_oserror(self):
+        for error in (PermissionError(1, "Operation not permitted", "ps"),
+                      FileNotFoundError(2, "No such file or directory", "ps")):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(browser_acceptance.subprocess, "run", side_effect=error):
+                    with self.assertRaises(browser_acceptance.ProcessTableUnavailable) as caught:
+                        browser_acceptance._process_table()
+                self.assertIn("process table", str(caught.exception))
+                self.assertIn("ps", str(caught.exception))
+
+    def test_denied_ps_never_reads_as_an_empty_process_table(self):
+        """The dangerous failure: claiming nothing was running."""
+        with mock.patch.object(browser_acceptance.subprocess, "run",
+                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+            with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
+                table = browser_acceptance._process_table()
+                self.fail(f"an unreadable process table returned {table!r} instead of refusing")
+
+    def test_start_token_refuses_when_ps_cannot_run(self):
+        with mock.patch.object(browser_acceptance.subprocess, "run",
+                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+            with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
+                browser_acceptance._start_token(os.getpid())
+
+    def test_a_pid_that_is_simply_gone_still_yields_an_empty_token(self):
+        """Behaviour preserved: a dead pid is an ANSWER, not an environment failure.
+
+        Hermetic on purpose. An earlier version of this test called the real
+        `ps`, so in a shell that denies `ps` the very test asserting "nothing
+        changed" raised ProcessTableUnavailable - it depended on the
+        prerequisite it exists to reason about. The distinction under test is
+        `_start_token`'s own logic (non-zero exit -> empty token), which needs
+        no operating system to prove.
+        """
+        gone = subprocess.CompletedProcess(args=["ps"], returncode=1, stdout="", stderr="")
+        alive = subprocess.CompletedProcess(
+            args=["ps"], returncode=0, stdout="Mon Aug 25 10:00:00 2026\n", stderr="",
+        )
+        with mock.patch.object(browser_acceptance, "_run_ps", return_value=gone):
+            self.assertEqual(browser_acceptance._start_token(999999), "")
+        with mock.patch.object(browser_acceptance, "_run_ps", return_value=alive):
+            self.assertEqual(browser_acceptance._start_token(os.getpid()), "Mon Aug 25 10:00:00 2026")
+
+    def test_the_same_distinction_holds_against_the_real_ps(self):
+        """The integration truth, skipped only where the OS cannot answer."""
+        from tests import environment_support
+        environment_support.require_process_table()
+        self.assertEqual(browser_acceptance._start_token(999999), "")
+        self.assertTrue(browser_acceptance._start_token(os.getpid()))
+
+    def test_release_preview_shares_the_same_refusal(self):
+        from harness import release_preview
+        with mock.patch.object(browser_acceptance.subprocess, "run",
+                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+            with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
+                release_preview._start_token(os.getpid())
+
+    def test_the_test_guard_skips_instead_of_failing(self):
+        from tests import environment_support
+        with mock.patch.object(browser_acceptance.subprocess, "run",
+                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+            with self.assertRaises(unittest.SkipTest):
+                environment_support.require_process_table()
+
+
+class LaunchLockReleaseTests(unittest.TestCase):
+    """A failed launch must never strand the launch lock.
+
+    Found while reproducing a review failure: `_PROCESS_LOCK.acquire()` was
+    followed by an unguarded `_process_table()`, so a shell that denies `ps`
+    left both the in-process lock and the file lock held. The next launch then
+    blocked forever on `.acquire()` - which is why the reviewer's release-gate
+    run never finished and had to be interrupted at that exact line, rather
+    than failing with a message.
+    """
+
+    def setUp(self):
+        # A stranded lock would hang this suite rather than fail it, so refuse
+        # to start from a state that is already wrong.
+        if not browser_acceptance._PROCESS_LOCK.acquire(blocking=False):
+            self.fail("the launch lock was already held before this test began")
+        browser_acceptance._PROCESS_LOCK.release()
+
+    def _fail_launch(self, error: Exception) -> None:
+        with mock.patch.object(browser_acceptance, "resolve_binary", return_value="/bin/echo"), \
+             mock.patch.object(browser_acceptance, "browser_identity", return_value={"sha256": "x"}), \
+             mock.patch.object(browser_acceptance, "_binary_digest", return_value="x"), \
+             mock.patch.object(browser_acceptance, "_process_table", side_effect=error):
+            with tempfile.TemporaryDirectory() as runtime:
+                with self.assertRaises(type(error)):
+                    browser_acceptance.launch("http://127.0.0.1:1/", Path(runtime))
+
+    def test_an_unreadable_process_table_does_not_strand_the_lock(self):
+        self._fail_launch(browser_acceptance.ProcessTableUnavailable("denied"))
+        self.assertTrue(
+            browser_acceptance._PROCESS_LOCK.acquire(blocking=False),
+            "launch() failed and left the process lock held - the next launch would hang",
+        )
+        browser_acceptance._PROCESS_LOCK.release()
+
+    def test_any_failure_before_the_browser_starts_releases_the_lock(self):
+        """Not just the ps case: the handler must cover the whole section."""
+        self._fail_launch(RuntimeError("something else entirely"))
+        self.assertTrue(
+            browser_acceptance._PROCESS_LOCK.acquire(blocking=False),
+            "launch() failed and left the process lock held",
+        )
+        browser_acceptance._PROCESS_LOCK.release()
+
+    def test_two_consecutive_failures_do_not_deadlock(self):
+        """The reviewer's symptom exactly: the SECOND call hung, not the first."""
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                self._fail_launch(browser_acceptance.ProcessTableUnavailable("denied"))
+
+
 class BrowserAcceptanceTests(unittest.TestCase):
+    def setUp(self):
+        # These launch real browsers and certify ownership from the process
+        # table; without it there is nothing to assert.
+        from tests import environment_support
+        environment_support.require_process_table()
+
     def executable(self, path: Path, body: str = "#!/bin/sh\nexit 0\n") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")

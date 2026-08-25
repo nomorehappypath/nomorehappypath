@@ -307,8 +307,18 @@ PAGE = r'''<!doctype html>
             <li>The app runs on this Mac only and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
             <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
-            <li>The top bar shows the installed version (for example <strong>v0.1.7</strong>). Click it to open the <strong>Software Update</strong> dialog: it checks this installation's own GitHub origin — nothing is sent anywhere else — and either confirms you are up to date or names the newer version with a <strong>What changed</strong> link to the release notes. <strong>Update now</strong> is always your click: fast-forward only, allowed only when no project is running (paused is fine), and it never touches your projects, boards, or settings.</li>
+            <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
+        </section>
+
+        <section class="help-section" aria-labelledby="help-version-title">
+          <h2 id="help-version-title">Check Your Version And Update</h2>
+          <ol class="help-steps">
+            <li>Your installed version is always visible in the <strong>top bar</strong> — the small pill next to "Manager connected" (for example <strong>v0.1.7</strong>).</li>
+            <li><strong>Click the version pill.</strong> The Software Update dialog opens and checks automatically — it asks only this installation's own GitHub origin; nothing is sent anywhere else. It answers plainly: you are up to date, or a newer version exists, with a <strong>What changed</strong> link to the release notes.</li>
+            <li>When a newer version exists and no project is running (<strong>paused is fine</strong>), click <strong>Update now</strong>. The update is fast-forward only, never touches your projects, boards, or settings, and the app restarts itself — the page reloads on the new version.</li>
+          </ol>
+          <p class="help-callout">If <strong>Update now</strong> does not appear: a project is running — pause or close it and check again. If the dialog reports local changes, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command instead.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-nohappy-title">

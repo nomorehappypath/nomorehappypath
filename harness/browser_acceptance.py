@@ -59,6 +59,25 @@ def resolve_binary() -> str:
     raise FileNotFoundError("no process-isolated Chromium headless binary is available")
 
 
+def _release_launch_lock(lock_handle) -> None:
+    """Release both launch locks, tolerating a half-built state.
+
+    Called only from the launch failure path, where the file handle may never
+    have been opened. Releasing the in-process lock is the part that must
+    always happen: without it every later launch blocks forever.
+    """
+    if lock_handle is not None:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        except (OSError, ValueError):
+            pass
+        try:
+            lock_handle.close()
+        except OSError:
+            pass
+    _PROCESS_LOCK.release()
+
+
 def _binary_digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -89,18 +108,50 @@ def browser_identity(binary: str) -> dict[str, str]:
     return dict(identity)
 
 
+class ProcessTableUnavailable(OSError):
+    """The OS process table could not be read at all.
+
+    Deliberately an OSError. Callers that already tolerate an OSError from these
+    routines - the ownership observer at :211 keeps polling, release_preview's
+    liveness check treats it as "not our process" - must keep behaving exactly
+    as they did, or this refactor would silently kill a background thread while
+    claiming to change nothing.
+
+    Process identity is evidence, not decoration: without it, ownership of a
+    launched process cannot be proven and no execution certificate is honest.
+    A restricted environment that forbids running ``ps`` therefore produces
+    this named refusal rather than a raw OSError from the middle of an
+    evidence routine - and never an empty table, which would read as "nothing
+    was running".
+    """
+
+
+def _run_ps(arguments: list[str], *, check: bool) -> subprocess.CompletedProcess:
+    """Run ps, translating an unrunnable ps into one named condition."""
+    try:
+        return subprocess.run(
+            ["ps", *arguments], capture_output=True, text=True, check=check,
+        )
+    except OSError as error:
+        raise ProcessTableUnavailable(
+            f"cannot read the process table: 'ps' could not be executed ({error})"
+        ) from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip() or f"exit status {error.returncode}"
+        raise ProcessTableUnavailable(
+            f"cannot read the process table: 'ps' failed ({detail})"
+        ) from error
+
+
 def _start_token(pid: int) -> str:
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True,
-    )
+    # A non-zero exit means that pid is gone, which is an ANSWER, not a
+    # failure - it stays an empty token exactly as before.
+    result = _run_ps(["-p", str(pid), "-o", "lstart="], check=False)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def _process_table() -> dict[int, dict[str, Any]]:
-    result = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,command="], capture_output=True, text=True,
-        check=True,
-    )
+    result = _run_ps(["-axo", "pid=,ppid=,pgid=,lstart=,command="], check=True)
     table: dict[int, dict[str, Any]] = {}
     for raw in result.stdout.splitlines():
         parts = raw.strip().split(None, 8)
@@ -379,59 +430,68 @@ def launch(
         f"--crash-dumps-dir={runtime / 'crash'}", "--remote-debugging-port=0",
         f"--window-size={int(width)},{int(height)}", *extra_args, url,
     ]
+    # Everything from here to the successful return holds two locks. Any escape
+    # that does not release BOTH deadlocks every later launch in this process:
+    # a failure between acquiring and returning used to leak them, so the next
+    # caller blocked forever on _PROCESS_LOCK.acquire(). One handler now covers
+    # every exit, including the ones that were never anticipated - an
+    # unreadable process table among them.
     _PROCESS_LOCK.acquire()
     lock_path = Path(os.environ.get("TMPDIR") or "/tmp") / "harness-browser-acceptance.lock"
+    lock_handle = None
+    process = None
+    observer_stop: threading.Event | None = None
+    observer: threading.Thread | None = None
     try:
         lock_handle = lock_path.open("a+")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-    except Exception:
-        _PROCESS_LOCK.release()
-        raise
-    baseline = _process_table()
-    try:
+        baseline = _process_table()
         process = subprocess.Popen(
             args, env=environment, start_new_session=True,
             stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
             stderr=subprocess.PIPE if capture_output else subprocess.DEVNULL,
             text=capture_output,
         )
-    except Exception:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
-        _PROCESS_LOCK.release()
+        start_token = ""
+        for _ in range(20):
+            start_token = _start_token(process.pid)
+            if start_token:
+                break
+            time.sleep(0.01)
+        if not start_token:
+            raise RuntimeError("could not record browser process start identity")
+        owned_identities: dict[int, dict[str, Any]] = {
+            process.pid: {
+                "pid": process.pid, "ppid": os.getpid(), "pgid": os.getpgid(process.pid),
+                "start_token": start_token, "command": binary,
+            },
+        }
+        observer_stop = threading.Event()
+        observer = threading.Thread(
+            target=_observe_owned,
+            args=(owned_identities, observer_stop, os.getpgid(process.pid)),
+            name=f"harness-browser-observer-{process.pid}", daemon=True,
+        )
+        observer.start()
+        return BrowserProcess(
+            process=process, runtime=runtime, identity=identity, pid=process.pid,
+            start_token=start_token, pgid=os.getpgid(process.pid),
+            baseline_apps=_app_processes(baseline), baseline_handlers=_default_handlers_digest(), url=url,
+            owned_identities=owned_identities, observer_stop=observer_stop,
+            observer=observer, lock_handle=lock_handle,
+        )
+    except BaseException:
+        if observer_stop is not None:
+            observer_stop.set()
+        if observer is not None:
+            observer.join(timeout=1)
+        if process is not None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        _release_launch_lock(lock_handle)
         raise
-    start_token = ""
-    for _ in range(20):
-        start_token = _start_token(process.pid)
-        if start_token:
-            break
-        time.sleep(0.01)
-    if not start_token:
-        process.kill()
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
-        _PROCESS_LOCK.release()
-        raise RuntimeError("could not record browser process start identity")
-    owned_identities: dict[int, dict[str, Any]] = {
-        process.pid: {
-            "pid": process.pid, "ppid": os.getpid(), "pgid": os.getpgid(process.pid),
-            "start_token": start_token, "command": binary,
-        },
-    }
-    observer_stop = threading.Event()
-    observer = threading.Thread(
-        target=_observe_owned,
-        args=(owned_identities, observer_stop, os.getpgid(process.pid)),
-        name=f"harness-browser-observer-{process.pid}", daemon=True,
-    )
-    observer.start()
-    return BrowserProcess(
-        process=process, runtime=runtime, identity=identity, pid=process.pid,
-        start_token=start_token, pgid=os.getpgid(process.pid),
-        baseline_apps=_app_processes(baseline), baseline_handlers=_default_handlers_digest(), url=url,
-        owned_identities=owned_identities, observer_stop=observer_stop,
-        observer=observer, lock_handle=lock_handle,
-    )
 
 
 def dump_dom(url: str, runtime: Path, *, timeout: float = 30) -> str:

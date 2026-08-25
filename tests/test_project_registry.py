@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -181,6 +182,82 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertIsNotNone(active)
         registry.deactivate(self.home, active["project_id"])
         self.assertIsNone(registry.active_project(self.home))
+
+    # ---- S-REG-007b: a half-written lock is never mistaken for an abandoned one ----
+    def test_unreadable_lock_is_refused_not_reclaimed(self):
+        """The race that let two activations win, reduced to a deterministic case.
+
+        `activate` used to create the lock with O_EXCL and write the record
+        afterwards. A concurrent caller reading inside that window saw an empty
+        file, failed to parse it, concluded the lock was stale, and reclaimed
+        it - so both callers won and the second overwrote the first. An
+        unreadable lock must therefore never read as abandoned.
+        """
+        entry = registry.register(self.home, "mu", self._project_dir("mu"))
+        self.home.mkdir(parents=True, exist_ok=True)
+        registry._lock_path(self.home).write_text("")          # the mid-write window
+        with self.assertRaisesRegex(RuntimeError, "unreadable"):
+            registry.activate(self.home, entry["id"])
+        self.assertEqual(registry._lock_path(self.home).read_text(), "",
+                         "a refused activation must not overwrite the existing lock")
+        audit = self.home / registry.AUDIT_FILENAME
+        if audit.exists():
+            self.assertNotIn("reclaimed stale activation lock", audit.read_text(),
+                             "an unreadable lock is not a stale lock")
+
+    # ---- S-REG-007d: the create-then-write window, forced open ----
+    def test_activation_window_is_not_mistaken_for_a_stale_lock(self):
+        """The race, made deterministic instead of hoped for.
+
+        A plain concurrent test only fails when the scheduler happens to land a
+        second caller inside the window between creating the lock and writing
+        it - on a fast machine it usually does not, so passing proves nothing.
+        This holds the window open: while the lock path is being created with
+        O_EXCL, the creating thread sleeps before returning. The pre-fix code
+        then reliably lets the second caller read an empty lock, judge it
+        stale, and reclaim it, so both callers win.
+
+        The fixed code creates a temporary file rather than the lock path and
+        publishes it with os.link, so the hook never fires and there is no
+        window to hold open.
+        """
+        first = registry.register(self.home, "rho", self._project_dir("rho"))
+        second = registry.register(self.home, "sigma", self._project_dir("sigma"))
+        lock = registry._lock_path(self.home)
+        real_open = os.open
+
+        def holding_open(path, flags, mode=0o777, **keywords):
+            descriptor = real_open(path, flags, mode, **keywords)
+            if str(path) == str(lock) and flags & os.O_EXCL:
+                time.sleep(0.3)
+            return descriptor
+
+        outcomes: dict[str, str] = {}
+        barrier = threading.Barrier(2)
+
+        def attempt(project_id: str):
+            barrier.wait()
+            try:
+                registry.activate(self.home, project_id)
+                outcomes[project_id] = "won"
+            except RuntimeError:
+                outcomes[project_id] = "refused"
+
+        with patch.object(os, "open", holding_open):
+            threads = [threading.Thread(target=attempt, args=(p,))
+                       for p in (first["id"], second["id"])]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(sorted(outcomes.values()), ["refused", "won"],
+                         "exactly one activation may win, even inside the window")
+        winner = [key for key, value in outcomes.items() if value == "won"][0]
+        active = registry.active_project(self.home)
+        self.assertIsNotNone(active, "the winner holds no lock")
+        self.assertEqual(active["project_id"], winner,
+                         "the lock names a project that did not win")
 
     # ---- S-REG-008: stale lock (dead pid) is reclaimed with an audit record ----
     def test_stale_lock_reclaimed_live_lock_respected(self):

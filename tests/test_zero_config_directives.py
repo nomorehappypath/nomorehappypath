@@ -32,6 +32,28 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
         self.assertIn("A misplaced comma", primary)
         self.assertIn("Never keep a historical or superseded hold open", primary)
 
+    def test_directives_require_proving_a_fix_under_the_condition_that_breaks_it(self):
+        agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
+        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
+        for text in (agent.lower(), spawn.lower()):
+            self.assertIn("a path outside the approved workspace", text)
+            self.assertIn("a different operating system", text)
+            self.assertIn("infer another agent's or another platform's behavior from its transcript", text)
+            self.assertIn("stays unproven", text)
+        self.assertIn("A green result from a place the failure cannot occur is not evidence", agent)
+        self.assertIn("belongs in the repository as a script or a test", spawn)
+
+    def test_directives_protect_behavior_a_reviewer_already_accepted(self):
+        agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
+        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
+        for text in (agent.lower(), spawn.lower()):
+            self.assertIn("already accepted", text)
+            self.assertIn("non-blocking", text)
+            self.assertIn("out of scope", text)
+            self.assertIn("new claim", text)
+            self.assertIn("an environment you have not reproduced", text)
+        self.assertIn("A refusal that fires when it should is the product working", agent)
+
     def test_runtime_directives_cannot_recreate_the_removed_findings_queue(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         cto = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
