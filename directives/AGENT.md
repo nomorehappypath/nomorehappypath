@@ -207,6 +207,52 @@ delivery plan or implement until the confirmation is recorded.
    concrete release action by its next monitoring cycle, post that missing CTO
    action as an internal governance defect; never ask the owner to prompt it.
 
+### Delivery quality bar
+
+The board certifies that your declared commands ran. It cannot judge whether
+the work is good; these four rules are yours to satisfy before you request
+review.
+
+- **A user-facing change is proven on the rendered surface.** When a scenario
+  covers something a person sees or operates, its `Simulation command` must
+  drive the running surface and capture what was actually rendered, using the
+  project's own UI test tooling or a headless driver you add under `.harness`
+  when it has none. Reading served markup, template source, or a build log is
+  not seeing the page; an empty or error render is a FAIL row, not a pass.
+  Where the project genuinely cannot be driven this way, record the limitation
+  as an approved Completion Contract exclusion with its reason, and never
+  present an unexecuted surface as covered by a chunk or final review
+  simulation.
+- **User-facing means usable, not just rendered.** A surface the owner will
+  see is judged as a product surface: readable at the size it ships, affected
+  interactions work with keyboard and pointer, relevant empty/loading/error
+  states are handled, and it matches the existing product's idiom. The
+  rendered proof shows it working; the UX Designer hat is responsible for it
+  being good.
+- **A defect fix carries a regression scenario you watched fail first.**
+  Capture the failing output on the unfixed code before you fix it and record
+  it as distinct evidence alongside the unit-test output; the ledger row then
+  asserts the corrected behavior. A regression scenario that would also have
+  passed on the unfixed code proves nothing and must not be presented as proof
+  of the fix.
+- **A restrictive condition is proven under that condition, not around it.**
+  When a finding, an acceptance scenario, or a gate names a condition the code
+  must survive — a command the environment denies, a path outside the approved
+  workspace, an absent binary or file, a different operating system — reproduce
+  that condition and run the candidate under it. Build the reproduction; never
+  infer another agent's or another platform's behavior from its transcript. A
+  green result from a place the failure cannot occur is not evidence of the
+  fix, in exactly the way that reading served markup is not seeing the page.
+  Where you genuinely cannot reproduce a condition, say so in the review
+  summary and name what stays unproven — a declared gap is honest, a silent
+  one is a false claim.
+- **Nothing you run touches the owner's real files.** Every test and
+  simulation runs against the task workspace, the board root's `.harness`
+  directories, or a temporary directory you create — never the owner's home
+  configuration, global tool settings, or another project. When a change goes
+  near provider or tool configuration, hash the affected file before and after
+  the run and record both hashes as evidence.
+
 ### Scope control for newly discovered findings
 
 Compare every newly discovered issue with the exact owner direction and the
@@ -221,6 +267,17 @@ summary only. Do not record a deferred finding, create board work, request an
 owner decision, wake the CTO, alter the current contract, or delay the current
 task. If it later becomes a reproducible defect in a required outcome, treat it
 as an in-scope failure with normal repair and regression proof.
+
+Behavior an Independent Reviewer has already accepted — including anything it
+marked non-blocking — is out of scope for the rounds that follow. Repairing a
+verdict is not an invitation to redesign what the verdict approved, and a
+protective refusal, gate, or guard is never weakened or downgraded on your own
+inference about an environment you have not reproduced. If you believe such
+behavior is wrong, it becomes a NEW claim: state it in the review summary as a
+deliberate change, carry the executed evidence that the old behavior was
+wrong, and let it be reviewed as its own thing. A refusal that fires when it
+should is the product working; silencing it to obtain a green run is the
+failure this system exists to prevent.
 
 ### Owner rejection repair routing
 

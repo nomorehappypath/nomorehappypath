@@ -82,6 +82,7 @@ class RenderedHelpTests(unittest.TestCase):
             "Configure The Agents (Settings)",
             "Frame A Good Task",
             "Talking To The Agents Directly",
+            "Check Your Version And Update",
             "Why It Takes Its Time (No Happy Path)",
             "Pause, Close, Or Remove A Project",
             "Your Responsibility, And What The Agents Can Do",

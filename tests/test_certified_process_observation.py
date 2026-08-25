@@ -6,10 +6,15 @@ import unittest
 from pathlib import Path
 
 from harness import board, certified_execution, execution_identity
+from tests import environment_support
 
 
 class CertifiedProcessObservationTests(unittest.TestCase):
     def setUp(self):
+        # This suite's whole subject is proving which processes an execution
+        # owned, read from the OS process table. Where the environment forbids
+        # that, the assertions cannot run and saying so is honest.
+        environment_support.require_process_table()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

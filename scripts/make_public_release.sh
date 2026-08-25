@@ -59,6 +59,23 @@ if grep -rin "$brand" "$out" --exclude-dir=.git \
 fi
 
 echo "== Gate 4: full test suite inside the assembled tree"
+# Gate 4 proves, among other things, WHICH processes an execution owned, and it
+# learns that by reading the OS process table. A release must never be cut from
+# an environment that cannot verify it, so an unreadable process table REFUSES
+# here rather than letting the suite report 145 errors, or - worse - letting it
+# report a pass built on 145 skips. The probe runs inside the assembled tree
+# because that is where the suite runs: sandboxes have been observed permitting
+# `ps` in the source checkout and denying it in the assembled tree, which sits
+# outside the approved path.
+if ! ( cd "$out" && PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -c \
+        "from harness import browser_acceptance; browser_acceptance._process_table()" ) 2>/dev/null; then
+  echo "REFUSED: this environment cannot read the OS process table ('ps') in $out." >&2
+  echo "         Certified execution proves process ownership by reading it, so the" >&2
+  echo "         release suite cannot verify this tree here and a pass would be false." >&2
+  echo "         Re-run the release from a shell that permits reading the process" >&2
+  echo "         table for the output directory." >&2
+  exit 1
+fi
 ( cd "$out" && PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests )
 
 echo "== All gates passed: $out is ready for release commit"

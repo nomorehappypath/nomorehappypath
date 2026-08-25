@@ -28,6 +28,7 @@ from typing import Any
 from urllib.request import urlopen
 
 from harness import board, git_process, workspace_settings
+from harness import browser_acceptance
 
 
 TICK_SECONDS = 5.0
@@ -41,10 +42,12 @@ def preview_root(root: Any) -> Path:
 
 
 def _start_token(pid: int) -> str:
-    """One ps-derived token so a reused PID is never mistaken for our child."""
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True,
-    )
+    """One ps-derived token so a reused PID is never mistaken for our child.
+
+    An absent pid yields an empty token, as before. An environment that cannot
+    run ``ps`` at all is a different thing entirely and says so by name.
+    """
+    result = browser_acceptance._run_ps(["-p", str(pid), "-o", "lstart="], check=False)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 

@@ -290,14 +290,22 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _read_lock(path: Path) -> dict[str, Any] | None:
+    """The lock's record, or None when it is absent, empty, or unparseable."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def active_project(home: Path) -> dict[str, Any] | None:
     """The live activation, or None. A stale lock (dead pid) reads as inactive."""
     path = _lock_path(home)
     if not path.is_file():
         return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    value = _read_lock(path)
+    if value is None:
         return None
     return value if _pid_alive(int(value.get("pid", 0))) else None
 
@@ -305,9 +313,13 @@ def active_project(home: Path) -> dict[str, Any] | None:
 def activate(home: Path, project_id: str, pid: int | None = None) -> dict[str, Any]:
     """Exclusive activation: exactly one project may be active at a time.
 
-    O_EXCL creation makes concurrent activations race-safe (one wins, the other
-    fails loudly).  A stale lock — its recorded pid no longer alive — is
-    reclaimed atomically with an audit record; a live lock is never overridden.
+    The lock file is published already carrying its record — written to a
+    temporary file and hard-linked into place, the same idiom
+    ``board_surface._write_new_file`` uses — so a concurrent caller can never
+    observe a created-but-empty lock.  A lock that exists but cannot be read is
+    therefore never treated as abandoned: only a *readable* record whose pid is
+    dead is reclaimed, atomically and with an audit record.  A live lock is
+    never overridden.
     """
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
@@ -317,27 +329,36 @@ def activate(home: Path, project_id: str, pid: int | None = None) -> dict[str, A
               "project_name": entry["name"], "acquired_at": _now()}
     payload = json.dumps(record, indent=2, sort_keys=True)
     path = _lock_path(home)
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        current = None
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
-        if current and _pid_alive(int(current.get("pid", 0))):
-            raise RuntimeError(
-                f"project '{current.get('project_name', current.get('project_id'))}' is already active "
-                f"(pid {current.get('pid')}); pause it before opening another project"
-            )
-        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temp.write_text(payload, encoding="utf-8")
-        os.replace(temp, path)
-        _audit(home, f"reclaimed stale activation lock (dead pid {current.get('pid') if current else 'unreadable'}) for project {project_id}")
-    else:
+        descriptor = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write(payload)
-        _audit(home, f"activated project '{entry['name']}' ({project_id}) pid={record['pid']}")
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            current = _read_lock(path)
+            if current is None:
+                raise RuntimeError(
+                    "another activation is in progress or the activation lock is unreadable "
+                    f"({path}); pause the open project, or remove that file if no project is running"
+                ) from None
+            if _pid_alive(int(current.get("pid", 0))):
+                raise RuntimeError(
+                    f"project '{current.get('project_name', current.get('project_id'))}' is already active "
+                    f"(pid {current.get('pid')}); pause it before opening another project"
+                ) from None
+            os.replace(temp, path)
+            _audit(home, f"reclaimed stale activation lock (dead pid {current.get('pid')}) for project {project_id}")
+        else:
+            _audit(home, f"activated project '{entry['name']}' ({project_id}) pid={record['pid']}")
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
     update_entry(home, project_id, last_active_at=_now())
     return record
 
