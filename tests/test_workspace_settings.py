@@ -122,8 +122,22 @@ class WorkspaceSettingsTests(unittest.TestCase):
         script = (Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh").read_text()
         launch = next(line for line in script.splitlines() if "HARNESS_CODEX_BIN" in line and "--cd" in line)
         self.assertIn('-c "approval_policy=never"', launch)
-        self.assertIn('-c "sandbox_mode=danger-full-access"', launch)
         self.assertIn('--cd "$execution_root"', launch)
+        # Writes are confined. This asserted the sandbox-disabling mode until a
+        # reviewer proved, by execution, that a managed agent could write
+        # outside the project while the app's Help text claimed it could not.
+        # The scope is now the project plus the harness's OWN paths - the task
+        # workspace is a SIBLING of the project, so workspace-write alone would
+        # block legitimate work.
+        self.assertIn('-c "sandbox_mode=workspace-write"', launch)
+        self.assertIn("sandbox_workspace_write.writable_roots", launch)
+        # The VALIDATED list, not the raw owner-supplied roots: an adopted
+        # project can name a broad ancestor, or a symlink resolving to one.
+        self.assertIn("${writable_roots_json}", launch)
+        self.assertNotIn("${data_root}", launch)
+        self.assertNotIn("full-access", launch,
+                         "the sandbox is switched off again; the Help text now "
+                         "claims protection that does not exist")
 
     def test_provider_apply_ignores_legacy_unconfirmed_override(self):
         with tempfile.TemporaryDirectory() as tmp:

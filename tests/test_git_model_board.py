@@ -90,6 +90,117 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
             }
         return committed
 
+    def test_rolled_back_board_nonce_does_not_deadlock_the_next_commit(self):
+        """A board rollback after the broker journal commits must self-heal.
+
+        The board counter lives inside the ``locked_state`` transaction and is
+        discarded when that block raises, but ``consume_nonce`` has already
+        written the broker journal by then. The two stores drift apart by one,
+        and allocating from the board alone replays a spent nonce, so every
+        later Delivery write is refused as a replay forever.
+        """
+        workspace = Path(self.begun["task_workspace"])
+        (workspace / "product.txt").write_text("first\n", encoding="utf-8")
+        board.broker_stage_commit(
+            self.root, self.delivery["id"], ["product.txt"], "first governed commit",
+        )
+
+        session_key = self.delivery.get("session_id") or self.delivery["id"]
+        with board.locked_state(self.root) as state:
+            nonces_path = board._broker_for_state(self.root, state, "GIT-MODEL").nonces_path
+        accepted = int(json.loads(nonces_path.read_text(encoding="utf-8"))[session_key])
+
+        # Reproduce the rollback: the board forgets an allocation the broker
+        # has durably accepted.
+        with board.locked_state(self.root) as state:
+            state["broker_nonces"][session_key] = accepted - 1
+
+        (workspace / "product.txt").write_text("second\n", encoding="utf-8")
+        committed = board.broker_stage_commit(
+            self.root, self.delivery["id"], ["product.txt"], "commit after board rollback",
+        )
+        self.assertTrue(committed["commit"])
+
+        with board.locked_state(self.root) as state:
+            self.assertGreater(int(state["broker_nonces"][session_key]), accepted)
+
+    def _accepted_nonce(self):
+        session_key = self.delivery.get("session_id") or self.delivery["id"]
+        with board.locked_state(self.root) as state:
+            nonces_path = board._broker_for_state(self.root, state, "GIT-MODEL").nonces_path
+        return session_key, int(json.loads(nonces_path.read_text(encoding="utf-8"))[session_key])
+
+    def test_recover_git_reports_and_reconciles_nonce_drift_and_is_quiet_without_it(self):
+        """The 2026-09-21 incident answered `{"holds": [], "recovered": []}` to this drift."""
+        workspace = Path(self.begun["task_workspace"])
+        (workspace / "product.txt").write_text("first\n", encoding="utf-8")
+        board.broker_stage_commit(self.root, self.delivery["id"], ["product.txt"], "first governed commit")
+        session_key, accepted = self._accepted_nonce()
+
+        quiet = board.recover_git_transactions(self.root)
+        self.assertEqual(quiet["nonce_drift"], [], "no drift must be reported as no drift")
+
+        with board.locked_state(self.root) as state:
+            state["broker_nonces"][session_key] = accepted - 1
+
+        report = board.recover_git_transactions(self.root)
+        self.assertEqual(report["nonce_drift"], [{
+            "task": "GIT-MODEL", "session": session_key,
+            "board": accepted - 1, "journal": accepted, "reconciled_to": accepted,
+        }])
+        with board.locked_state(self.root) as state:
+            self.assertEqual(int(state["broker_nonces"][session_key]), accepted)
+            kinds = [event["kind"] for event in state["events"]]
+        self.assertIn("broker_nonce_drift_reconciled", kinds)
+        self.assertEqual(board.recover_git_transactions(self.root)["nonce_drift"], [])
+
+    def test_a_refused_write_is_a_visible_blocked_state_not_a_stall_and_clears_on_success(self):
+        """The agent kept polling for 21 minutes while every write bounced; the board said 'stalled'."""
+        from unittest import mock
+        import time
+        from harness import git_broker
+
+        workspace = Path(self.begun["task_workspace"])
+        (workspace / "product.txt").write_text("first\n", encoding="utf-8")
+        board.broker_stage_commit(self.root, self.delivery["id"], ["product.txt"], "first governed commit")
+
+        (workspace / "product.txt").write_text("second\n", encoding="utf-8")
+        with mock.patch.object(board, "_next_broker_nonce", return_value=1):
+            with self.assertRaises(git_broker.ReplayError) as caught:
+                board.broker_stage_commit(self.root, self.delivery["id"], ["product.txt"], "replayed nonce")
+        self.assertIn("replay refused", str(caught.exception))
+
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertEqual(agent["status"], "blocked")
+            self.assertEqual(agent["broker_refusal"]["operation"], "git-commit")
+            self.assertIn("replay refused", agent["broker_refusal"]["reason"])
+            self.assertIn("refused", agent["status_note"])
+            self.assertEqual(state["events"][-1]["kind"], "broker_write_refused")
+            self.assertNotEqual(agent.get("liveness"), "stalled")
+            # Age the heartbeat so the watchdog would otherwise nudge this agent.
+            agent["last_poll_at"] = "2020-01-01T00:00:00+00:00"
+            agent["last_progress_at"] = "2020-01-01T00:00:00+00:00"
+
+        time.sleep(1.1)
+        board.mark_stalled(self.root, stale_seconds=1)
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertNotIn(agent.get("liveness"), {"stalled", "recovering"},
+                             "a refused write must not be treated as a stall")
+            self.assertIsNone(agent.get("automatic_recovery_requested_at"),
+                              "the generic recover instruction must not be routed to a blocked agent")
+
+        committed = board.broker_stage_commit(self.root, self.delivery["id"], ["product.txt"], "after the refusal")
+        self.assertTrue(committed["commit"])
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertNotIn("broker_refusal", agent)
+            self.assertEqual(agent["status"], "working")
+            self.assertIn("accepted", agent["status_note"])
+            kinds = [event["kind"] for event in state["events"]]
+        self.assertIn("broker_write_accepted_after_refusal", kinds)
+
     def test_owner_accept_advances_local_main_to_exact_mirror_candidate_without_push(self):
         committed = self.certified_candidate()
         response = board.record_release_decision(self.root, "GIT-MODEL", "accepted")

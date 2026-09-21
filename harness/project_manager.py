@@ -9,7 +9,9 @@ information — task counts, running state, health — is computed from each
 project's board at render time, never stored.
 
 Phase 1 scope: Open, New project, Adopt existing, Repair, Remove, Close. The
-Codex confidentiality notice is display-only (no sandbox enforcement claim).
+Agent-reach disclosure lives in Help, not on the project view, and states
+plainly that agent sessions run unconfined. Only the app's own Git work is
+sandboxed.
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ if __package__ in {None, ""}:
 from harness import board, board_surface, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
 from harness import workspace_settings
+from harness import platform_support
 from harness.project_manager_page import PAGE
 
 MANAGER_PORT = 8740
@@ -54,16 +57,6 @@ FOLDER_PROMPTS = {
     "adopt-project": "Choose the existing project folder to adopt",
     "repair-project": "Choose the project's current folder",
 }
-
-# Delivery runs on Codex in the current role defaults; the confidentiality
-# limitation (outside reads can reach the model channel) is disclosed on every
-# project view. Display-only in Phase 1 — it claims no sandbox enforcement.
-CODEX_NOTICE = (
-    "Codex agents can read files outside this project and could relay their "
-    "contents through the model connection. Write access is what the harness "
-    "confines today; full read confinement arrives with the sandbox phase."
-)
-
 
 def project_folder_name(name: str) -> str:
     """Return a predictable safe folder name derived from a project name."""
@@ -91,19 +84,72 @@ def choose_folder(purpose: str) -> str:
     prompt = FOLDER_PROMPTS.get(str(purpose))
     if not prompt:
         raise ValueError("unknown folder selection purpose")
-    if os.uname().sysname != "Darwin":
-        raise ValueError("native folder selection is available on macOS only")
-    script = f'POSIX path of (choose folder with prompt "{prompt}")'
+    # The closed-set check above is the only thing keeping arbitrary text out of
+    # the AppleScript, so it runs BEFORE the platform layer is reached.
     try:
-        result = subprocess.run(
-            ["/usr/bin/osascript", "-e", script], capture_output=True, text=True,
-            check=False, timeout=120,
-        )
-    except subprocess.TimeoutExpired as error:
+        return platform_support.folder_chooser().choose(prompt)
+    except platform_support.UnsupportedPlatformOperation as error:
+        raise ValueError("native folder selection is available on macOS only") from error
+    except platform_support.FolderSelectionTimeout as error:
         raise ValueError("folder selection timed out; try again") from error
-    if result.returncode != 0 or not result.stdout.strip():
-        return ""
-    return str(Path(result.stdout.strip()).resolve())
+
+
+def native_folder_selection_available() -> bool:
+    """Can this platform open a folder dialog at all?
+
+    False headless and on Linux, which is the normal case for the servers this
+    port exists to support. The page asks this so it can offer a typed path
+    instead of a button that cannot work.
+    """
+    try:
+        platform_support.folder_chooser()
+    except platform_support.UnsupportedPlatformOperation:
+        return False
+    return os.uname().sysname == "Darwin"
+
+
+def folder_from_typed_path(raw: str, purpose: str, *, home=None) -> str:
+    """Validate a typed folder path. Never fails silently.
+
+    The interim answer where no native dialog exists. Every refusal below names
+    what is wrong in words the owner can act on: a path that is merely rejected
+    with "invalid" turns a typo into a support question.
+
+    Validation is here, not in the platform layer, for the same reason the
+    purpose table is: it is product policy, and the closed-set purpose check
+    must still run first.
+    """
+    if not FOLDER_PROMPTS.get(str(purpose)):
+        raise ValueError("unknown folder selection purpose")
+
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("type the full path to the folder, starting with /")
+    if text.startswith("~"):
+        text = os.path.expanduser(text)
+    if not text.startswith("/"):
+        raise ValueError("the path must be absolute — start it with /")
+
+    candidate = Path(text)
+    if not candidate.exists():
+        raise ValueError(f"there is no folder at {candidate}")
+    if not candidate.is_dir():
+        raise ValueError(f"{candidate} is a file, not a folder")
+    resolved = candidate.resolve()
+    if not os.access(resolved, os.W_OK):
+        raise ValueError(f"{resolved} is not writable by this user")
+
+    # A project inside a project makes two boards fight over the same tree.
+    if home is not None:
+        for existing in registry.entries(home):
+            other = Path(str(existing.get("root") or "")).resolve()
+            if other == resolved:
+                raise ValueError(f"{resolved} is already a project")
+            if other in resolved.parents:
+                raise ValueError(f"{resolved} is inside the existing project at {other}")
+            if resolved in other.parents:
+                raise ValueError(f"{resolved} contains the existing project at {other}")
+    return str(resolved)
 
 
 def page_version() -> str:
@@ -334,7 +380,8 @@ class ProjectManager:
         rows.sort(key=lambda row: row.get("last_board_activity") or row.get("last_active_at") or "", reverse=True)
         rows.sort(key=lambda row: not row["active"])
         return {
-            "projects": rows, "active": active, "codex_notice": CODEX_NOTICE,
+            "projects": rows, "active": active,
+            "native_folder_picker": native_folder_selection_available(),
             "page_version": page_version(),
         }
 
@@ -1050,7 +1097,20 @@ def make_handler(manager: ProjectManager):
                     return self._redirect("/")
                 self._require_json_api()
                 if self.path == "/api/folders/browse":
-                    selected = choose_folder(self._body().get("purpose", ""))
+                    value = self._body()
+                    typed = value.get("path", "")
+                    if typed:
+                        # Typed path: the interim answer where no native dialog
+                        # exists. Validated server-side, never trusted as given.
+                        chosen = folder_from_typed_path(
+                            typed, value.get("purpose", ""), home=manager.home,
+                        )
+                        return self._send(200, {"path": chosen, "cancelled": False})
+                    if not native_folder_selection_available():
+                        raise ValueError(
+                            "this system has no folder chooser — type the full path instead"
+                        )
+                    selected = choose_folder(value.get("purpose", ""))
                     return self._send(200, {"path": selected, "cancelled": not bool(selected)})
                 if self.path == "/api/settings":
                     value = self._body()

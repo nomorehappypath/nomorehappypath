@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import sys
 
+from harness import platform_support
+
 
 SHELL_AMBIENT_KEYS = frozenset({
     "BASH_ENV", "ENV", "CDPATH", "IFS", "SHELLOPTS", "BASHOPTS", "ZDOTDIR",
@@ -22,16 +24,7 @@ EXECUTION_ENVIRONMENT_KEYS = frozenset({
 
 def _execution_path(source: Mapping[str, str]) -> str:
     """Return one stable tool path independent of an agent's interactive shell."""
-    candidates = [str(Path(sys.executable).resolve().parent)]
-    for environment_name in ("VIRTUAL_ENV", "CONDA_PREFIX"):
-        prefix = str(source.get(environment_name, "")).strip()
-        if prefix:
-            candidates.append(str(Path(prefix).resolve() / "bin"))
-    candidates.extend((
-        "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
-        "/usr/sbin", "/sbin",
-    ))
-    return os.pathsep.join(dict.fromkeys(candidates))
+    return platform_support.discovery().governed_execution_path(source)
 
 
 def environment(

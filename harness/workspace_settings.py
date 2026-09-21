@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -162,17 +161,6 @@ def validate_workspace(value: str) -> Path:
 
 def update(root: ProjectRoot, workspace_root: str) -> dict[str, Any]:
     raise ValueError("the project folder is managed from Projects and cannot be changed here")
-
-
-def choose_folder() -> str:
-    """Open a native macOS folder chooser; return empty when cancelled."""
-    if os.uname().sysname != "Darwin":
-        raise ValueError("native folder browsing is available on macOS only")
-    script = 'POSIX path of (choose folder with prompt "Choose the agent workspace folder")'
-    result = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
 
 
 def apply_provider_files(settings: dict[str, Any], provider: str) -> dict[str, str]:

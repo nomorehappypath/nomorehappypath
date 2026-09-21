@@ -6,6 +6,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 harness_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/platform_support.sh"
 home="${HARNESS_HOME:-$HOME/.harness-home}"
 port="8740"
 worker_port="8741"
@@ -62,8 +63,12 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 digest = hashlib.sha256()
-for path in sorted((root / "harness").glob("*.py")):
-    digest.update(path.name.encode())
+source_root = root / "harness"
+# Recursive, and keyed on the path RELATIVE to the source root: a subpackage
+# must change this revision, and two files sharing a name in different
+# directories must not collide. Identical output while no subpackage exists.
+for path in sorted(source_root.rglob("*.py")):
+    digest.update(path.relative_to(source_root).as_posix().encode())
     digest.update(path.read_bytes())
 print(digest.hexdigest(), end="")
 PY
@@ -120,7 +125,7 @@ if ! wait_for_manager; then
 fi
 
 if [[ "$open_browser" == "1" ]]; then
-  open "$url" 2>/dev/null || true
+  owner_open_url "$url"
 fi
 
 echo "HARNESS NEXT ONLINE | url=$url | private_worker_port=$worker_port | pid=$manager_pid"

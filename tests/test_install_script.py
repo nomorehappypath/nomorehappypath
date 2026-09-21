@@ -2,7 +2,10 @@
 """The installer must be honest and safe: clear checks, no accidental installs."""
 from __future__ import annotations
 
+import platform
+import sys
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -42,8 +45,25 @@ class InstallScriptTests(unittest.TestCase):
 
     def test_check_names_every_prerequisite_and_the_api_key(self):
         completed = self.run_script("--check")
-        for marker in ("macOS", "Python", "Codex CLI", "Claude Code CLI", "OpenAI API key"):
+        for marker in ("Python", "Codex CLI", "Claude Code CLI", "OpenAI API key"):
             self.assertIn(marker, completed.stdout)
+        # The PLATFORM must be NAMED, not one platform's name asserted.
+        #
+        # This required the literal "macOS", so it failed on Linux while the
+        # installer did exactly the right thing and reported "Ubuntu 24.04.4
+        # LTS". My first correction then asked for platform.system() — "Linux" —
+        # which the installer also never prints, because it reports the DISTRO.
+        # Both versions guessed at the wording instead of asking the code.
+        #
+        # The contract is that the check prints whatever the seam's
+        # platform_display_label returns, so the test asks the seam.
+        label = subprocess.run(
+            ["bash", "-c", f'source "{ROOT}/scripts/platform_support.sh"; platform_display_label'],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertTrue(label, "the seam must produce a platform label")
+        self.assertIn(label, completed.stdout,
+                      "the check must name the platform it is running on")
         # --check must never install anything or prompt
         self.assertNotIn("Choose 1 or 2", completed.stdout)
 
@@ -65,6 +85,45 @@ class InstallScriptTests(unittest.TestCase):
                        "cannot alter or",
                        "When should I NOT use it?"):
             self.assertIn(marker, readme)
+
+
+class HeadlessInstallTests(unittest.TestCase):
+    """A successful install must not report failure because no browser opened.
+
+    The reviewer proved this on Ubuntu: with the service installed and the app
+    answering, a failing or absent opener made the installer exit 3 IMMEDIATELY
+    AFTER printing that NoMoreHappyPath was running. A successful install
+    reported as a failure is worse than no message at all — the owner undoes
+    work that succeeded.
+
+    Stage 0 deliberately left that line a bare `open`, because routing it would
+    have changed exit behaviour and Stage 0 forbade that. Supporting Linux
+    inverted the calculation: headless is the normal case there.
+    """
+
+    def test_the_final_open_goes_through_the_seam(self):
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('owner_open_url "http://127.0.0.1:8740/"', installer,
+                      "the success-path open must not be able to fail the install")
+        self.assertNotIn('        open "http://127.0.0.1:8740/"', installer,
+                         "a bare open under set -e fails the installer on a headless box")
+
+    def test_the_opener_succeeds_when_no_opener_exists(self):
+        """The behaviour that makes the above safe, exercised for real."""
+        with tempfile.TemporaryDirectory() as empty:
+            # Absolute bash: PATH is deliberately empty so neither `open` nor
+            # `xdg-open` can be found, which is the condition under test.
+            completed = subprocess.run(
+                ["/bin/bash", "-c",
+                 f'set -euo pipefail; source "{ROOT}/scripts/platform_support.sh"; '
+                 f'owner_open_url "http://127.0.0.1:8740/"'],
+                capture_output=True, text=True,
+                env={"HOME": empty, "PATH": empty},
+            )
+        self.assertEqual(completed.returncode, 0,
+                         f"an absent opener must not fail: {completed.stderr}")
+        self.assertIn("127.0.0.1:8740", completed.stdout,
+                      "with no opener the owner must still be told the URL")
 
 
 if __name__ == "__main__":
@@ -125,3 +184,47 @@ class StopAllRegexScopingTests(unittest.TestCase):
         self.assertTrue(re.search(pattern, "python3 /tmp/harness.next/harness/project_manager.py --home x"))
         self.assertFalse(re.search(pattern, "python3 /tmp/harnessXnext/harness/project_manager.py --home x"),
                          "foreign installation must never match")
+
+
+class PrerequisiteAgreesWithTheAppTests(unittest.TestCase):
+    """The check must find CLIs the way the APP finds them.
+
+    Measured on a real Ubuntu box: Claude Code was installed at
+    ~/.local/bin/claude, the app's discovery found it, and this check reported
+    "Claude Code CLI not found" — because it used `command -v`, which respects
+    the login PATH, and ~/.local/bin was not on it.
+
+    A prerequisite check that disagrees with the program it checks for is worse
+    than none: it sends the owner to reinstall something that already works.
+    This is the same class as public issue #1, fixed in the app and never fixed
+    here.
+    """
+
+    def test_the_check_resolves_CLIs_through_the_app_not_the_shell_PATH(self):
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("global_settings.provider_executable", installer,
+                      "the check must ask the app where a CLI is")
+        self.assertNotIn("command -v codex", installer,
+                         "PATH lookup misses ~/.local/bin under a minimal environment")
+        self.assertNotIn("command -v claude", installer)
+
+    def test_it_finds_a_cli_that_is_NOT_on_PATH(self):
+        """The exact condition from the box: installed, executable, off PATH."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            local = home / ".local" / "bin"; local.mkdir(parents=True)
+            planted = local / "claude"
+            planted.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            planted.chmod(0o755)
+            found = subprocess.run(
+                [sys.executable, "-c",
+                 "import sys; sys.path.insert(0, sys.argv[1]);"
+                 "from harness import global_settings;"
+                 "print(global_settings.provider_executable('claude'))",
+                 str(ROOT)],
+                capture_output=True, text=True,
+                env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            )
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn(".local/bin/claude", found.stdout,
+                      "a CLI off PATH must still be found, as the app finds it")

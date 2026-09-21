@@ -9,6 +9,8 @@ import os
 import shutil
 import signal
 import subprocess
+
+from harness import platform_support
 import threading
 import time
 from dataclasses import dataclass
@@ -34,7 +36,7 @@ def _safe_binary(candidate: str | os.PathLike[str] | None) -> str | None:
     if not path.is_file() or not os.access(path, os.X_OK):
         return None
     resolved = path.resolve()
-    if any(part.lower().endswith(".app") for part in resolved.parts):
+    if platform_support.browser_host().rejects_resolved(resolved):
         return None
     return str(resolved)
 
@@ -46,12 +48,9 @@ def resolve_binary() -> str:
         if selected:
             return selected
         raise ValueError("the configured acceptance browser must be executable and outside every macOS .app bundle")
-    cache = Path.home() / "Library" / "Caches" / "ms-playwright"
-    candidates = sorted(
-        cache.glob("chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell"),
-        reverse=True,
-    )
-    candidates.extend(shutil.which(name) for name in ("chrome-headless-shell", "chromium", "chromium-browser"))
+    host = platform_support.browser_host()
+    candidates: list = list(host.headless_cache_candidates())
+    candidates.extend(shutil.which(name) for name in host.path_candidate_names())
     for candidate in candidates:
         selected = _safe_binary(candidate)
         if selected:
@@ -108,64 +107,21 @@ def browser_identity(binary: str) -> dict[str, str]:
     return dict(identity)
 
 
-class ProcessTableUnavailable(OSError):
-    """The OS process table could not be read at all.
-
-    Deliberately an OSError. Callers that already tolerate an OSError from these
-    routines - the ownership observer at :211 keeps polling, release_preview's
-    liveness check treats it as "not our process" - must keep behaving exactly
-    as they did, or this refactor would silently kill a background thread while
-    claiming to change nothing.
-
-    Process identity is evidence, not decoration: without it, ownership of a
-    launched process cannot be proven and no execution certificate is honest.
-    A restricted environment that forbids running ``ps`` therefore produces
-    this named refusal rather than a raw OSError from the middle of an
-    evidence routine - and never an empty table, which would read as "nothing
-    was running".
-    """
+# Moved into harness/platform_support. The name stays here because callers and
+# tests import it from this module, and Stage 0 changes nothing observable.
+ProcessTableUnavailable = platform_support.ProcessTableUnavailable
 
 
 def _run_ps(arguments: list[str], *, check: bool) -> subprocess.CompletedProcess:
-    """Run ps, translating an unrunnable ps into one named condition."""
-    try:
-        return subprocess.run(
-            ["ps", *arguments], capture_output=True, text=True, check=check,
-        )
-    except OSError as error:
-        raise ProcessTableUnavailable(
-            f"cannot read the process table: 'ps' could not be executed ({error})"
-        ) from error
-    except subprocess.CalledProcessError as error:
-        detail = (error.stderr or "").strip() or f"exit status {error.returncode}"
-        raise ProcessTableUnavailable(
-            f"cannot read the process table: 'ps' failed ({detail})"
-        ) from error
+    return platform_support.process_identity().run_ps(arguments, check=check)
 
 
 def _start_token(pid: int) -> str:
-    # A non-zero exit means that pid is gone, which is an ANSWER, not a
-    # failure - it stays an empty token exactly as before.
-    result = _run_ps(["-p", str(pid), "-o", "lstart="], check=False)
-    return result.stdout.strip() if result.returncode == 0 else ""
+    return platform_support.process_identity().start_token(pid)
 
 
 def _process_table() -> dict[int, dict[str, Any]]:
-    result = _run_ps(["-axo", "pid=,ppid=,pgid=,lstart=,command="], check=True)
-    table: dict[int, dict[str, Any]] = {}
-    for raw in result.stdout.splitlines():
-        parts = raw.strip().split(None, 8)
-        if len(parts) != 9:
-            continue
-        try:
-            pid, ppid, pgid = (int(parts[index]) for index in range(3))
-        except ValueError:
-            continue
-        table[pid] = {
-            "pid": pid, "ppid": ppid, "pgid": pgid,
-            "start_token": " ".join(parts[3:8]), "command": parts[8],
-        }
-    return table
+    return platform_support.process_identity().process_table()
 
 
 def _is_browser_app_command(command: str) -> bool:

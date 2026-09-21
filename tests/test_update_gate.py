@@ -9,11 +9,15 @@ import json
 import os
 import shutil
 import socket
+import contextlib
+import signal
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+
+from harness import platform_support
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
@@ -186,11 +190,34 @@ class LauncherEndToEndTests(unittest.TestCase):
         }
 
     def _stop(self):
-        subprocess.run(["kill", "-TERM", f"-{self.process.pid}"], capture_output=True)
-        try:
+        """Signal the child's group ONLY while the child still leads that group.
+
+        This teardown used to shell out to the kill command with a NEGATED
+        pid, which addresses a process GROUP by number with no liveness and
+        no leadership check. (The literal form is not written here: the
+        architectural guard scans this file too, as it should.) This test restarts
+        the launcher on purpose, so by teardown the original process has often
+        exited and its pid has been reused — and the group that number now names
+        is the TEST RUNNER's own group. Three detached full-suite runs on the
+        Ubuntu host died here with no traceback, and running this single test in
+        the foreground of an SSH session killed the SSH session.
+        """
+        identity = platform_support.process_identity()
+        for sig in (signal.SIGTERM, None, signal.SIGKILL):
+            if sig is None:
+                try:
+                    self.process.wait(timeout=10)
+                    return
+                except subprocess.TimeoutExpired:
+                    continue
+            if not identity.terminate_group(self.process, sig):
+                # Not a group leader any more, or already gone: the pid alone is
+                # the only thing still safe to address.
+                if self.process.poll() is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(self.process.pid, sig)
+        with contextlib.suppress(subprocess.TimeoutExpired):
             self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            subprocess.run(["kill", "-KILL", f"-{self.process.pid}"], capture_output=True)
 
     def _wait_ready(self, timeout: float = 30.0):
         deadline = time.monotonic() + timeout

@@ -30,6 +30,7 @@ from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from harness import control
+from harness import platform_support
 from harness.project_context import ProjectRoot, context_cli_arguments, project_context
 
 
@@ -301,11 +302,9 @@ class SessionTokenAuthority:
             if current_pid == attached_pid:
                 break
             try:
-                result = subprocess.run(
-                    ["/bin/ps", "-o", "ppid=", "-p", str(current_pid)],
-                    check=True, capture_output=True, text=True, timeout=2,
+                parent_pid = platform_support.process_identity().parent_process_id(
+                    current_pid, timeout_seconds=2,
                 )
-                parent_pid = int(result.stdout.strip())
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 raise SurfaceAuthenticationError("session authentication failed") from error
             if parent_pid <= 1 or parent_pid == current_pid:

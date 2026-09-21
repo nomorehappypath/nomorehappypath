@@ -16,8 +16,10 @@ tail — never silently dropped.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -28,6 +30,7 @@ from typing import Any
 from urllib.request import urlopen
 
 from harness import board, git_process, workspace_settings
+from harness import platform_support
 from harness import browser_acceptance
 
 
@@ -178,18 +181,12 @@ class Preview:
         self.process = None
         if not process or process.poll() is not None:
             return
-        try:
-            subprocess.run(["kill", "-TERM", f"-{process.pid}"], capture_output=True)
-        except OSError:
-            pass
+        platform_support.process_identity().terminate_group(process, signal.SIGTERM)
         deadline = time.monotonic() + STOP_GRACE_SECONDS
         while process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.1)
         if process.poll() is None:
-            try:
-                subprocess.run(["kill", "-KILL", f"-{process.pid}"], capture_output=True)
-            except OSError:
-                pass
+            platform_support.process_identity().terminate_group(process, signal.SIGKILL)
             process.wait(timeout=5)
 
 
@@ -276,8 +273,16 @@ class ReleasePreviewSupervisor:
             token = str(recorded.get("start_token") or "")
             if not pid or task in self.previews:
                 continue
+            # A recorded pid from a PREVIOUS worker: there is no Popen handle to
+            # prove liveness with, so the start token is the only evidence that
+            # this number is still the process we started. Even then the signal
+            # goes to the pid alone, never to a GROUP addressed by that number -
+            # a recycled pid would make that somebody else's group.
             if token and _start_token(int(pid)) == token:
-                subprocess.run(["kill", "-TERM", f"-{int(pid)}"], capture_output=True)
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
 
     def _record(self, task: str, preview_value: dict[str, Any]) -> None:
         try:

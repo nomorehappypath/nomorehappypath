@@ -10,8 +10,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # pgrep -f takes a REGEX: every metacharacter in the path must be escaped or
 # /tmp/harness.next would also match /tmp/harnessXnext - and kill it.
 root_re="$(printf '%s' "$root" | sed -e 's/[][\.^$*+?(){}|/]/\\&/g')"
-label="com.nomorehappypath.app"
-plist="$HOME/Library/LaunchAgents/$label.plist"
+source "$root/scripts/platform_support.sh"
+label="$(service_label)"
+plist="$(service_unit_path)"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: stop_all.sh          stop this installation's app processes"
@@ -29,7 +30,7 @@ fi
 
 # The service would instantly restart what we kill - take it out first.
 if [[ -f "$plist" ]]; then
-  launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+  autostart_stop
   echo "  ✔ auto-start service stopped (reinstall any time with: bash install.sh)"
 fi
 

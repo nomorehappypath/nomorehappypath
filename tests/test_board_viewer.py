@@ -29,10 +29,18 @@ class BoardViewerTests(unittest.TestCase):
         return self.script().split("el('#status-dialog-close')", 1)[0]
 
     def run_node(self, invocation):
+        """The program goes in on STDIN, not in argv.
+
+        `node -e <program>` puts the whole thing on the command line, and these
+        invocations embed a full dashboard payload as JSON. Linux's ARG_MAX is
+        smaller than macOS's, so the larger cases died with
+        "OSError: [Errno 7] Argument list too long" while the same test passed
+        on macOS - the limit, not the code, decided the result.
+        """
+        program = self.declarations_only() + "\n" + invocation
         completed = subprocess.run(
-            ["node", "-e", self.declarations_only() + "\n" + invocation],
-            capture_output=True,
-            text=True,
+            ["node", "--input-type=commonjs", "-"],
+            input=program, capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)

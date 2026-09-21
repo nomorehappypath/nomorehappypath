@@ -19,6 +19,23 @@ from typing import Any, Iterator, Mapping
 from harness import browser_acceptance, execution_identity
 
 
+def _reports_zero_executed_tests(output: str) -> bool:
+    """Did this command run no tests at all?
+
+    Recognised regardless of exit code: Python 3.12 signals it through code 5
+    while 3.9 exits 0, so keying off the exit status alone gives a different
+    answer on each interpreter for identical output.
+    """
+    counts = [
+        int(value)
+        for pair in re.findall(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I)
+        for value in pair if value
+    ]
+    if counts and max(counts) == 0:
+        return True
+    return bool(re.search(r"\bNO TESTS RAN\b", output, re.I))
+
+
 @contextmanager
 def _identity_lock(root: Any, identity_sha256: str) -> Iterator[None]:
     directory = execution_identity.board.board_dir(root) / "execution-locks"
@@ -258,6 +275,15 @@ def run(
             "execution_record_id": certified["entry"].get("record_id", ""),
             "process_audit": audit_manifest,
         }
+        # ZERO EXECUTED TESTS IS ITS OWN REFUSAL, checked before the exit code.
+        # Python 3.12 signals "no tests ran" through exit code 5, so this branch
+        # fired first there and reported "failed with exit code 5" — true,
+        # useless, and hiding the real problem: the command tested NOTHING.
+        # Python 3.9 exits 0 for the same command, which is why macOS never saw
+        # it. board.py carries the same guard; both call sites need it because
+        # either can be the one that runs the command.
+        if _reports_zero_executed_tests(output):
+            raise ValueError("internal-QA test command reported zero executed tests")
         if exit_code != 0:
             detail = problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}"
             raise ValueError(detail)

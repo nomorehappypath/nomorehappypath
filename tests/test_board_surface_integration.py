@@ -505,15 +505,17 @@ class BoardArtifactIngestionTests(unittest.TestCase):
         ):
             board_client._read_artifact(str(raced), "ledger")
 
+        # A modification landing BETWEEN the two reads: detected by comparing
+        # the bytes, on every platform, without depending on a clock.
         modified = self.context.code_root / "modified.md"
         modified.write_text("before", encoding="utf-8")
         original_read = os.read
-        changed = False
+        reads = 0
 
         def modified_read(descriptor, count):
-            nonlocal changed
-            if not changed:
-                changed = True
+            nonlocal reads
+            reads += 1
+            if reads == 3:  # after the first read has drained the file
                 modified.write_text("AFTER!", encoding="utf-8")
             return original_read(descriptor, count)
 
@@ -521,6 +523,58 @@ class BoardArtifactIngestionTests(unittest.TestCase):
             ValueError, "changed while it was being read"
         ):
             board_client._read_artifact(str(modified), "ledger")
+
+        # A LENGTH change at any point: detected by size, on every platform.
+        resized = self.context.code_root / "resized.md"
+        resized.write_text("before", encoding="utf-8")
+        original_read_2 = os.read
+        first = True
+
+        def resizing_read(descriptor, count):
+            nonlocal first
+            if first:
+                first = False
+                resized.write_text("considerably longer than before", encoding="utf-8")
+            return original_read_2(descriptor, count)
+
+        with mock.patch.object(board_client.os, "read", side_effect=resizing_read), self.assertRaisesRegex(
+            ValueError, "changed while it was being read"
+        ):
+            board_client._read_artifact(str(resized), "ledger")
+
+        # DECLARED GAP, now ACTUALLY ASSERTED. The reviewer's non-blocking
+        # finding was that this said "asserted" while being only a comment — a
+        # claim about a test that the test did not make.
+        #
+        # An in-place same-length rewrite keeps dev, ino and size, and on Linux
+        # keeps both timestamps too. That is the residual exposure, and it is
+        # pinned here so it cannot change unnoticed in either direction.
+        inplace = self.context.code_root / "inplace.md"
+        inplace.write_text("A" * 64, encoding="utf-8")
+        before_stat = os.stat(inplace)
+        inplace.write_text("B" * 64, encoding="utf-8")
+        after_stat = os.stat(inplace)
+        self.assertEqual(
+            (before_stat.st_dev, before_stat.st_ino, before_stat.st_size),
+            (after_stat.st_dev, after_stat.st_ino, after_stat.st_size),
+            "an in-place same-length rewrite became detectable by identity — the "
+            "declared limit in board_client is now understated and must be revisited",
+        )
+
+        # And the closure that makes it MATTER less: the harness replaces its
+        # durable files rather than rewriting them, so a concurrent change to
+        # anything the harness itself wrote DOES change the inode and IS caught.
+        replaced = self.context.code_root / "replaced.md"
+        board._atomic_write_text(replaced, "A" * 64)
+        before_replace = os.stat(replaced)
+        board._atomic_write_text(replaced, "B" * 64)
+        after_replace = os.stat(replaced)
+        self.assertNotEqual(
+            (before_replace.st_dev, before_replace.st_ino),
+            (after_replace.st_dev, after_replace.st_ino),
+            "a harness durable write stopped being atomic; same-length changes "
+            "to it are now undetectable, as BOARD.md was until this was fixed",
+        )
 
     def test_real_thin_client_uploads_bytes_over_http_without_sending_its_path(self):
         _, agent, authority, token, gateway = self.session()

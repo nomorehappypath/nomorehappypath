@@ -119,7 +119,6 @@ PAGE = r'''<!doctype html>
 
     .notice { position: fixed; right: 24px; bottom: 24px; z-index: 20; width: min(420px, calc(100% - 48px)); padding: 13px 15px; border: 1px solid #d9e1ed; border-radius: 12px; color: #33415a; background: white; box-shadow: 0 18px 50px rgba(23,36,58,.18); }
     .notice.error { color: #8a241d; border-color: #facfc9; background: #fff8f7; }
-    .confidentiality { margin-top: 8px; padding: 8px 12px; border: 1px solid #f2ddad; border-radius: 12px; color: #765014; background: var(--amber-soft); font-size: 12px; line-height: 1.3; }
     .settings-shell { display: grid; gap: 18px; padding-bottom: 30px; }
     .settings-intro { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 18px 20px; border: 1px solid #d8e1fb; border-radius: 14px; color: #34425a; background: var(--blue-soft); }
     .settings-intro strong { display: block; margin-bottom: 3px; color: var(--ink); }
@@ -164,6 +163,7 @@ PAGE = r'''<!doctype html>
     .field-hint { margin: 0; color: var(--subtle); font-size: 12px; }
     .folder-control { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: stretch; }
     .folder-control .button { min-height: 44px; box-shadow: none; }
+    .typed-path { flex: 1; min-width: 220px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; }
     .selected-path { min-width: 0; display: flex; align-items: center; padding: 10px 12px; overflow: hidden; border: 1px solid #cfd7e2; border-radius: 10px; color: #526078; background: #f8fafc; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .selected-path.empty { color: var(--subtle); font-family: inherit; font-style: italic; }
     .folder-preview { margin-top: 7px; padding: 9px 11px; border-radius: 9px; color: #41506a; background: var(--blue-soft); font-size: 12px; overflow-wrap: anywhere; }
@@ -200,7 +200,6 @@ PAGE = r'''<!doctype html>
       .project-side { min-width: 135px; gap: 6px; }
       .last-active { font-size: 11px; }
       .actions .button { min-height: 32px; padding: 5px 9px; font-size: 12px; }
-      .confidentiality { margin-top: 4px; padding: 5px 8px; font-size: 11px; }
     }
 
     @media (max-width: 760px) {
@@ -267,7 +266,6 @@ PAGE = r'''<!doctype html>
 
       <div class="list-head"><h2>All projects</h2><span class="list-note">One project can be open at a time</span></div>
       <div id="projects" aria-busy="true"><div class="skeleton"><div class="spinner" aria-label="Loading projects"></div></div></div>
-      <div class="confidentiality" id="codex-notice" hidden></div>
 
     </section>
 
@@ -331,6 +329,17 @@ PAGE = r'''<!doctype html>
             <li><strong>Simulations.</strong> Risky changes are rehearsed against realistic conditions before they are allowed to land.</li>
           </ul>
           <p class="help-callout">This is why a task can look slow while the bars barely move: the time is going into checks designed to catch what a quick demo would hide. Slower to say done — far less likely to be wrong when it does.</p>
+        </section>
+
+        <section class="help-section" aria-labelledby="help-reach-title">
+          <h2 id="help-reach-title">What The Agents Can Reach</h2>
+          <p>These agents run on your own machine, as you. Here is exactly where that stops, without softening:</p>
+          <ul class="help-list">
+            <li><strong>An agent cannot change files outside your project.</strong> It is launched with write access limited to the project folder and the app&rsquo;s own working folders. A write anywhere else &mdash; your Documents, your keys, another project &mdash; is refused by the operating system, not merely discouraged.</li>
+            <li><strong>An agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI or Anthropic as part of doing the work.</li>
+            <li><strong>The app&rsquo;s own Git work is sandboxed too</strong>, to the paths that operation needs.</li>
+          </ul>
+          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project, but not from being <em>read</em>. If there are files you would not hand to OpenAI, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Read confinement is not available today &mdash; judge the app on what it does now, not on what may come.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-key-title">
@@ -542,7 +551,7 @@ PAGE = r'''<!doctype html>
       <div class="field"><label for="project-description">Description</label><textarea id="project-description" name="description" rows="4" autocomplete="off" placeholder="Describe what this project is for and what matters about it."></textarea><p class="field-hint">This appears on the project card, so a short paragraph works well.</p></div>
       <div class="field">
         <label id="project-folder-label">Parent folder</label>
-        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
+        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><input class="typed-path" type="text" id="project-folder-typed" placeholder="/home/you/projects" spellcheck="false" hidden><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
         <p class="field-hint" id="project-folder-hint">Your project folder will be created inside the selected location.</p>
         <div class="folder-preview" id="project-folder-preview" hidden></div>
       </div>
@@ -556,7 +565,7 @@ PAGE = r'''<!doctype html>
       <h2 id="repair-title">Repair project folder</h2>
       <p class="modal-copy">Choose the folder where this project lives now. Saved harness data and project history will be preserved.</p>
       <div class="field"><label>Current folder</label><div class="selected-path" id="repair-current-path"></div></div>
-      <div class="field"><label>New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
+      <div class="field"><label>New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
       <p class="form-error" id="repair-error" role="alert" aria-live="polite"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save folder</button></div>
     </form>
@@ -840,9 +849,10 @@ PAGE = r'''<!doctype html>
           ? value.projects.map(row).join('')
           : '<div class="empty"><strong>No projects yet</strong>Create a new project or adopt an existing folder to get started.</div>';
         renderSummary(value.projects);
-        const notice = q('#codex-notice');
-        notice.hidden = !value.codex_notice;
-        notice.textContent = value.codex_notice || '';
+        if (typeof value.native_folder_picker === 'boolean') {
+          nativeFolderPicker = value.native_folder_picker;
+          applyFolderPickerMode();
+        }
       } catch (error) {
         q('#projects').innerHTML = '<div class="empty"><strong>Projects could not be loaded</strong>The manager will keep trying. Check the connection and try again.</div>';
         status(`Could not load projects: ${error.message}`, 'error');
@@ -939,17 +949,48 @@ PAGE = r'''<!doctype html>
       preview.hidden = false;
       preview.textContent = `New project folder: ${createFolder.replace(/\/$/, '')}/${folderName(q('#project-name').value)}`;
     };
-    async function browseFolder(purpose, errorSelector) {
+    let nativeFolderPicker = true;
+    async function browseFolder(purpose, errorSelector, inputSelector) {
       const error = q(errorSelector);
       error.textContent = '';
+      // Where the system has no folder dialog — every Linux server, and any
+      // headless machine — the owner types the path into the field this button
+      // reveals. No browser dialog is used: this product uses its own, and a
+      // native one is neither styled nor reachable by the same keyboard path
+      // as the rest of the form. (The literal call is not written even in a
+      // comment - the page guard scans this file, as it should.)
+      const body = {purpose};
+      if (!nativeFolderPicker) {
+        const field = inputSelector ? q(inputSelector) : null;
+        const typed = field ? field.value.trim() : '';
+        if (!typed) {
+          error.textContent = 'Type the full path to the folder, starting with /';
+          if (field) field.focus();
+          return '';
+        }
+        body.path = typed;
+      }
       try {
-        const value = await api('/api/folders/browse', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({purpose})});
+        const value = await api('/api/folders/browse', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         return value.path || '';
       } catch (problem) {
         error.textContent = problem.message;
         return '';
       }
     }
+    function applyFolderPickerMode() {
+      // One place decides what the folder controls look like, so the two forms
+      // cannot drift apart.
+      const native = nativeFolderPicker;
+      [['#project-folder-browse', '#project-folder-typed', '#project-folder-hint'],
+       ['#repair-folder-browse', '#repair-folder-typed', '#repair-folder-hint']].forEach(([button, field, hint]) => {
+        const b = q(button), f = q(field), h = q(hint);
+        if (f) f.hidden = native;
+        if (b) b.textContent = native ? 'Choose folder' : 'Use this folder';
+        if (h && !native) h.textContent = 'This system has no folder chooser, so type the full path, starting with /';
+      });
+    }
+
     function openCreate(mode) {
       adopting = mode === 'adopted';
       createFolder = '';
@@ -974,7 +1015,7 @@ PAGE = r'''<!doctype html>
     q('#create-cancel').onclick = () => createDialog.close();
     q('#project-name').addEventListener('input', updateFolderPreview);
     q('#project-folder-browse').onclick = async () => {
-      const selected = await browseFolder(adopting ? 'adopt-project' : 'new-parent', '#create-error');
+      const selected = await browseFolder(adopting ? 'adopt-project' : 'new-parent', '#create-error', '#project-folder-typed');
       if (!selected) return;
       createFolder = selected;
       setPath('#project-folder-path', selected);
@@ -1020,7 +1061,7 @@ PAGE = r'''<!doctype html>
     }
     q('#repair-cancel').onclick = () => repairDialog.close();
     q('#repair-folder-browse').onclick = async () => {
-      const selected = await browseFolder('repair-project', '#repair-error');
+      const selected = await browseFolder('repair-project', '#repair-error', '#repair-folder-typed');
       if (!selected) return;
       repairFolder = selected;
       setPath('#repair-folder-path', selected);

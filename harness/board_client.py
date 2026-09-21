@@ -164,6 +164,41 @@ def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
             chunks.append(chunk)
             remaining -= len(chunk)
         payload = b"".join(chunks)
+        # Read it AGAIN from the same descriptor and compare the bytes.
+        #
+        # The fstat comparisons below cannot carry this alone. A same-size
+        # rewrite is only detectable through the timestamps, and Linux stamps
+        # inode times from a coarse kernel clock: measured on the target host, a
+        # same-size rewrite left BOTH mtime and ctime unchanged in 173 of 200
+        # attempts. macOS timestamps are fine enough to catch it, which is why
+        # this guard looked sound for as long as there was only one platform.
+        #
+        # A modification during the first read makes `payload` a mix of old and
+        # new; the second read returns the settled content and differs. A
+        # modification between the reads differs too. Neither depends on a clock.
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        verify: list[bytes] = []
+        remaining = MAX_ARTIFACT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            verify.append(chunk)
+            remaining -= len(chunk)
+        if b"".join(verify) != payload:
+            raise ValueError("artifact changed while it was being read")
+        # DECLARED LIMIT, so nobody mistakes this guard for more than it is:
+        # a same-LENGTH rewrite in place, completing inside the filesystem's
+        # timestamp granularity, is NOT detectable here. dev, ino and size are
+        # unchanged by a truncate-and-rewrite, and on Linux both mtime and ctime
+        # come from a coarse kernel clock - measured on the target host, they
+        # stayed identical in 173 of 200 same-size rewrites. macOS timestamps
+        # are fine enough to catch it, which is why this looked sound while
+        # there was only one platform. There is no evidence left to check.
+        #
+        # What IS detected on both platforms: replacement (ino), truncation and
+        # any length change (size), extra links, a non-regular file, and a
+        # modification landing between the two reads above.
         after = os.fstat(descriptor)
     finally:
         os.close(descriptor)
