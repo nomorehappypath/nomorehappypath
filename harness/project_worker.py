@@ -19,7 +19,6 @@ import signal
 import shlex
 import socket
 import socketserver
-import struct
 import subprocess
 import sys
 import tempfile
@@ -35,6 +34,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harness import board, board_viewer, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity
+from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
     SurfaceAuthenticationError, SurfaceAuthorizationError, SurfaceProtocolError,
@@ -236,11 +236,11 @@ class ProjectWatchdog:
         }
 
 
-def launch_terminal(root, session: dict, bootstrap_socket: str) -> None:
+def launch_terminal(root, session: dict, bootstrap_socket: str, *, manager_home=None):
     """Launch one managed Terminal with only a non-secret local socket in argv."""
-    if sys.platform != "darwin":
-        raise RuntimeError("central CLI launch currently requires macOS Terminal")
     runner = Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"
+    # This launcher's OWN argv: --board-bootstrap, and neither of the viewer's
+    # two flags. The seam takes argv already built, so the difference survives.
     arguments = [
         "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
         "/bin/bash", "--noprofile", "--norc", str(runner),
@@ -250,33 +250,36 @@ def launch_terminal(root, session: dict, bootstrap_socket: str) -> None:
         "--kind", session["kind"],
         "--board-bootstrap", bootstrap_socket,
     ]
-    command = "exec " + shlex.join(arguments)
+    if manager_home:
+        # The TRUSTED registry location — see board_viewer for why a
+        # discovered one cannot be trusted.
+        arguments += ["--manager-home", str(manager_home)]
     color = control.SESSION_COLORS.get(session.get("color", "black"), control.SESSION_COLORS["black"])
-    rgb = "{" + ", ".join(str(round(channel * 65535 / 255)) for channel in color["rgb"]) + "}"
-    applescript = f'''on run argv
- tell application "Terminal"
- activate
- set newTab to do script (item 1 of argv)
- tell newTab
-  set background color to {rgb}
-  set normal text color to {{65535, 65535, 65535}}
- end tell
- end tell
-end run'''
-    subprocess.run(
-        ["/usr/bin/osascript", "-e", applescript, command],
-        check=True, capture_output=True, text=True,
-    )
+    try:
+        # Returned for the same reason as the viewer's: on Linux this is the
+        # only way the owner learns how to reach the session.
+        return platform_support.terminal_host().open_session(
+            session["id"], arguments, color_rgb=color["rgb"],
+        )
+    except platform_support.UnsupportedPlatformOperation as error:
+        # Surface the PLATFORM'S OWN refusal. This used to hardcode the macOS
+        # wording, so a Linux owner whose only problem was a missing tmux was
+        # told the app "requires macOS Terminal" — true of nothing, and it
+        # points them at the one fix that cannot work.
+        raise RuntimeError(str(error)) from error
 
 
 def _peer_pid(connection: socket.socket) -> int:
-    if sys.platform == "darwin":
-        return struct.unpack("i", connection.getsockopt(0, 0x002, 4))[0]
-    if hasattr(socket, "SO_PEERCRED"):
-        return struct.unpack(
-            "3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-        )[0]
-    raise SurfaceAuthenticationError("session authentication failed")
+    """The OS-authenticated pid of the local peer.
+
+    The mechanism moved to harness/platform_support; the REFUSAL stays here,
+    because "session authentication failed" is this module's contract, not the
+    platform layer's, and it is deliberately uninformative.
+    """
+    try:
+        return platform_support.process_identity().peer_process_id(connection)
+    except platform_support.UnsupportedPlatformOperation as error:
+        raise SurfaceAuthenticationError("session authentication failed") from error
 
 
 def make_bootstrap_server(
@@ -482,7 +485,7 @@ def make_handler(
                         data.get("color", "black"), settings_override=settings_override,
                     )
                     authority.prepare(session["id"])
-                    launch_terminal(root, session, bootstrap_socket())
+                    launch_terminal(root, session, bootstrap_socket(), manager_home=settings_home)
                     self.send_json(201, {"session": session})
                 except Exception as error:
                     if session:
@@ -510,7 +513,7 @@ def make_handler(
                         session = control.mark_resume_launch_requested(root, session_id)
                     authority.prepare(session_id)
                     prepared = True
-                    launch_terminal(root, session, bootstrap_socket())
+                    launch_terminal(root, session, bootstrap_socket(), manager_home=settings_home)
                     launched = True
                     self.send_json(201, {"session_id": session_id, "status": "launch_requested"})
                 except Exception as error:

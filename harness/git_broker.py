@@ -24,6 +24,7 @@ import subprocess
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from harness import accepted_bytes, child_process
+from harness import platform_support
 from harness.project_context import ProjectContext, ProjectRoot, project_context
 
 
@@ -273,7 +274,7 @@ class GitBroker:
         environment.update({
             "HOME": str(self.home_root),
             "TMPDIR": str(self.temp_root),
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": platform_support.discovery().trusted_tool_search_path(),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
@@ -285,51 +286,17 @@ class GitBroker:
         return environment
 
     def _sandbox_profile(self, readable: Sequence[Path], writable: Sequence[Path], network: bool, allow_shell: bool) -> Path | None:
-        executable = Path("/usr/bin/sandbox-exec")
-        if not self.use_os_sandbox or not executable.is_file() or os.uname().sysname != "Darwin":
+        """Kept as a delegate: the rules now live in harness/platform_support."""
+        confinement = platform_support.confinement()
+        if not self.use_os_sandbox or not confinement.available():
             return None
-        def literal(path: Path) -> str:
-            return str(path.resolve()).replace("\\", "\\\\").replace('"', '\\"')
-        # Deny by default, then allow immutable OS/runtime reads plus the exact
-        # board-derived operation paths.  This keeps repository-controlled
-        # helpers from reading arbitrary owner files while still allowing the
-        # signed Apple Git runtime and locale/security databases to load.
-        lines = [
-            "(version 1)", "(allow default)",
-            "(deny file-read*)", "(deny file-write*)", "(deny network*)", "(deny process-exec*)",
-            "(allow file-read-metadata)",
-            '(allow file-read-data (literal "/"))',
-        ]
-        for executable_path in (
-            Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
-            Path("/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core"),
-            Path("/usr/bin/git"), Path("/usr/bin/ssh"),
-        ):
-            operation = "subpath" if executable_path.is_dir() else "literal"
-            lines.append(f'(allow process-exec ({operation} "{literal(executable_path)}"))')
-        if allow_shell:
-            lines.append('(allow process-exec (literal "/bin/sh"))')
-            lines.append('(allow process-exec (literal "/bin/bash"))')
-        for system_path in (
-            Path("/System"), Path("/usr"), Path("/bin"), Path("/sbin"),
-            Path("/Library/Apple"), Path("/private/etc"),
-            Path("/private/var/db/timezone"), Path("/dev"),
-            Path("/Applications/Xcode.app"),
-        ):
-            lines.append(f'(allow file-read* (subpath "{literal(system_path)}"))')
-        for path in sorted({Path(item) for item in readable}, key=str):
-            lines.append(f'(allow file-read* (subpath "{literal(path)}"))')
-        if network:
-            lines.append("(allow network*)")
-        lines.append('(allow file-write* (literal "/dev/null"))')
-        for path in sorted({Path(item) for item in writable}, key=str):
-            lines.append(f'(allow file-write* (subpath "{literal(path)}"))')
-        digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
-        profile = self.journal_root / f"sandbox-{digest}.sb"
-        if not profile.exists():
-            profile.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            profile.chmod(0o600)
-        return profile
+        return confinement._profile(
+            platform_support.defaults.Grant(
+                readable=readable, writable=writable,
+                network=network, starts_helper_programs=allow_shell,
+            ),
+            store=self.journal_root,
+        )
 
     def _run_git(
         self,
@@ -343,10 +310,11 @@ class GitBroker:
         input: str | bytes | None = None,
         index_file: Path | None = None,
     ) -> subprocess.CompletedProcess:
-        xcode_git = Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git")
-        git = xcode_git if xcode_git.is_file() else Path("/usr/bin/git")
+        candidates = platform_support.discovery().trusted_git_candidates()
+        git = next((path for path in candidates if path.is_file()), candidates[-1])
         if not git.is_file():
-            located = shutil.which("git", path="/usr/bin:/bin:/usr/sbin:/sbin")
+            located = shutil.which(
+                "git", path=platform_support.discovery().trusted_tool_search_path())
             if not located:
                 raise BrokerError("trusted Git executable was not found")
             git = Path(located).resolve()
@@ -392,8 +360,21 @@ class GitBroker:
         elif (cwd / "HEAD").is_file() and (cwd / "objects").is_dir():
             metadata_paths.append(cwd.resolve())
         readable_paths = [cwd, self.home_root, self.temp_root, self.hooks_root, *metadata_paths, *readable, *writable_paths]
-        profile = self._sandbox_profile(readable_paths, writable_paths, sandbox_network, allow_shell)
-        command = (["/usr/bin/sandbox-exec", "-f", str(profile), *fixed] if profile else fixed)
+        confined = platform_support.confinement().wrap(
+            fixed,
+            platform_support.defaults.Grant(
+                readable=readable_paths, writable=writable_paths,
+                network=sandbox_network, starts_helper_programs=allow_shell,
+            ),
+            store=self.journal_root,
+            enabled=self.use_os_sandbox,
+        )
+        # `confined.enforced` is now KNOWABLE where before the caller could not
+        # tell a confined run from an unconfined one. Stage 0 deliberately does
+        # not act on it: acting would be a behaviour change, and the decision of
+        # what to do when confinement is unavailable belongs to Stage 1, where
+        # the answer differs per platform.
+        command = confined.argv
         environment = self._git_environment()
         if index_file is not None:
             resolved_index = index_file.resolve(strict=False)

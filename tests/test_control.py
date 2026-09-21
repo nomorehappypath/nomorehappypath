@@ -14,7 +14,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness import board, board_viewer, contract, control
+from harness import board, board_viewer, contract, control, project_registry
 from harness.project_context import ProjectContext
 from tests.environment_support import require_loopback
 
@@ -25,6 +25,25 @@ RUNNER = ROOT / "scripts" / "run_managed_agent.sh"
 
 def free_port():
     sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close(); return port
+
+
+
+def registered_home(base: Path, code: Path, data: Path, workspaces: Path) -> Path:
+    """A manager home that ASSIGNS this project its storage.
+
+    Every managed launch carries one -- `project_manager.worker_argv` passes
+    --settings-home unconditionally -- so a runner test that omits it is not
+    modelling a real launch. It models the unregistered path that used to be
+    granted by default, which is the hole the grant check now closes.
+    """
+    home = base / "manager-home"
+    home.mkdir(exist_ok=True)
+    project_registry.save(home, {
+        "version": project_registry.REGISTRY_VERSION,
+        "projects": [{"id": "p1", "name": "adopted", "code_root": str(code),
+                      "data_root": str(data), "workspace_root": str(workspaces)}],
+    })
+    return home
 
 
 class ControlTests(unittest.TestCase):
@@ -132,6 +151,7 @@ class ControlTests(unittest.TestCase):
                     "--python", sys.executable,
                     "--session-id", session["id"],
                     "--kind", session["kind"],
+                    "--manager-home", str(registered_home(base, code, data, workspaces)),
                 ],
                 env={
                     **os.environ,
@@ -183,6 +203,7 @@ class ControlTests(unittest.TestCase):
                     "--python", sys.executable,
                     "--session-id", session["id"],
                     "--kind", session["kind"],
+                    "--manager-home", str(registered_home(base, code, data, workspaces)),
                 ],
                 env={
                     **os.environ,

@@ -26,7 +26,13 @@ class InteractiveSupervisorTests(unittest.TestCase):
         self.assertEqual(arguments[:2], ["/usr/bin/osascript", "-e"])
         self.assertEqual(arguments[-1], "/dev/ttys123")
         self.assertIn("if tty of terminalTab is targetTTY", arguments[2])
-        self.assertIn("close terminalWindow", arguments[2])
+        # Closed by window IDENTITY, not by the loop reference it was matched
+        # through, and never by position: `close window 1` resolves to whatever
+        # window happens to be frontmost, which during diagnosis was the
+        # owner's own live session.
+        self.assertIn("close window id targetId", arguments[2])
+        self.assertNotIn("close terminalWindow", arguments[2])
+        self.assertNotIn("close window 1", arguments[2])
         self.assertNotIn("name of terminalWindow", arguments[2])
         self.assertTrue(launch.call_args.kwargs["start_new_session"])
 
@@ -54,7 +60,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                startup = self._read_until(master, b"interactive supervisor ready", timeout=3)
+                startup = self._read_until(master, b"interactive supervisor ready")
                 os.write(master, b"Build a real retry controller\n")
                 self._wait_for(lambda: board.snapshot(root).get("owner_directions", {}).get(session["id"], {}).get("text") == "Build a real retry controller")
                 # The exact terminal input unlocks one authorized task, then
@@ -93,9 +99,9 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 queued = control.enqueue_instruction(root, session["id"], "Run the routed CTO action now.", "test-controller")
-                output = self._read_until(master, b"INSTRUCTION_SUBMITTED", timeout=3)
+                output = self._read_until(master, b"INSTRUCTION_SUBMITTED")
                 self.assertIn(b"SYSTEM CONTROL", output)
                 self.assertIn(b"<ENTER>", output)
                 self._wait_for(
@@ -119,11 +125,29 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 "time.sleep(.3)\n"
                 "tty.setraw(0)\n"
                 "os.write(1,b'CHILD_READY')\n"
-                "first=os.read(0,4096)\n"
-                "ready,_,_=select.select([0],[],[],1)\n"
-                "second=os.read(0,4096) if ready else b''\n"
-                "verdict=b'SEPARATE_ENTER' if b'\\r' not in first and b'\\r' in second else b'PASTE_NOT_SUBMITTED'\n"
-                "os.write(1,verdict+b'|FIRST='+first+b'|SECOND='+second.replace(b'\\r',b'<ENTER>'))\n"
+                "buf=b''\n"
+                "# A CEILING, not a pause: the loop below breaks the moment the paste and\n"
+                "# its ENTER have arrived, so a generous bound costs nothing when the\n"
+                "# machine is idle. Three seconds was the last fixed duration in this\n"
+                "# test - the parent already waits on the condition - and under full-suite\n"
+                "# load the CHILD gave up before the paste arrived, reporting\n"
+                "# PASTE_NOT_SUBMITTED for a product that was working.\n"
+                "deadline=time.time()+30\n"
+                "while time.time()<deadline:\n"
+                "    r,_,_=select.select([0],[],[],0.2)\n"
+                "    if r:\n"
+                "        chunk=os.read(0,4096)\n"
+                "        if not chunk: break\n"
+                "        buf+=chunk\n"
+                "    end=buf.find(b'\\x1b[201~')\n"
+                "    if end>=0 and b'\\r' in buf[end:]: break\n"
+                "start=buf.find(b'\\x1b[200~')\n"
+                "end=buf.find(b'\\x1b[201~')\n"
+                "inside=buf[start+6:end] if 0<=start<end else b''\n"
+                "after=buf[end+6:] if end>=0 else b''\n"
+                "ok=(0<=start<end) and b'\\r' not in inside and b'\\r' in after\n"
+                "verdict=b'SEPARATE_ENTER' if ok else b'PASTE_NOT_SUBMITTED'\n"
+                "os.write(1,verdict+b'|INSIDE='+inside+b'|AFTER='+after.replace(b'\\r',b'<ENTER>'))\n"
             )
             command = [
                 "python3", str(ROOT / "harness" / "interactive_supervisor.py"), "--root", str(root), "--session-id", session["id"], "--agent-id", agent["id"], "--",
@@ -132,9 +156,9 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 control.enqueue_instruction(root, session["id"], "Resume this routed task without owner input.", "paste-sensitive-test")
-                output = self._read_until(master, b"SEPARATE_ENTER", timeout=3)
+                output = self._read_until(master, b"SEPARATE_ENTER")
                 self.assertIn(b"SYSTEM CONTROL", output)
                 self.assertIn(b"<ENTER>", output)
                 self.assertNotIn(b"PASTE_NOT_SUBMITTED", output)
@@ -156,11 +180,28 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 "time.sleep(.3)\n"
                 "tty.setraw(0)\n"
                 "os.write(1,b'CHILD_READY')\n"
-                "first=os.read(0,4096)\n"
-                "ready,_,_=select.select([0],[],[],1)\n"
-                "second=os.read(0,4096) if ready else b''\n"
-                "ok=(b'\\x1b[200~' in first and b'\\x1b[201~' in first and b'First\\n\\nSecond' in first and b'\\r' not in first and b'\\r' in second)\n"
-                "os.write(1,(b'MULTILINE_PASTE_OK' if ok else b'MULTILINE_PASTE_BAD')+b'|FIRST='+first+b'|SECOND='+second.replace(b'\\r',b'<ENTER>'))\n"
+                "buf=b''\n"
+                "# A CEILING, not a pause: the loop below breaks the moment the paste and\n"
+                "# its ENTER have arrived, so a generous bound costs nothing when the\n"
+                "# machine is idle. Three seconds was the last fixed duration in this\n"
+                "# test - the parent already waits on the condition - and under full-suite\n"
+                "# load the CHILD gave up before the paste arrived, reporting\n"
+                "# PASTE_NOT_SUBMITTED for a product that was working.\n"
+                "deadline=time.time()+30\n"
+                "while time.time()<deadline:\n"
+                "    r,_,_=select.select([0],[],[],0.2)\n"
+                "    if r:\n"
+                "        chunk=os.read(0,4096)\n"
+                "        if not chunk: break\n"
+                "        buf+=chunk\n"
+                "    end=buf.find(b'\\x1b[201~')\n"
+                "    if end>=0 and b'\\r' in buf[end:]: break\n"
+                "start=buf.find(b'\\x1b[200~')\n"
+                "end=buf.find(b'\\x1b[201~')\n"
+                "inside=buf[start+6:end] if 0<=start<end else b''\n"
+                "after=buf[end+6:] if end>=0 else b''\n"
+                "ok=(0<=start<end) and b'First\\n\\nSecond' in inside and b'\\r' not in inside and b'\\r' in after\n"
+                "os.write(1,(b'MULTILINE_PASTE_OK' if ok else b'MULTILINE_PASTE_BAD')+b'|INSIDE='+inside+b'|AFTER='+after.replace(b'\\r',b'<ENTER>'))\n"
             )
             command = [
                 "python3", str(ROOT / "harness" / "interactive_supervisor.py"), "--root", str(root), "--session-id", session["id"], "--agent-id", agent["id"], "--",
@@ -169,9 +210,9 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 control.enqueue_instruction(root, session["id"], "First\n\nSecond", "multiline-owner-message")
-                output = self._read_until(master, b"MULTILINE_PASTE_", timeout=3)
+                output = self._read_until(master, b"MULTILINE_PASTE_")
                 self.assertIn(b"MULTILINE_PASTE_OK", output)
                 process.wait(timeout=8)
             finally:
@@ -194,7 +235,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             os.close(slave)
             directive = "Review the harness end to end.\n\n- Include failures\n- Require independent review"
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 os.write(master, b"\x1b[200~" + directive.encode() + b"\x1b[201~")
                 self._wait_for(lambda: board.snapshot(root).get("owner_directions", {}).get(session["id"], {}).get("text") == directive)
                 self.assertNotIn("\x1b", board.snapshot(root)["owner_directions"][session["id"]]["text"])
@@ -218,7 +259,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             os.close(slave)
             direction = "Execute every scenario simulation and reject false PASS results"
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 # Split a cursor reply across reads, then add colour-query,
                 # device-attribute, and focus replies before real owner text.
                 os.write(master, b"\x1b[7;")
@@ -256,7 +297,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             os.close(slave)
             direction = "Preserve owner prose about OWNER DIRECTION and reject reply bytes"
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 # Exercise both 7-bit DCS and 8-bit C1 DCS/CSI after the real
                 # owner text. Split the C1 DCS so the streaming path must hold
                 # it until the C1 string terminator arrives.
@@ -300,7 +341,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 time.sleep(.35)
                 self.assertIsNone(process.poll(), "the CTO was stopped by another agent's shared worktree change")
                 self.assertNotEqual(board.snapshot(root)["agents"][agent["id"]]["status"], "blocked")
@@ -323,7 +364,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 time.sleep(.35)
                 self.assertIsNone(process.poll(), "the reviewer was stopped by another agent's shared worktree change")
                 self.assertNotEqual(board.snapshot(root)["agents"][agent["id"]]["status"], "blocked")
@@ -346,7 +387,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 os.kill(process.pid, 15)
                 self.assertNotEqual(process.wait(timeout=8), 0)
                 self.assertNotIn(agent["id"], board.snapshot(root)["agents"])
@@ -369,7 +410,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
                 time.sleep(.1)
                 os.kill(process.pid, 15)
                 self.assertNotEqual(process.wait(timeout=8), 0)
@@ -397,11 +438,11 @@ class InteractiveSupervisorTests(unittest.TestCase):
             process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
             os.close(slave)
             try:
-                self._read_until(master, b"interactive supervisor ready", timeout=3)
-                self._wait_for(lambda: helper_pid.exists(), timeout=3)
+                self._read_until(master, b"interactive supervisor ready")
+                self._wait_for(lambda: helper_pid.exists())
                 os.kill(process.pid, 15)
                 self.assertNotEqual(process.wait(timeout=8), 0)
-                self._wait_for(lambda: helper_stopped.exists(), timeout=3)
+                self._wait_for(lambda: helper_stopped.exists())
                 self.assertEqual(helper_stopped.read_text(), "stopped")
             finally:
                 if process.poll() is None:
@@ -409,7 +450,13 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 process.wait(timeout=8)
                 os.close(master)
 
-    def _wait_for(self, predicate, timeout=3):
+    def _wait_for(self, predicate, timeout=None):
+        # Same ceiling reasoning as _read_until: it returns the moment the
+        # predicate holds, so a generous bound costs nothing when idle.
+        # NOTE: the default used to be 3 seconds written into the signature,
+        # which a blanket edit then stripped - blunt replacements hit
+        # signatures as well as call sites.
+        timeout = timeout or self.READ_TIMEOUT_CEILING
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
@@ -417,8 +464,19 @@ class InteractiveSupervisorTests(unittest.TestCase):
             time.sleep(.05)
         self.fail("timed out waiting for supervisor state")
 
-    def _read_until(self, master, needle, timeout):
-        deadline = time.monotonic() + timeout
+    # A ceiling, not a pause. These tests drive a real pty and a real child
+    # process, so under load the child is simply slower to reach the point being
+    # observed. The reliability gate caught it: four of five identical full-suite
+    # runs, and one where these two tests failed alone.
+    #
+    # Waiting longer costs NOTHING when the machine is idle, because the loop
+    # returns the instant the needle appears. A short ceiling buys nothing and
+    # turns a busy machine into a red suite - the "flaky test" that is really a
+    # measurement artefact, and that trains everyone to ignore a real failure.
+    READ_TIMEOUT_CEILING = 30
+
+    def _read_until(self, master, needle, timeout=None):
+        deadline = time.monotonic() + (timeout or self.READ_TIMEOUT_CEILING)
         output = b""
         while time.monotonic() < deadline:
             readable, _, _ = select.select([master], [], [], .1)
@@ -429,7 +487,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
                     break
             if needle in output:
                 return output
-        self.fail(f"did not receive {needle!r}; got {output!r}")
+        self.fail(f"did not receive {needle!r} within {deadline - time.monotonic() + (timeout or self.READ_TIMEOUT_CEILING):.0f}s; got {output!r}")
 
     def _git(self, root, *args):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)

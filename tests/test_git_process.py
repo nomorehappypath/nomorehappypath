@@ -154,7 +154,7 @@ class GitProcessTests(unittest.TestCase):
 
     def test_all_harness_owned_git_subprocesses_use_the_sanitized_boundary(self):
         direct_calls = []
-        for path in sorted((ROOT / "harness").glob("*.py")):
+        for path in sorted((ROOT / "harness").rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
@@ -165,7 +165,7 @@ class GitProcessTests(unittest.TestCase):
                     continue
                 first = node.args[0].elts[0]
                 if isinstance(first, ast.Constant) and first.value == "git":
-                    direct_calls.append(f"{path.name}:{node.lineno}")
+                    direct_calls.append(f"{path.relative_to(ROOT / 'harness').as_posix()}:{node.lineno}")
         self.assertEqual(direct_calls, [])
         launcher = (ROOT / "scripts" / "start_board_viewer.sh").read_text(encoding="utf-8")
         self.assertNotIn("git -C", launcher)
@@ -176,7 +176,7 @@ class GitProcessTests(unittest.TestCase):
             "merge", "push", "rebase", "reset", "tag", "update-ref", "worktree",
         }
         bypasses = []
-        for path in sorted((ROOT / "harness").glob("*.py")):
+        for path in sorted((ROOT / "harness").rglob("*.py")):
             if path.name == "git_broker.py":
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

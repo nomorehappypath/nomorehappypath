@@ -29,8 +29,12 @@ def _source_digest(root: Path) -> str:
     """Digest executable Harness sources, independent of mtime and paths."""
     digest = hashlib.sha256()
     source_root = root / "harness"
-    for path in sorted(source_root.glob("*.py")):
-        digest.update(path.name.encode("utf-8"))
+    # Recursive, and keyed on the path RELATIVE to the source root. A
+    # subpackage must be part of this digest, and two files sharing a name in
+    # different directories must not be indistinguishable to it. While no
+    # subpackage exists the output is byte-identical to the flat form.
+    for path in sorted(source_root.rglob("*.py")):
+        digest.update(path.relative_to(source_root).as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")

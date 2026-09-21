@@ -112,6 +112,10 @@ class ProjectManagerLauncherTests(unittest.TestCase):
             shutil.copytree(ROOT / "harness", installed / "harness")
             (installed / "scripts").mkdir()
             shutil.copy2(SCRIPT, installed / "scripts" / SCRIPT.name)
+            # The launcher sources the platform seam; a root without it is not
+            # an installation, it is half of one.
+            shutil.copy2(ROOT / "scripts" / "platform_support.sh",
+                         installed / "scripts" / "platform_support.sh")
             subprocess.run(
                 ["git", "init", "-b", "main"], cwd=installed, check=True,
                 capture_output=True,
@@ -212,6 +216,10 @@ class ProjectManagerLauncherTests(unittest.TestCase):
             shutil.copytree(ROOT / "harness", installed / "harness")
             (installed / "scripts").mkdir()
             shutil.copy2(SCRIPT, installed / "scripts" / SCRIPT.name)
+            # The launcher sources the platform seam; a root without it is not
+            # an installation, it is half of one.
+            shutil.copy2(ROOT / "scripts" / "platform_support.sh",
+                         installed / "scripts" / "platform_support.sh")
             subprocess.run(
                 ["git", "init", "-b", "main"], cwd=installed, check=True,
                 capture_output=True,

@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness import board, control, project_worker
+from harness import board, control, project_registry, project_worker
 from harness.board_surface import (
     ALL_BOARD_OPERATIONS,
     AUTHORIZATION_MATRIX,
@@ -269,6 +269,18 @@ print(s.makefile("rb").readline().decode(),end="")
         record = json.loads(restarted.path.read_text(encoding="utf-8"))["sessions"][session["id"]]
         self.assertEqual(record["revoked_at"], "")
 
+    def _registered_home(self) -> Path:
+        home = Path(self._tmp.name) / "manager-home"
+        home.mkdir(exist_ok=True)
+        project_registry.save(home, {
+            "version": project_registry.REGISTRY_VERSION,
+            "projects": [{"id": "p1", "name": "project",
+                          "code_root": str(self.context.code_root),
+                          "data_root": str(self.context.data_root),
+                          "workspace_root": str(self.context.workspace_root)}],
+        })
+        return home
+
     def test_real_managed_runner_bootstraps_token_into_provider_environment(self):
         session = control.create(self.context, "codex_delivery")
         authority = SessionTokenAuthority(self.context)
@@ -292,6 +304,9 @@ print(s.makefile("rb").readline().decode(),end="")
                 "--python", os.path.realpath(os.sys.executable),
                 "--session-id", session["id"],
                 "--kind", session["kind"],
+                # A managed launch always names its manager home; without one
+                # the runner correctly refuses storage it cannot see assigned.
+                "--manager-home", str(self._registered_home()),
                 "--board-bootstrap", bootstrap,
             ]
             environment = dict(os.environ)

@@ -23,6 +23,7 @@ from urllib.parse import quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
+from harness import platform_support
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -269,6 +270,7 @@ function taskGate(state,name,contract,agent,reviews,total,done){
   if(agent?.task===name&&!((state.requirement_confirmations||{})[name]?.text))return{status:'AWAITING FINAL REQUIREMENTS',progress:0,progressTone:'active',ctoAction:'CTO: monitoring requirements capture',next:'Delivery is clarifying the request. No implementation or review may begin until you say go ahead and the final requirements are recorded.'};
   if(released)return{status:'READY FOR YOUR TEST',progress:100,progressTone:'ready',ctoAction:'CTO: release approved',next:'The exact tested version is clean and pushed to main. Your visual test is now required.'};
   if(latest?.status==='failed'){const final=latest.phase==='final_acceptance';return{status:'REPAIR IN PROGRESS',progress:final?86:staged(.85),progressTone:'repair',ctoAction:'CTO: blocking release and routing repair',next:'Independent review found a defect. Delivery must repair it and submit a new review cycle. Your action: none.'};}
+  if(agent?.broker_refusal)return{status:'BLOCKED — GIT WRITE REFUSED',progress:deliveryProgress,progressTone:'repair',ctoAction:'CTO: run recover-git and read the refusal reason',next:`The Delivery Agent's last Git write was refused by the broker: ${agent.broker_refusal.reason}. It is not stalled and retrying alone cannot help. The CTO must run recover-git. Your action: none.`};
   if(agent?.liveness==='stalled'&&recentOutputActive(agent))return{status:'STATUS UPDATE OVERDUE',progress:deliveryProgress,progressTone:'active',ctoAction:'CTO: requesting a short status update',next:'The Delivery Agent is actively producing terminal output, but its board update is overdue. The harness has requested a short update. Your action: none.'};
   if(agent?.liveness==='stalled')return{status:'REPAIR IN PROGRESS',progress:deliveryProgress,progressTone:'repair',ctoAction:'CTO: recovering automation',next:'The Delivery Agent stopped checking the board. The system must resume its saved work. Your action: none.'};
   if(currentReview?.status==='claimed'){const final=currentReview.phase==='final_acceptance';return{status:'INDEPENDENT REVIEW IN PROGRESS',progress:final?86:staged(.85),progressTone:'active',ctoAction:'CTO: monitoring independent review',next:`An Independent Reviewer is testing ${reviewScope(currentReview)} with a different scenario ledger. Your action: none.`};}
@@ -727,6 +729,7 @@ function ctoTaskRowsHtml(state,contracts){
 function agentStatusSummary(agent,state,contracts){
   if(agent.status==='paused')return{summary:'This agent and its exact next action are intentionally paused. The terminal is stopped and the board is read-only.',next:'Resume the project to continue from the saved gate. No work has been reset or re-queued.'};
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
+  if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
   if(agent.liveness==='stalled')return{summary:`The ${agent.role==='qa'?'Independent Reviewer':agent.role==='cto'?'CTO':'Delivery Agent'} for ${humanTask(agent,state)} stopped checking the board. The harness must recover it; you do not need to intervene.`,next:'Resume the saved work and report a plain-language update. Your action: none.'};
   if(agent.task==='AWAITING_OWNER_DIRECTION')return{summary:'This Delivery Agent is open and waiting for your development direction.',next:'Use Give direction in Mission Control when you are ready.'};
@@ -1102,7 +1105,15 @@ function showColorDialog(kind){
 }
 
 async function start(kind,color='black'){
-  try{await call('/api/sessions',{kind,color});el('#notice').textContent=`${kind==='codex_delivery'?'CODEX Delivery Agent':kind==='claude_reviewer'?'CLAUDE Independent Reviewer':'CTO'} launch requested with ${terminalColors.find(item=>item.id===color)?.label||'standard black'} terminal.`;await refresh();}
+  try{const started=await call('/api/sessions',{kind,color});const role=kind==='codex_delivery'?'CODEX Delivery Agent':kind==='claude_reviewer'?'CLAUDE Independent Reviewer':'CTO';const shade=terminalColors.find(item=>item.id===color)?.label||'standard black';
+    // On macOS the window is already in front of the owner and there is nothing
+    // to say. On Linux the session runs in tmux with no window at all, so the
+    // exact attach command is the ONLY way they can reach their agent - the
+    // launch would otherwise look like it did nothing.
+    el('#notice').textContent = started && started.attach_hint
+      ? `${role} started in a ${shade} session. Attach to watch it:  ${started.attach_hint}`
+      : `${role} launch requested with ${shade} terminal.`;
+    await refresh();}
   catch(error){el('#notice').textContent='Could not launch session: '+error.message;}
 }
 
@@ -2290,8 +2301,12 @@ def dispatch_approved_findings(
         session = control.create(
             root, "codex_delivery", settings_override=settings_override,
         )
-        launch_terminal(root, session)
-        return {"status": "terminal_started", "session_id": session["id"]}
+        surface = launch_terminal(root, session, manager_home=settings_home)
+        started = {"status": "terminal_started", "session_id": session["id"]}
+        hint = _attach_hint(surface)
+        if hint:
+            started["attach_hint"] = hint
+        return started
     except Exception as error:
         if "session" in locals():
             control.fail_launch(root, session["id"], f"unable to open Terminal: {error}")
@@ -2473,11 +2488,24 @@ def test_provider_connection(root: Path, provider: str, effort: str, model: str 
     }
 
 
-def launch_terminal(root: Path, session: dict) -> None:
+
+def _attach_hint(surface: Any) -> str:
+    """The attach command, or "" when this platform has nothing to say.
+
+    Read defensively: a caller may hold anything a launcher returned, and the
+    hint is optional by design — macOS has none because the window is already
+    in front of the owner. Reading the attribute directly turned a stubbed
+    launcher into an unserialisable payload and errored three suites.
+    """
+    hint = getattr(surface, "attach_hint", "")
+    return hint if isinstance(hint, str) else ""
+
+
+def launch_terminal(root: Path, session: dict, *, manager_home=None) -> platform_support.SessionSurface:
     """Open exactly one visible macOS Terminal session for a hard-coded agent role."""
-    if sys.platform != "darwin":
-        raise RuntimeError("central CLI launch currently requires macOS Terminal")
     runner = Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"
+    # This launcher's OWN argv: --close-terminal-on-exit, plus --task only when
+    # the session has one. Neither belongs to the worker's launcher.
     arguments = [
         "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
         "/bin/bash", "--noprofile", "--norc", str(runner),
@@ -2489,20 +2517,26 @@ def launch_terminal(root: Path, session: dict) -> None:
     ]
     if session["task"]:
         arguments += ["--task", session["task"]]
-    command = "exec " + shlex.join(arguments)
+    if manager_home:
+        # The TRUSTED registry location. The write grant is validated against
+        # the storage the registry ASSIGNED this project, and a registry found
+        # any other way can be planted by whoever supplied the bad path.
+        arguments += ["--manager-home", str(manager_home)]
     color = control.SESSION_COLORS.get(session.get("color", "black"), control.SESSION_COLORS["black"])
-    rgb = "{" + ", ".join(str(round(channel * 65535 / 255)) for channel in color["rgb"]) + "}"
-    applescript = f'''on run argv
- tell application "Terminal"
- activate
- set newTab to do script (item 1 of argv)
- tell newTab
-  set background color to {rgb}
-  set normal text color to {{65535, 65535, 65535}}
- end tell
- end tell
-end run'''
-    subprocess.run(["/usr/bin/osascript", "-e", applescript, command], check=True, capture_output=True, text=True)
+    try:
+        # The surface is RETURNED, not discarded. On macOS the window is already
+        # in front of the owner and there is nothing to say; on Linux the
+        # session runs in tmux and the owner has no way to reach it unless
+        # Mission Control tells them the command.
+        return platform_support.terminal_host().open_session(
+            session["id"], arguments, color_rgb=color["rgb"],
+        )
+    except platform_support.UnsupportedPlatformOperation as error:
+        # Surface the PLATFORM'S OWN refusal. This used to hardcode the macOS
+        # wording, so a Linux owner whose only problem was a missing tmux was
+        # told the app "requires macOS Terminal" — true of nothing, and it
+        # points them at the one fix that cannot work.
+        raise RuntimeError(str(error)) from error
 
 
 def parse_release_multipart(raw: bytes, content_type: str) -> tuple[dict[str, str], list[dict[str, object]]]:
@@ -2826,11 +2860,15 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                         data.get("color", "black"), settings_override=settings_override,
                     )
                     try:
-                        launch_terminal(root, session)
+                        surface = launch_terminal(root, session, manager_home=settings_home)
                     except Exception as error:
                         session = control.fail_launch(root, session["id"], f"unable to open Terminal: {error}")
                         self.send_json(500, {"error": session["reason"], "session": session}); return
-                    self.send_json(201, {"session": session}); return
+                    payload = {"session": session}
+                    hint = _attach_hint(surface)
+                    if hint:
+                        payload["attach_hint"] = hint
+                    self.send_json(201, payload); return
                 if path == "/api/settings/browse":
                     raise ValueError("the project folder is managed from Projects and cannot be changed here")
                 if path == "/api/settings/apply":

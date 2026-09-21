@@ -6,6 +6,7 @@ set -euo pipefail
 target_root=""
 data_root=""
 workspace_root=""
+manager_home=""
 python_bin=""
 session_id=""
 kind=""
@@ -24,6 +25,13 @@ while [[ $# -gt 0 ]]; do
     --workspace-root)
       [[ $# -ge 2 ]] || { echo "--workspace-root requires a directory" >&2; exit 2; }
       workspace_root="$2"; shift 2 ;;
+    --manager-home)
+      # Where the project registry lives. The write grant is validated against
+      # the storage the registry ASSIGNED this project, and without the home it
+      # would fall back to the default location and refuse an adopted project's
+      # legitimate storage - which is exactly how a reviewer failed this.
+      [[ $# -ge 2 ]] || { echo "--manager-home requires a directory" >&2; exit 2; }
+      manager_home="$2"; shift 2 ;;
     --python)
       [[ $# -ge 2 ]] || { echo "--python requires an executable" >&2; exit 2; }
       python_bin="$2"; shift 2 ;;
@@ -155,7 +163,50 @@ launch_agent_cli() {
     # project's execution root. Nothing dangerous is ever written to the
     # owner's global ~/.codex/config.toml, so one project's access can never
     # leak into another project or into the owner's own codex sessions.
-    launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=danger-full-access" "$prompt"
+    #
+    # WRITES ARE CONFINED. This used to pass the sandbox mode that disables
+    # Codex's sandbox entirely (the literal is not written here: a test scans
+    # this file for it, as it should). A reviewer proved by
+    # execution that a managed agent could write to a sibling directory outside
+    # the project, while the app's own Help text claimed writes were held to the
+    # project folder. The claim was false, and this is what makes it true.
+    #
+    # workspace-write alone is not enough: the harness's own task workspaces sit
+    # in a SIBLING directory of the project, and its data root may too, so a
+    # bare workspace-write blocks legitimate work. Both are named explicitly
+    # instead, which is the whole point - the grant is the exact set of paths
+    # this agent needs, and nothing else. The owner's home, ssh keys and other
+    # projects are outside it.
+    #
+    # READS ARE NOT CONFINED. Codex has no read-scoping mode, so an agent can
+    # still read anything the owner can. The Help text says so plainly; do not
+    # let this comment or that text drift into implying otherwise.
+    # The grant is only as narrow as the paths handed to it. For an ADOPTED
+    # project these roots are owner-supplied, so one can name a broad ancestor -
+    # or a symlink resolving to one - and passing it through would grant every
+    # sibling of the project. A reviewer proved exactly that. The roots are
+    # validated (symlinks resolved FIRST) and the launch REFUSES rather than
+    # narrowing silently, because a silently narrowed grant is a surprise the
+    # owner never sees.
+    # The harness root arrives as argv, not PYTHONPATH: this interpreter runs
+    # with -E, which IGNORES the environment on purpose, so an exported
+    # PYTHONPATH is invisible here. Setting one made every launch refuse - the
+    # import failed, the helper exited non-zero, and 13 suites went red.
+    if ! writable_roots_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness.agent_grant import agent_writable_roots, GrantTooBroad
+try:
+    print(json.dumps(agent_writable_roots(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] or None)))
+except GrantTooBroad as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(3)
+' "$harness_root" "$execution_root" "$data_root" "$workspace_root" "$target_root" "$manager_home")"; then
+      echo "REFUSED: this project's storage layout would grant the agent more than it needs." >&2
+      echo "         Fix the project's data or workspace root, then relaunch." >&2
+      exit 3
+    fi
+    launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$prompt"
   else
     launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" "$prompt"
   fi

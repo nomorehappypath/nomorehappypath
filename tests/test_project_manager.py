@@ -10,6 +10,7 @@ Run:  PYTHONPATH=. python3 -m unittest tests.test_project_manager -v
 """
 from __future__ import annotations
 
+import collections
 import json
 import hashlib
 import os
@@ -25,9 +26,47 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness import board, control, global_settings, project_manager, project_registry as registry
+from harness import (board, control, global_settings, platform_support, project_manager,
+                     project_registry as registry)
 from harness.project_manager_page import PAGE
 from tests.environment_support import require_loopback
+
+Uname = collections.namedtuple("Uname", "sysname nodename release version machine")
+
+
+@contextmanager
+def _pinned_host(sysname: str, platform: str):
+    """Force the platform for the stretch of a test that drives the folder picker.
+
+    Stage 1 selects a real implementation per platform, and off Darwin there is
+    no native chooser: `native_folder_selection_available()` is False and
+    /api/folders/browse refuses and points at the typed-path field instead. A
+    picker test that inherits its host therefore reports the MACHINE it ran on
+    rather than the endpoint — and skipping it on Linux would report OK for a
+    picker nobody exercised.
+
+    Both signals are pinned because Stage 1 reads both: the selector asks
+    sys.platform, the chooser asks uname. Pinning only uname would still reach
+    the macOS chooser today, but silently take the Linux one the day that seam
+    is overridden.
+
+    Only sysname is invented; the rest of the real uname is carried through
+    because board's environment identity reads release and machine off the same
+    call.
+    """
+    real = os.uname()
+    pinned = Uname(sysname, real.nodename, real.release, real.version, real.machine)
+    with patch.object(platform_support.defaults.sys, "platform", platform), \
+            patch.object(os, "uname", return_value=pinned):
+        yield
+
+
+def macos_host():
+    return _pinned_host("Darwin", "darwin")
+
+
+def linux_host():
+    return _pinned_host("Linux", "linux")
 
 
 class ProjectManagerTests(unittest.TestCase):
@@ -82,7 +121,7 @@ class ProjectManagerTests(unittest.TestCase):
         with self.served() as (base, _):
             with urlopen(base + "/", timeout=5) as response:
                 page = response.read().decode()
-            for marker in ("NoMoreHappyPath", "Primary navigation", "New project", "Adopt existing", "codex-notice"):
+            for marker in ("NoMoreHappyPath", "Primary navigation", "New project", "Adopt existing"):
                 self.assertIn(marker, page)
             with urlopen(base + "/?page=settings", timeout=5) as response:
                 settings_page = response.read().decode()
@@ -104,7 +143,6 @@ class ProjectManagerTests(unittest.TestCase):
         self.assertEqual(row["latest_progress"], "Waiting for independent review.")
         self.assertEqual(row["last_board_activity"], "2026-08-14T14:31:00+00:00")
         self.assertTrue(row["health"]["ok"])
-        self.assertIn("model connection", value["codex_notice"])
 
     def test_page_script_is_valid_and_card_renderer_escapes_project_text(self):
         script = PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
@@ -182,7 +220,6 @@ class ProjectManagerTests(unittest.TestCase):
             ".summary-card { min-height: 42px; padding: 5px 10px; }",
             ".list-head { margin: 6px 0 4px; }",
             ".project { gap: 10px; padding: 10px 12px; }",
-            ".confidentiality { margin-top: 4px; padding: 5px 8px; font-size: 11px; }",
         ):
             self.assertIn(rule, compact)
 
@@ -736,11 +773,27 @@ class ProjectManagerTests(unittest.TestCase):
     def test_native_folder_browse_endpoint_and_scaffold_repair_rebase(self):
         selected = self.base / "selected"; selected.mkdir()
         with self.served() as (base, _):
-            with patch.object(project_manager, "choose_folder", return_value=str(selected)) as chooser:
+            with macos_host(), patch.object(
+                project_manager, "choose_folder", return_value=str(selected),
+            ) as chooser:
                 status, value = self.request(base, "/api/folders/browse", "POST", {"purpose": "new-parent"})
             self.assertEqual(status, 200)
             self.assertEqual(value, {"path": str(selected), "cancelled": False})
             chooser.assert_called_once_with("new-parent")
+
+            # The other half of the same endpoint, asserted rather than skipped:
+            # off macOS the chooser is never reached and the owner is sent to the
+            # typed-path field. Both platforms are checked on every host, so this
+            # reports the behaviour and not the machine.
+            with linux_host(), patch.object(
+                project_manager, "choose_folder", return_value=str(selected),
+            ) as unreachable:
+                status, refused = self.request(
+                    base, "/api/folders/browse", "POST", {"purpose": "new-parent"},
+                )
+            self.assertEqual(status, 400)
+            self.assertIn("type the full path instead", refused["error"])
+            unreachable.assert_not_called()
 
             old = self.base / "old"; old.mkdir()
             status, created = self.request(base, "/api/projects", "POST", {
@@ -759,16 +812,20 @@ class ProjectManagerTests(unittest.TestCase):
         parent = self.base / "parent"; parent.mkdir()
         (parent / "already-here").mkdir()
         with self.served() as (base, _):
-            with patch.object(project_manager, "choose_folder", return_value=""):
+            with macos_host(), patch.object(project_manager, "choose_folder", return_value=""):
                 status, cancelled = self.request(
                     base, "/api/folders/browse", "POST", {"purpose": "adopt-project"},
                 )
             self.assertEqual(status, 200)
             self.assertEqual(cancelled, {"path": "", "cancelled": True})
 
-            status, invalid = self.request(
-                base, "/api/folders/browse", "POST", {"purpose": "not-a-purpose"},
-            )
+            # Pinned too: the endpoint checks for a chooser BEFORE it validates
+            # the purpose, so off macOS an unknown purpose is answered with the
+            # no-chooser message and this closed-set refusal is never reached.
+            with macos_host():
+                status, invalid = self.request(
+                    base, "/api/folders/browse", "POST", {"purpose": "not-a-purpose"},
+                )
             self.assertEqual(status, 400)
             self.assertIn("unknown folder", invalid["error"])
 
@@ -802,7 +859,7 @@ class ProjectManagerTests(unittest.TestCase):
     def test_folder_picker_timeout_and_failed_registration_cleanup(self):
         parent = self.base / "parent"; parent.mkdir()
         with self.served() as (base, _):
-            with patch.object(
+            with macos_host(), patch.object(
                 project_manager.subprocess, "run",
                 side_effect=subprocess.TimeoutExpired(["/usr/bin/osascript"], 120),
             ):

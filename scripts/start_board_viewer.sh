@@ -6,6 +6,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 harness_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/platform_support.sh"
 target_root="$PWD"
 data_root=""
 workspace_root=""
@@ -16,12 +17,19 @@ root_was_supplied=0
 usage() {
   cat <<'EOF'
 Usage: start_board_viewer.sh [--root PROJECT_ROOT] [--data-root DATA_ROOT]
-                             [--workspace-root WORKSPACE_ROOT] [--port PORT] [--no-open]
+                             [--workspace-root WORKSPACE_ROOT] [--home HARNESS_HOME]
+                             [--port PORT] [--no-open]
 
 Starts the live Harness board for PROJECT_ROOT (default: current directory).
 It creates the board if necessary and opens the local display automatically.
 EOF
 }
+
+# The SAME default as start_project_manager.sh. An agent's writable grant is
+# checked against the registry in this home, so a board that disagreed with the
+# manager about where the registry lives would refuse launches for projects the
+# manager had legitimately registered.
+settings_home="${HARNESS_HOME:-$HOME/.harness-home}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +42,9 @@ while [[ $# -gt 0 ]]; do
     --workspace-root)
       [[ $# -ge 2 ]] || { echo "--workspace-root requires a directory" >&2; exit 2; }
       workspace_root="$2"; shift 2 ;;
+    --home)
+      [[ $# -ge 2 ]] || { echo "--home requires a directory" >&2; exit 2; }
+      settings_home="$2"; shift 2 ;;
     --port)
       [[ $# -ge 2 && "$2" =~ ^[0-9]+$ && "$2" -ge 1 && "$2" -le 65535 ]] || {
         echo "--port requires a number from 1 to 65535" >&2; exit 2;
@@ -83,15 +94,20 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 digest = hashlib.sha256()
-for path in sorted((root / "harness").glob("*.py")):
-    digest.update(path.name.encode())
+source_root = root / "harness"
+# Recursive, and keyed on the path RELATIVE to the source root: a subpackage
+# must change this revision, and two files sharing a name in different
+# directories must not collide. Identical output while no subpackage exists.
+for path in sorted(source_root.rglob("*.py")):
+    digest.update(path.relative_to(source_root).as_posix().encode())
     digest.update(path.read_bytes())
 print(digest.hexdigest(), end="")
 PY
 }
 
 start_viewer() {
-  python3 -E "$harness_root/harness/board_viewer.py" "${context_args[@]}" --port "$port" &
+  python3 -E "$harness_root/harness/board_viewer.py" "${context_args[@]}" \
+    --settings-home "$settings_home" --port "$port" &
   viewer_pid=$!
 }
 
@@ -140,11 +156,7 @@ if ! wait_for_viewer; then
 fi
 
 if [[ "$open_browser" == "1" ]]; then
-  if command -v open >/dev/null 2>&1; then
-    open "$url" || true
-  elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url" || true
-  fi
+  owner_open_url "$url"
 fi
 
 echo "BOARD VIEWER ONLINE | project=$target_root | url=$url | pid=$viewer_pid"

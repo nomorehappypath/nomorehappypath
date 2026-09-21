@@ -819,11 +819,13 @@ class ProviderUserDirResolutionTests(unittest.TestCase):
                 import importlib
                 from harness import global_settings as gs
                 importlib.reload(gs)
-                try:
-                    found = gs.provider_executable(
-                        "claude",
-                        source_environment={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
-                    )
-                finally:
-                    importlib.reload(gs)
+                found = gs.provider_executable(
+                    "claude",
+                    source_environment={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                )
+            # Restored OUTSIDE the patch. Reloading while os.path.expanduser was
+            # still patched re-imported the module with the temporary home and
+            # left PROVIDER_SEARCH_DIRECTORIES polluted for every later test in
+            # the process.
+            importlib.reload(gs)
             self.assertEqual(found, str(fake), "user-level install dir not searched")

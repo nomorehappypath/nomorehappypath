@@ -38,6 +38,10 @@ class BoardViewerLauncherTests(unittest.TestCase):
             shutil.copytree(ROOT / "harness", harness_root / "harness")
             (harness_root / "scripts").mkdir(parents=True)
             shutil.copy2(SCRIPT, harness_root / "scripts" / "start_board_viewer.sh")
+            # The launcher sources the platform seam; a root without it is not
+            # an installation, it is half of one.
+            shutil.copy2(ROOT / "scripts" / "platform_support.sh",
+                         harness_root / "scripts" / "platform_support.sh")
             subprocess.run(["git", "init", "-b", "main"], cwd=harness_root, check=True, capture_output=True)
             subprocess.run(["git", "add", "harness", "scripts"], cwd=harness_root, check=True)
             subprocess.run(
@@ -91,6 +95,10 @@ class BoardViewerLauncherTests(unittest.TestCase):
             harness_root = Path(tmp) / "harness-root"
             (harness_root / "scripts").mkdir(parents=True)
             shutil.copy2(SCRIPT, harness_root / "scripts" / "start_board_viewer.sh")
+            # The launcher sources the platform seam; a root without it is not
+            # an installation, it is half of one.
+            shutil.copy2(ROOT / "scripts" / "platform_support.sh",
+                         harness_root / "scripts" / "platform_support.sh")
             os.symlink(ROOT / "harness", harness_root / "harness", target_is_directory=True)
             port = free_port()
             process = subprocess.Popen(["bash", "start_board_viewer.sh", "--port", str(port), "--no-open"], cwd=harness_root / "scripts", stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

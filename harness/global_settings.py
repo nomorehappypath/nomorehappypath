@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from harness import child_process, control
+from harness import platform_support
 
 SETTINGS_VERSION = 1
 SETTINGS_FILENAME = "settings.json"
@@ -54,19 +55,11 @@ MODEL_UNAVAILABLE_SIGNALS = (
     "model_not_found",
 )
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$")
-PROVIDER_SEARCH_DIRECTORIES = (
-    # User-level installers first, the way a login shell orders PATH: Claude
-    # Code's official installer targets ~/.local/bin, which no launchd PATH
-    # and no system prefix contains. The app must find CLIs the way the owner
-    # installed them - without a login shell's profile or a process restart -
-    # and the owner's deliberate user-level install outranks a system copy.
-    os.path.expanduser("~/.local/bin"),
-    os.path.expanduser("~/bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-)
+# The ordering rationale, and the directories themselves, now live in
+# harness/platform_support: they are platform knowledge. The name and the
+# value are unchanged, so every caller and every recorded PATH string is
+# byte-identical.
+PROVIDER_SEARCH_DIRECTORIES = platform_support.discovery().owner_tool_directories()
 
 
 def _now() -> str:

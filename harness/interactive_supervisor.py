@@ -11,6 +11,8 @@ enforcement point.
 """
 from __future__ import annotations
 
+from harness import platform_support
+
 import argparse
 import array
 import fcntl
@@ -28,6 +30,7 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, child_process, contract, control
+from harness import platform_support
 from harness.project_context import add_context_arguments, context_from_args
 
 
@@ -252,56 +255,29 @@ def _make_controlling_terminal() -> None:
 
 
 def _schedule_terminal_close(stdin_fd: int) -> None:
-    """Close only this finished managed Terminal window after the process exits."""
-    if sys.platform != "darwin":
-        return
-    try:
-        terminal_tty = os.ttyname(stdin_fd)
-    except OSError:
-        return
-    script = r'''on run argv
- delay 0.5
- set targetTTY to item 1 of argv
- tell application "Terminal"
-  repeat with terminalWindow in windows
-   repeat with terminalTab in tabs of terminalWindow
-    try
-     if tty of terminalTab is targetTTY then
-      close terminalWindow
-      return
-     end if
-    end try
-   end repeat
-  end repeat
- end tell
-end run'''
-    try:
-        subprocess.Popen(
-            ["/usr/bin/osascript", "-e", script, terminal_tty],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError:
-        pass
+    """Dismiss THIS finished session's surface.
+
+    A self-dismissal: the caller is the occupant, so the seam operation takes no
+    session argument. The fd is how macOS names the surface the occupant sits
+    in, not a session identity.
+    """
+    platform_support.terminal_host().dismiss_current_session(stdin_fd)
 
 
 def _stop_child_group(child: subprocess.Popen, grace_seconds: float = 1.0) -> None:
     """Stop an interactive CLI even when it ignores a normal termination."""
     if child.poll() is not None:
         return
-    try:
-        os.killpg(child.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    # Through the ONE guard, not a copy of it: it refuses when the process has
+    # exited and when the pid no longer leads its own group. Signalling a group
+    # by a number whose owner has changed is what killed the test runner.
+    identity = platform_support.process_identity()
+    if not identity.terminate_group(child, signal.SIGTERM):
         return
     try:
         child.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        identity.terminate_group(child, signal.SIGKILL)
         child.wait()
 
 

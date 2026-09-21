@@ -1,0 +1,8 @@
+{
+ "amber": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {23130, 17219, 5140}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run",
+ "black": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {0, 0, 0}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run",
+ "blue": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {4626, 15163, 23901}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run",
+ "green": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {5654, 19018, 13621}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run",
+ "purple": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {16962, 10023, 23130}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run",
+ "red": "on run argv\n tell application \"Terminal\"\n activate\n set newTab to do script (item 1 of argv)\n tell newTab\n  set background color to {23130, 9509, 9509}\n  set normal text color to {65535, 65535, 65535}\n end tell\n end tell\nend run"
+}

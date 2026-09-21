@@ -116,6 +116,34 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    """Replace a durable file, never rewrite it in place.
+
+    An in-place rewrite keeps the same inode, and at the same LENGTH it keeps
+    the same size and — on Linux, whose inode timestamps come from a coarse
+    kernel clock — the same mtime and ctime. A reader then cannot tell the file
+    changed underneath it. A temp file plus os.replace changes the inode, which
+    the artifact guard already detects reliably on both platforms.
+
+    This is not theoretical: a reviewer measured the previous in-place BOARD.md
+    write being accepted with changed same-size content 84 times out of 100 on
+    Ubuntu.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Byte-payload counterpart of _atomic_write_text; same reasoning."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(payload)
+    os.replace(temporary, path)
+
+
 def board_dir(root: ProjectRoot) -> Path:
     return project_context(root).storage_path("board")
 
@@ -242,8 +270,8 @@ def _snapshot_board(root: Path, state: dict[str, Any]) -> None:
         dest = backups / f"e{next_event:09d}"
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(events, dest / "events.jsonl")
-        (dest / "state.json").write_text(
-            json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        _atomic_write_text(dest / "state.json",
+                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n")
         for old in sorted(p for p in backups.iterdir() if p.is_dir())[:-BOARD_BACKUP_KEEP]:
             shutil.rmtree(old, ignore_errors=True)
     except OSError:
@@ -444,9 +472,10 @@ def _render_board(state: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+
 def _persist_visible_board(root: Path, state: dict[str, Any]) -> None:
     directory = board_dir(root)
-    (directory / "BOARD.md").write_text(_render_board(state), encoding="utf-8")
+    _atomic_write_text(directory / "BOARD.md", _render_board(state))
     last_exported = int(state.get("last_event_exported", 0))
     new_events = [event for event in state.get("events", []) if int(event["sequence"]) > last_exported]
     if new_events:
@@ -1804,12 +1833,101 @@ def _require_contract_preflight(root: Path, task: str) -> None:
         raise ValueError("delivery work requires a valid Completion Contract: " + "; ".join(problems))
 
 
-def _next_broker_nonce(state: dict[str, Any], identity: str) -> int:
-    """Allocate one worker-side monotonic nonce without trusting the caller."""
+def _broker_journal_nonce(broker: git_broker.GitBroker, identity: str) -> int:
+    """Read the nonce the broker has durably accepted for one session."""
+    try:
+        known = json.loads(broker.nonces_path.read_text(encoding="utf-8"))
+        return int(known.get(identity, 0))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        # An absent or corrupt journal is not this helper's to diagnose:
+        # consume_nonce raises RecoveryHoldError on the same read, so the
+        # caller still fails loudly instead of silently reusing a nonce.
+        return 0
+
+
+def _next_broker_nonce(
+    state: dict[str, Any], identity: str, broker: git_broker.GitBroker,
+) -> int:
+    """Allocate one monotonic nonce above both durable stores.
+
+    The board counter is transactional and rolls back with its enclosing
+    ``locked_state`` block, while the broker journal commits the instant a
+    nonce is consumed. Any failure between those two points left the board one
+    behind, so the next allocation replayed an already-accepted nonce and the
+    broker refused every subsequent write permanently. Allocating above both
+    stores absorbs that gap on the next call instead of deadlocking Delivery.
+    """
     nonces = state.setdefault("broker_nonces", {})
-    value = int(nonces.get(identity, 0)) + 1
+    floor = max(int(nonces.get(identity, 0)), _broker_journal_nonce(broker, identity))
+    value = floor + 1
     nonces[identity] = value
     return value
+
+
+BROKER_REFUSAL_ERRORS = (git_broker.ReplayError, git_broker.RecoveryHoldError)
+
+
+def _record_broker_refusal(
+    state: dict[str, Any], agent: dict[str, Any], operation: str, error: BaseException,
+) -> None:
+    """A refused Git write is a blocked agent, not a stalled one.
+
+    In the 2026-09-21 incident the agent kept polling, the watchdog kept
+    "recovering" it, and every write bounced for 21 minutes while the board
+    said only that it was stalled. The refusal reason is the thing the owner
+    and the CTO need to see, so it is written on the agent verbatim.
+    """
+    reason = f"{type(error).__name__}: {error}"
+    stamp = now()
+    agent.update({
+        "status": "blocked",
+        "status_note": f"Git write refused ({operation}): {error}"[:240],
+        "last_status_at": stamp,
+        "broker_refusal": {"operation": operation, "reason": reason, "at": stamp},
+    })
+    _event(state, "broker_write_refused", agent, {
+        "task": agent.get("task", ""),
+        "operation": operation,
+        "reason": reason,
+        "message": "the Git broker refused this write; the agent is blocked, not stalled — run recover-git",
+    })
+
+
+def _clear_broker_refusal(state: dict[str, Any], agent: dict[str, Any]) -> None:
+    refusal = agent.pop("broker_refusal", None)
+    if not refusal:
+        return
+    if agent.get("status") == "blocked":
+        agent.update({
+            "status": "working",
+            "status_note": "Git write accepted; the earlier broker refusal is cleared",
+            "last_status_at": now(),
+        })
+    _event(state, "broker_write_accepted_after_refusal", agent, {
+        "task": agent.get("task", ""),
+        "operation": refusal.get("operation", ""),
+        "message": "a Git write succeeded after an earlier refusal; the blocked state is cleared",
+    })
+
+
+@contextmanager
+def _broker_refusal_surface(root: ProjectRoot, agent_id: str, operation: str):
+    """Record a broker refusal in its own transaction, because the caller's rolls back.
+
+    Every broker write runs inside a ``locked_state`` block, and a refusal
+    raises out of it, so anything written to the agent inside that block is
+    discarded with the rest of the transaction. The refusal is therefore
+    recorded here, after the block has unwound, and the error is re-raised
+    unchanged so the CLI still fails loudly.
+    """
+    try:
+        yield
+    except BROKER_REFUSAL_ERRORS as error:
+        with locked_state(root) as state:
+            agent = state.get("agents", {}).get(agent_id)
+            if isinstance(agent, dict):
+                _record_broker_refusal(state, agent, operation, error)
+        raise
 
 
 def _broker_for_state(root: ProjectRoot, state: dict[str, Any], task: str) -> git_broker.GitBroker:
@@ -2820,6 +2938,13 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     continue
             if age < effective_stale_seconds:
                 continue
+            # An agent whose last Git write was REFUSED is blocked, not stalled:
+            # it is doing exactly what it was told and being turned away, so a
+            # wake-up nudge cannot help and the generic "resume your saved work"
+            # instruction is false. The refusal reason on the card is what the
+            # owner and the CTO need; recover-git clears the cause.
+            if agent.get("broker_refusal") and agent.get("role") != "cto":
+                continue
             # A blocked agent is not a stalled agent. While its task carries an
             # open control-plane hold, wake-up nudges cannot help and only burn
             # tokens (171 of them on 2026-08-21). Route at most one recovery per
@@ -3312,7 +3437,7 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
     task = task.strip()
     if not task or task == AWAITING_OWNER_DIRECTION:
         raise ValueError("a real internal task identifier is required")
-    with locked_state(root) as state:
+    with _broker_refusal_surface(root, agent_id, "branch-create"), locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES:
             raise ValueError("only development or engineering agents may begin a task")
@@ -3369,8 +3494,9 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
             state.setdefault("task_repositories", {})[task] = str(repository)
             broker = _broker_for_state(root, state, task)
             branch_record = broker.branch_create(
-                agent_id, _next_broker_nonce(state, str(agent.get("session_id") or agent_id)),
+                agent_id, _next_broker_nonce(state, str(agent.get("session_id") or agent_id), broker),
             )
+            _clear_broker_refusal(state, agent)
             workspace = Path(branch_record["workspace"])
             state.setdefault("task_branches", {})[task] = branch_record
         else:
@@ -3610,7 +3736,7 @@ def bind_task_repository(root: Path, agent_id: str, repository_value: str, basel
         baseline["candidate_head_at_binding"] = baseline.get("head", "")
         baseline["head"] = baseline_commit
         baseline["declared_baseline_verified"] = True
-    with locked_state(root) as state:
+    with _broker_refusal_surface(root, agent_id, "branch-create"), locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("only an active Delivery Agent may bind its task repository")
@@ -3629,8 +3755,9 @@ def bind_task_repository(root: Path, agent_id: str, repository_value: str, basel
         state.setdefault("task_baselines", {})[task] = baseline
         broker = _broker_for_state(root, state, task)
         branch_record = broker.branch_create(
-            agent_id, _next_broker_nonce(state, str(agent.get("session_id") or agent_id)),
+            agent_id, _next_broker_nonce(state, str(agent.get("session_id") or agent_id), broker),
         )
+        _clear_broker_refusal(state, agent)
         state["task_workspaces"][task] = branch_record["workspace"]
         state.setdefault("task_branches", {})[task] = branch_record
         event = _event(state, "task_repository_bound", agent, {
@@ -4007,11 +4134,22 @@ def _execute_internal_qa(
             cache_decision="executed_no_cache_store",
         ))
     output = (completed.stdout + completed.stderr).strip()
+    counts = [int(value) for pair in re.findall(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I) for value in pair if value]
+
+    # ZERO EXECUTED TESTS IS ITS OWN REFUSAL, checked BEFORE the exit code.
+    #
+    # Python 3.12 signals "no tests ran" through exit code 5, so on that
+    # interpreter the generic exit-code branch fired first and the owner was
+    # told "command failed with exit code 5" - true, useless, and hiding the
+    # actual problem, which is that their QA command tested NOTHING. On Python
+    # 3.9 the same command exits 0 and the precise refusal was reached. The
+    # protection held on both; only the diagnosis was wrong, and a gate that
+    # cannot say why it refused is most of the way to a gate nobody trusts.
+    ran_nothing = (counts and max(counts) == 0) or re.search(r"\bNO TESTS RAN\b", output, re.I)
+    if ran_nothing:
+        raise ValueError("internal-QA test command reported zero executed tests")
     if completed.returncode != 0:
         raise ValueError(f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}")
-    counts = [int(value) for pair in re.findall(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I) for value in pair if value]
-    if counts and max(counts) == 0:
-        raise ValueError("internal-QA test command reported zero executed tests")
     if not counts:
         raise ValueError("internal-QA output must report a positive executed-test count")
     return output
@@ -4159,7 +4297,7 @@ def _store_internal_qa_evidence(root: Path, command: str, output: str, simulatio
             f"{dedup_note}"
             f"{simulation['output']}\n"
         )
-    path.write_text("".join(sections), encoding="utf-8")
+    _atomic_write_text(path, "".join(sections))
     return str(path)
 
 
@@ -4185,7 +4323,7 @@ def _certify_payload(root: Path, payload: bytes, source_path: str) -> dict[str, 
     if destination.exists() and destination.read_bytes() != payload:
         raise ValueError(f"certified evidence hash collision or tampering: {destination}")
     if not destination.exists():
-        destination.write_bytes(payload)
+        _atomic_write_bytes(destination, payload)
     return {"path": str(destination), "sha256": digest, "source_path": source_path}
 
 
@@ -5322,7 +5460,7 @@ def declare_subtasks(
             "status": "open", "pipeline_status": "pending",
             "chunks": {}, "created_at": now(),
         }
-    with locked_state(root) as state:
+    with _broker_refusal_surface(root, agent_id, "subtask-branch-create"), locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES or developer["task"] == AWAITING_OWNER_DIRECTION or not developer.get("active"):
             raise ValueError("only an active Delivery Agent may declare product subtasks")
@@ -5348,8 +5486,9 @@ def declare_subtasks(
             branches = state.setdefault("subtask_branches", {}).setdefault(developer["task"], {})
             for name in sorted(prepared):
                 branch = broker.branch_create(
-                    developer["id"], _next_broker_nonce(state, session_key), subtask=name,
+                    developer["id"], _next_broker_nonce(state, session_key, broker), subtask=name,
                 )
+                _clear_broker_refusal(state, developer)
                 workspaces[name] = branch["workspace"]
                 branches[name] = branch
                 existing[name].update({
@@ -5619,7 +5758,7 @@ def broker_stage_commit(
     subtask: str = "",
 ) -> dict[str, Any]:
     """Stage explicit task paths and commit them through the trusted broker."""
-    with locked_state(root) as state:
+    with _broker_refusal_surface(root, agent_id, "git-commit"), locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer.get("role") not in DEVELOPER_ROLES or not developer.get("active"):
             raise ValueError("only the active Delivery task owner may create a governed commit")
@@ -5646,11 +5785,12 @@ def broker_stage_commit(
         broker = _broker_for_state(root, state, task)
         result = broker.stage_commit(
             agent_id,
-            _next_broker_nonce(state, str(developer.get("session_id") or developer["id"])),
+            _next_broker_nonce(state, str(developer.get("session_id") or developer["id"]), broker),
             paths,
             message,
             subtask=subtask,
         )
+        _clear_broker_refusal(state, developer)
         if item:
             _require_owned_files(item, list(result.get("manifest") or []), "broker commit result")
         _event(state, "broker_commit_created", developer, {
@@ -6960,7 +7100,7 @@ def migrate_reviewer_ledgers(root: Path) -> dict[str, Any]:
             destination = context.storage_path("reviews", source.name)
             if source.is_file() and not destination.is_file():
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(source.read_bytes())
+                _atomic_write_bytes(destination, source.read_bytes())
             if not destination.is_file():
                 continue
             digest = hashlib.sha256(destination.read_bytes()).hexdigest()
@@ -8534,14 +8674,50 @@ def watch(root: Path, status_interval_seconds: int = 300, stale_seconds: int = 9
         return due
 
 
+def _reconcile_broker_nonces(
+    state: dict[str, Any], broker: git_broker.GitBroker, task: str,
+) -> list[dict[str, Any]]:
+    """Report and close any gap between the board counter and the broker journal.
+
+    The journal never rolls back; the board counter does. A board value below
+    the journal's is exactly the drift that deadlocked Delivery on 2026-09-21,
+    and before this check ``recover-git`` answered `{"holds": [], "recovered":
+    []}` to it — the operator had no way to see the cause. Allocation now
+    self-heals, but the drift is still reported here so an incident is
+    diagnosable in seconds rather than by reading two JSON files side by side.
+    """
+    try:
+        journal = json.loads(broker.nonces_path.read_text(encoding="utf-8")) if broker.nonces_path.is_file() else {}
+    except (OSError, json.JSONDecodeError) as error:
+        return [{"task": task, "session": "", "board": None, "journal": None,
+                 "problem": f"broker nonce journal is unreadable: {error}"}]
+    nonces = state.setdefault("broker_nonces", {})
+    drift: list[dict[str, Any]] = []
+    for session, accepted in sorted(journal.items()):
+        try:
+            accepted_value = int(accepted)
+        except (TypeError, ValueError):
+            continue
+        board_value = int(nonces.get(session, 0) or 0)
+        if board_value < accepted_value:
+            nonces[session] = accepted_value
+            drift.append({
+                "task": task, "session": session, "board": board_value,
+                "journal": accepted_value, "reconciled_to": accepted_value,
+            })
+    return drift
+
+
 def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
     """Worker-start reconciliation for incomplete broker transactions."""
     recovered: list[dict[str, Any]] = []
     holds: list[dict[str, Any]] = []
+    nonce_drift: list[dict[str, Any]] = []
     with locked_state(root) as state:
         tasks = sorted(state.get("task_repositories", {}))
         for task in tasks:
             broker = _broker_for_state(root, state, task)
+            nonce_drift.extend(_reconcile_broker_nonces(state, broker, task))
 
             def record(outcome: dict[str, Any]) -> None:
                 if outcome.get("operation") == "accept-merge" and outcome.get("status") == "completed_idempotently":
@@ -8596,7 +8772,15 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
             _event(state, "git_recovery_completed", None, {
                 "message": f"Git broker reconciled {len(recovered)} incomplete transaction(s) without data loss",
             })
-    return {"recovered": recovered, "holds": holds}
+        if nonce_drift:
+            _event(state, "broker_nonce_drift_reconciled", None, {
+                "message": (
+                    f"board nonce counter was behind the broker journal for "
+                    f"{len(nonce_drift)} session(s); reconciled to the journal"
+                ),
+                "drift": nonce_drift,
+            })
+    return {"recovered": recovered, "holds": holds, "nonce_drift": nonce_drift}
 
 
 def _root(value: str) -> Path:

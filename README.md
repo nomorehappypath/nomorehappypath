@@ -43,7 +43,7 @@ AI agents it governs run on **your own accounts**.
 
 | Requirement | Where to get it | Cost |
 |---|---|---|
-| macOS 13+ with Python 3.9+ | `python3 --version` to check | free |
+| **macOS 13+** with Python 3.9+, or **Linux** (tested on Ubuntu 24.04) with Python 3.9+, git, tmux and bubblewrap | `python3 --version` to check; on Ubuntu `sudo apt install git tmux bubblewrap` | free |
 | **Codex CLI** (the Delivery agent) | `npm install -g @openai/codex` — sign in with your OpenAI account | your OpenAI/ChatGPT plan |
 | **Claude Code CLI** (the Reviewer/CTO) | https://claude.com/claude-code — sign in with your Anthropic account | your Anthropic plan |
 | **OpenAI API key** (project chat) | https://platform.openai.com/api-keys — entered under Settings, verified before storage, kept in a file only you can read | pay-per-use, cents |
@@ -51,8 +51,18 @@ AI agents it governs run on **your own accounts**.
 You can start with just one CLI, but the platform's core guarantee —
 **cross-vendor review, where a competing vendor's agent verifies the work** —
 needs both. No other dependencies: the platform is pure Python standard
-library. Windows and Linux are not supported yet (the visible-terminal
-workflow is built on macOS machinery); Linux support is on the roadmap.
+library. Windows is not supported.
+
+**On Linux** the platform is built for a server with no desktop. The
+installer sets up a per-user systemd service and tells you if lingering is
+off (without it the service stops when you log out; `sudo loginctl
+enable-linger <user>` fixes that). Each agent runs in its own named tmux
+session, and Mission Control shows the exact `tmux attach -t …` command to
+watch it. The platform's own Git writes are confined with bubblewrap; if
+bubblewrap is missing, those writes refuse to run rather than run unconfined.
+Project folders are chosen by typing a path, since there is no native folder
+dialog. A desktop-Linux experience with terminal windows is not part of this
+release.
 
 ## Install
 
@@ -160,17 +170,16 @@ when being wrong costs a shrug; use NoMoreHappyPath when being wrong costs
 a client, a weekend, or your reputation.
 
 **Can I run it inside a virtual machine?**
-Yes. On an Apple Silicon Mac, you can run the agents inside a macOS virtual
-machine, and some owners prefer that. It gives the agents real freedom inside
-the folder you point them at while keeping that work separate from your main
-Mac environment. Tools such as VirtualBuddy, UTM, and Parallels can create
-macOS guests on Apple Silicon Macs; install the tooling inside the guest, keep
-the projects inside the guest, and take a snapshot before the first run. That
-snapshot lets you revert the whole environment, not just a Git commit. This is
+Yes, and a Linux VM or server is the simplest way to do it. Install on a
+headless Ubuntu guest (or a cloud box), keep the projects inside it, and take
+a snapshot before the first run; that snapshot lets you revert the whole
+environment, not just a Git commit. On an Apple Silicon Mac you can instead
+run the agents inside a macOS virtual machine: tools such as VirtualBuddy,
+UTM, and Parallels can create macOS guests on Apple Silicon Macs. This is
 optional: running directly on your Mac is normal too. Either way, point the
 agents at the exact project folder and keep it in version control. Practical
-limit: Apple allows macOS guests only on Apple hardware, so a VM is not a
-workaround for running macOS on a Windows PC.
+limit: Apple allows macOS guests only on Apple hardware, so a macOS VM is not
+a workaround for running on a Windows PC; a Linux VM is.
 
 ## Your responsibility
 

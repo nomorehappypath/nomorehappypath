@@ -8,7 +8,30 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness import browser_acceptance
+from harness import browser_acceptance, platform_support
+from harness.platform_support import linux
+
+
+def _identity():
+    """The seam the ps calls now go through; patching the old delegate is a no-op.
+
+    Resolves the CURRENT platform, so call it inside `_running_as` or it
+    answers for the host rather than for the implementation under test.
+    """
+    return platform_support.process_identity()
+
+
+def _running_as(platform_name: str):
+    """Pin the platform so a test reports BEHAVIOUR, not the host it ran on.
+
+    Stage 1 selects an implementation for real, so a test that denies `ps` and
+    expects a refusal was asserting "this machine is a Mac" as much as anything
+    about the product: on Linux the seam reads /proc, executes nothing, and the
+    denial lands on nobody. The real selector stays in the path - only the
+    answer it reads is fixed - so these still prove that selection works, not
+    just that the chosen module does.
+    """
+    return mock.patch.object(platform_support.sys, "platform", platform_name)
 
 
 class ProcessTableAvailabilityTests(unittest.TestCase):
@@ -23,10 +46,16 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
     """
 
     def test_denied_ps_becomes_a_named_condition_not_a_raw_oserror(self):
+        # Pinned to macOS: `ps` is what the macOS seam executes, so denying it
+        # is a statement about that implementation. Unpinned, this passed on a
+        # Mac and reported the HOST on Linux, where nothing shells out and the
+        # patched `subprocess.run` was never reached. The /proc seam owes the
+        # same refusal and is held to it in LinuxProcessTableTests below.
         for error in (PermissionError(1, "Operation not permitted", "ps"),
                       FileNotFoundError(2, "No such file or directory", "ps")):
             with self.subTest(error=type(error).__name__):
-                with mock.patch.object(browser_acceptance.subprocess, "run", side_effect=error):
+                with _running_as("darwin"), mock.patch.object(
+                        browser_acceptance.subprocess, "run", side_effect=error):
                     with self.assertRaises(browser_acceptance.ProcessTableUnavailable) as caught:
                         browser_acceptance._process_table()
                 self.assertIn("process table", str(caught.exception))
@@ -34,15 +63,19 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
 
     def test_denied_ps_never_reads_as_an_empty_process_table(self):
         """The dangerous failure: claiming nothing was running."""
-        with mock.patch.object(browser_acceptance.subprocess, "run",
-                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+        with _running_as("darwin"), \
+                mock.patch.object(browser_acceptance.subprocess, "run",
+                                  side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
                 table = browser_acceptance._process_table()
                 self.fail(f"an unreadable process table returned {table!r} instead of refusing")
 
     def test_start_token_refuses_when_ps_cannot_run(self):
-        with mock.patch.object(browser_acceptance.subprocess, "run",
-                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+        # Pinned to macOS: the refusal being asserted is about EXECUTING `ps`,
+        # and only the macOS seam executes anything to obtain a start token.
+        with _running_as("darwin"), \
+                mock.patch.object(browser_acceptance.subprocess, "run",
+                                  side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
                 browser_acceptance._start_token(os.getpid())
 
@@ -55,15 +88,23 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
         prerequisite it exists to reason about. The distinction under test is
         `_start_token`'s own logic (non-zero exit -> empty token), which needs
         no operating system to prove.
+
+        Pinned to macOS for the same reason it is hermetic: `run_ps` and the
+        BSD `lstart` string it returns belong to the macOS seam. Unpinned, the
+        patch landed on an object Linux never calls and the assertion measured
+        the host's real /proc. The Linux half of this distinction is in
+        LinuxProcessTableTests below.
         """
         gone = subprocess.CompletedProcess(args=["ps"], returncode=1, stdout="", stderr="")
         alive = subprocess.CompletedProcess(
             args=["ps"], returncode=0, stdout="Mon Aug 25 10:00:00 2026\n", stderr="",
         )
-        with mock.patch.object(browser_acceptance, "_run_ps", return_value=gone):
-            self.assertEqual(browser_acceptance._start_token(999999), "")
-        with mock.patch.object(browser_acceptance, "_run_ps", return_value=alive):
-            self.assertEqual(browser_acceptance._start_token(os.getpid()), "Mon Aug 25 10:00:00 2026")
+        with _running_as("darwin"):
+            with mock.patch.object(_identity(), "run_ps", return_value=gone):
+                self.assertEqual(browser_acceptance._start_token(999999), "")
+            with mock.patch.object(_identity(), "run_ps", return_value=alive):
+                self.assertEqual(
+                    browser_acceptance._start_token(os.getpid()), "Mon Aug 25 10:00:00 2026")
 
     def test_the_same_distinction_holds_against_the_real_ps(self):
         """The integration truth, skipped only where the OS cannot answer."""
@@ -74,17 +115,66 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
 
     def test_release_preview_shares_the_same_refusal(self):
         from harness import release_preview
-        with mock.patch.object(browser_acceptance.subprocess, "run",
-                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+        with _running_as("darwin"), \
+                mock.patch.object(browser_acceptance.subprocess, "run",
+                                  side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
                 release_preview._start_token(os.getpid())
 
     def test_the_test_guard_skips_instead_of_failing(self):
         from tests import environment_support
-        with mock.patch.object(browser_acceptance.subprocess, "run",
-                               side_effect=PermissionError(1, "Operation not permitted", "ps")):
+        with _running_as("darwin"), \
+                mock.patch.object(browser_acceptance.subprocess, "run",
+                                  side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(unittest.SkipTest):
                 environment_support.require_process_table()
+
+
+class LinuxProcessTableTests(unittest.TestCase):
+    """The same distinction, through the seam Linux actually selects.
+
+    Pinning the tests above to macOS keeps them honest, but on its own it would
+    leave the invariant they exist for - an unreadable process table is a named
+    refusal, never an empty one - asserted on no platform at all when the suite
+    runs on the Ubuntu target. These read a /proc built here, so the behaviour
+    is proved on any host rather than only where /proc happens to exist.
+    """
+
+    def _entry(self, proc: Path, pid: int, start_ticks: str = "919191") -> None:
+        """One /proc/<pid> carrying the only three fields the seam reads.
+
+        After the bracketed comm come state, ppid and pgrp; starttime is
+        overall field 22, which is why the filler is exactly sixteen wide.
+        """
+        entry = proc / str(pid)
+        entry.mkdir(parents=True)
+        (entry / "stat").write_text(
+            f"{pid} (headless-shell) S 1 {pid} " + "0 " * 16 + f"{start_ticks}\n",
+            encoding="utf-8",
+        )
+        (entry / "cmdline").write_bytes(b"/opt/browser\x00--headless\x00")
+
+    def test_an_unreadable_proc_is_the_same_named_refusal(self):
+        """Not an empty table: "nothing was running" is the dangerous claim."""
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "no-proc"
+            with _running_as("linux"), \
+                    mock.patch.object(linux.PROCESS_IDENTITY, "PROC", missing):
+                with self.assertRaises(browser_acceptance.ProcessTableUnavailable) as caught:
+                    table = browser_acceptance._process_table()
+                    self.fail(f"an unreadable /proc returned {table!r} instead of refusing")
+            self.assertIn(str(missing), str(caught.exception))
+
+    def test_a_pid_that_is_simply_gone_still_yields_an_empty_token(self):
+        """A dead pid is an ANSWER here too - and a live one is its start time."""
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary) / "proc"
+            self._entry(proc, 4242, start_ticks="919191")
+            with _running_as("linux"), \
+                    mock.patch.object(linux.PROCESS_IDENTITY, "PROC", proc):
+                self.assertEqual(browser_acceptance._start_token(4242), "919191")
+                self.assertEqual(browser_acceptance._start_token(999999), "")
+                self.assertEqual(set(browser_acceptance._process_table()), {4242})
 
 
 class LaunchLockReleaseTests(unittest.TestCase):

@@ -210,7 +210,7 @@ delivery plan or implement until the confirmation is recorded.
 ### Delivery quality bar
 
 The board certifies that your declared commands ran. It cannot judge whether
-the work is good; these four rules are yours to satisfy before you request
+the work is good; these rules are yours to satisfy before you request
 review.
 
 - **A user-facing change is proven on the rendered surface.** When a scenario
@@ -246,6 +246,38 @@ review.
   Where you genuinely cannot reproduce a condition, say so in the review
   summary and name what stays unproven — a declared gap is honest, a silent
   one is a false claim.
+- **An intermittent failure is measured before it is named.** A test that
+  fails sometimes is a race, a leak, or a real defect until repetition proves
+  otherwise. Run it in a loop — ten times or more — and record the count before
+  calling anything flaky. "Known flaky" is how a genuine defect survives for
+  years: a race presents exactly as intermittency, and the failing runs are the
+  honest ones. If it truly is environmental, the loop tells you that too, and
+  the number belongs in the evidence.
+- **A search is not a census.** When a claim depends on a complete set — every
+  writer, every call site, every place a rule is enforced — a grep that finds
+  matches does not prove the set. It proves what matched the pattern you chose.
+  Enumerate by walking the whole surface, state how you enumerated, and read
+  what your own search printed before you conclude from it. A count presented
+  as a census is how a claim reads as verified while being false.
+- **An instrument must prove it ran.** Any script that judges a result — a
+  comparison, a gate, a health check — must fail loudly when the thing it
+  measures did not complete. A test suite that dies produces no failures, and a
+  naive comparison then reports it as clean. Require the positive signal (the
+  summary line, the exit status, the completion marker) and treat its absence
+  as failure, never as success. Silence is not a pass.
+- **A claim about the product is verified against the product.** Before you
+  ship any sentence a user will read as a guarantee — what is confined, what is
+  private, what cannot happen — execute the thing it describes and watch it
+  hold. This applies with full force to text you inherited: moving, rewording,
+  or relocating a claim makes you responsible for it. A false safety claim in
+  user-facing copy is worse than a bug, because the user makes decisions on it.
+- **A test reports the behaviour, not the machine it ran on.** An assertion
+  that passes because of where it happens to run is not a test. Watch for a
+  test that skips on one platform while its module reports OK, an expectation
+  built on one platform's timing or filesystem granularity, and a check that
+  reads its own environment instead of the contract. Where platforms genuinely
+  differ, assert BOTH behaviours explicitly; never widen an assertion until
+  every platform passes, and never skip to make a suite green.
 - **Nothing you run touches the owner's real files.** Every test and
   simulation runs against the task workspace, the board root's `.harness`
   directories, or a temporary directory you create — never the owner's home
