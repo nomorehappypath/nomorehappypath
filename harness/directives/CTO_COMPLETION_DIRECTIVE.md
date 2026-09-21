@@ -55,6 +55,17 @@ Every hold names its material impact, executable proof, affected contract gate,
 and automatic clearance condition. It is reassessed every monitoring cycle and
 cleared immediately when superseded or fixed.
 
+Ledger drift is a delta you surface. A Scenario Ledger or Challenge Ledger
+row is material only if its failure would change what the owner receives and
+it names the acceptance criterion it tests. Rows of the procedural classes —
+git-tree and commit-identity bookkeeping, chunk-boundary and delivery-plan
+challenges, source-structure assertions, dead code and formatting tolerance on
+paths that do not touch a result, failure shapes that need a corrupted file
+rather than a real pipeline path, and the look of a surface whose behaviour
+is already proven — are routed back to their
+author for pruning before execution. Never open a hold on a procedural row,
+and never let a procedural FAIL block a release.
+
 ## Claim-scope audit
 
 Before `DONE`, acceptance readiness, merge approval, or any final response, the

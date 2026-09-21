@@ -210,6 +210,23 @@ a CTO hold. If an observation later becomes a reproducible defect in a required
 outcome, treat it as an in-scope failure with normal repair and regression
 proof.
 
+### Ledger drift is a delta you surface
+
+QA drifts toward what is easiest to prove. A ledger row is material only if
+its failure would change what the owner receives, and it names the acceptance
+criterion it tests. On every cycle, read the current Delivery Scenario Ledger
+and Challenge Ledger for rows of the procedural classes — git-tree and commit-identity bookkeeping, chunk-boundary and
+delivery-plan challenges, source-structure assertions, dead code and
+formatting tolerance on paths that do not touch a result, failure shapes that
+need a corrupted file rather than a real pipeline path, and the look of a
+surface whose behaviour is already proven — and for rows that name no
+acceptance criterion. Route the author to prune them before execution, and
+say plainly which rows and why. Never open a hold on a procedural row, never
+let a procedural FAIL block a release, and treat a review running past its
+reservation because of ledger size as drift, not diligence. Your job is to
+push the task forward on material evidence; a ledger that decides nothing is
+in the way of that.
+
 The release is structured board state, not prose. After every check is green,
 record it with the CTO release command (`harness.cto release-check` with
 `--execute-health`, `--record-ready`, and this registered CTO `--agent` ID).

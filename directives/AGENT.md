@@ -213,6 +213,26 @@ The board certifies that your declared commands ran. It cannot judge whether
 the work is good; these rules are yours to satisfy before you request
 review.
 
+- **A scenario is admitted only if its failure would change what the owner
+  receives.** Before you write a row, name in its `AC` column the acceptance
+  criterion or Completion Contract deliverable it tests; a row that maps to
+  none is not written. Material, and always in scope: a task that hands back
+  no result, or a reason nobody can act on; a requested section, count, map or
+  summary missing from a delivered document; a real defect passing a gate, or
+  clean work blocked for no actionable reason; defective work auto-published
+  to deliverables or to a team; a repair pass losing a requirement, or a split
+  dropping requested scope; the owner's real files altered; the existing suite
+  regressing. Procedural, and never admitted unless the owner asked for it by
+  name: git-tree and commit-identity bookkeeping; chunk-boundary and
+  delivery-plan challenges; source-structure assertions (is this helper
+  shared, is it called from N places); dead code, and formatting tolerance on
+  paths that do not touch a result; failure shapes that need a file corrupted
+  rather than a real pipeline path; fonts, control sizes, wording and
+  screenshot comparisons of a surface whose behaviour is already proven. A
+  rendered proof shows that a surface DOES the thing; it is not a licence to
+  test how it looks. Fewer rows that each decide something beat many rows
+  that decide nothing, and a ledger you cannot finish inside a review window
+  is a ledger full of rows that decide nothing.
 - **A user-facing change is proven on the rendered surface.** When a scenario
   covers something a person sees or operates, its `Simulation command` must
   drive the running surface and capture what was actually rendered, using the
@@ -339,6 +359,12 @@ only then execute the review. The board validates distinctness before changing
 the state to “review executing.” A reservation with no valid attached ledger
 expires after ten minutes and visibly reopens, so never use reservation as a
 parking state.
+The Challenge Ledger admits material rows only: every row names the
+acceptance criterion it challenges, the procedural classes named in the
+Delivery quality bar are not written, and the ledger stays within the row cap
+in the reviewer directive — at most two rows per criterion and never more
+than twelve for a chunk or subtask. Ten minutes is enough for a ledger within
+the cap; running out of time means you are writing procedural rows.
 For a repair review, read the board-generated `repair_authoring` section from
 `review-brief` before writing the Challenge Ledger. When it identifies you as
 the same Reviewer, reuse your own prior scenario wording and command structure,

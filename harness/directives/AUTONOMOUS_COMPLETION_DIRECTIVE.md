@@ -91,6 +91,36 @@ and architectural repairs, not for a two-line correction. Previously closed
 findings are re-verified by running their committed regression tests, not by
 bespoke re-proof, unless the new repair touched their surface.
 
+## Challenge ledger admission — material rows only
+
+The materiality rule does not start at the verdict; it starts when a row is
+written. A Challenge Ledger row is admitted only if its failure would change
+what the owner receives, and every row names the acceptance criterion or
+Completion Contract deliverable it challenges. A row that maps to none is not
+written.
+
+Material, and always in scope: a task that hands back no result, or a reason
+nobody can act on; a requested section, count, map or summary missing from a
+delivered document; a real defect passing a gate, or clean work blocked for no
+actionable reason; defective work auto-published to deliverables or to a team;
+a repair pass losing a requirement, or a split dropping requested scope; the
+owner's real files altered; the existing suite regressing.
+
+Procedural, and never admitted unless the owner asked for it by name: git-tree
+and commit-identity bookkeeping; chunk-boundary and delivery-plan challenges;
+source-structure assertions (is this helper shared, is it called from N
+places); dead code, and formatting tolerance on paths that do not touch a
+result; failure shapes that need a file corrupted rather than a real pipeline
+path; fonts, control sizes, wording and screenshot comparisons of a surface
+whose behaviour is already proven.
+
+Row cap: at most two rows per acceptance criterion of the scope under review,
+and never more than twelve rows for a chunk or subtask. Final acceptance may
+add one integration row per declared chunk or subtask. A ledger over the cap
+is authored wrong, not thorough, and the CTO sends it back for pruning before
+execution. Ten minutes of reservation is enough for a ledger within the cap;
+running out of time means the rows are procedural.
+
 ## Continuous execution and updates
 
 Every active task has an owner, next action, board poll timer, and a short
