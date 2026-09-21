@@ -76,6 +76,17 @@ Challenge Ledger is being prepared, and execution begins only after the board
 validates the attached ledger. An unattached reservation expires and reopens
 after ten minutes.
 
+Both ledgers admit material rows only: a row is written only if its failure
+would change what the owner receives, and it names the acceptance criterion it
+tests. Git-tree and commit-identity bookkeeping, chunk-boundary challenges,
+source-structure assertions, dead code, failure shapes that need a corrupted
+file rather than a real pipeline path, and the look of a surface whose
+behaviour is already proven are procedural and are not written unless the
+owner asked for them by name. The Challenge Ledger stays within the
+row cap in the reviewer directive — at most two rows per criterion, never
+more than twelve for a chunk or subtask; the CTO sends an over-cap or
+procedural ledger back before execution.
+
 Integrate the candidate onto current local `main` before requesting final
 acceptance so the reviewed commit is the intended release commit. If only
 commit metadata later changes while the Git tree remains identical, the CTO

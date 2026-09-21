@@ -54,6 +54,44 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
             self.assertIn("an environment you have not reproduced", text)
         self.assertIn("A refusal that fires when it should is the product working", agent)
 
+    def test_directives_admit_only_material_scenarios_and_cap_the_challenge_ledger(self):
+        """2026-09-21: QA drifted into git bookkeeping, chunk boundaries and fonts.
+
+        The materiality rule used to start at the verdict; it now starts when a
+        row is written, for every role, in the owner's own terms.
+        """
+        agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
+        cto = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
+        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
+        reviewer = " ".join((ROOT / "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md").read_text().split())
+        completion = " ".join((ROOT / "harness/directives/CTO_COMPLETION_DIRECTIVE.md").read_text().split())
+        template_path = ROOT / "validated_v0.2/REVIEWER_CHALLENGE_LEDGER_TEMPLATE.md"
+        # validated_v0.2/ is private material the public cut does not ship; the
+        # five directives above are shipped and stay pinned unconditionally.
+        template = " ".join(template_path.read_text().split()) if template_path.is_file() else None
+        for text in (agent, spawn, reviewer, cto, completion):
+            self.assertIn("would change what the owner receives", text)
+            self.assertIn("acceptance criterion", text)
+            self.assertIn("commit-identity bookkeeping", text)
+            self.assertIn("chunk-boundary", text)
+            self.assertIn("source-structure assertions", text)
+            self.assertIn("dead code", text)
+            self.assertIn("real pipeline path", text)
+        for text in (agent, reviewer, spawn):
+            self.assertIn("never more than twelve", text)
+        self.assertIn("at most two rows per acceptance criterion", reviewer)
+        self.assertIn("hands back no result", agent)
+        self.assertIn("hands back no result", reviewer)
+        self.assertIn("not a licence to test how it looks", agent)
+        for text in (cto, completion):
+            self.assertIn("Never open a hold on a procedural row", text)
+            self.assertIn("never let a procedural FAIL block a release", text)
+        self.assertIn("drift, not diligence", cto)
+        if template is None:
+            self.skipTest("validated_v0.2/ is not part of this tree (public cut excludes it); directives pinned above")
+        self.assertIn("never more than twelve", template)
+        self.assertIn("| ID | Criterion tested |", template)
+
     def test_runtime_directives_cannot_recreate_the_removed_findings_queue(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         cto = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
