@@ -11,8 +11,12 @@ enforcement point.
 """
 from __future__ import annotations
 
-from harness import platform_support
-
+# No `harness` import may appear above the sys.path bootstrap below: this file
+# is exec'd by run_managed_agent.sh as `python3 -E harness/interactive_supervisor.py`
+# from a foreign directory, where the package is not importable until the
+# bootstrap runs. One early import here killed every agent launch on
+# 2026-09-22. tests/test_scripts_launch_as_the_runner_does.py runs each
+# launched script exactly that way.
 import argparse
 import array
 import fcntl
