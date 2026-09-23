@@ -388,8 +388,42 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "effort": selected["effort"],
             "provider_label": PROVIDERS[selected["provider"]]["label"],
         }
+        _inherit_cli_memory(state, session)
         state["sessions"][session_id] = session
         return dict(session)
+
+
+def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any]) -> None:
+    """A new session of a role continues the last conversation of that role.
+
+    Conversation memory used to follow the terminal session only, so stopping
+    a Delivery agent and launching the role again started a blank agent while
+    the previous afternoon's discussion sat readable in the old session's
+    view (2026-09-23). The newest ENDED session of the same kind that carries
+    a CLI session id hands it on, with its launch count, so the runner's plan
+    resumes it. A session that is still active never hands its conversation
+    to a second live terminal: two Delivery agents may run at once, and each
+    must own its own CLI session.
+    """
+    kind = session.get("kind")
+    live_ids = {
+        str(item.get("cli_session_id"))
+        for item in state.get("sessions", {}).values()
+        if item.get("kind") == kind and item.get("status") in ACTIVE_STATUSES and item.get("cli_session_id")
+    }
+    candidates = [
+        item for item in state.get("sessions", {}).values()
+        if item.get("kind") == kind and item.get("id") != session.get("id")
+        and item.get("status") not in ACTIVE_STATUSES
+        and item.get("cli_session_id") and str(item.get("cli_session_id")) not in live_ids
+    ]
+    if not candidates:
+        return
+    predecessor = max(candidates, key=lambda item: str(item.get("ended_at") or item.get("created_at") or ""))
+    session["cli_session_id"] = predecessor["cli_session_id"]
+    session["cli_session_provider"] = predecessor.get("cli_session_provider")
+    session["cli_launches"] = max(int(predecessor.get("cli_launches") or 1), 1)
+    session["continues_session"] = predecessor["id"]
 
 
 def restore_missing_resume_session(
@@ -461,6 +495,7 @@ def _cli_memory_fields() -> dict[str, Any]:
     return {
         "cli_session_id": None, "cli_session_provider": None,
         "cli_launches": 0, "cli_last_launch_at": None, "cli_last_launch_resumed": False,
+        "continues_session": None,
     }
 
 
@@ -476,6 +511,7 @@ def cli_session(root: Path, session_id: str) -> dict[str, Any]:
             "cli_launches": int(session.get("cli_launches") or 0),
             "cli_last_launch_at": session.get("cli_last_launch_at"),
             "cli_last_launch_resumed": bool(session.get("cli_last_launch_resumed")),
+            "continues_session": session.get("continues_session"),
         }
 
 
@@ -899,6 +935,11 @@ def main(argv: list[str] | None = None) -> int:
     launch_parser = subparsers.add_parser("note-cli-launch")
     launch_parser.add_argument("--session-id", required=True)
     launch_parser.add_argument("--resumed", action="store_true")
+    conversation_parser = subparsers.add_parser(
+        "conversation", help="print the readable conversation of one managed terminal (any agent may read another's)",
+    )
+    conversation_parser.add_argument("--session-id", required=True)
+    conversation_parser.add_argument("--raw", action="store_true", help="the raw terminal record instead")
     args = parser.parse_args(argv)
     if args.command == "attach":
         result = attach(context_from_args(args), args.id, args.pid)
@@ -918,6 +959,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "note-cli-launch":
         print(json.dumps(note_cli_launch(context_from_args(args), args.session_id, args.resumed), sort_keys=True))
+        return 0
+    if args.command == "conversation":
+        from harness import conversation
+        text = conversation.conversation_view(context_from_args(args), args.session_id, raw=args.raw)
+        if text is None:
+            print(f"no conversation is recorded for managed session {args.session_id}", file=sys.stderr)
+            return 1
+        sys.stdout.write(text)
         return 0
     raise AssertionError("unreachable")
 

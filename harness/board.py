@@ -8790,8 +8790,12 @@ def _root(value: str) -> Path:
 def main(argv: list[str] | None = None) -> int:
     from harness import board_client
     client_state = board_client.environment_state()
-    if client_state != "legacy":
-        return board_client.invoke(list(sys.argv[1:] if argv is None else argv))
+    requested = list(sys.argv[1:] if argv is None else argv)
+    # Help is answered locally, never sent to the worker: a managed agent that
+    # asked `--help` used to get "response is invalid or incompatible" back
+    # and spent a minute deciding whether the board was broken (2026-09-23).
+    if client_state != "legacy" and not any(item in {"-h", "--help"} for item in requested):
+        return board_client.invoke(requested)
     parser = argparse.ArgumentParser(
         description="Dev Harness durable agent board", allow_abbrev=False,
     )

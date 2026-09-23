@@ -263,13 +263,16 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
     known = str(record.get("cli_session_id") or "")
     launches = int(record.get("cli_launches") or 0)
     transcript = str(transcript_path(root, session_id))
+    predecessor = str(record.get("continues_session") or "")
     if launches > 0 and known:
         if provider == "claude" and claude_session_exists(known):
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
-                    "transcript": transcript, "reason": f"resuming Claude Code session {known}"}
+                    "transcript": transcript, "reason": f"resuming Claude Code session {known}",
+                    "predecessor": predecessor}
         if provider == "codex" and codex_rollout_path(known) is not None:
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
-                    "transcript": transcript, "reason": f"resuming Codex session {known}"}
+                    "transcript": transcript, "reason": f"resuming Codex session {known}",
+                    "predecessor": predecessor}
         reason = f"previous {provider} session {known} is not in the vendor store; starting fresh"
         # The stale id must go: the supervisor discovers a NEW Codex rollout only
         # while the record carries no id, and a later plan would otherwise keep
@@ -284,19 +287,24 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
         minted = str(uuid.uuid4())
         control.record_cli_session(root, session_id, minted, provider)
         return {"mode": "fresh", "provider": provider, "cli_session_id": minted,
-                "transcript": transcript, "reason": reason}
+                "transcript": transcript, "reason": reason, "predecessor": predecessor}
     return {"mode": "fresh", "provider": provider, "cli_session_id": "",
-            "transcript": transcript, "reason": reason,
+            "transcript": transcript, "reason": reason, "predecessor": predecessor,
             "codex_marker": codex_launch_marker(session_id, launches + 1)}
 
 
-def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_command_prefix: str) -> str:
+def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_command_prefix: str,
+                     conversation_command: str = "") -> str:
+    reread = (
+        f"To reread the conversation in readable form, run: {conversation_command}"
+        if conversation_command else
+        f"The raw terminal record of what was said, both sides, is at {transcript}"
+    )
     return (
         f"{RECOVERY_LABEL} This managed terminal was relaunched by the harness and your "
-        f"previous conversation (session {cli_session_id}) was resumed. The full transcript "
-        f"of what was said, both sides, is at {transcript}. Read it if your memory of the "
-        f"discussion is thin, then continue exactly where it stopped; do not start over and "
-        f"do not ask the owner to repeat anything that is in the transcript. You remain agent "
+        f"previous conversation (session {cli_session_id}) was resumed. {reread}. Read it if "
+        f"your memory of the discussion is thin, then continue exactly where it stopped; do not "
+        f"start over and do not ask the owner to repeat anything that is in it. You remain agent "
         f"{agent_id} on the board; for every board command, start with: {board_command_prefix}. "
         f"USER ACTION: None."
     )
@@ -318,6 +326,26 @@ def codex_discovery_state(root: ProjectRoot, session_id: str, provider: str) -> 
     return pending, marker
 
 
+EARLIER_LABEL = "[SYSTEM CONTROL — earlier conversation available]"
+
+
+def earlier_conversation_note(predecessor_session_id: str, conversation_command: str) -> str:
+    """Appended to a FRESH launch prompt when a previous session of this role exists.
+
+    The resume could not happen (the CLI's store no longer has that
+    conversation), so the new agent is told where the readable record is and
+    to read it before doing anything else — the owner must never be asked to
+    repeat what is already recorded.
+    """
+    return (
+        f"{EARLIER_LABEL} A previous {predecessor_session_id.rsplit('-', 1)[0]} session "
+        f"({predecessor_session_id}) held a conversation with the owner that could not be resumed "
+        f"into this one. Before you do anything else, read it in readable form by running: "
+        f"{conversation_command}. Treat every decision in it as already made; do not ask the "
+        f"owner to repeat anything that is in it. USER ACTION: None."
+    )
+
+
 def wait_for_codex_session_id(root: ProjectRoot, session_id: str, since: float, cwd: Path, marker: str,
                               *, timeout: float = 90.0, poll: float = 2.0) -> str | None:
     """Supervisor helper: record the Codex session id once its rollout appears."""
@@ -329,3 +357,208 @@ def wait_for_codex_session_id(root: ProjectRoot, session_id: str, since: float, 
             return found
         time.sleep(poll)
     return None
+
+
+# ---------------------------------------------------------------- readable view
+
+LAUNCH_SIGNATURES = ("For every board command, start with:", "# AGENTS.md instructions",
+                     RECOVERY_LABEL)
+ROLE_LABELS = {"claude_cto": "CTO", "claude_reviewer": "REVIEWER", "codex_delivery": "DELIVERY AGENT"}
+
+
+def vendor_conversation_path(provider: str, cli_session_id: str) -> Path | None:
+    """Where the CLI itself keeps this conversation, if it still does."""
+    if not cli_session_id:
+        return None
+    if provider == "claude":
+        projects = claude_config_dir() / "projects"
+        if projects.is_dir():
+            for candidate in projects.glob(f"*/{cli_session_id}.jsonl"):
+                return candidate
+        return None
+    if provider == "codex":
+        return codex_rollout_path(cli_session_id)
+    return None
+
+
+def _entry(at: str, who: str, kind: str, text: str) -> dict[str, str]:
+    return {"at": str(at or ""), "who": who, "kind": kind, "text": text}
+
+
+def _tool_line(name: str, arguments: Any) -> str:
+    """One readable line for a tool call: the command, the file, or the name."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return f"{name}: {arguments[:200]}"
+    if isinstance(arguments, dict):
+        for key in ("command", "cmd", "file_path", "path", "pattern", "query", "url"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{name}: {value.strip()[:300]}"
+            if isinstance(value, list) and value:
+                return f"{name}: {' '.join(str(item) for item in value)[:300]}"
+        description = arguments.get("description")
+        if isinstance(description, str) and description.strip():
+            return f"{name}: {description.strip()[:200]}"
+    return str(name)
+
+
+def read_claude_conversation(path: Path) -> list[dict[str, str]]:
+    """Claude Code's session file: `user` / `assistant` records, main chain only."""
+    entries: list[dict[str, str]] = []
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return entries
+    with handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("isSidechain"):
+                continue
+            kind = record.get("type")
+            message = record.get("message") if isinstance(record.get("message"), dict) else None
+            if kind not in {"user", "assistant"} or message is None:
+                continue
+            at = str(record.get("timestamp") or "")
+            content = message.get("content")
+            if isinstance(content, str):
+                if kind == "user" and content.strip():
+                    entries.append(_entry(at, "owner", "text", content))
+                elif kind == "assistant" and content.strip():
+                    entries.append(_entry(at, "agent", "text", content))
+                continue
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text" and str(block.get("text", "")).strip():
+                    entries.append(_entry(at, "owner" if kind == "user" else "agent", "text", str(block["text"])))
+                elif block_type == "tool_use" and kind == "assistant":
+                    entries.append(_entry(at, "agent", "tool", _tool_line(str(block.get("name", "tool")), block.get("input"))))
+                # thinking and tool_result blocks are not the conversation
+    return entries
+
+
+def read_codex_conversation(path: Path) -> list[dict[str, str]]:
+    """Codex's rollout: `response_item` messages and tool calls, developer role skipped."""
+    entries: list[dict[str, str]] = []
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return entries
+    with handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("type") != "response_item":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            at = str(record.get("timestamp") or "")
+            payload_type = payload.get("type")
+            if payload_type == "message":
+                role = payload.get("role")
+                if role not in {"user", "assistant"}:
+                    continue
+                content = payload.get("content")
+                if isinstance(content, str):
+                    parts = [content]
+                elif isinstance(content, list):
+                    parts = [str(item.get("text", "")) for item in content if isinstance(item, dict)]
+                else:
+                    parts = []
+                text = "\n".join(part for part in parts if part.strip())
+                if text.strip():
+                    entries.append(_entry(at, "owner" if role == "user" else "agent", "text", text))
+            elif payload_type in {"function_call", "custom_tool_call", "local_shell_call"}:
+                name = str(payload.get("name") or payload_type)
+                arguments = payload.get("arguments") if "arguments" in payload else payload.get("input")
+                if payload_type == "local_shell_call" and isinstance(payload.get("action"), dict):
+                    arguments = payload["action"]
+                entries.append(_entry(at, "agent", "tool", _tool_line(name, arguments)))
+    return entries
+
+
+def read_vendor_conversation(provider: str, cli_session_id: str) -> list[dict[str, str]] | None:
+    path = vendor_conversation_path(provider, cli_session_id)
+    if path is None:
+        return None
+    if provider == "claude":
+        return read_claude_conversation(path)
+    return read_codex_conversation(path)
+
+
+def _clock(at: str) -> str:
+    match = re.search(r"T(\d{2}:\d{2}:\d{2})", at or "")
+    return match.group(1) if match else "--:--:--"
+
+
+def render_conversation(entries: list[dict[str, str]], *, agent_label: str, header: list[str]) -> str:
+    """Plain text a person reads top to bottom: who spoke, when, what; tools as one line."""
+    out: list[str] = list(header) + [""]
+    for entry in entries:
+        who = "YOU" if entry["who"] == "owner" else agent_label
+        text = entry["text"].strip()
+        if entry["kind"] == "tool":
+            out.append(f"[{_clock(entry['at'])}] {who} ran: {text}")
+            continue
+        if any(signature in text for signature in LAUNCH_SIGNATURES):
+            lines = text.count("\n") + 1
+            first = text.splitlines()[0][:80] if text else ""
+            out.append(f"[{_clock(entry['at'])}] {who} — launch instructions folded ({lines} lines, {len(text)} chars): {first}")
+            out.append("")
+            continue
+        out.append(f"[{_clock(entry['at'])}] {who}")
+        out.append(text)
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def conversation_view(root: ProjectRoot, session_id: str, *, raw: bool = False) -> str | None:
+    """What the Conversation link shows.
+
+    The readable view is built from the CLI's own session file when the
+    harness knows the id and the file is still there; otherwise the raw
+    terminal record with a one-line note. `raw=True` always returns the raw
+    record. None means neither exists.
+    """
+    raw_text = transcript_text(root, session_id)
+    if raw:
+        return raw_text
+    try:
+        record = control.cli_session(root, session_id)
+    except ValueError:
+        record = {}
+    provider = str(record.get("cli_session_provider") or "")
+    cli_session_id = str(record.get("cli_session_id") or "")
+    kind = session_id.rsplit("-", 1)[0] if "-" in session_id else session_id
+    agent_label = ROLE_LABELS.get(kind, "AGENT")
+    entries = read_vendor_conversation(provider, cli_session_id) if provider and cli_session_id else None
+    if entries:
+        header = [
+            f"Conversation — {agent_label.title()} session {session_id}",
+            f"Source: {provider} session {cli_session_id} (the CLI's own record). Raw terminal record: add ?raw=1 to this address.",
+        ]
+        return render_conversation(entries, agent_label=agent_label, header=header)
+    if raw_text is None:
+        return None
+    reason = (
+        "no CLI session id is recorded for this terminal (it predates conversation memory)"
+        if not cli_session_id else
+        f"the {provider or 'CLI'} session {cli_session_id} is not in the CLI's store any more"
+    )
+    return (
+        f"Conversation — {agent_label.title()} session {session_id}\n"
+        f"Readable view unavailable: {reason}. This is the raw terminal record, as painted by the CLI.\n\n"
+        + raw_text
+    )

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -285,7 +286,8 @@ class RunnerArgvTests(unittest.TestCase):
         prompt = self.text()
         self.assertIn(conversation.RECOVERY_LABEL, prompt)
         self.assertIn(minted, prompt)
-        self.assertIn(str(transcript), prompt)
+        self.assertIn(f"conversation --session-id {session['id']}", prompt,
+                      "a resumed agent is told the command that rereads its conversation")
         self.assertNotIn("# CTO Directive", prompt, "a resumed agent already holds the directive")
         record = control.cli_session(self.root, session["id"])
         self.assertEqual((record["cli_launches"], record["cli_last_launch_resumed"]), (2, True))
@@ -414,6 +416,259 @@ class CodexStoreClearedRelaunchTests(unittest.TestCase):
         self.assertIn(conversation.RECOVERY_LABEL, text)
 
 
+def write_claude_session(config_dir: Path, session_id: str) -> Path:
+    """A Claude Code session file shaped like the real one read on 2026-09-23."""
+    store = config_dir / "projects" / "-Users-owner-project"; store.mkdir(parents=True, exist_ok=True)
+    path = store / f"{session_id}.jsonl"
+    rec = lambda **kw: json.dumps(kw)  # noqa: E731
+    lines = [
+        rec(type="user", timestamp="2026-09-23T15:37:09.047Z", isSidechain=False,
+            message={"role": "user", "content": "# CTO Directive — standing global project monitor\n\nlots of rules\n\nFor every board command, start with: python3 board.py --root /p"}),
+        rec(type="assistant", timestamp="2026-09-23T15:37:09.897Z", isSidechain=False,
+            message={"role": "assistant", "content": [{"type": "thinking", "thinking": "private"}]}),
+        rec(type="assistant", timestamp="2026-09-23T15:37:12.000Z", isSidechain=False,
+            message={"role": "assistant", "content": [{"type": "text", "text": "CTO ONLINE. Reading the board."},
+                                                       {"type": "tool_use", "name": "Bash", "input": {"command": "python3 board.py --root /p status", "description": "Read the board"}}]}),
+        rec(type="user", timestamp="2026-09-23T15:37:13.000Z", isSidechain=False,
+            message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "noise the reader must skip"}]}),
+        rec(type="user", timestamp="2026-09-23T15:40:00.000Z", isSidechain=False,
+            message={"role": "user", "content": "how do we make the motion creative agents better?"}),
+        rec(type="assistant", timestamp="2026-09-23T15:40:20.000Z", isSidechain=False,
+            message={"role": "assistant", "content": [{"type": "text", "text": "Three options.\n1. Split the brief.\n2. Add a critic pass.\n3. Cache references."}]}),
+        rec(type="assistant", timestamp="2026-09-23T15:41:00.000Z", isSidechain=True,
+            message={"role": "assistant", "content": [{"type": "text", "text": "subagent chatter the reader must skip"}]}),
+        rec(type="ai-title", title="irrelevant"),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+class ReadableConversationTests(unittest.TestCase):
+    """The Conversation view is the conversation, not the terminal's paint."""
+
+    def test_claude_session_file_reads_as_owner_agent_and_tool_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_claude_session(Path(tmp), "11111111-1111-1111-1111-111111111111")
+            entries = conversation.read_claude_conversation(path)
+        self.assertEqual([(e["who"], e["kind"]) for e in entries],
+                         [("owner", "text"), ("agent", "text"), ("agent", "tool"), ("owner", "text"), ("agent", "text")])
+        self.assertEqual(entries[2]["text"], "Bash: python3 board.py --root /p status")
+        text = conversation.render_conversation(entries, agent_label="CTO", header=["H"])
+        self.assertIn("[15:37:09] YOU — launch instructions folded (5 lines,", text)
+        self.assertIn("[15:37:12] CTO\nCTO ONLINE. Reading the board.", text)
+        self.assertIn("[15:37:12] CTO ran: Bash: python3 board.py --root /p status", text)
+        self.assertIn("[15:40:00] YOU\nhow do we make the motion creative agents better?", text)
+        self.assertIn("[15:40:20] CTO\nThree options.\n1. Split the brief.", text)
+        for noise in ("private", "noise the reader must skip", "subagent chatter", "irrelevant", "lots of rules"):
+            self.assertNotIn(noise, text)
+
+    def test_codex_rollout_reads_messages_and_tool_calls_and_folds_the_injected_prompts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = Path(tmp) / "sessions" / "2026" / "09" / "23"; day.mkdir(parents=True)
+            path = day / "rollout-2026-09-23T10-37-00-22222222-2222-2222-2222-222222222222.jsonl"
+            item = lambda ts, payload: json.dumps({"timestamp": ts, "type": "response_item", "payload": payload})  # noqa: E731
+            lines = [
+                json.dumps({"type": "session_meta", "payload": {"id": "22222222-2222-2222-2222-222222222222", "cwd": tmp}}),
+                item("2026-09-23T15:37:03Z", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "developer text the reader must skip"}]}),
+                item("2026-09-23T15:37:03Z", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for " + tmp + "\n\nrules"}]}),
+                item("2026-09-23T15:37:03Z", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# Agent Directive\n\nFor every board command, start with: python3 board.py\nHARNESS_MANAGED_SESSION=x#1"}]}),
+                item("2026-09-23T15:37:09Z", {"type": "reasoning", "summary": [], "encrypted_content": "zzz"}),
+                item("2026-09-23T15:37:12Z", {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Standing by for your direction."}]}),
+                item("2026-09-23T15:37:15Z", {"type": "custom_tool_call", "name": "shell", "input": "python3 board.py status", "status": "completed"}),
+                item("2026-09-23T15:37:16Z", {"type": "function_call", "name": "shell", "arguments": json.dumps({"command": ["ls", "-la"]})}),
+                item("2026-09-23T15:37:17Z", {"type": "custom_tool_call_output", "output": "noise the reader must skip"}),
+                item("2026-09-23T15:42:00Z", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "build the motion pipeline"}]}),
+            ]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            entries = conversation.read_codex_conversation(path)
+        self.assertEqual([(e["who"], e["kind"]) for e in entries],
+                         [("owner", "text"), ("owner", "text"), ("agent", "text"), ("agent", "tool"), ("agent", "tool"), ("owner", "text")])
+        text = conversation.render_conversation(entries, agent_label="DELIVERY AGENT", header=["H"])
+        self.assertEqual(text.count("launch instructions folded"), 2, text)
+        self.assertIn("[15:37:12] DELIVERY AGENT\nStanding by for your direction.", text)
+        self.assertIn("[15:37:15] DELIVERY AGENT ran: shell: python3 board.py status", text)
+        self.assertIn("[15:37:16] DELIVERY AGENT ran: shell: ls -la", text)
+        self.assertIn("[15:42:00] YOU\nbuild the motion pipeline", text)
+        for noise in ("developer text", "noise the reader must skip", "zzz", "rules"):
+            self.assertNotIn(noise, text)
+
+    def test_view_prefers_the_vendor_file_and_falls_back_to_the_raw_record_with_a_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"; root.mkdir()
+            claude_dir = Path(tmp) / "claude-config"
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}):
+                session = control.create(root, "claude_cto")
+                transcript = conversation.Transcript(conversation.transcript_path(root, session["id"]))
+                transcript.agent_bytes(b"\x1b[2J\xe2\x9c\xbbMulling\xe2\x80\xa6\r\n")
+                transcript.owner("raw owner line")
+                transcript.close()
+                # No id recorded yet: raw record with the reason.
+                view = conversation.conversation_view(root, session["id"])
+                self.assertIn("Readable view unavailable: no CLI session id is recorded", view)
+                self.assertIn(">> raw owner line", view)
+                # Id recorded but the store lost it: raw with the other reason.
+                control.record_cli_session(root, session["id"], "11111111-1111-1111-1111-111111111111", "claude")
+                view = conversation.conversation_view(root, session["id"])
+                self.assertIn("is not in the CLI's store any more", view)
+                # Vendor file present: the readable view, and the raw record on request.
+                write_claude_session(claude_dir, "11111111-1111-1111-1111-111111111111")
+                view = conversation.conversation_view(root, session["id"])
+                self.assertIn("Conversation — Cto session", view)
+                self.assertIn("[15:40:00] YOU\nhow do we make the motion creative agents better?", view)
+                self.assertNotIn("Mulling", view)
+                raw = conversation.conversation_view(root, session["id"], raw=True)
+                self.assertIn(">> raw owner line", raw); self.assertNotIn("[15:40:00] YOU", raw)
+                # Unknown session: nothing at all.
+                self.assertIsNone(conversation.conversation_view(root, "claude_cto-nothere"))
+
+    def test_the_conversation_command_prints_the_readable_view_for_any_agent_to_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"; root.mkdir()
+            claude_dir = Path(tmp) / "claude-config"
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}):
+                session = control.create(root, "claude_cto")
+                control.record_cli_session(root, session["id"], "11111111-1111-1111-1111-111111111111", "claude")
+                write_claude_session(claude_dir, "11111111-1111-1111-1111-111111111111")
+                completed = subprocess.run(
+                    [sys.executable, "-E", str(ROOT / "harness" / "control.py"), "--root", str(root),
+                     "conversation", "--session-id", session["id"]],
+                    capture_output=True, text=True, env={**os.environ}, timeout=60,
+                )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("[15:40:00] YOU\nhow do we make the motion creative agents better?", completed.stdout)
+        self.assertIn("CTO ran: Bash:", completed.stdout)
+        missing = subprocess.run([sys.executable, "-E", str(ROOT / "harness" / "control.py"), "--root", str(root),
+                                  "conversation", "--session-id", "claude_cto-nothere"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(missing.returncode, 1)
+
+    def test_the_recovery_message_tells_a_resumed_agent_how_to_reread(self):
+        message = conversation.recovery_message("id", "/t.log", "cto-1", "python3 board.py", "python3 control.py conversation --session-id s")
+        self.assertIn("run: python3 control.py conversation --session-id s", message)
+        self.assertNotIn("/t.log", message)
+
+
+class RoleContinuityTests(unittest.TestCase):
+    """A newly launched role continues the last conversation of that role.
+
+    2026-09-23: the owner stopped a Delivery agent, launched the role again,
+    and the new agent started blank while the afternoon's discussion sat in
+    the old session's view. Memory now follows the ROLE: a new session
+    inherits the newest ended session's CLI conversation and the runner
+    resumes it; if the CLI's store lost it, the new agent is told where the
+    readable record is before it starts.
+    """
+
+    def setUp(self):
+        require_loopback()
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "project"; self.root.mkdir()
+        self.capture = self.root / "captured.txt"
+        self.claude_dir = Path(self.tmp.name) / "claude-config"
+        self.codex_home = Path(self.tmp.name) / "codex-home"
+        self.day = self.codex_home / "sessions" / "2026" / "09" / "23"; self.day.mkdir(parents=True)
+        self.environment = {**os.environ, "HARNESS_CAPTURE": str(self.capture),
+                            "HARNESS_CLAUDE_BIN": str(fake_cli(self.root / "fake-claude")),
+                            "HARNESS_CODEX_BIN": str(fake_cli(self.root / "fake-codex")),
+                            "CLAUDE_CONFIG_DIR": str(self.claude_dir), "CODEX_HOME": str(self.codex_home)}
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.claude_dir), "CODEX_HOME": str(self.codex_home)})
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def launch(self, session) -> tuple[list[str], str]:
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        text = self.capture.read_text(encoding="utf-8")
+        return text.splitlines(), text
+
+    def end(self, session_id: str) -> None:
+        """What happens after a terminal ends: the next control call reconciles the dead pid."""
+        with control.locked_state(self.root) as state:
+            state["sessions"][session_id].update({"status": "exited", "ended_at": control.now(), "pid": None})
+
+    def test_a_new_session_inherits_the_newest_ended_session_of_its_role_only(self):
+        first = control.create(self.root, "codex_delivery")
+        control.record_cli_session(self.root, first["id"], "00000000-0000-0000-0000-0000000000aa", "codex")
+        control.note_cli_launch(self.root, first["id"], resumed=False)
+        # While the first is ACTIVE, a second concurrent Delivery does not take its conversation.
+        control.attach(self.root, first["id"], os.getpid())
+        second = control.create(self.root, "codex_delivery")
+        self.assertIsNone(second["cli_session_id"]); self.assertIsNone(second["continues_session"])
+        # Another role never inherits across kinds.
+        cto = control.create(self.root, "claude_cto")
+        self.assertIsNone(cto["cli_session_id"])
+        # Once the first has ended, the next Delivery continues it.
+        self.end(first["id"]); self.end(second["id"])
+        third = control.create(self.root, "codex_delivery")
+        self.assertEqual(third["cli_session_id"], "00000000-0000-0000-0000-0000000000aa")
+        self.assertEqual(third["cli_launches"], 1)
+        self.assertEqual(third["continues_session"], first["id"])
+        self.assertEqual(control.cli_session(self.root, third["id"])["continues_session"], first["id"])
+
+    def test_codex_role_resumes_the_previous_agents_conversation_or_is_told_where_to_read_it(self):
+        first = control.create(self.root, "codex_delivery")
+        self.launch(first)                                  # fresh
+        marker = conversation.codex_launch_marker(first["id"], 1)
+        write_rollout(self.day, "00000000-0000-0000-0000-0000000000aa", self.root, "directive…\n" + marker)
+        control.record_cli_session(self.root, first["id"], "00000000-0000-0000-0000-0000000000aa", "codex")
+        self.end(first["id"])
+        # The owner launches the Delivery role again: a NEW managed session.
+        second = control.create(self.root, "codex_delivery")
+        self.assertEqual(second["continues_session"], first["id"])
+        argv, text = self.launch(second)
+        self.assertEqual(argv[0], "resume", "a new Delivery session resumes the last Delivery conversation")
+        self.assertIn("00000000-0000-0000-0000-0000000000aa", argv)
+        self.assertIn(conversation.RECOVERY_LABEL, text)
+        self.assertNotIn(conversation.EARLIER_LABEL, text)
+        self.end(second["id"])
+        # The CLI's store lost the conversation: the next Delivery starts fresh and is told to read it.
+        conversation.codex_rollout_path("00000000-0000-0000-0000-0000000000aa").unlink()
+        third = control.create(self.root, "codex_delivery")
+        self.assertEqual(third["continues_session"], second["id"])
+        argv, text = self.launch(third)
+        self.assertEqual(argv[0], "--cd")
+        self.assertIn("MODE: Delivery Agent.", text)
+        self.assertIn(conversation.EARLIER_LABEL, text)
+        self.assertIn(f"conversation --session-id {second['id']}", text,
+                      "the note names the command that prints the predecessor's readable conversation")
+        record = control.cli_session(self.root, third["id"])
+        self.assertIsNone(record["cli_session_id"], "stale id cleared")
+        # The launch count carries over with the conversation, so this launch's marker is numbered after it.
+        self.assertIn(conversation.codex_launch_marker(third["id"], record["cli_launches"]), text)
+        self.assertEqual(conversation.codex_discovery_state(self.root, third["id"], "codex"),
+                         (True, conversation.codex_launch_marker(third["id"], record["cli_launches"])))
+
+    def test_claude_role_resumes_the_previous_agents_conversation(self):
+        first = control.create(self.root, "claude_cto")
+        argv, _ = self.launch(first)
+        minted = argv[argv.index("--session-id") + 1]
+        write_claude_session(self.claude_dir, minted)
+        self.end(first["id"])
+        second = control.create(self.root, "claude_cto")
+        self.assertEqual(second["cli_session_id"], minted)
+        argv, text = self.launch(second)
+        self.assertIn("--resume", argv); self.assertEqual(argv[argv.index("--resume") + 1], minted)
+        self.assertIn(conversation.RECOVERY_LABEL, text)
+        # And the new session's Conversation view already shows the predecessor's exchanges.
+        view = conversation.conversation_view(self.root, second["id"])
+        self.assertIn("[15:40:00] YOU\nhow do we make the motion creative agents better?", view)
+
+
+class HelpThroughTheAuthenticatedClientTests(unittest.TestCase):
+    def test_help_is_answered_locally_and_a_missing_operation_says_what_to_do(self):
+        environment = {**os.environ, "HARNESS_BOARD_TOKEN": "x", "HARNESS_BOARD_ENDPOINT": "http://127.0.0.1:1/",
+                       "HARNESS_BOARD_PROTOCOL": "1"}
+        script = str(ROOT / "harness" / "board.py")
+        helped = subprocess.run([sys.executable, "-E", script, "--root", "/tmp", "--help"], capture_output=True, text=True, env=environment, timeout=60)
+        self.assertEqual(helped.returncode, 0, helped.stderr)
+        self.assertIn("usage: board.py", helped.stdout)
+        self.assertIn("poll", helped.stdout)
+        self.assertNotIn("invalid or incompatible", helped.stdout + helped.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = subprocess.run([sys.executable, "-E", script, "--root", tmp], capture_output=True, text=True, env=environment, timeout=60)
+        self.assertEqual(bare.returncode, 2)
+        self.assertIn("a board operation is required (run with --help to see them)", bare.stderr)
+        self.assertNotIn("invalid or incompatible", bare.stderr)
+
+
 class TranscriptEndpointTests(unittest.TestCase):
     def setUp(self):
         require_loopback()
@@ -443,8 +698,14 @@ class TranscriptEndpointTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn("text/plain", response.headers.get("Content-Type", ""))
             text = response.read().decode("utf-8")
+        # No managed session record for this id: the raw record, with the reason on top.
+        self.assertIn("Readable view unavailable", text)
         self.assertIn(">> how do we make the motion agents better?", text)
         self.assertIn("<< Three options: ...", text)
+        with urlopen(f"{self.base_url}/api/transcripts/claude_cto-abc123?raw=1", timeout=10) as response:
+            raw = response.read().decode("utf-8")
+        self.assertNotIn("Readable view unavailable", raw)
+        self.assertIn(">> how do we make the motion agents better?", raw)
         for missing in ("claude_cto-nothere", "..%2Fescape"):
             with self.assertRaises(Exception) as caught:
                 urlopen(f"{self.base_url}/api/transcripts/{missing}", timeout=10)
@@ -533,8 +794,12 @@ class RenderedConversationLinkTests(unittest.TestCase):
         board.register(self.context, "cto", "GLOBAL_MONITOR", vendor="Anthropic", session_id=self.session["id"])
         transcript = conversation.Transcript(conversation.transcript_path(self.context, self.session["id"]))
         transcript.owner("let us enhance the motion creative agents")
-        transcript.agent_bytes(b"Here is the analysis.\n")
+        transcript.agent_bytes(b"\x1b[2J\xe2\x9c\xbbMulling\xe2\x80\xa6 Here is the analysis.\n")
         transcript.close()
+        self.claude_dir = base / "claude-config"
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.claude_dir)}); patcher.start(); self.addCleanup(patcher.stop)
+        control.record_cli_session(self.context, self.session["id"], "11111111-1111-1111-1111-111111111111", "claude")
+        write_claude_session(self.claude_dir, "11111111-1111-1111-1111-111111111111")
 
     def test_the_agent_row_offers_the_conversation_and_it_opens_the_transcript_under_the_manager_prefix(self):
         # Served exactly as the worker is started by the manager: with the /project prefix.
@@ -565,8 +830,12 @@ class RenderedConversationLinkTests(unittest.TestCase):
         self.assertEqual(reading["href"], f"{PREFIX}/api/transcripts/{self.session['id']}",
                          "the link must carry the manager prefix the page was served with")
         self.assertEqual(reading["status"], 200, f"following the link through the manager route: {reading}")
-        self.assertIn(">> let us enhance the motion creative agents", reading["fetched"])
-        self.assertIn("<< Here is the analysis.", reading["fetched"])
+        # The readable conversation, not the terminal's paint.
+        self.assertIn("[15:40:00] YOU\nhow do we make the motion creative agents better?", reading["fetched"])
+        self.assertIn("[15:40:20] CTO\nThree options.", reading["fetched"])
+        self.assertIn("CTO ran: Bash: python3 board.py --root /p status", reading["fetched"])
+        self.assertNotIn("Mulling", reading["fetched"])
+        self.assertIn("?raw=1", reading["fetched"])
         # It sits beside "View status" and must look like it: same button face,
         # no underline, same height. The owner saw a bare underlined text link.
         link_style, button_style = reading["linkStyle"], reading["buttonStyle"]

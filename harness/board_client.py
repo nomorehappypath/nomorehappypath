@@ -270,7 +270,8 @@ def invoke(argv: list[str]) -> int:
     try:
         arguments = _strip_context_arguments(list(argv))
         if not arguments or arguments[0].startswith("-"):
-            raise ValueError("board operation is required")
+            print("error: a board operation is required (run with --help to see them)", file=sys.stderr)
+            return 2
         token = os.environ[TOKEN_ENV]
         endpoint = _loopback_endpoint(os.environ[ENDPOINT_ENV])
         protocol = os.environ[PROTOCOL_ENV]
