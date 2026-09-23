@@ -13,6 +13,11 @@ kind=""
 board_endpoint=""
 board_bootstrap=""
 close_terminal_on_exit="0"
+launch_mode="fresh"
+cli_session_id=""
+transcript_path=""
+launch_reason=""
+codex_marker=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -140,7 +145,7 @@ register_agent() {
 
 launch_visible_cli() {
   if [[ -t 0 && -t 1 ]]; then
-    supervisor_args=("${context_args[@]}" --session-id "$session_id" --agent-id "$agent_id")
+    supervisor_args=("${context_args[@]}" --session-id "$session_id" --agent-id "$agent_id" --provider "$provider" --execution-root "$execution_root")
     if [[ "$close_terminal_on_exit" == "1" ]]; then
       supervisor_args+=(--close-terminal-on-exit)
     fi
@@ -156,8 +161,52 @@ effort="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["effo
 vendor="OpenAI"
 if [[ "$provider" == "claude" ]]; then vendor="Anthropic"; fi
 
+# The CLI keeps its own memory of a conversation, and the harness keeps the
+# vendor's session id so a relaunch RESUMES that memory instead of starting a
+# stranger. On 2026-09-22 an afternoon of CTO design work was lost this way.
+# plan-cli-launch decides FRESH or RESUME (resume only when the vendor store
+# still holds the session; otherwise fresh, and the reason goes into the
+# transcript so nobody has to guess). The recovery message replaces the full
+# directive on a resume: the agent already has the directive in its memory.
+plan_cli_launch() {
+  local plan_json
+  plan_json="$("$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" plan-cli-launch --session-id "$session_id" --provider "$provider")" || {
+    echo "REFUSED: could not plan the CLI launch for $session_id" >&2; exit 2; }
+  launch_mode="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["mode"])' <<<"$plan_json")"
+  cli_session_id="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["cli_session_id"])' <<<"$plan_json")"
+  transcript_path="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["transcript"])' <<<"$plan_json")"
+  launch_reason="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["reason"])' <<<"$plan_json")"
+  codex_marker="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("codex_marker",""))' <<<"$plan_json")"
+  mkdir -p "$(dirname "$transcript_path")"
+  printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" >> "$transcript_path"
+  if [[ "$launch_mode" == "resume" ]]; then
+    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" --resumed >/dev/null
+  else
+    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" >/dev/null
+  fi
+}
+
+recovery_prompt() {
+  "$python_bin" -E - "$harness_root" "$cli_session_id" "$transcript_path" "$agent_id" "$board_command_prefix" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from harness.conversation import recovery_message
+print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]))
+PY
+}
+
 launch_agent_cli() {
   local prompt="$1"
+  plan_cli_launch
+  if [[ "$launch_mode" == "resume" ]]; then
+    prompt="$(recovery_prompt)"
+  elif [[ "$provider" == "codex" && -n "$codex_marker" ]]; then
+    # Codex records this prompt as the first message of its rollout; the
+    # marker is how the supervisor finds THIS launch's rollout and no other.
+    prompt="${prompt}
+
+${codex_marker}"
+  fi
   if [[ "$provider" == "codex" ]]; then
     # Approval and sandbox scope are supplied PER LAUNCH, bound to this
     # project's execution root. Nothing dangerous is ever written to the
@@ -206,9 +255,19 @@ except GrantTooBroad as error:
       echo "         Fix the project's data or workspace root, then relaunch." >&2
       exit 3
     fi
-    launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$prompt"
+    if [[ "$launch_mode" == "resume" ]]; then
+      # `codex resume` takes the same -c settings; it has no --cd, and the
+      # runner already runs from the execution root.
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$cli_session_id" "$prompt"
+    else
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$prompt"
+    fi
   else
-    launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" "$prompt"
+    if [[ "$launch_mode" == "resume" ]]; then
+      launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" --resume "$cli_session_id" "$prompt"
+    else
+      launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" --session-id "$cli_session_id" "$prompt"
+    fi
   fi
 }
 

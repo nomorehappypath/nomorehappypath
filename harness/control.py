@@ -380,6 +380,7 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "color_hex": SESSION_COLORS[color]["hex"],
             "color_label": SESSION_COLORS[color]["label"],
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
+            **_cli_memory_fields(),
             "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
             **KINDS[kind],
             "provider": selected["provider"],
@@ -435,6 +436,7 @@ def restore_missing_resume_session(
             "color": "black", "color_hex": SESSION_COLORS["black"]["hex"],
             "color_label": SESSION_COLORS["black"]["label"],
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
+            **_cli_memory_fields(),
             "launch_deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=30)
             ).isoformat(),
@@ -445,6 +447,78 @@ def restore_missing_resume_session(
         }
         state.setdefault("sessions", {})[session_id] = session
         return dict(session)
+
+
+def _cli_memory_fields() -> dict[str, Any]:
+    """The CLI's own conversation identity, kept so a relaunch can resume it.
+
+    `cli_session_id` is the vendor's session id (minted by the harness for
+    Claude Code, discovered from the rollout for Codex). `cli_launches` counts
+    how many times a CLI was started for this managed session; the first
+    launch is fresh, every later one tries to resume. Both survive pause,
+    resume and harness restarts because the session record does.
+    """
+    return {
+        "cli_session_id": None, "cli_session_provider": None,
+        "cli_launches": 0, "cli_last_launch_at": None, "cli_last_launch_resumed": False,
+    }
+
+
+def cli_session(root: Path, session_id: str) -> dict[str, Any]:
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        return {
+            "session_id": session_id,
+            "cli_session_id": session.get("cli_session_id"),
+            "cli_session_provider": session.get("cli_session_provider"),
+            "cli_launches": int(session.get("cli_launches") or 0),
+            "cli_last_launch_at": session.get("cli_last_launch_at"),
+            "cli_last_launch_resumed": bool(session.get("cli_last_launch_resumed")),
+        }
+
+
+def record_cli_session(root: Path, session_id: str, cli_session_id: str, provider: str) -> dict[str, Any]:
+    cli_session_id = str(cli_session_id or "").strip()
+    if not cli_session_id:
+        raise ValueError("a CLI session id is required")
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        session["cli_session_id"] = cli_session_id
+        session["cli_session_provider"] = str(provider or "")
+        return {"session_id": session_id, "cli_session_id": cli_session_id, "provider": session["cli_session_provider"]}
+
+
+def clear_cli_session(root: Path, session_id: str, reason: str = "") -> dict[str, Any]:
+    """Forget a CLI session id that can no longer be resumed.
+
+    A stale id is worse than none: the supervisor only discovers a new Codex
+    rollout while the record has NO id, so a fallback that left the old id in
+    place made every later relaunch start fresh forever (round-2 finding).
+    """
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        previous = session.get("cli_session_id")
+        session["cli_session_id"] = None
+        session["cli_session_provider"] = None
+        session["cli_session_cleared_reason"] = str(reason or "")
+        return {"session_id": session_id, "cleared": previous, "reason": session["cli_session_cleared_reason"]}
+
+
+def note_cli_launch(root: Path, session_id: str, resumed: bool) -> dict[str, Any]:
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        session["cli_launches"] = int(session.get("cli_launches") or 0) + 1
+        session["cli_last_launch_at"] = now()
+        session["cli_last_launch_resumed"] = bool(resumed)
+        return {"session_id": session_id, "cli_launches": session["cli_launches"], "resumed": bool(resumed)}
 
 
 def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
@@ -815,6 +889,16 @@ def main(argv: list[str] | None = None) -> int:
     resolve_parser = subparsers.add_parser("resolve")
     resolve_parser.add_argument("--kind", required=True)
     resolve_parser.add_argument("--session-id", required=True)
+    plan_parser = subparsers.add_parser("plan-cli-launch")
+    plan_parser.add_argument("--session-id", required=True)
+    plan_parser.add_argument("--provider", required=True)
+    record_parser = subparsers.add_parser("record-cli-session")
+    record_parser.add_argument("--session-id", required=True)
+    record_parser.add_argument("--cli-session-id", required=True)
+    record_parser.add_argument("--provider", required=True)
+    launch_parser = subparsers.add_parser("note-cli-launch")
+    launch_parser.add_argument("--session-id", required=True)
+    launch_parser.add_argument("--resumed", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "attach":
         result = attach(context_from_args(args), args.id, args.pid)
@@ -824,6 +908,16 @@ def main(argv: list[str] | None = None) -> int:
         root = context_from_args(args)
         value = session_launch_settings(root, args.session_id, args.kind)
         print(json.dumps(value, sort_keys=True))
+        return 0
+    if args.command == "plan-cli-launch":
+        from harness import conversation
+        print(json.dumps(conversation.plan_cli_launch(context_from_args(args), args.session_id, args.provider), sort_keys=True))
+        return 0
+    if args.command == "record-cli-session":
+        print(json.dumps(record_cli_session(context_from_args(args), args.session_id, args.cli_session_id, args.provider), sort_keys=True))
+        return 0
+    if args.command == "note-cli-launch":
+        print(json.dumps(note_cli_launch(context_from_args(args), args.session_id, args.resumed), sort_keys=True))
         return 0
     raise AssertionError("unreachable")
 
