@@ -51,6 +51,22 @@ class ClaimTruthTests(unittest.TestCase):
         self.assertNotIn('writable_roots=[\\"${data_root}\\"', RUNNER,
                          "the raw owner-supplied roots must not reach the sandbox flag")
 
+    def test_the_sandbox_keeps_network_on_so_the_board_client_can_reach_the_worker(self):
+        """2026-09-23: every Delivery poll was refused at the socket.
+
+        workspace-write disables network for the agent's shell by default, and
+        the board client is a shell command talking HTTP to 127.0.0.1. Proven
+        with `codex exec` under the runner's exact settings: curl exit 7
+        without the setting, 403 (reached) with it. Both launch lines — fresh
+        and resume — must carry it, and write confinement must stay.
+        """
+        codex_lines = [line for line in RUNNER.splitlines() if "HARNESS_CODEX_BIN" in line and "launch_visible_cli" in line]
+        self.assertEqual(len(codex_lines), 2, "a fresh launch and a resume launch")
+        for line in codex_lines:
+            self.assertIn("sandbox_workspace_write.network_access=true", line, line)
+            self.assertIn("sandbox_mode=workspace-write", line, line)
+            self.assertIn("sandbox_workspace_write.writable_roots=${writable_roots_json}", line, line)
+
     def test_help_claims_write_confinement_only_because_it_is_enforced(self):
         text = help_text().lower()
         self.assertIn("cannot change files outside your project", text)

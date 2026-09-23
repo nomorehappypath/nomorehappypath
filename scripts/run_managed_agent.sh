@@ -18,6 +18,7 @@ cli_session_id=""
 transcript_path=""
 launch_reason=""
 codex_marker=""
+predecessor_session=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -177,6 +178,7 @@ plan_cli_launch() {
   transcript_path="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["transcript"])' <<<"$plan_json")"
   launch_reason="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["reason"])' <<<"$plan_json")"
   codex_marker="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("codex_marker",""))' <<<"$plan_json")"
+  predecessor_session="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("predecessor",""))' <<<"$plan_json")"
   mkdir -p "$(dirname "$transcript_path")"
   printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" >> "$transcript_path"
   if [[ "$launch_mode" == "resume" ]]; then
@@ -186,12 +188,28 @@ plan_cli_launch() {
   fi
 }
 
+conversation_command_for() {
+  printf '%q -E %q --root %q --data-root %q --workspace-root %q conversation --session-id %q' \
+    "$python_bin" "$harness_root/harness/control.py" "$target_root" "$data_root" "$workspace_root" "$1"
+}
+
+earlier_conversation_note() {
+  "$python_bin" -E - "$harness_root" "$predecessor_session" "$(conversation_command_for "$predecessor_session")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from harness.conversation import earlier_conversation_note
+print(earlier_conversation_note(sys.argv[2], sys.argv[3]))
+PY
+}
+
 recovery_prompt() {
-  "$python_bin" -E - "$harness_root" "$cli_session_id" "$transcript_path" "$agent_id" "$board_command_prefix" <<'PY'
+  local conversation_command
+  conversation_command="$(conversation_command_for "$session_id")"
+  "$python_bin" -E - "$harness_root" "$cli_session_id" "$transcript_path" "$agent_id" "$board_command_prefix" "$conversation_command" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from harness.conversation import recovery_message
-print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]))
+print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
 PY
 }
 
@@ -200,12 +218,21 @@ launch_agent_cli() {
   plan_cli_launch
   if [[ "$launch_mode" == "resume" ]]; then
     prompt="$(recovery_prompt)"
-  elif [[ "$provider" == "codex" && -n "$codex_marker" ]]; then
-    # Codex records this prompt as the first message of its rollout; the
-    # marker is how the supervisor finds THIS launch's rollout and no other.
-    prompt="${prompt}
+  else
+    if [[ -n "$predecessor_session" ]]; then
+      # A previous session of this role existed and could not be resumed:
+      # point the new agent at its readable conversation before it starts.
+      prompt="${prompt}
+
+$(earlier_conversation_note)"
+    fi
+    if [[ "$provider" == "codex" && -n "$codex_marker" ]]; then
+      # Codex records this prompt as the first message of its rollout; the
+      # marker is how the supervisor finds THIS launch's rollout and no other.
+      prompt="${prompt}
 
 ${codex_marker}"
+    fi
   fi
   if [[ "$provider" == "codex" ]]; then
     # Approval and sandbox scope are supplied PER LAUNCH, bound to this
@@ -255,12 +282,22 @@ except GrantTooBroad as error:
       echo "         Fix the project's data or workspace root, then relaunch." >&2
       exit 3
     fi
+    # NETWORK STAYS ON INSIDE THE SANDBOX. Codex's workspace-write sandbox
+    # disables network for the agent's shell commands by default, and the
+    # board client is a shell command that talks HTTP to the private worker
+    # on 127.0.0.1. With the default, every board poll of every Delivery
+    # agent was refused at the socket ("authenticated board worker is
+    # unavailable or temporarily busy") from the day write confinement went
+    # live. Proven with `codex exec` under these exact settings: curl to the
+    # worker → exit 7 without this line, 403 with it. Codex 0.156.0 offers
+    # no loopback-only option; the Help text has never claimed network
+    # confinement, only write confinement, and that is unchanged.
     if [[ "$launch_mode" == "resume" ]]; then
       # `codex resume` takes the same -c settings; it has no --cd, and the
       # runner already runs from the execution root.
-      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$cli_session_id" "$prompt"
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true" "$cli_session_id" "$prompt"
     else
-      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" "$prompt"
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true" "$prompt"
     fi
   else
     if [[ "$launch_mode" == "resume" ]]; then

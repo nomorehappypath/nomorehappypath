@@ -18,7 +18,7 @@ from email.parser import BytesParser
 from email.policy import default as email_default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -2681,8 +2681,9 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 # another agent. See harness/conversation.py.
                 from harness import conversation
                 session_id = unquote(path[len("/api/transcripts/"):])
+                raw = parse_qs(urlparse(self.path).query).get("raw", ["0"])[0] in {"1", "true", "yes"}
                 try:
-                    text = conversation.transcript_text(root, session_id)
+                    text = conversation.conversation_view(root, session_id, raw=raw)
                 except ValueError:
                     text = None
                 body = (text if text is not None else "no conversation transcript for this session\n").encode("utf-8")
