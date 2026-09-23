@@ -33,7 +33,7 @@ from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, child_process, contract, control
+from harness import board, child_process, contract, control, conversation
 from harness import platform_support
 from harness.project_context import add_context_arguments, context_from_args
 
@@ -188,13 +188,17 @@ def _strip_terminal_replies(buffer: bytearray, preserve_paste_markers: bool = Tr
     buffer[:] = cleaned
 
 
-def _record_owner_direction(root: Path, session_id: str, text: str) -> None:
+def _record_owner_direction(root: Path, session_id: str, text: str, transcript=None) -> None:
     """Store one real owner instruction, ignoring terminal paste control bytes."""
     payload = bytearray(text.encode("utf-8", errors="ignore"))
     _strip_terminal_replies(payload, preserve_paste_markers=False)
     text = contract.normalize_owner_direction(payload.decode("utf-8", errors="ignore"))
     if not text:
         return
+    if transcript is not None:
+        # Every owner line goes to the transcript, for every role. The board
+        # below records direction for the Delivery session only.
+        transcript.owner(text)
     try:
         board.record_owner_direction(root, session_id, text)
         print("\r\nHARNESS | owner direction recorded; Delivery may now begin its internal task.\r", flush=True)
@@ -204,7 +208,7 @@ def _record_owner_direction(root: Path, session_id: str, text: str) -> None:
         pass
 
 
-def _record_owner_lines(root: Path, session_id: str, buffer: bytearray) -> None:
+def _record_owner_lines(root: Path, session_id: str, buffer: bytearray, transcript=None) -> None:
     """Capture ordinary lines and bracketed multi-line terminal pastes exactly.
 
     Modern Codex and Claude terminals enable bracketed paste mode.  Treating
@@ -220,7 +224,7 @@ def _record_owner_lines(root: Path, session_id: str, buffer: bytearray) -> None:
                 return
             payload = bytes(buffer[len(PASTE_BUFFER):end]).decode("utf-8", errors="ignore")
             del buffer[:end + len(PASTE_END)]
-            _record_owner_direction(root, session_id, payload)
+            _record_owner_direction(root, session_id, payload, transcript)
             continue
         start = buffer.find(PASTE_START)
         if start >= 0:
@@ -241,7 +245,7 @@ def _record_owner_lines(root: Path, session_id: str, buffer: bytearray) -> None:
         del buffer[: boundary + 1]
         if not line:
             continue
-        _record_owner_direction(root, session_id, line)
+        _record_owner_direction(root, session_id, line, transcript)
 
 
 def _copy_terminal_size(source_fd: int, target_fd: int) -> None:
@@ -287,11 +291,19 @@ def _stop_child_group(child: subprocess.Popen, grace_seconds: float = 1.0) -> No
 
 def run(
     root: Path, session_id: str, agent_id: str, command: list[str],
-    *, close_terminal_on_exit: bool = False,
+    *, close_terminal_on_exit: bool = False, provider: str = "", execution_root: str = "",
 ) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive supervisor requires a real Terminal")
     stdin_fd, stdout_fd = sys.stdin.fileno(), sys.stdout.fileno()
+    # The harness keeps its own record of this conversation, both directions,
+    # so a relaunched agent (and the owner) can read what was said even when
+    # the CLI's memory is gone. See harness/conversation.py.
+    transcript = conversation.Transcript(conversation.transcript_path(root, session_id))
+    transcript.note(f"supervisor started for {session_id} (agent {agent_id}, provider {provider or 'unknown'}): {' '.join(command[:1])}")
+    launched_at = time.time()
+    codex_id_pending, codex_marker = conversation.codex_discovery_state(root, session_id, provider)
+    next_codex_probe = launched_at + 2.0
     master, slave = pty.openpty()
     _copy_terminal_size(stdin_fd, slave)
     child = subprocess.Popen(
@@ -337,6 +349,7 @@ def run(
                 if data:
                     child_output_seen = True
                     _write(stdout_fd, data)
+                    transcript.agent_bytes(data)
                     if pending_owner_input:
                         _write(master, bytes(pending_owner_input))
                         pending_owner_input.clear()
@@ -349,7 +362,7 @@ def run(
                 if not data:
                     break
                 typed.extend(data)
-                _record_owner_lines(root, session_id, typed)
+                _record_owner_lines(root, session_id, typed, transcript)
                 if child_output_seen:
                     _write(master, data)
                 else:
@@ -357,12 +370,25 @@ def run(
                     # written before their first output can be discarded, so
                     # retain exact owner bytes until startup is visibly ready.
                     pending_owner_input.extend(data)
+            if codex_id_pending and time.time() >= next_codex_probe:
+                # Codex mints its own session id and writes it to a rollout file
+                # shortly after starting; record it so a relaunch can resume.
+                next_codex_probe = time.time() + 2.0
+                found = conversation.discover_codex_session_id(launched_at, Path(execution_root or os.getcwd()), codex_marker)
+                if found:
+                    control.record_cli_session(root, session_id, found, "codex")
+                    transcript.note(f"codex session id recorded: {found}")
+                    codex_id_pending = False
+                elif time.time() - launched_at > 120:
+                    transcript.note("codex session id not found within 120s; a relaunch will start fresh")
+                    codex_id_pending = False
             controller_queue.extend(control.take_instructions(root, session_id))
             # A supervisor-ready banner only proves the wrapper started. Wait
             # for the child CLI's first output so a slow-starting CLI cannot
             # receive controller input before it has configured its terminal.
             if child_output_seen and controller_queue:
                 item = controller_queue.pop(0)
+                transcript.note(f"controller message ({item['source']}): {item['text']}")
                 _submit_controller_message(master, item["source"], item["text"])
                 control.acknowledge_instruction(root, session_id, item["id"])
         return child.wait()
@@ -379,6 +405,8 @@ def run(
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGWINCH, previous_winch)
+        transcript.note("supervisor ended; terminal closed")
+        transcript.close()
         try:
             board.offline(root, agent_id, "visible CLI terminal ended", transport_ended=True)
         except ValueError:
@@ -393,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--close-terminal-on-exit", action="store_true")
+    parser.add_argument("--provider", default="")
+    parser.add_argument("--execution-root", default="")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -403,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     return run(
         context_from_args(args), args.session_id, args.agent_id, command,
         close_terminal_on_exit=args.close_terminal_on_exit,
+        provider=args.provider, execution_root=args.execution_root,
     )
 
 
