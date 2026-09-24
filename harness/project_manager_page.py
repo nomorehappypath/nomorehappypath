@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Human-facing Projects landing page for the stable manager process."""
 
 PAGE = r'''<!doctype html>
@@ -96,6 +96,12 @@ PAGE = r'''<!doctype html>
     .badge.stopped { color: #85510a; background: #fff0d5; }
     .badge.paused { color: #5a398e; background: #f0eaff; }
     .badge.bad { color: var(--red); background: var(--red-soft); }
+    .badge.waiting { color: #fff; background: var(--red); animation: waiting-blink 1.1s steps(2, start) infinite; }
+    .waiting-banner { margin: 0 0 18px; padding: 18px 22px; border-radius: 16px; background: var(--red); color: #fff; font-size: 18px; font-weight: 800; line-height: 1.35; box-shadow: 0 14px 36px rgba(180, 35, 24, .28); animation: waiting-blink 1.1s steps(2, start) infinite; }
+    .waiting-banner p { margin: 8px 0 0; font-size: 15px; font-weight: 600; }
+    .waiting-banner small { display: block; margin-top: 10px; font-size: 13px; font-weight: 500; opacity: .92; }
+    @keyframes waiting-blink { 50% { background: #7a1610; } }
+    @media (prefers-reduced-motion: reduce) { .waiting-banner, .badge.waiting { animation: none; } .waiting-banner { outline: 4px solid #7a1610; } }
     .badge.kind { color: #765314; background: #fff7df; }
     .description { display: -webkit-box; max-width: 760px; min-height: 0; margin: 5px 0 9px; overflow: hidden; color: #4f5e74; font-size: 14px; white-space: pre-line; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     .description.empty-copy { color: var(--subtle); font-style: italic; }
@@ -246,6 +252,7 @@ PAGE = r'''<!doctype html>
 
   <main class="page">
     <section id="projects-page">
+      <section class="waiting-banner" id="waiting-banner" hidden role="alert" aria-live="assertive"></section>
       <div class="hero">
         <div>
           <div class="eyebrow">Your workspace</div>
@@ -479,6 +486,7 @@ PAGE = r'''<!doctype html>
               <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
               <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes.</td></tr>
               <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
+              <tr><td>A red blinking banner says an agent is waiting for you</td><td>That agent's Terminal window has stopped at a question — usually a "Do you want to proceed?" permission prompt, or a line that says it needs you to act — and nothing moves until it is answered. Switch to that Terminal window and answer it. Managed agents are launched so this should not happen; if it keeps happening, note which prompt you saw and tell your developer.</td></tr>
               <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI or Anthropic account ran out of credit or hit its usage limit. <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
               <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
               <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
@@ -490,9 +498,9 @@ PAGE = r'''<!doctype html>
         </section>
 
         <section class="help-section" aria-labelledby="help-legal-title">
-          <h2 id="help-legal-title">Legal — No Warranty, No Liability</h2>
-          <p class="help-callout"><strong>By using this software you accept its full disclaimer:</strong> it is provided as-is with no warranty of any kind; the AI agents act autonomously and you assume the entire risk of what they create, change, delete, execute, and spend on your accounts; and to the maximum extent permitted by law, KpiMinds LLC is not liable for any damages arising from this software — for free use, its total liability is zero.</p>
-          <p>The complete, binding text is on the <strong>Legal</strong> page in the top menu and in the <strong>DISCLAIMER</strong> file that ships with the software, next to the LICENSE (Business Source License 1.1). If you do not accept those terms, do not use the software.</p>
+          <h2 id="help-legal-title">Legal — Apache 2.0, and a Safety Notice</h2>
+          <p class="help-callout"><strong>This software is open source under the Apache License, Version 2.0.</strong> It is provided as-is, without warranty, and the license limits liability (sections 7 and 8). The AI agents act autonomously and can create, change, delete, execute and spend on the accounts you connect; the <strong>Legal</strong> page carries an informational safety notice about that. The notice adds no conditions to the license.</p>
+          <p>The full license ships as the LICENSE file with the software; the safety notice ships as the DISCLAIMER file beside it and is repeated on the <strong>Legal</strong> page in the top menu.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-chat-title">
@@ -503,37 +511,26 @@ PAGE = r'''<!doctype html>
     </section>
 
     <section id="legal-page" hidden>
-      <div class="hero"><div><div class="eyebrow">Legal terms</div><h1>Disclaimer &amp; Limitation of Liability</h1><p class="hero-copy">Using NoMoreHappyPath means accepting these terms in full. If you do not accept them, do not use the software.</p></div></div>
+      <div class="hero"><div><div class="eyebrow">Open-source licensing and safety</div><h1>Apache 2.0 and Operational Safety</h1><p class="hero-copy">NoMoreHappyPath is licensed under Apache License 2.0. This page summarizes the license and provides informational safety guidance about autonomous agents; it does not modify the license or add conditions.</p></div></div>
       <div class="help-shell">
         <section class="help-section" aria-labelledby="legal-license-title">
-          <h2 id="legal-license-title">1. License — Business Source License 1.1</h2>
-          <p>This software is distributed under the <strong>Business Source License 1.1</strong>, licensor <strong>KpiMinds LLC</strong>. You may use it freely for evaluation, development, testing, and personal, non-commercial projects. <strong>Any production or commercial use — including offering this software, modified or unmodified, as a product or service to others — requires a commercial license from KpiMinds LLC</strong> (license@kpiminds.com). On 2030-08-21 this version converts to the Apache 2.0 open-source license. The full text ships as the LICENSE file with the software.</p>
+          <h2 id="legal-license-title">1. License — Apache License, Version 2.0</h2>
+          <p>This software is open source under the <strong>Apache License, Version 2.0</strong>, copyright holder <strong>KpiMinds LLC</strong>. You may use, modify and distribute it, including commercially, under that license's terms; it is provided without warranty, and the license's own disclaimer of warranty and limitation of liability (sections 7 and 8) are the only terms that apply. The full text ships as the LICENSE file with the software. Contact: license@kpiminds.com.</p>
         </section>
 
-        <section class="help-section" aria-labelledby="legal-warranty-title">
-          <h2 id="legal-warranty-title">2. No Warranty</h2>
-          <p>THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR THAT THE SOFTWARE WILL BE ERROR-FREE, UNINTERRUPTED, OR SECURE. NO INFORMATION OR ADVICE GIVEN BY KPIMINDS LLC CREATES ANY WARRANTY.</p>
-        </section>
-        <section class="help-section" aria-labelledby="legal-risk-title">
-          <h2 id="legal-risk-title">3. AI Agents Act Autonomously — You Assume That Risk</h2>
-          <p>This software orchestrates third-party AI agents that are non-deterministic and act autonomously: they can create, modify, delete, and execute files and commands inside the folders you designate, and they can incur charges on the third-party accounts you connect (including OpenAI and Anthropic accounts and API keys). YOU ACCEPT THE ENTIRE RISK of agent behavior — including loss, corruption, or deletion of data or code; defective, insecure, or non-functional output; unintended execution of commands; and all charges billed to your accounts. You are solely responsible for folder selection, backups, version control, reviewing all output before use, and every decision to accept or deploy anything the software or its agents produce.</p>
-        </section>
-        <section class="help-section" aria-labelledby="legal-liability-title">
-          <h2 id="legal-liability-title">4. Limitation of Liability</h2>
-          <p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL KPIMINDS LLC, ITS MEMBERS, OFFICERS, EMPLOYEES, CONTRACTORS, OR AGENTS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES WHATSOEVER — INCLUDING WITHOUT LIMITATION LOSS OF DATA, LOSS OF PROFITS, BUSINESS INTERRUPTION, COST OF SUBSTITUTE GOODS OR SERVICES, OR THIRD-PARTY API OR SUBSCRIPTION CHARGES — ARISING OUT OF OR RELATING TO THE SOFTWARE OR ITS USE OR INABILITY TO USE, UNDER ANY THEORY OF LIABILITY, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. KPIMINDS LLC'S TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED THE AMOUNT YOU PAID KPIMINDS LLC FOR THE SOFTWARE IN THE TWELVE MONTHS PRECEDING THE CLAIM — WHICH, FOR FREE USE, IS ZERO. Where a jurisdiction does not allow certain exclusions, liability is limited to the minimum extent permitted by law.</p>
-        </section>
-        <section class="help-section" aria-labelledby="legal-indemnity-title">
-          <h2 id="legal-indemnity-title">5. Your Indemnity</h2>
-          <p>You agree to defend, indemnify, and hold harmless KpiMinds LLC from any claims, damages, and expenses (including reasonable attorneys' fees) brought by a third party arising out of your use of the software, the actions of agents operating under your accounts and direction, or your violation of these terms or of the LICENSE.</p>
+        <section class="help-section" aria-labelledby="legal-notice-title">
+          <h2 id="legal-notice-title">2. Safety Notice (informational)</h2>
+          <p><strong>This notice is informational. It does not modify, and adds no conditions to, the Apache License, Version 2.0.</strong> The license's own disclaimer of warranty (section 7) and limitation of liability (section 8) are the only terms that apply.</p>
+          <p>This software orchestrates third-party AI agents that are non-deterministic and act autonomously: inside the folders you designate they can create, modify, delete and execute files and commands, and they can incur charges on the third-party accounts you connect (including OpenAI and Anthropic accounts and API keys). Things that have happened with tools like this include loss or deletion of data or code, defective or insecure output, unintended command execution and unexpected charges. Choose the folder carefully, keep it in version control, keep backups, review output before you rely on it, and decide for yourself what to accept or deploy.</p>
         </section>
         <section class="help-section" aria-labelledby="legal-thirdparty-title">
-          <h2 id="legal-thirdparty-title">6. Third-Party Services</h2>
-          <p>The Codex CLI, Claude Code CLI, and the OpenAI API are third-party services governed by their own terms and billed to your own accounts. KpiMinds LLC is not a party to those relationships and has no responsibility for those services, their output, their availability, or their charges.</p>
+          <h2 id="legal-thirdparty-title">3. Third-Party Services</h2>
+          <p>The Codex CLI, Claude Code CLI, and the OpenAI API are third-party services governed by their own terms and billed to your own accounts. KpiMinds LLC is not a party to those relationships and does not operate those services.</p>
         </section>
         <section class="help-section" aria-labelledby="legal-general-title">
-          <h2 id="legal-general-title">7. General</h2>
+          <h2 id="legal-general-title">4. Build Attribution</h2>
           <p><strong>Build attribution:</strong> projects created ("scaffolded") by this software include a visible BUILT_WITH.md file identifying NoMoreHappyPath as the build tool, with the creation time and a non-personal installation identifier. Adopted repositories are never written to. The project's code belongs to its owner; the stamp records only the tool.</p>
-          <p>These terms are governed by the laws of the State of Texas, USA, and any dispute shall be brought exclusively in the state or federal courts located in Austin, Travis County, Texas — you consent to that jurisdiction and venue. They supplement the LICENSE (Business Source License 1.1); for license matters the LICENSE governs. If any provision is unenforceable, the remainder stands. The same text ships as the DISCLAIMER file beside the LICENSE. Contact: license@kpiminds.com.</p>
+          <p>The same notice ships as the DISCLAIMER file beside the LICENSE. Contact: license@kpiminds.com.</p>
         </section>
       </div>
     </section>
@@ -629,7 +626,7 @@ PAGE = r'''<!doctype html>
       const remove = project.active ? '' : `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Remove</button>`;
       return `<article class="project ${state}" data-project-id="${esc(project.id)}">
         <div>
-          <div class="project-top"><h3>${esc(project.name)}</h3><span class="badges"><span class="badge ${state}"${stateTitle}>${stateLabel}</span><span class="badge kind">${esc(project.kind)}</span>${health}</span></div>
+          <div class="project-top"><h3>${esc(project.name)}</h3><span class="badges"><span class="badge ${state}"${stateTitle}>${stateLabel}</span><span class="badge kind">${esc(project.kind)}</span>${(project.waiting_sessions||[]).length ? `<span class="badge waiting">${(project.waiting_sessions||[]).length === 1 ? "Waiting for you" : (project.waiting_sessions||[]).length + " waiting for you"}</span>` : ""}${health}</span></div>
           ${description}
           <div class="metrics">
             <span class="metric"><strong>${counts.total}</strong> tasks</span>
@@ -645,6 +642,21 @@ PAGE = r'''<!doctype html>
           <div class="actions">${remove}${primary}</div>
         </div>
       </article>`;
+    };
+    const waitingSince = (iso) => {
+      const started = new Date(iso); if (Number.isNaN(started.getTime())) return '';
+      const minutes = Math.max(0, Math.round((Date.now() - started.getTime()) / 60000));
+      return minutes < 1 ? 'just now' : minutes === 1 ? 'for 1 minute' : `for ${minutes} minutes`;
+    };
+    const renderWaiting = (projects) => {
+      const banner = q('#waiting-banner'); if (!banner) return;
+      const waiting = [];
+      for (const project of projects) for (const session of project.waiting_sessions || []) waiting.push({project, session});
+      if (!waiting.length) { banner.hidden = true; banner.replaceChildren(); return; }
+      banner.hidden = false;
+      banner.innerHTML = `<div>${waiting.length === 1 ? 'An agent is waiting for you' : `${waiting.length} agents are waiting for you`} — nothing moves until you answer in its Terminal window.</div>`
+        + waiting.map(({project, session}) => `<p>${esc(project.name)}: ${esc(session.role || session.label)} (${esc(session.label)}) ${esc(session.reason)} — waiting ${esc(waitingSince(session.since))}.</p>`).join('')
+        + '<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>';
     };
     const renderSummary = (projects) => {
       q('#summary-total').textContent = projects.length;
@@ -849,6 +861,7 @@ PAGE = r'''<!doctype html>
           ? value.projects.map(row).join('')
           : '<div class="empty"><strong>No projects yet</strong>Create a new project or adopt an existing folder to get started.</div>';
         renderSummary(value.projects);
+        renderWaiting(value.projects);
         if (typeof value.native_folder_picker === 'boolean') {
           nativeFolderPicker = value.native_folder_picker;
           applyFolderPickerMode();

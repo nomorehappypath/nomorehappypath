@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 # Claim/assignment protocol CLI — routing layer of the orchestration substrate. System python3.
 #   bash claim.sh post --task T1 --role reviewer --forbid-vendor "Claude (Anthropic)"
 #   bash claim.sh claim --item <item-id> --signature <sig>

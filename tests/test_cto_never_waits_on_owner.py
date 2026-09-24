@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The CTO must never block or idle waiting on the product owner.
 
 The reported violation: the CTO asked the owner a question and then waited for an

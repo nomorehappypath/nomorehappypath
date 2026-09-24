@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """An owner repair must be able to reach review (harness finding, 2026-08-14).
 
 Live defect: claim_release_repair left the delivery record inactive, so the

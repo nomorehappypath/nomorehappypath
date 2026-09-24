@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Executable invariant: every socket-binding test class runs the loopback guard.
 
 A text scanner once claimed this and was wrong - a duplicated setUp() let a

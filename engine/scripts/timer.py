@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """OS-timer generator — run `scheduler tick` durably as a local background service.
 
 Renders an OS scheduler unit (macOS launchd plist, or a cron line) that runs the scheduler tick

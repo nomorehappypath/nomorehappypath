@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Durable multi-agent board with role-labelled events and QA cycles.
 
 The board is intentionally a small stdlib-only service. Agents never invent a

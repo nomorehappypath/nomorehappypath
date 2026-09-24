@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Local, loopback-only lifecycle registry for visible CLI agent sessions."""
 from __future__ import annotations
 
@@ -380,6 +380,7 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "color_hex": SESSION_COLORS[color]["hex"],
             "color_label": SESSION_COLORS[color]["label"],
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
+            "attention_since": None, "attention_reason": None,
             **_cli_memory_fields(),
             "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
             **KINDS[kind],
@@ -470,6 +471,7 @@ def restore_missing_resume_session(
             "color": "black", "color_hex": SESSION_COLORS["black"]["hex"],
             "color_label": SESSION_COLORS["black"]["label"],
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
+            "attention_since": None, "attention_reason": None,
             **_cli_memory_fields(),
             "launch_deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=30)
@@ -616,6 +618,47 @@ def record_output(root: Path, session_id: str, byte_count: int) -> dict[str, Any
         session["last_output_at"] = now()
         session["output_bytes"] = int(session.get("output_bytes", 0)) + byte_count
         return {"session_id": session_id, "last_output_at": session["last_output_at"], "output_bytes": session["output_bytes"]}
+
+
+def record_attention(root: Path, session_id: str, reason: str) -> dict[str, Any]:
+    """The terminal stopped to wait for the owner; say so on the session record.
+
+    Set once per wait: a redraw that repeats the same prompt keeps the original
+    time, so the banner can say how long the owner has been needed.
+    """
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValueError("an attention reason is required")
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not session or session["status"] not in ACTIVE_STATUSES:
+            raise ValueError("cannot record attention for an inactive managed session")
+        if not session.get("attention_since"):
+            session["attention_since"] = now()
+        session["attention_reason"] = reason[:200]
+        return {"session_id": session_id, "attention_since": session["attention_since"], "attention_reason": session["attention_reason"]}
+
+
+def clear_attention(root: Path, session_id: str) -> dict[str, Any]:
+    """The owner answered, or the terminal moved on: nothing is waiting any more."""
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not session:
+            raise ValueError("unknown managed session")
+        session["attention_since"] = None
+        session["attention_reason"] = None
+        return {"session_id": session_id, "attention_since": None, "attention_reason": None}
+
+
+def waiting_sessions(root: Path) -> list[dict[str, Any]]:
+    """Active sessions whose terminal is waiting for the owner, oldest wait first."""
+    waiting = [
+        item for item in snapshot(root).get("sessions", [])
+        if item.get("status") in ACTIVE_STATUSES and item.get("attention_since")
+    ]
+    return sorted(waiting, key=lambda item: str(item.get("attention_since")))
 
 
 def request_status_update(root: Path, session_id: str) -> dict[str, Any] | None:

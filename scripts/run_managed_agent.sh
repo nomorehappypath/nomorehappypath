@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 # Internal runner launched in a visible Terminal window by the board control panel.
 set -euo pipefail
 
@@ -234,6 +234,24 @@ $(earlier_conversation_note)"
 ${codex_marker}"
     fi
   fi
+  # THE SAME WRITE GRANT FOR BOTH VENDORS. Codex confines writes to these
+  # roots (sandbox below); Claude is told the same roots with --add-dir so a
+  # read or write inside them never stops the agent to ask. Computed once,
+  # before the vendor branch, so the two can never drift apart.
+  if ! writable_roots_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness.agent_grant import agent_writable_roots, GrantTooBroad
+try:
+  print(json.dumps(agent_writable_roots(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] or None)))
+except GrantTooBroad as error:
+  print(error, file=sys.stderr)
+  raise SystemExit(3)
+' "$harness_root" "$execution_root" "$data_root" "$workspace_root" "$target_root" "$manager_home")"; then
+    echo "REFUSED: this project's storage layout would grant the agent more than it needs." >&2
+    echo "         Fix the project's data or workspace root, then relaunch." >&2
+    exit 3
+  fi
   if [[ "$provider" == "codex" ]]; then
     # Approval and sandbox scope are supplied PER LAUNCH, bound to this
     # project's execution root. Nothing dangerous is ever written to the
@@ -268,20 +286,6 @@ ${codex_marker}"
     # with -E, which IGNORES the environment on purpose, so an exported
     # PYTHONPATH is invisible here. Setting one made every launch refuse - the
     # import failed, the helper exited non-zero, and 13 suites went red.
-    if ! writable_roots_json="$("$python_bin" -E -c '
-import json, sys
-sys.path.insert(0, sys.argv[1])
-from harness.agent_grant import agent_writable_roots, GrantTooBroad
-try:
-    print(json.dumps(agent_writable_roots(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] or None)))
-except GrantTooBroad as error:
-    print(error, file=sys.stderr)
-    raise SystemExit(3)
-' "$harness_root" "$execution_root" "$data_root" "$workspace_root" "$target_root" "$manager_home")"; then
-      echo "REFUSED: this project's storage layout would grant the agent more than it needs." >&2
-      echo "         Fix the project's data or workspace root, then relaunch." >&2
-      exit 3
-    fi
     # NETWORK STAYS ON INSIDE THE SANDBOX. Codex's workspace-write sandbox
     # disables network for the agent's shell commands by default, and the
     # board client is a shell command that talks HTTP to the private worker
@@ -300,10 +304,51 @@ except GrantTooBroad as error:
       launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true" "$prompt"
     fi
   else
+    # NO PERMISSION PROMPTS, AND A REAL BOUNDARY. A managed Claude terminal
+    # runs unattended; a "Do you want to proceed?" menu halts all progress
+    # until a person looks at the window. The project's own .claude/settings
+    # asks for bypass mode, but the CLI ignores that setting at project level
+    # ("the session starts in Manual mode", docs/permission-modes) and never
+    # restores bypass on --resume (docs/sessions). So bypass is passed on every
+    # launch - and BECAUSE bypass removes the CLI's own boundary, the whole CLI
+    # process is run inside the harness's OS write confinement (Seatbelt on
+    # macOS, bubblewrap on Linux; harness/agent_confinement.py), limited to
+    # exactly the roots Codex is granted plus the CLI's own state. A write
+    # anywhere else is refused by the operating system, which is what the Help
+    # text promises. Reads and network stay open, as for Codex. The launch
+    # REFUSES rather than run open when the platform lacks the primitive.
+    # The granted roots are also added as working directories so the CLI's
+    # own path checks never stop it either.
+    claude_access=(--permission-mode bypassPermissions)
+    execution_root_real="$(cd "$execution_root" && pwd -P)"
+    while IFS= read -r granted_root; do
+      # The grant lists resolved paths; the execution root is already the
+      # CLI's working directory and needs no --add-dir.
+      if [[ -n "$granted_root" && "$granted_root" != "$execution_root_real" ]]; then claude_access+=(--add-dir "$granted_root"); fi
+    done < <("$python_bin" -E -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$writable_roots_json")
+    claude_confined=()
+    while IFS= read -r -d '' part; do claude_confined+=("$part"); done < <(
+      "$python_bin" -E -c '
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement
+try:
+    wrapped = agent_confinement.wrap([], json.loads(sys.argv[2]), store=sys.argv[3], home=os.path.expanduser("~"),
+                                     claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None)
+except agent_confinement.ConfinementUnavailable as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(3)
+sys.stdout.write("\0".join(wrapped) + "\0")
+' "$harness_root" "$writable_roots_json" "$data_root/control"
+    )
+    if [[ ${#claude_confined[@]} -eq 0 ]]; then
+      echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2
+      exit 3
+    fi
     if [[ "$launch_mode" == "resume" ]]; then
-      launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" --resume "$cli_session_id" "$prompt"
+      launch_visible_cli "${claude_confined[@]}" "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" "${claude_access[@]}" --resume "$cli_session_id" "$prompt"
     else
-      launch_visible_cli "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" --session-id "$cli_session_id" "$prompt"
+      launch_visible_cli "${claude_confined[@]}" "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" "${claude_access[@]}" --session-id "$cli_session_id" "$prompt"
     fi
   fi
 }

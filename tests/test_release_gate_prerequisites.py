@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The release gate must refuse an environment it cannot verify in.
 
 Three review rounds turned on this and none of them tested it, because the

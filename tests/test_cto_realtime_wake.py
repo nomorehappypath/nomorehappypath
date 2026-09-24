@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The CTO must act in near-real time, never overnight (owner report, 2026-08-15).
 
 Two defects: (1) nothing woke the CTO when a final acceptance PASSED — its only

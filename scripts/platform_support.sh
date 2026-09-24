@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 #
 # The one place that knows what an auto-start service, a log directory, and a
 # URL opener mean on this platform. A sourced library, because every caller is

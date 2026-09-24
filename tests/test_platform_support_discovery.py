@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The first platform seam: tool discovery, moved without changing a byte.
 
 `docs/specs/LINUX_STAGE0_PLATFORM_SEAM.md` §4.4. Several of these strings are

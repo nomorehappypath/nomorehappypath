@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Projects landing page + manager simulations (spec §6.4, §7).
 
 Drives the real HTTP surface end to end on a live server: list rendering with
@@ -1264,16 +1264,16 @@ class HelpPageCoverageTests(unittest.TestCase):
             "Your Responsibility, And What The Agents Can Do",
             "entirely your own responsibility",
             "be careful which folder you point them at",
-            "Legal — No Warranty, No Liability",
-            "its total liability is zero",
+            "Legal — Apache 2.0, and a Safety Notice",
+            "adds no conditions to the license",
             "DISCLAIMER",
             'data-page="legal"',
-            "Limitation of Liability",
-            "FOR FREE USE, IS ZERO",
-            "hold harmless KpiMinds LLC",
-            "Austin, Travis County, Texas",
-            "License — Business Source License 1.1",
-            "requires a commercial license from KpiMinds LLC",
+            "Safety Notice (informational)",
+            "adds no conditions to, the Apache License, Version 2.0",
+            "does not operate those services",
+            "Build Attribution",
+            "License — Apache License, Version 2.0",
+            "including commercially, under that license's terms",
             "Build attribution:",
             "BUILT_WITH.md",
             "A task needs all three roles running",

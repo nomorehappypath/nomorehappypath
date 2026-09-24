@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Source-revision digests must see a subpackage, or they describe less than they claim.
 
 `docs/specs/LINUX_STAGE0_PLATFORM_SEAM.md` §3.5: five places walked
