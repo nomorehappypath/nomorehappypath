@@ -146,7 +146,7 @@ Think of it as hiring a governed engineering team, not buying an app. The
 agents work on your own OpenAI and Anthropic plans, and a serious build -
 with adversarial reviews, scenario tests, and failure-path evidence - can
 run into the hundreds or a few thousand dollars of model spend. Measure
-that against what the software is for: a commercial product that will
+that against what the software is for: a product that will
 generate revenue, or a contract build that would cost tens of thousands
 with an agency. The reviews are where the money goes, and they are the
 point - you are paying for the right to trust the result.
@@ -190,16 +190,15 @@ and run code — so choose that folder carefully, keep it under version control,
 and never point the agents at data you cannot afford to lose. Agent usage is
 billed to your own OpenAI/Anthropic accounts.
 
-The complete, binding terms — no warranty, assumption of AI-agent risk, and
-KpiMinds LLC's limitation of liability (zero for free use) — are in
-[DISCLAIMER.md](DISCLAIMER.md). Using the software means accepting them.
+The license's own no-warranty and limitation-of-liability terms apply (see
+LICENSE, sections 7 and 8). [DISCLAIMER.md](DISCLAIMER.md) is an informational
+safety notice about what autonomous agents can do; it adds no conditions.
 
 ## License
 
-Source-available under the **Business Source License 1.1** (see LICENSE).
-Free for evaluation, development, testing, and personal non-commercial use.
-**Any production or commercial use requires a commercial license from
-KpiMinds LLC** — contact **license@kpiminds.com**. On 2030-08-21 this version
-converts to Apache 2.0.
+Open source under the **Apache License, Version 2.0** (see LICENSE). You may
+use, modify and distribute it, including commercially, under the terms of
+that license; it comes with no warranty (LICENSE, section 7). Contact:
+**license@kpiminds.com**.
 
-Copyright (c) 2026 KpiMinds LLC. All rights reserved.
+Copyright 2026 KpiMinds LLC.

@@ -1,15 +1,18 @@
 # Contributing
 
-Thank you for your interest. This project is source-available under the
-Business Source License 1.1, and KpiMinds LLC must remain the sole copyright
-holder of the entire work.
+Thank you for your interest. This project is open source under the Apache
+License, Version 2.0 (see LICENSE).
 
 - **Issues and ideas are very welcome** — bug reports, design discussion, and
   feature proposals all help.
-- **Code contributions are accepted only with a signed copyright assignment**:
-  by submitting a pull request you agree that, upon merge, the entire
-  copyright in your contribution is assigned to KpiMinds LLC. If you are not
-  comfortable with that, please open an issue instead of a PR.
+- **Code contributions are welcome as pull requests.** Unless you say
+  otherwise in the pull request, any contribution you intentionally submit
+  for inclusion is licensed under the Apache License, Version 2.0, as section
+  5 of that license provides, without any additional terms or conditions.
+  You keep the copyright in what you write; no assignment is asked for.
+- Give new files a license header with the SPDX identifier
+  (`SPDX-License-Identifier: Apache-2.0`) and your own copyright line if you
+  wish; do not attribute your work to KpiMinds LLC.
 - Contributions must pass the full test suite
   (`PYTHONPATH=. python3 -m unittest discover -s tests`).
 

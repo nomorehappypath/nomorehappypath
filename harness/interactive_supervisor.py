@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Keep a visible interactive CLI under local harness supervision.
 
 The owner still types directly into the Terminal.  The supervisor only records
@@ -33,7 +33,7 @@ from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, child_process, contract, control, conversation
+from harness import attention, board, child_process, contract, control, conversation
 from harness import platform_support
 from harness.project_context import add_context_arguments, context_from_args
 
@@ -257,6 +257,16 @@ def _copy_terminal_size(source_fd: int, target_fd: int) -> None:
         pass
 
 
+def _terminal_rows(fd: int) -> int | None:
+    """How many rows the real Terminal shows; what the prompt watch treats as the screen."""
+    try:
+        size = fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)
+    except (OSError, ValueError):
+        return None
+    rows = int.from_bytes(size[:2], sys.byteorder)
+    return rows or None
+
+
 def _make_controlling_terminal() -> None:
     os.setsid()
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -304,6 +314,24 @@ def run(
     launched_at = time.time()
     codex_id_pending, codex_marker = conversation.codex_discovery_state(root, session_id, provider)
     next_codex_probe = launched_at + 2.0
+    # A terminal that stops to ask the owner something halts all progress
+    # until a person looks at it. The watch recognises that in the output
+    # and the session record carries it, so Mission Control can shout.
+    watch = attention.PromptWatch(height=_terminal_rows(stdin_fd))
+
+    def note_attention(change: tuple[str, str | None] | None) -> None:
+        if not change:
+            return
+        kind, reason = change
+        try:
+            if kind == "waiting":
+                control.record_attention(root, session_id, reason or "is waiting for you")
+                transcript.note(f"terminal is waiting for the owner: {reason}")
+            else:
+                control.clear_attention(root, session_id)
+                transcript.note("terminal no longer waiting for the owner")
+        except ValueError:
+            pass
     master, slave = pty.openpty()
     _copy_terminal_size(stdin_fd, slave)
     child = subprocess.Popen(
@@ -329,6 +357,7 @@ def run(
 
     def resize(_signal, _frame):
         _copy_terminal_size(stdin_fd, master)
+        note_attention(watch.resize(_terminal_rows(stdin_fd)))
 
     previous_term = signal.signal(signal.SIGTERM, request_stop)
     previous_int = signal.signal(signal.SIGINT, request_stop)
@@ -357,11 +386,13 @@ def run(
                         control.record_output(root, session_id, len(data))
                     except ValueError:
                         pass
+                    note_attention(watch.feed(data))
             if stdin_fd in readable:
                 data = os.read(stdin_fd, 4096)
                 if not data:
                     break
                 typed.extend(data)
+                note_attention(watch.owner_typed())
                 _record_owner_lines(root, session_id, typed, transcript)
                 if child_output_seen:
                     _write(master, data)

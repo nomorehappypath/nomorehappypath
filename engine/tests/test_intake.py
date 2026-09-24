@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Regression tests for intake + planning (engine/scripts/intake.py). Stdlib unittest.
 
 The planner is a seam, so tests run offline (no live LLM).

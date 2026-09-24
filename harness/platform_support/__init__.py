@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """One place where platform-specific behaviour lives, selected once.
 
 `docs/specs/LINUX_STAGE0_PLATFORM_SEAM.md`. Stage 0 moves the macOS
@@ -18,7 +18,7 @@ import sys
 
 
 from harness.platform_support.defaults import (  # noqa: E402  (re-exported names)
-    FolderSelectionTimeout, ProcessTableUnavailable, SessionSurface,
+    AgentConfinementUnavailable, FolderSelectionTimeout, ProcessTableUnavailable, SessionSurface,
     UnsupportedPlatformOperation,
 )
 
@@ -68,6 +68,11 @@ def process_identity():
 def confinement():
     """OS-level confinement for commands run on the owner's behalf."""
     return _selected().CONFINEMENT
+
+
+def agent_confinement():
+    """OS write confinement around a whole managed CLI process (Seatbelt / bubblewrap)."""
+    return _selected().AGENT_CONFINEMENT
 
 
 def browser_host():

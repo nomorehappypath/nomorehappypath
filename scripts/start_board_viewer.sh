@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 # Start the visible Harness board for the current project. No Python command,
 # profile, or manual browser URL is required from the product owner.
 set -euo pipefail

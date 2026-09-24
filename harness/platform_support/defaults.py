@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Today's values, moved verbatim from their previous homes.
 
 Nothing here is new. Every value is byte-identical to what the caller
@@ -580,3 +580,77 @@ end run'''
 
 
 TERMINAL_HOST = _TerminalHost()
+
+
+class AgentConfinementUnavailable(RuntimeError):
+    """This platform cannot draw a write boundary around a managed agent; the launch must refuse."""
+
+
+class _AgentConfinement:
+    """OS write confinement around a WHOLE managed CLI process (macOS Seatbelt).
+
+    Codex confines its own writes; Claude Code cannot be asked to (its
+    prompts are its boundary, and an unattended agent must not stop at
+    prompts; its built-in sandbox has no network-only off switch, and inside
+    it the board worker on 127.0.0.1 and ssh to the test host are
+    unreachable — proven live 2026-09-23). So the harness draws the boundary
+    with the primitive the git broker already uses: everything allowed except
+    writes, writes allowed only inside the granted roots plus what the CLI
+    itself needs to function. Reads and network are not confined, exactly as
+    for Codex, and the Help text says so.
+    """
+
+    def cli_state_paths(self, home, claude_config_dir=None) -> list[str]:
+        """What Claude Code writes to run at all, independent of any project."""
+        home = Path(home).expanduser()
+        config_dir = Path(claude_config_dir).expanduser() if claude_config_dir else home / ".claude"
+        return [
+            str(config_dir), str(home / ".claude.json"), str(home / ".cache"), str(home / ".npm"),
+            str(home / "Library" / "Caches"), str(home / "Library" / "Logs"),
+        ]
+
+    def temp_paths(self) -> list[str]:
+        """Temp space the CLI and its tools use. `TMPDIR` is added by the facade, validated."""
+        return ["/private/tmp", "/private/var/folders"]
+
+    def available(self) -> bool:
+        return Path("/usr/bin/sandbox-exec").is_file()
+
+    @staticmethod
+    def _real(path) -> str:
+        return str(Path(path).expanduser().resolve())
+
+    @staticmethod
+    def _quote(path: str) -> str:
+        return path.replace("\\", "\\\\").replace('"', '\\"')
+
+    def profile(self, writable: list[str]) -> str:
+        """Seatbelt: allow default, deny file-write*, allow file-write* only inside the grant.
+
+        Files the CLI writes NEXT TO its config (`~/.claude.json.backup`,
+        `.lock` …) are matched by prefix.
+        """
+        lines = ["(version 1)", "(allow default)", "(deny file-write*)"]
+        for path in writable:
+            real = self._real(path)
+            if Path(real).is_file() or real.endswith(".claude.json"):
+                lines.append(f'(allow file-write* (literal "{self._quote(real)}") (regex #"^{self._quote(real)}[.]"))')
+            else:
+                lines.append(f'(allow file-write* (subpath "{self._quote(real)}"))')
+        lines.append('(allow file-write* (subpath "/dev"))')
+        return "\n".join(lines) + "\n"
+
+    def wrap(self, argv, writable: list[str], *, store) -> list[str]:
+        """The command to run so that `argv` can write only inside `writable`."""
+        if not self.available():
+            raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to launch the agent unconfined")
+        profile = self.profile(writable)
+        store = Path(store)
+        store.mkdir(parents=True, exist_ok=True)
+        path = store / f"agent-sandbox-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"
+        if not path.is_file() or path.read_text(encoding="utf-8") != profile:
+            path.write_text(profile, encoding="utf-8")
+        return ["/usr/bin/sandbox-exec", "-f", str(path), *list(argv)]
+
+
+AGENT_CONFINEMENT = _AgentConfinement()

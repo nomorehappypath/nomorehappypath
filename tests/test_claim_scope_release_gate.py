@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Claim-scope release-gate simulations (finding-57a0fe813e3ee545).
 
 Defect: the release check computed claim_scope_audit_passed by TERM OVERLAP

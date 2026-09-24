@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """A repaired release must be acceptable by the owner (harness defect, 2026-08-15).
 
 Live defect: record_release_ready overwrote releases[task] but left the earlier

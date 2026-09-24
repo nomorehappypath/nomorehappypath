@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The Linux implementations.
 
 Inherits every default and overrides only what is genuinely different. That is
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.platform_support.defaults import (  # noqa: F401  (re-exported seam surface)
+    _AgentConfinement, AgentConfinementUnavailable,
     BROWSER_HOST,
     CONFINEMENT,
     _Discovery,
@@ -336,3 +337,56 @@ class _BwrapConfinement:
 
 
 CONFINEMENT = _BwrapConfinement()
+
+
+class _BwrapAgentConfinement(_AgentConfinement):
+    """The same boundary with bubblewrap: root read-only, the grant read-write, network shared.
+
+    `HARNESS_BWRAP_BIN` names the binary (tests and operators); otherwise
+    PATH. WHEN bwrap IS ABSENT THIS REFUSES, for the reason `_BwrapConfinement`
+    gives: a missing package must never silently become "run open".
+    """
+
+    def __init__(self, which=shutil.which):
+        self._which = which
+
+    def cli_state_paths(self, home, claude_config_dir=None) -> list[str]:
+        home = Path(home).expanduser()
+        config_dir = Path(claude_config_dir).expanduser() if claude_config_dir else home / ".claude"
+        return [str(config_dir), str(home / ".claude.json"), str(home / ".cache"), str(home / ".npm")]
+
+    def temp_paths(self) -> list[str]:
+        return ["/tmp", "/var/tmp"]
+
+    def binary(self) -> str | None:
+        named = os.environ.get("HARNESS_BWRAP_BIN")
+        if named:
+            return named if Path(named).is_file() else None
+        return self._which("bwrap")
+
+    def available(self) -> bool:
+        return self.binary() is not None
+
+    def wrap(self, argv, writable: list[str], *, store) -> list[str]:
+        bwrap = self.binary()
+        if not bwrap:
+            raise AgentConfinementUnavailable(
+                "confinement requires bubblewrap; install it (apt install bubblewrap). "
+                "Refusing to launch the agent unconfined."
+            )
+        command = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+        for path in writable:
+            real = Path(self._real(path))
+            if not real.exists():
+                # A state file or directory the CLI has not created yet is
+                # created for it: bwrap cannot bind a path that does not exist.
+                if real.name == ".claude.json" or real.suffix == ".json":
+                    real.parent.mkdir(parents=True, exist_ok=True)
+                    real.touch()
+                else:
+                    real.mkdir(parents=True, exist_ok=True)
+            command += ["--bind", str(real), str(real)]
+        return command + ["--", *list(argv)]
+
+
+AGENT_CONFINEMENT = _BwrapAgentConfinement()

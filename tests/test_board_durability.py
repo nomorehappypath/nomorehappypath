@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Board durability & wipe recovery — the board must never be silently destroyed.
 
 The load-bearing simulation is test_full_wipe_recovers_from_backup: it reproduces

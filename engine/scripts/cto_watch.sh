@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 # Vendor-neutral forwarder to cto_watchdog.py. Standalone: system python3.
 #   bash cto_watch.sh --repo .                       # one-shot
 #   bash cto_watch.sh --watch-interval 600 --only-changes   # 10-min monitor

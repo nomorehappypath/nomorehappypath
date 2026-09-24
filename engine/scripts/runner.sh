@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 # Spawn-runner CLI — launch a real agent process for a work item. System python3.
 #   bash runner.sh dispatch --item <item-id> --signature <sig>
 set -euo pipefail

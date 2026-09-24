@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """P1 execute-once sims (item 5; owner bar: no verdict without certified execution).
 
 Run:  PYTHONPATH=. python3 -m unittest tests.test_execute_once -v

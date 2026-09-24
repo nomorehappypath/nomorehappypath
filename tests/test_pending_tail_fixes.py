@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Pending-tail fixes: issue rows 1, 2, 5, 6, 9 (fold-completion program).
 
 Run:  PYTHONPATH=. python3 -m unittest tests.test_pending_tail_fixes -v

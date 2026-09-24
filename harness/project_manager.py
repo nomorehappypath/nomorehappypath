@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Projects manager: the landing page and per-project board worker (spec §6.4, §7).
 
 One stable manager process serves the scrolling project list. Opening a project
@@ -158,6 +158,28 @@ def page_version() -> str:
     return hashlib.sha256(PAGE.encode("utf-8")).hexdigest()[:16]
 
 
+def _waiting_sessions(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Managed terminals of this project that stopped to wait for the owner.
+
+    Read from the project's own session records; a project whose storage is
+    unreadable simply reports none, its health row already says why.
+    """
+    try:
+        context = registry.context_for_entry(entry)
+        return [
+            {
+                "id": str(item.get("id", "")),
+                "label": str(item.get("label", "")),
+                "role": str(item.get("role", "")),
+                "reason": str(item.get("attention_reason") or "is waiting for you"),
+                "since": str(item.get("attention_since") or ""),
+            }
+            for item in control.waiting_sessions(context)
+        ]
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+
+
 def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     """Truthful render-time status straight from the project's own board."""
     health = registry.entry_health(entry)
@@ -301,8 +323,10 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             last_board_activity = ""
             resume_available = False
             paused = False
+    waiting = _waiting_sessions(entry)
     return {
         "health": health,
+        "waiting_sessions": waiting,
         "task_counts": counts,
         "agent_counts": agent_counts,
         "running": running,

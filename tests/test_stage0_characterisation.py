@@ -1,4 +1,4 @@
-# Copyright (c) 2026 KpiMinds LLC. Licensed under the Business Source License 1.1; see LICENSE.
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """Pin the behaviours Stage 0 will move that nothing exercises today.
 
 `docs/specs/LINUX_STAGE0_PLATFORM_SEAM.md` §8.3 names five of them. Stage 0's
