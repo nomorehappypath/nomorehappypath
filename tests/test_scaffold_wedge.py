@@ -311,10 +311,11 @@ class OpenAlwaysTests(ScaffoldFixture):
     def test_every_card_state_offers_the_open_action(self):
         page = project_manager_page_source()
         self.assertNotIn('data-act="repair"', page)
-        self.assertNotIn("Resume project</button>", page)
         self.assertNotIn("View paused board", page)
         self.assertIn('data-act="open"', page)
-        self.assertIn("Open project</button>", page)
+        # One button, one action: open. Its verb follows the project's state
+        # (owner 2026-09-24: a paused project's button must say Resume).
+        self.assertIn("${project.paused ? 'Resume project' : 'Open project'}</button>", page)
         self.assertIn("Open Mission Control</button>", page)
 
     def test_unhealthy_board_opens_and_recovers_instead_of_refusing(self):

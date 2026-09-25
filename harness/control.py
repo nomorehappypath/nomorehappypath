@@ -37,22 +37,68 @@ PROVIDERS = {
     "claude": {"label": "Claude", "binary_env": "HARNESS_CLAUDE_BIN"},
 }
 PROVIDER_EFFORTS = {
-    # Codex's reasoning setting uses xhigh for its strongest selectable level.
-    "codex": {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high"},
-    # Claude Code's CLI exposes max, not Codex's xhigh spelling.
-    "claude": {"low": "Low", "medium": "Medium", "high": "High", "max": "Max"},
+    # Verified live 2026-09-24: Codex's API accepts low … xhigh, max; its own
+    # model catalog adds "ultra" (maximum reasoning with automatic task
+    # delegation) on the Sol and Terra tiers.
+    "codex": {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max",
+              "ultra": "Ultra (delegates subtasks)"},
+    # Claude Code 2.1.281: --effort low, medium, high, xhigh, max.
+    "claude": {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"},
+}
+# What each suggested model is for, in the providers' own words where they
+# give them (the CLI pickers, 2026-09-24) — shown next to the ID in Settings
+# so nobody has to remember which is which.
+PROVIDER_MODEL_DESCRIPTIONS = {
+    "codex": {
+        "gpt-6-astra": "Frontier intelligence for the most demanding work (Codex default)",
+        "gpt-6-sol": "Workhorse model for coding and everyday work",
+        "gpt-6-luna": "Fast and affordable model for easier tasks",
+        "gpt-5.6-sol": "Older coding model for complex work",
+        "gpt-5.6-sol-wm": "Older coding model for complex work, working-memory variant",
+        "gpt-5.6-terra": "Older balanced model for straightforward work",
+        "gpt-5.6-luna": "Older fast and efficient model",
+        "gpt-5.5": "Legacy coding model",
+        "gpt-5.4": "Legacy general model, superseded by GPT-5.6",
+        "gpt-5.4-mini": "Legacy small model for quick, simple tasks",
+        "gpt-5.3-codex-spark": "Legacy fast coding model",
+        "codex-auto-review": "Codex's own code-review model",
+    },
+    "claude": {
+        "claude-opus-5-5[1m]": "Opus 5.5 with 1M context — best for everyday, complex tasks (Claude default)",
+        "claude-opus-5-5": "Opus 5.5 — best for everyday, complex tasks",
+        "opus[1m]": "Latest Opus with 1M context (alias)",
+        "claude-fable-5-1[1m]": "Fable 5.1 with 1M context — most capable for the hardest, longest-running tasks",
+        "claude-fable-5-1": "Fable 5.1 — most capable for the hardest, longest-running tasks",
+        "fable": "Latest Fable (alias)",
+        "claude-fable-5[1m]": "Fable 5 with 1M context — previous Fable",
+        "claude-fable-5": "Fable 5 — previous Fable",
+        "claude-opus-5": "Opus 5 — previous Opus",
+        "claude-sonnet-5": "Sonnet 5 — efficient for routine tasks",
+        "opus": "Latest Opus (alias)",
+        "sonnet": "Latest Sonnet (alias) — efficient for routine tasks",
+        "haiku": "Latest Haiku (alias) — fastest for quick answers",
+        "claude-haiku-4-5-20251001": "Haiku 4.5 — fastest for quick answers",
+    },
 }
 PROVIDER_MODELS = {
-    # Suggestions only. The settings UI also accepts a full model ID so the
-    # harness does not become stale when a provider releases another model.
+    # Suggestions only, newest first. The settings UI also accepts a full
+    # model ID so the harness does not become stale when a provider releases
+    # another model. Nothing is removed from these lists when new entries
+    # arrive (owner's rule, 2026-09-24); every entry was accepted by the
+    # CLI on the day it was added.
     "codex": [
+        "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
         "gpt-5.6-sol", "gpt-5.6-sol-wm", "gpt-5.6-terra", "gpt-5.6-luna",
         "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
         "codex-auto-review",
     ],
     "claude": [
+        # Claude Code's picker order (owner's paste, 2026-09-24): Opus 5.5
+        # (the default, 1M context), Fable 5.1, Fable 5, Sonnet 5, Haiku 4.5.
+        "claude-opus-5-5[1m]", "claude-opus-5-5", "opus[1m]",
+        "claude-fable-5-1[1m]", "claude-fable-5-1", "fable",
         "claude-fable-5[1m]", "claude-fable-5", "claude-opus-5",
-        "claude-sonnet-5", "opus", "sonnet", "haiku",
+        "claude-sonnet-5", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001",
     ],
 }
 PROVIDER_DEFAULT_MODELS = {"codex": "gpt-5.6-sol", "claude": "opus"}
@@ -109,14 +155,13 @@ def role_for_kind(kind: str) -> str:
 
 
 def normalize_provider_effort(provider: str, effort: str) -> str:
-    provider = str(provider).strip().lower()
+    """The CLI spelling of an effort level.
+
+    Both CLIs now accept both "xhigh" and "max" (Claude Code 2.1.281's
+    --effort choices; Codex's API enum), so the levels pass through as
+    saved. Only the human spellings are folded.
+    """
     effort = str(effort).strip().lower().replace("extra-high", "xhigh").replace("extra high", "xhigh")
-    if provider == "claude" and effort == "xhigh":
-        # Existing persisted settings used Codex's spelling for Claude. Accept
-        # it once and return the real Claude CLI spelling during migration.
-        effort = "max"
-    elif provider == "codex" and effort == "max":
-        effort = "xhigh"
     return effort
 
 
@@ -241,7 +286,7 @@ def _prune_instruction_receipts(state: dict[str, Any]) -> None:
     terminal = sorted(
         (
             receipt for receipt in receipts.values()
-            if receipt.get("status") in {"delivered", "discarded"}
+            if receipt.get("status") in {"delivered", "discarded", "withdrawn"}
         ),
         key=lambda receipt: (receipt.get("delivered_at") or receipt.get("discarded_at")
                              or receipt.get("queued_at") or "", receipt.get("id") or ""),
@@ -514,6 +559,7 @@ def cli_session(root: Path, session_id: str) -> dict[str, Any]:
             "cli_last_launch_at": session.get("cli_last_launch_at"),
             "cli_last_launch_resumed": bool(session.get("cli_last_launch_resumed")),
             "continues_session": session.get("continues_session"),
+            "resumed_after_pause_at": session.get("resumed_after_pause_at"),
         }
 
 
@@ -556,6 +602,10 @@ def note_cli_launch(root: Path, session_id: str, resumed: bool) -> dict[str, Any
         session["cli_launches"] = int(session.get("cli_launches") or 0) + 1
         session["cli_last_launch_at"] = now()
         session["cli_last_launch_resumed"] = bool(resumed)
+        # The launch that follows a pause has now been planned with the pause
+        # in its prompt; a later relaunch (a crash, say) is an ordinary one.
+        # (Not cleared on attach: the runner attaches BEFORE it plans.)
+        session["resumed_after_pause_at"] = None
         return {"session_id": session_id, "cli_launches": session["cli_launches"], "resumed": bool(resumed)}
 
 
@@ -712,6 +762,28 @@ def take_instructions(root: Path, session_id: str) -> list[dict[str, Any]]:
             receipt = state.setdefault("instruction_receipts", {}).get(entry.get("id"), {})
             receipt.update({"status": "taken", "taken_at": taken_at})
         return json.loads(json.dumps(entries))
+
+
+def withdraw_instruction(root: Path, instruction_id: str) -> dict[str, Any]:
+    """Remove a queued instruction before the supervisor takes it.
+
+    2026-09-25 defect #10: a reviewer wake stayed queued after its review was
+    cancelled, so the reviewer woke to "no open QA request". Returns the
+    receipt; ``status`` is ``withdrawn`` when the message never reached the
+    terminal, otherwise the caller must tell the terminal itself.
+    """
+    with locked_state(root) as state:
+        receipt = state.setdefault("instruction_receipts", {}).get(instruction_id)
+        if not receipt:
+            raise ValueError("unknown instruction receipt")
+        if receipt.get("status") == "queued":
+            session_id = str(receipt.get("session_id") or "")
+            inbox = state.setdefault("inbox", {})
+            inbox[session_id] = [entry for entry in inbox.get(session_id, []) if entry.get("id") != instruction_id]
+            if not inbox[session_id]:
+                inbox.pop(session_id, None)
+            receipt.update({"status": "withdrawn", "withdrawn_at": now()})
+        return dict(receipt)
 
 
 def acknowledge_instruction(root: Path, session_id: str, instruction_id: str) -> dict[str, Any]:
@@ -907,11 +979,15 @@ def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str
             ):
                 prepared.append({**dict(session), "action": "awaiting_attachment"})
                 continue
+            was_paused = bool(session.get("pause_requested_at")) or session.get("status") == "paused"
             session.update({
                 "status": "launching", "pid": None, "ended_at": None,
                 "auth_epoch": int(session.get("auth_epoch", 1)) + 1,
                 "pause_requested_at": None, "stop_requested_at": None,
                 "resume_launch_requested_at": None,
+                # Remembered until the CLI is back: the relaunch tells the
+                # agent the owner paused and resumed, and to continue its task.
+                "resumed_after_pause_at": now() if was_paused else session.get("resumed_after_pause_at"),
                 # The offer is the owner-consent boundary: only sessions the
                 # resume selected for relaunch may be launched by the owner's
                 # button; a retired terminal is never offered.
@@ -923,6 +999,27 @@ def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str
             })
             prepared.append({**dict(session), "action": "relaunch"})
     return prepared
+
+
+def restage_resume_launch(root: Path, session_id: str) -> dict[str, Any]:
+    """A relaunch the resume attempted did not open a Terminal: offer it again.
+
+    The board's relaunch button is the fallback for exactly this session, so
+    the request claim is released and the offer restored, with a fresh
+    attachment deadline.
+    """
+    with locked_state(root) as state:
+        session = state["sessions"].get(session_id)
+        if not session:
+            raise ValueError("unknown session")
+        if session.get("status") != "launching" or session.get("pid"):
+            return dict(session)
+        session.update({
+            "resume_launch_requested_at": None, "resume_offer": "relaunch",
+            "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+            "reason": "relaunch attempted by the resume did not open a Terminal; ready to relaunch from the board",
+        })
+        return dict(session)
 
 
 def mark_resume_launch_requested(root: Path, session_id: str) -> dict[str, Any]:

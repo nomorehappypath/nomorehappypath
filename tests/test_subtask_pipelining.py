@@ -468,3 +468,114 @@ class SubtaskPipeliningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnershipRefusalTests(SubtaskPipeliningTests):
+    """2026-09-24 defect: an ownership refusal stranded Delivery with no wake-up and no clear route."""
+
+    def test_an_ownership_refusal_names_the_governed_route_keeps_wakeups_and_is_cleared_by_recover_git(self):
+        import time
+        from unittest import mock
+        self.declare()
+        board.start_subtask(self.root, self.delivery["id"], "alpha")
+        workspace = Path(board.snapshot(self.root)["subtask_workspaces"]["PIPELINE"]["alpha"])
+        (workspace / "test_smoke.py").write_text("changed outside alpha's ownership\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "ownership boundary") as caught:
+            board.broker_stage_commit(self.root, self.delivery["id"], ["test_smoke.py"], "touches a file alpha does not own", subtask="alpha")
+        self.assertIsInstance(caught.exception, git_broker.AuthorizationError)
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertEqual(agent["status"], "blocked")
+            self.assertEqual(agent["broker_refusal"]["kind"], "ownership")
+            self.assertIn("declare-subtasks", agent["broker_refusal"]["route"])
+            self.assertEqual(state["events"][-1]["kind"], "broker_write_refused")
+            self.assertEqual(state["events"][-1]["refusal_kind"], "ownership")
+            agent["last_poll_at"] = "2020-01-01T00:00:00+00:00"
+            agent["last_progress_at"] = "2020-01-01T00:00:00+00:00"
+        time.sleep(1.1)
+        board.mark_stalled(self.root, stale_seconds=1)
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertIsNotNone(agent.get("automatic_recovery_requested_at"), "an ownership refusal keeps the wake-ups coming")
+        instruction = board._automatic_recovery_instruction(agent)
+        self.assertIn("ownership rule, not a fault", instruction)
+        self.assertIn("declare-subtasks", instruction)
+        self.assertIn("USER ACTION: None", instruction)
+        # recover-git finds nothing to reconcile: the flag is cleared, the agent is working again.
+        report = board.recover_git_transactions(self.root)
+        self.assertEqual(report["cleared_refusals"], [self.delivery["id"]])
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertNotIn("broker_refusal", agent)
+            self.assertEqual(agent["status"], "working")
+            self.assertIn("declare-subtasks", agent["status_note"])
+            self.assertIn("broker_refusal_cleared_by_recovery", [event["kind"] for event in state["events"]])
+        self.assertEqual(board.recover_git_transactions(self.root)["cleared_refusals"], [])
+
+    def test_a_transaction_refusal_is_woken_once_with_its_reason_not_every_tick(self):
+        import time
+        from unittest import mock
+        self.declare()
+        board.start_subtask(self.root, self.delivery["id"], "alpha")
+        workspace = Path(board.snapshot(self.root)["subtask_workspaces"]["PIPELINE"]["alpha"])
+        (workspace / "alpha").mkdir(exist_ok=True); (workspace / "alpha" / "a.txt").write_text("a\n", encoding="utf-8")
+        board.broker_stage_commit(self.root, self.delivery["id"], ["alpha/a.txt"], "first", subtask="alpha")
+        (workspace / "alpha" / "a.txt").write_text("b\n", encoding="utf-8")
+        with mock.patch.object(board, "_next_broker_nonce", return_value=1):
+            with self.assertRaises(git_broker.ReplayError):
+                board.broker_stage_commit(self.root, self.delivery["id"], ["alpha/a.txt"], "replayed", subtask="alpha")
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.delivery["id"]]
+            self.assertEqual(agent["broker_refusal"]["kind"], "transaction")
+            agent["last_poll_at"] = "2020-01-01T00:00:00+00:00"; agent["last_progress_at"] = "2020-01-01T00:00:00+00:00"
+        time.sleep(1.1)
+        with mock.patch("harness.control.enqueue_instruction", return_value={"id": "w-1", "source": "automatic-recovery"}) as enqueue:
+            board.mark_stalled(self.root, stale_seconds=1)
+            # 2026-09-25 defect #4: the refusal is routed as the saved next action ...
+            self.assertEqual(enqueue.call_count, 1)
+            self.assertIn("refused by the Git broker", enqueue.call_args.args[2])
+            self.assertIn("recover-git", enqueue.call_args.args[2])
+            first = board.snapshot(self.root)["agents"][self.delivery["id"]].get("automatic_recovery_requested_at")
+            self.assertTrue(first)
+            # ... once per retry window, never every watchdog tick, and never as a stall.
+            board.mark_stalled(self.root, stale_seconds=1)
+            self.assertEqual(enqueue.call_count, 1)
+        agent = board.snapshot(self.root)["agents"][self.delivery["id"]]
+        self.assertEqual(agent.get("automatic_recovery_requested_at"), first)
+        self.assertNotIn(agent.get("liveness"), {"stalled", "recovering"})
+        self.assertEqual(agent["broker_refusal"]["kind"], "transaction")
+
+
+class BaseCarriedAcceptedPathsTests(SubtaskPipeliningTests):
+    """Task F PART 2: the reviewer is told when a subtask's base carries repaired accepted bytes."""
+
+    def test_a_subtask_started_over_repaired_accepted_bytes_it_owns_records_them_and_the_brief_shows_them(self):
+        from harness import review_brief
+        self.declare()
+        reviewer = self.reviewer()
+        for name in ("alpha", "beta"):
+            board.start_subtask(self.root, self.delivery["id"], name)
+            self.commit(name, f"{name}/{name}.txt")
+            self.pass_request(reviewer, self.request(name), name)
+        alpha_pass = next(r for r in board.snapshot(self.root)["qa_requests"].values() if r.get("subtask") == "alpha" and r["status"] == "passed")
+        # Every subtask passed: a repair of alpha's accepted file reaches the task head.
+        task_workspace = Path(board.snapshot(self.root)["task_workspaces"]["PIPELINE"])
+        (task_workspace / "alpha" / "alpha.txt").write_text("alpha REPAIRED\n", encoding="utf-8")
+        board.broker_stage_commit(self.root, self.delivery["id"], ["alpha/alpha.txt"], "repair alpha after final acceptance failed")
+        # A new subtask owning alpha's files is declared and started from that head.
+        board.declare_subtasks(self.root, self.delivery["id"], [
+            {"id": "gamma", "title": "Gamma", "acceptance_proof": "Gamma repairs alpha", "dependencies": [], "owned_paths": ["alpha"], "owned_surfaces": ["api:gamma"]},
+        ], reason="repair needs an owning subtask")
+        board.start_subtask(self.root, self.delivery["id"], "gamma")
+        gamma = board.snapshot(self.root)["delivery_plans"]["PIPELINE"]["subtasks"]["gamma"]
+        carried = gamma["base_carried_accepted_paths"]
+        self.assertEqual([item["path"] for item in carried], ["alpha/alpha.txt"])
+        self.assertEqual(carried[0]["accepted_by"], alpha_pass["id"]); self.assertEqual(carried[0]["accepted_subtask"], "alpha")
+        self.assertNotEqual(carried[0]["accepted_entry"], carried[0]["base_entry"])
+        # Gamma's own change and review: the brief names the carried paths.
+        self.commit("gamma", "alpha/gamma-note.txt")
+        request = self.request("gamma")
+        brief = review_brief.build(self.root, board.snapshot(self.root), request)
+        self.assertEqual([item["path"] for item in brief["candidate"]["base_carried_accepted_paths"]], ["alpha/alpha.txt"])
+        # A subtask whose base carries nothing changed records an empty list.
+        self.assertEqual(board.snapshot(self.root)["delivery_plans"]["PIPELINE"]["subtasks"]["alpha"].get("base_carried_accepted_paths", []), [])

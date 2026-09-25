@@ -22,7 +22,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import (
-    board, child_process, contract, execution_identity, git_broker, git_process,
+    accepted_bytes, board, child_process, contract, execution_identity, git_broker, git_process,
     lifecycle, runtime_probe,
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
@@ -128,7 +128,7 @@ def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
 
 def _changed_paths(repo: Path, base: str, candidate: str) -> list[str]:
     result = git_process.run(
-        ["git", "diff", "--no-ext-diff", "--name-only", f"{base}..{candidate}"],
+        ["git", *accepted_bytes.name_only_arguments(f"{base}..{candidate}")],
         cwd=repo, capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -180,6 +180,36 @@ def _task_lineage(state: dict[str, Any], task: str, developers: list[dict[str, A
         "duplicate_active": duplicate_active,
         "invalid": invalid,
     }
+
+
+def _coordinator_recorded_checks(root: Path, task: str, reviewed_commit: str) -> dict[str, Any]:
+    """The release coordinator's trusted record for this exact commit, or {}.
+
+    Read ONLY from the manager-owned store that no managed agent can write
+    (`project_registry.trusted_project_store`). The human-readable copy under
+    board/evidence is never consulted: the data root is in every agent's write
+    grant, and a forged record there must not clear a release gate.
+    """
+    if not task or not reviewed_commit:
+        return {}
+    from harness import project_registry
+    try:
+        name = project_registry.trusted_record_name(task)
+    except ValueError:
+        return {}
+    store = project_registry.trusted_project_store(root)
+    if store is None:
+        return {}
+    path = store / name
+    if store.is_symlink() or path.is_symlink() or path.resolve().parent != store.resolve():
+        return {}
+    try:
+        recorded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(recorded, dict) or str(recorded.get("reviewed_commit") or "") != reviewed_commit:
+        return {}
+    return recorded
 
 
 def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[str, Any] | None, execute_health: bool, health_command: str, *, check_remote: bool = True) -> dict[str, Any]:
@@ -261,6 +291,26 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
                         )
         except (OSError, git_broker.BrokerError) as error:
             archive_error = str(error)
+    archive_source = "disposable-checkout" if archive_verified else ""
+    archive_note = ""
+    if exact_commit and not archive_verified:
+        # 2026-09-25 defect #12: inside the CTO's own sandbox the broker's
+        # nested sandbox wrapper is refused, so this step always failed there,
+        # although the Python release coordinator had already verified the
+        # same commit outside any agent sandbox. That record is the
+        # authoritative out-of-sandbox check; reuse it for the exact commit.
+        recorded = _coordinator_recorded_checks(root, task, reviewed_commit)
+        if recorded.get("artifact_archive_verified") is True and recorded.get("artifact_commit_exact") is True:
+            archive_verified = True
+            archive_source = "release-coordinator"
+            archive_note = (
+                "the disposable checkout could not be made here"
+                + (f" ({archive_error[-300:]})" if archive_error else "")
+                + "; reusing the release coordinator's verified record for this exact commit"
+            )
+            if execute_health and not health_verified and recorded.get("artifact_health_verified") is True:
+                health_verified = True
+                health_output = str(recorded.get("artifact_health_output") or "")
     artifact_finished_at = lifecycle.now()
     return {
         "reviewed_commit": reviewed_commit,
@@ -272,6 +322,8 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
         "review_repin_verified": repin_verified,
         "artifact_commit_pushed": pushed,
         "artifact_archive_verified": archive_verified,
+        "artifact_archive_source": archive_source,
+        "artifact_archive_note": archive_note,
         "artifact_health_verified": health_verified,
         "artifact_archive_error": archive_error,
         "artifact_health_output": health_output,

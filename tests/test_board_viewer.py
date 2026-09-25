@@ -1002,9 +1002,9 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
             fake.chmod(0o755)
             with patch.dict(os.environ, {"HARNESS_CLAUDE_BIN": str(fake), "CAPTURE": str(capture)}):
                 result = board_viewer.test_provider_connection(root, "claude", "xhigh", "opus")
-            self.assertEqual(result["effort"], "max")
+            self.assertEqual(result["effort"], "xhigh", "Claude Code accepts xhigh itself now; nothing is translated")
             self.assertEqual(result["model"], "opus")
-            self.assertIn("--model\nopus\n--effort\nmax", capture.read_text(encoding="utf-8"))
+            self.assertIn("--model\nopus\n--effort\nxhigh", capture.read_text(encoding="utf-8"))
 
     def run_manager_node(self, invocation):
         from harness import project_manager_page
@@ -1077,7 +1077,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
                 with self.assertRaisesRegex(ValueError, "rejected model opus or effort max"):
                     board_viewer.test_provider_connection(root, "claude", "max", "opus")
 
-    def test_codex_connection_test_preserves_model_and_normalizes_max_effort(self):
+    def test_codex_connection_test_preserves_model_and_effort(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp) / "dev_harness"; root.mkdir()
             capture = Path(tmp) / "codex-args"
@@ -1086,9 +1086,9 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
             fake.chmod(0o755)
             with patch.dict(os.environ, {"HARNESS_CODEX_BIN": str(fake), "CAPTURE": str(capture)}):
                 result = board_viewer.test_provider_connection(root, "codex", "max", "gpt-5.6-sol-wm")
-            self.assertEqual(result["effort"], "xhigh")
+            self.assertEqual(result["effort"], "max", "Codex accepts max itself now; nothing is translated")
             self.assertEqual(result["model"], "gpt-5.6-sol-wm")
-            self.assertIn("--model\ngpt-5.6-sol-wm\n-c\nmodel_reasoning_effort=xhigh", capture.read_text(encoding="utf-8"))
+            self.assertIn("--model\ngpt-5.6-sol-wm\n-c\nmodel_reasoning_effort=max", capture.read_text(encoding="utf-8"))
 
     def test_corrupt_legacy_workspace_settings_falls_back_without_killing_viewer(self):
         with TemporaryDirectory() as tmp:

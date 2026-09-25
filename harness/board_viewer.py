@@ -51,8 +51,9 @@ PAGE = r"""<!doctype html>
 @media (prefers-reduced-motion:reduce){.waiting-banner{animation:none;outline:4px solid #7a1610}}
 .badge.tone-waiting{background:var(--red);color:#fff;animation:waiting-blink 1.1s steps(2,start) infinite}
 @media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
-.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
-.release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
+.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
+.release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
 .modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}
 .terminal-color{display:inline-flex;align-items:center;gap:5px;margin-top:5px;color:var(--muted);font-size:12px}.terminal-color-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid #8994a0;vertical-align:-1px}
 .history-panel{margin-top:18px}.history-details>summary{display:flex;justify-content:space-between;align-items:center;gap:16px;cursor:pointer}.history-count{color:var(--muted);font-size:13px;font-weight:600}.history-intro{margin:8px 0 0;color:var(--muted);font-size:13px}.history-search{width:min(100%,560px);margin-top:12px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.history-search-status{margin:6px 0;color:var(--muted);font-size:13px}.history-list{height:520px;max-height:60vh;overflow-y:scroll;overscroll-behavior:contain;margin-top:10px;border:1px solid var(--line);border-radius:9px;padding:0 12px;background:#fbfcfe}.history-date-group{border-top:1px solid var(--line)}.history-date-group:first-child{border-top:0}.history-date-group>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;padding:13px 2px;color:var(--blue);font-size:12px;font-weight:800;text-transform:uppercase}.history-date-count{color:var(--muted);text-transform:none}.history-date-items{padding-left:16px}.history-item{border-top:1px solid var(--line);padding:13px 0}.history-item:first-child{border-top:0}.history-item-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.history-item h3{font-size:15px}.history-item .task-key{margin-top:2px}.history-time{color:var(--muted);font-size:12px;white-space:nowrap}.history-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:13px}.history-empty{border:1px dashed #c7d1db;border-radius:10px;padding:18px;color:var(--muted);text-align:center;margin:12px 0}.history-match{margin-top:9px;padding:8px 10px;border-radius:7px;background:var(--amber-soft);font-size:13px}.history-match mark{background:#ffd98b}.history-directive{margin-top:10px;border:1px solid var(--line);border-radius:8px;background:#fff}.history-directive-title{padding:8px 11px;color:#27476f;font-size:12px;font-weight:800;border-bottom:1px solid var(--line)}.history-directive-body{height:150px;max-height:150px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.history-directive-body h4{font-size:14px;margin:10px 0 5px}.history-directive-body p{margin:5px 0;color:var(--ink)}.history-directive-body ul,.history-directive-body ol{margin:5px 0 8px;padding-left:22px}.history-directive-body li{margin:3px 0}.history-directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.findings-panel{margin-top:18px}.findings-intro{margin:8px 0 0;color:var(--muted);font-size:13px}.finding-card{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:12px;background:#fff}.finding-card h3{font-size:15px;margin:0 0 4px}.finding-card p{margin:6px 0;color:var(--ink)}.finding-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px}.finding-evidence{margin-top:8px;padding:8px 10px;border-radius:7px;background:#f8fafc;color:var(--muted);font-size:12px}.finding-card .actions{margin-top:11px}.finding-card.queued{border-color:#b8c9e8;background:#f7faff}.finding-card.dismissed{border-color:#b6dfc8;background:var(--green-soft)}.finding-limit{margin-top:10px;color:var(--muted);font-size:12px}
@@ -82,6 +83,7 @@ PAGE = r"""<!doctype html>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
+<section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="attention" class="panel section" aria-live="polite"></section>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
 <section class="layout"><div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only current work appears here. Component counts are supporting evidence, not a completion claim.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div><aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside></section>
@@ -272,7 +274,10 @@ function taskGate(state,name,contract,agent,reviews,total,done){
   }
   const staged=fraction=>Math.min(79,Math.round(10+Math.min(1,ratio+leaf*fraction)*60));
   const deliveryProgress=Math.min(70,Math.round(10+ratio*60));
+  if(decision==='accepted'&&(state.release_decisions||{})[name]?.git_acceptance?.status==='failed')return{status:'ACCEPT SAVED, NOT IN MAIN YET',progress:96,progressTone:'repair',ctoAction:'Your acceptance is saved',next:'The approved work is not in main yet. Fix the cause shown below, then press Try Accept again.'};
   if(decision==='accepted')return{status:'OWNER ACCEPTED',progress:100,progressTone:'ready',ctoAction:'Your response is saved',next:'You accepted this release. Your visual-test response is closed.'};
+  const reintegration=(state.git_reintegration_required||{})[name];
+  if(reintegration&&!decision)return{status:'RE-INTEGRATION NEEDED',progress:Math.max(deliveryProgress,60),progressTone:'repair',ctoAction:reintegration.delivery==='relaunch_required'?'Owner: relaunch Delivery for this task':'Delivery: merging main in',next:String(reintegration.owner_line||'A newer version of main was accepted after this work branched. Delivery is merging it in and will re-test before final review.')};
   if(decision==='not_accepted')return{status:'OWNER REJECTED / REPAIR REQUIRED',progress:100,progressTone:'repair',ctoAction:'Delivery: repair required',next:'Your reason and attachments are saved. Delivery will use them in a new repair, review, and release cycle.'};
   if(released&&!deployedRelease)return{status:'DEPLOYMENT REFRESH REQUIRED',progress:96,progressTone:'repair',ctoAction:'CTO: loading the reviewed release',next:'The reviewed release is not the version serving this page. Acceptance is disabled until Mission Control is running the exact reviewed commit. Your action: none.'};
   if(agent?.task===name&&!((state.requirement_confirmations||{})[name]?.text))return{status:'AWAITING FINAL REQUIREMENTS',progress:0,progressTone:'active',ctoAction:'CTO: monitoring requirements capture',next:'Delivery is clarifying the request. No implementation or review may begin until you say go ahead and the final requirements are recorded.'};
@@ -352,12 +357,19 @@ function releasePreviewHtml(release){
   if(preview.status==='starting')return `<div class="release-preview"><strong>Candidate preview is starting…</strong><p>The reviewed candidate is being launched on this computer. This page updates automatically.</p></div>`;
   if(preview.status==='failed')return `<div class="release-preview failed"><strong>The candidate preview could not start</strong><p>${esc(preview.error||'Unknown failure')}</p>${preview.log_tail?`<pre class="preview-log">${esc(preview.log_tail)}</pre>`:''}<div class="actions"><button type="button" class="secondary" onclick="retryPreview(${task})">Try again</button></div></div>`;
   const location=[preview.branch?`branch <code>${esc(preview.branch)}</code>`:'',commit?`commit <code>${esc(commit)}</code>`:''].filter(Boolean).join(' · ');
-  if(preview.suggested_command)return `<div class="release-preview"><strong>See it running before you decide</strong><p>This looks startable: ${esc(preview.suggested_reason||'a known project shape was detected')}. One click runs the reviewed candidate (commit <code>${esc(commit)}</code>) on this computer — or edit the command first.</p><div class="preview-setup"><input id="preview-command" value="${esc(preview.suggested_command)}" autocomplete="off"><button type="button" class="preview-link" onclick="savePreviewCommand()">Start the preview</button></div><p class="preview-hint" id="preview-hint">The command runs from a clean copy of the reviewed commit and serves only this computer.</p></div>`;
-  return `<div class="release-preview"><strong>Set up a candidate preview for this project</strong><p>The reviewed work lives on ${location||'the task branch'}${preview.workspace?` in <code>${esc(preview.workspace)}</code>`:''}. Enter the command that starts this project so you can see the candidate running before you accept. Use {port} for the local port and {state_dir} for a scratch folder.</p><div class="preview-setup"><input id="preview-command" placeholder="Example: scripts/start_app.sh --port {port}" autocomplete="off"><button type="button" class="secondary" onclick="savePreviewCommand()">Save and start preview</button></div><p class="preview-hint" id="preview-hint">The command runs from a clean copy of the reviewed commit and serves only this computer.</p></div>`;
+  const where=preview.workspace?`<p class="preview-where"><strong>Where the delivered work is:</strong> <code>${esc(preview.workspace)}</code>${location?` <small>(${location})</small>`:''}</p>`:(location?`<p class="preview-where"><small>${location}</small></p>`:'');
+  if(preview.status==='skipped')return `<div class="release-preview"><strong>No preview — you are reviewing the delivered files</strong><p>You said there is nothing to start for this work. Open the folder below, look at what was delivered, then give your decision below.</p>${where}<div class="actions"><button type="button" class="secondary" onclick="retryPreview(${task})">I do want to run it</button></div></div>`;
+  if(preview.suggested_command)return `<div class="release-preview"><strong>See it running before you decide</strong><p>This looks like a website we can open for you (${esc(preview.suggested_reason||'a known project shape was detected')}). One click runs the reviewed version (commit <code>${esc(commit)}</code>) on this computer. You can change the command first if you know better.</p>${where}<div class="preview-setup"><input id="preview-command" value="${esc(preview.suggested_command)}" autocomplete="off"><button type="button" class="secondary" onclick="savePreviewCommand()">Run it for me</button><button type="button" class="secondary" onclick="skipPreview(${task})">No preview needed</button></div><p class="preview-hint" id="preview-hint">It runs from a clean copy of the reviewed version and is visible only on this computer.</p></div>`;
+  return `<div class="release-preview"><strong>Do you want to see it running first?</strong><p>We could not find a simple way to start this project ourselves. If it starts with a command you know, type it below and we will run the reviewed version on this computer for you to try. If this work is not something that runs — files, documents, images, video — skip this step: open the folder below, look at what was delivered, then give your decision below.</p>${where}<div class="preview-setup"><input id="preview-command" placeholder="For example: npm start" autocomplete="off"><button type="button" class="secondary" onclick="savePreviewCommand()">Run it for me</button><button type="button" class="secondary" onclick="skipPreview(${task})">No preview needed</button></div><p class="preview-hint" id="preview-hint"><small>Advanced: if your command needs a port number, write {port} where it goes; {state_dir} is a scratch folder we provide.</small></p></div>`;
+}
+async function skipPreview(task){
+  const hint=el('#preview-hint');
+  try{await call('/api/releases/'+encodeURIComponent(task)+'/preview-skip',{});if(hint)hint.textContent='Understood: no preview. Review the delivered files, then choose below.';await refresh();}
+  catch(error){if(hint)hint.textContent='Could not record that: '+error.message;else el('#notice').textContent='Could not record that: '+error.message;}
 }
 async function savePreviewCommand(){
   const input=el('#preview-command'), hint=el('#preview-hint');
-  if(!input.value.trim()){hint.textContent='Enter the command that starts this project.';return;}
+  if(!input.value.trim()){hint.textContent='Type the command that starts this project, or choose "No preview needed".';return;}
   try{await call('/api/settings/preview',{command:input.value});hint.textContent='Saved. The preview starts in a few seconds; this page updates automatically.';}
   catch(error){hint.textContent='Could not save the preview command: '+error.message;}
 }
@@ -393,6 +405,8 @@ function releaseResponseHtml(state,name){
   if(response){
     if(response.decision==='accepted'){
       const acceptance=(state.git_acceptances||{})[name],instruction=(state.remote_push_instructions||{})[name],outcome=(state.remote_push_outcomes||{})[name],task=esc(JSON.stringify(name));
+      const failed=response.git_acceptance;
+      if(!acceptance&&failed?.status==='failed')return `<div class="release-response recorded acceptance-failed" aria-live="polite"><strong>Accepted, but not in main yet</strong><div class="release-reason"><span>Why</span><p>${esc(failed.reason||'The approved work could not be moved into main.')}</p></div><p>Your acceptance is saved. Once the cause above is fixed, press the button to move the approved work into main.</p><div class="actions"><button type="button" onclick="submitAccepted(${task})">Try Accept again</button></div></div>`;
       if(!acceptance)return `<div class="release-response recorded" aria-live="polite"><strong>Your response: Accepted</strong><p>The local Git transaction is waiting for reintegration or recovery. No remote push occurred.</p></div>`;
       if(outcome?.outcome==='pushed')return `<div class="release-response recorded" aria-live="polite"><strong>Accepted locally and pushed</strong><p>The exact accepted commit was pushed to ${esc(outcome.remote)} ${esc(outcome.branch)} after your separate confirmation.</p></div>`;
       if(instruction&&!instruction.used_at)return `<div class="release-response recorded" aria-live="polite"><strong>Accepted locally</strong><p>Your separate push instruction is saved. Confirm now to allow one remote contact; drift will abort rather than overwrite.</p><div class="actions"><button type="button" onclick="confirmPush(${task},${esc(JSON.stringify(instruction.id))})">Confirm push now</button></div></div>`;
@@ -682,6 +696,7 @@ function humanTask(agent,state={}){
 function humanStage(agent,state,contracts){
   if(agent.status==='paused')return'PAUSED';
   if(agent.role==='cto'){
+    if(agent.recovery_state==='unresponsive')return'CTO NOT RESPONDING';
     if(agent.liveness==='stalled')return'CTO RECOVERY REQUIRED';
     const rows=ctoTaskRows(state,contracts);
     if(rows.some(row=>row.ownerAction!=='None.'))return'OWNER TEST READY';
@@ -739,6 +754,7 @@ function agentStatusSummary(agent,state,contracts){
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
+  if(agent.role==='cto'&&agent.recovery_state==='unresponsive')return{summary:'CTO is not responding - it may need /login. Three wake-ups in a row went unanswered, so the harness has stopped pinging it.',next:'Open the CTO terminal; if it shows a login prompt, run /login. The CTO resumes once it checks the board again.',ownerAction:'Open the CTO terminal and run /login if it asks you to sign in.'};
   if(agent.liveness==='stalled')return{summary:`The ${agent.role==='qa'?'Independent Reviewer':agent.role==='cto'?'CTO':'Delivery Agent'} for ${humanTask(agent,state)} stopped checking the board. The harness must recover it; you do not need to intervene.`,next:'Resume the saved work and report a plain-language update. Your action: none.'};
   if(agent.task==='AWAITING_OWNER_DIRECTION')return{summary:'This Delivery Agent is open and waiting for your development direction.',next:'Use Give direction in Mission Control when you are ready.'};
   if(agent.role==='cto'){
@@ -773,7 +789,7 @@ async function submitAccepted(task){
     await call('/api/releases/'+encodeURIComponent(task)+'/decision',{decision:'accepted'});
     el('#notice').textContent='Your response was saved with this release.';
     await refresh();
-  }catch(error){el('#notice').textContent='We could not save your response. Please try again.';}
+  }catch(error){el('#notice').textContent='We could not save your response. '+(error?.message||'Please try again.');}
 }
 
 function openDecisionDialog(task){
@@ -910,6 +926,10 @@ function openAgents(state,contracts,sessionItems=[]){
         actions.append(ownerButton);
       }
     }
+    if(agent.role==='cto'&&agent.active){
+      const message=document.createElement('button');message.className='secondary';message.type='button';message.textContent='Message the CTO';message.title='Send the CTO one complete message from here instead of typing into its terminal.';message.onclick=()=>openOwnerMessageDialog(agent.id,'cto_message');
+      actions.append(message);
+    }
     const button=document.createElement('button');
     button.className='secondary status-button';button.type='button';button.textContent='View status';button.onclick=()=>showAgentStatus(agent.id);
     actions.append(button);
@@ -944,9 +964,9 @@ function openAgents(state,contracts,sessionItems=[]){
 function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
   ownerMessageAgentId=agentId; ownerMessageType=type;
-  el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':'Send clarification to Delivery';
-  el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
-  el('#owner-message-submit').textContent=type==='direction'?'Send direction':'Send clarification';
+  el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
+  el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
+  el('#owner-message-submit').textContent=type==='direction'?'Send direction':type==='cto_message'?'Send to the CTO':'Send clarification';
   el('#owner-message-text').value=''; el('#owner-message-directive-file').value=''; el('#owner-message-attachments').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='The browser reads the file as strict UTF-8. Its path is never sent or opened by the worker.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
   el('#owner-message-dialog').showModal();
 }
@@ -965,10 +985,43 @@ async function submitOwnerMessage(event){
       await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'modify',text:el('#owner-message-text').value});
       requirementsModifyTask='';
     }else await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
-    el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':'Your clarification and attachments were sent to the current Delivery Agent.'; await refresh();
+    el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':ownerMessageType==='cto_message'?'Your message was sent to the CTO.':'Your clarification and attachments were sent to the current Delivery Agent.'; await refresh();
   }catch(failure){error.textContent=failure.message;}
   finally{submit.disabled=false;}
   return false;
+}
+
+function renderOwnerActions(state){
+  const section=el('#owner-actions');
+  const open=Object.values(state.owner_actions||{}).filter(item=>item.status==='open').sort((a,b)=>String(a.recorded_at).localeCompare(String(b.recorded_at)));
+  if(!open.length){section.hidden=true;section.innerHTML='';return;}
+  section.hidden=false;
+  section.innerHTML=`<h2>${open.length===1?'One thing the CTO needs you to do':`${open.length} things the CTO needs you to do`}</h2>`+open.map(item=>{
+    const id=esc(JSON.stringify(item.id));
+    const command=item.command?`<pre id="command-${esc(item.id)}">${esc(item.command)}</pre><div class="actions"><button type="button" onclick="copyOwnerActionCommand(${id})">Copy</button><small>Paste it into Terminal, then wait for the CTO to confirm.</small></div>`:'';
+    return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}. This card clears when the CTO records the outcome.</small></div>`;
+  }).join('');
+}
+
+async function copyOwnerActionCommand(actionId){
+  const node=document.getElementById('command-'+actionId),button=node?.parentElement?.querySelector('button');
+  if(!node)return;
+  const text=node.textContent;
+  let copied=false,selected=false;
+  try{await navigator.clipboard.writeText(text);copied=true;}
+  catch(error){
+    // No clipboard permission: select the command so one keystroke copies it.
+    try{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);selected=true;copied=document.execCommand('copy');if(copied)selection.removeAllRanges();}catch(fallbackError){copied=false;}
+  }
+  if(button){button.textContent=copied?'Copied':selected?'Selected — press ⌘C':'Copy failed; select it by hand';setTimeout(()=>{button.textContent='Copy';},4000);}
+}
+
+function agentReachText(agent){
+  // What each role's sandbox allows, in the owner's words (defect #16: agents
+  // filed findings against each other for limits nobody could see).
+  if(agent.role==='cto')return'The project folders, the project data folder and temp space, and the board. Not the rest of your home folder, not the Application Support folder in your home Library, and it cannot start a nested sandbox, so its release check reuses the coordinator\'s verified record. Anything that needs more is pinned above as a card for you to run.';
+  if(agent.role==='qa')return'The disposable review checkout, the project data folder and temp space; the workspace\'s node_modules is linked in so builds need no network. Not the rest of your home folder or the Application Support folder in your home Library.';
+  return'Its own task worktree, the project data folder and temp space. Not the rest of your home folder or the Application Support folder in your home Library; a real-GPU proof that writes there is handed to the CTO, who pins it as a card for you to run.';
 }
 
 function showAgentStatus(agentId){
@@ -978,7 +1031,7 @@ function showAgentStatus(agentId){
   el('#status-dialog-title').textContent=(agent.display_name||agent.role)+' status';
   const ledger=agentChecklistHtml(lastBoard?.agent_checklists?.[agent.id]);
   const ownerAction=needsOwner?(directionSent?'Use Respond to Delivery to approve the proposal or request changes.':'Use Give direction beside this agent in Mission Control.'):(wording.ownerAction||'None.');
-  el('#status-dialog-body').innerHTML=`<dl><dt>Current situation</dt><dd>${esc(wording.summary)}</dd><dt>Task</dt><dd>${esc(humanTask(agent,state))}</dd><dt>Current stage</dt><dd>${esc(humanStage(agent,state,contracts))}</dd><dt>Last update</dt><dd>${esc(relativeUpdate(agent.last_status_at))}</dd><dt>What happens next</dt><dd>${esc(wording.next.replace(/\s*(USER|Your) ACTION:\s*None\.?/i,''))}</dd><dt>Your action</dt><dd>${esc(ownerAction)}</dd></dl>${agent.role==='cto'?ctoTaskRowsHtml(state,contracts):ledger}`;
+  el('#status-dialog-body').innerHTML=`<dl><dt>Current situation</dt><dd>${esc(wording.summary)}</dd><dt>Task</dt><dd>${esc(humanTask(agent,state))}</dd><dt>Current stage</dt><dd>${esc(humanStage(agent,state,contracts))}</dd><dt>Last update</dt><dd>${esc(relativeUpdate(agent.last_status_at))}</dd><dt>What happens next</dt><dd>${esc(wording.next.replace(/\s*(USER|Your) ACTION:\s*None\.?/i,''))}</dd><dt>Your action</dt><dd>${esc(ownerAction)}</dd><dt>Can reach</dt><dd>${esc(agentReachText(agent))}</dd></dl>${agent.role==='cto'?ctoTaskRowsHtml(state,contracts):ledger}`;
   const dialog=el('#status-dialog'),title=el('#status-dialog-title');
   dialog.showModal();
   title.focus?.({preventScroll:true});
@@ -1069,8 +1122,11 @@ function render(data,managed){
   el('#claimed').textContent=reviews.filter(review=>review.status==='claimed').length;
   const liveTasks=new Set(data.live_tasks||[]);
   el('#passed').textContent=reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length;
-  const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!recentOutputActive(agent)&&agent.recovery_state!=='reset_requested');
-  if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
+  renderOwnerActions(state);
+  const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
+  const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!recentOutputActive(agent)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
+  if(unresponsive.length)el('#attention').innerHTML=`<h2>CTO is not responding - it may need /login</h2><p><strong>Your action:</strong> open the CTO terminal window. If it shows a login prompt, run <code>/login</code> and sign in; the CTO picks up where it left off once it checks the board again. Automatic wake-ups are paused until then.</p>`;
+  else if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
   else el('#attention').innerHTML='<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
   tasks(state,contracts,data.owner_directions||{},data.live_tasks,data.in_scope_findings||[],data.requirement_confirmations||{});
   currentHistoryVersion=String(data.history_version||'');
@@ -1476,12 +1532,16 @@ def _compact_dashboard_state(
     for key in (
         "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
         "task_workspaces", "releases", "release_decisions", "release_repairs",
-        "requirement_confirmations", "owner_clarifications",
+        "requirement_confirmations", "owner_clarifications", "git_reintegration_required",
     ):
         compact[key] = {
             task: value for task, value in (state.get(key) or {}).items()
             if task in live
         }
+    compact["owner_actions"] = {
+        key: value for key, value in (state.get("owner_actions") or {}).items()
+        if value.get("status") == "open"
+    }
     active_sessions = {value.get("session_id") for value in compact["agents"].values() if value.get("session_id")}
     compact["owner_directions"] = {
         session: value for session, value in (state.get("owner_directions") or {}).items()
@@ -2028,10 +2088,17 @@ def _live_task_names(state: dict, contracts: dict) -> list[str]:
     """
     names = _task_names_from_state(state, contracts)
     live: set[str] = set()
+    # An Accept whose fast-forward failed is not finished work: the owner still
+    # has to press Accept again once the cause is fixed, so the task stays live
+    # (2026-09-25 defects #2/#21: the card vanished into Task history).
     accepted = {
         str(task) for task, decision in (state.get("release_decisions") or {}).items()
         if decision.get("decision") == "accepted"
+        and (decision.get("git_acceptance") or {}).get("status") != "failed"
     }
+    for task, decision in (state.get("release_decisions") or {}).items():
+        if decision.get("decision") == "accepted" and (decision.get("git_acceptance") or {}).get("status") == "failed" and task in names:
+            live.add(str(task))
     for agent in (state.get("agents") or {}).values():
         if (agent.get("active") or agent.get("status") == "paused") and agent.get("role") in board.DEVELOPER_ROLES and agent.get("task") in names and agent.get("task") not in accepted:
             live.add(agent["task"])
@@ -2066,6 +2133,9 @@ def _live_task_names(state: dict, contracts: dict) -> list[str]:
     for task, repair in (state.get("release_repairs") or {}).items():
         if repair.get("status") in {"OWNER_REJECTED_REPAIR_REQUIRED", "DELIVERY_REPAIR_IN_PROGRESS"}:
             live.add(task)
+    for task in (state.get("git_reintegration_required") or {}):
+        if task in names and task not in accepted:
+            live.add(str(task))
     live.update(
         str(finding.get("task") or "")
         for finding in (state.get("deferred_findings") or {}).values()
@@ -2101,7 +2171,9 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
         ]
         failed_reviews = [request for request in _task_requests(state, task) if request.get("status") == "failed"]
         agent_statuses = [agent.get("status") for agent in (state.get("agents") or {}).values() if agent.get("task") == task]
-        if decision.get("decision") == "accepted":
+        if decision.get("decision") == "accepted" and (decision.get("git_acceptance") or {}).get("status") == "failed":
+            result = "ACCEPT SAVED, NOT IN MAIN YET"
+        elif decision.get("decision") == "accepted":
             result = "OWNER ACCEPTED"
         elif decision.get("decision") == "not_accepted":
             result = "OWNER REJECTED / REPAIR REQUIRED"
@@ -2452,6 +2524,7 @@ def settings_payload(root: Path, settings_home: Path | None = None) -> dict:
     value["efforts"] = control.EFFORTS
     value["provider_efforts"] = control.PROVIDER_EFFORTS
     value["provider_models"] = available_provider_models()
+    value["provider_model_descriptions"] = control.PROVIDER_MODEL_DESCRIPTIONS
     if global_value:
         value["connectivity"] = global_value.get("connectivity", {})
         value["settings_scope"] = "global"
@@ -2792,6 +2865,21 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     task = unquote(path[len(release_prefix):-len("/preview-retry")])
                     board.clear_release_preview(root, task)
                     self.send_json(200, {"cleared": task}); return
+                if path.startswith(release_prefix) and path.endswith("/preview-skip"):
+                    # The owner says there is nothing to run for this release:
+                    # the acceptance step proceeds on the delivered files.
+                    task = unquote(path[len(release_prefix):-len("/preview-skip")])
+                    release = (board.snapshot(root).get("releases") or {}).get(task) or {}
+                    recorded = release.get("preview") or {}
+                    state_now = board.snapshot(root)
+                    workspace = str((state_now.get("task_workspaces") or {}).get(task) or recorded.get("workspace") or "")
+                    branch_record = (state_now.get("task_branches") or {}).get(task)
+                    branch = (str(branch_record.get("branch") or "") if isinstance(branch_record, dict) else str(branch_record or "")).removeprefix("refs/heads/")
+                    value = board.record_release_preview(root, task, {
+                        "status": "skipped", "head_commit": str(release.get("head_commit") or ""),
+                        "workspace": workspace, "branch": branch, "skipped_at": board.now(),
+                    })
+                    self.send_json(200, {"preview": value}); return
                 if path.startswith(release_prefix) and path.endswith("/push-instruction"):
                     task = unquote(path[len(release_prefix):-len("/push-instruction")])
                     length = int(self.headers.get("Content-Length", "0"))

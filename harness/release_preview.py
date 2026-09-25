@@ -305,6 +305,14 @@ class ReleasePreviewSupervisor:
         command = str(settings.get("command") or "").strip()
         if not head_commit:
             return
+        if not command and recorded.get("status") == "skipped":
+            # The owner said there is nothing to run for this release; the
+            # record stays until they change their mind (retry clears it).
+            preview = self.previews.pop(task, None)
+            if preview is not None:
+                preview.stop()
+                shutil.rmtree(preview.directory, ignore_errors=True)
+            return
         if not command:
             preview = self.previews.pop(task, None)
             if preview is not None:

@@ -622,7 +622,7 @@ PAGE = r'''<!doctype html>
       // Open goes straight to its board.
       const primary = project.active && !project.paused
         ? `<button class="button" data-act="view" data-id="${esc(project.id)}">Open Mission Control</button><button class="button secondary" data-act="pause" data-id="${esc(project.id)}">Pause project</button>`
-        : `<button class="button" data-act="open" data-id="${esc(project.id)}">Open project</button>`;
+        : `<button class="button" data-act="open" data-id="${esc(project.id)}">${project.paused ? 'Resume project' : 'Open project'}</button>`;
       const remove = project.active ? '' : `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Remove</button>`;
       return `<article class="project ${state}" data-project-id="${esc(project.id)}">
         <div>
@@ -680,7 +680,8 @@ PAGE = r'''<!doctype html>
     const modelOptions = (provider, selected = '') => {
       const models = settingsCatalog?.provider_models?.[provider] || [];
       const current = models.includes(selected) ? selected : '__custom__';
-      return models.map((model) => `<option value="${esc(model)}"${current === model ? ' selected' : ''}>${esc(model)}</option>`).join('')
+      const describe = (model) => settingsCatalog?.provider_model_descriptions?.[provider]?.[model];
+      return models.map((model) => `<option value="${esc(model)}"${current === model ? ' selected' : ''}>${esc(model)}${describe(model) ? ' — ' + esc(describe(model)) : ''}</option>`).join('')
         + `<option value="__custom__"${current === '__custom__' ? ' selected' : ''}>Custom model ID…</option>`;
     };
     const syncCustomModel = (role) => {

@@ -58,7 +58,9 @@ ALL_BOARD_OPERATIONS = {
     "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair",
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
-    "reopen-integrity", "watch", "reopen-candidate-scope",
+    "reopen-integrity", "watch", "reopen-candidate-scope", "reevaluate-finalization",
+    "reintegrate-main",
+    "owner-action", "owner-action-done",
 }
 COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
@@ -68,6 +70,8 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "resolve-repair-package", "complete", "claim-release-repair",
     "repin-final-review",
+    # Defect #19: Delivery merges main into its own task branch through the broker.
+    "reintegrate-main",
     # Recovery valve for the scaffold wedge: --repo is a PROTECTED argument the
     # surface refuses from clients, so an authenticated Delivery bind can only
     # ever target the server-derived project repository.
@@ -82,6 +86,13 @@ CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
     "reopen-integrity", "reopen-candidate-scope",
+    # Task F PART 3: the governed re-evaluation of finalization coverage is a
+    # CTO operation, like reopen-integrity; Delivery and the reviewer are
+    # refused, so a stuck task is unstuck only by the role that audits it.
+    "reevaluate-finalization",
+    # Defects #9/#22: what the owner must do is pinned in Mission Control, not
+    # typed into a scrolling terminal.
+    "owner-action", "owner-action-done",
 }
 AUTHORIZATION_MATRIX = {
     operation: frozenset(
@@ -116,7 +127,8 @@ AGENT_ARGUMENT_OPERATIONS = {
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "attach-challenge-ledger",
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
-    "reopen-candidate-scope",
+    "reopen-candidate-scope", "reintegrate-main",
+    "reopen-candidate-scope", "owner-action", "owner-action-done",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",

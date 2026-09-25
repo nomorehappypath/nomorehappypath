@@ -13,7 +13,9 @@ harness-home directory explicitly, matching the reviewed boundary rules of
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import os
 import uuid
 from datetime import datetime, timezone
@@ -264,6 +266,68 @@ def entry_health(entry: dict[str, Any]) -> dict[str, Any]:
         if path.exists() and not path.is_dir():
             reasons.append(f"{field} exists but is not a directory: {path}")
     return {"ok": not reasons, "reasons": reasons}
+
+
+TASK_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
+
+
+def plain_task_id(task: str) -> str:
+    """One plain task name, never a path.
+
+    2026-09-25 round-2 reviewer finding: a task named `../../../registry`
+    was accepted by the board and, used as a file name, overwrote the manager
+    registry. Letters, digits, dot, dash and underscore only; no leading dot;
+    at most 120 characters.
+    """
+    value = str(task or "").strip()
+    if not value or not TASK_ID_PATTERN.fullmatch(value) or ".." in value:
+        raise ValueError("a task id must be one plain name: letters, digits, dot, dash or underscore (no slashes, no '..')")
+    return value
+
+
+def trusted_record_name(task: str) -> str:
+    """The file name for a task's trusted record: a hash, never the raw id."""
+    return hashlib.sha256(plain_task_id(task).encode("utf-8")).hexdigest()[:32] + ".json"
+
+
+def trusted_project_store(root, *, home: Path | None = None, namespace: str = "release-checks") -> Path | None:
+    """A manager-owned folder for this project that no managed agent may write.
+
+    2026-09-25 reviewer finding: evidence under the project data root can be
+    forged by any managed agent, because the data root is in every agent's
+    write grant. The store is derived from the registry (which agents cannot
+    write either) and sits beside the project's assigned storage, never inside
+    its code, data or workspace roots; when it would, there is no trusted store.
+    """
+    home_path = Path(home) if home is not None else default_home()
+    try:
+        context = project_context(root)
+    except (OSError, ValueError):
+        return None
+    for entry in entries(home_path):
+        try:
+            candidate = context_for_entry(entry)
+        except (KeyError, OSError, ValueError):
+            continue
+        if candidate.data_root != context.data_root and candidate.code_root != context.code_root:
+            continue
+        store = home_path / "projects" / str(entry["id"]) / namespace
+        # No link may stand in for the store or its parents: a symlink there
+        # would redirect the manager's writes to a place someone else chose.
+        if any(part.is_symlink() for part in (store, store.parent, store.parent.parent)):
+            return None
+        store = store.resolve()
+        # Both the derived roots and the REGISTERED roots are agent-writable
+        # (the grant is computed from the registry); the store may lie in neither.
+        for granted in (
+            context.code_root, context.data_root, context.workspace_root,
+            candidate.code_root, candidate.data_root, candidate.workspace_root,
+        ):
+            granted = Path(granted).resolve()
+            if store == granted or store.is_relative_to(granted):
+                return None
+        return store
+    return None
 
 
 def context_for_entry(entry: dict[str, Any]) -> ProjectContext:

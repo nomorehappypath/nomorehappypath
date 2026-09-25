@@ -32,6 +32,7 @@ DEVELOPER_ROLES = {"development", "engineering"}
 WRITE_OPERATIONS = {
     "branch-create", "stage+commit", "record-review-ref",
     "mirror-ref-create", "subtask-fold", "accept-merge", "remote-push",
+    "reintegrate-main",
 }
 ZERO_OID = "0" * 40
 SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -88,6 +89,17 @@ def context_for_repository(board_root: ProjectRoot, repository: Path) -> Project
     """Use project-owned data/workspace roots with an explicitly bound repo."""
     control = project_context(board_root)
     return ProjectContext(repository, control.data_root, control.workspace_root)
+
+
+def _has_conflict_markers(path: Path) -> bool:
+    try:
+        text = path.read_bytes()
+    except (OSError, IsADirectoryError):
+        return False
+    return any(
+        line.startswith((b"<<<<<<< ", b">>>>>>> ")) or line == b"======="
+        for line in text.splitlines()
+    )
 
 
 class GitBroker:
@@ -589,13 +601,13 @@ class GitBroker:
             # untouched; the patch is materialized only in the isolated task
             # worktree and must later cross stage+commit with explicit paths.
             inherited_names = self._run_git(
-                ["diff", "--no-ext-diff", "--name-only", "HEAD", "--"], cwd=repository,
+                accepted_bytes.name_only_arguments("HEAD"), cwd=repository,
                 writable=[repository],
             )
             inherited_paths = sorted(line for line in inherited_names.stdout.splitlines() if line)
             if inherited_paths:
                 patch = self._run_git(
-                    ["diff", "--no-ext-diff", "--binary", "HEAD", "--", *inherited_paths], cwd=repository,
+                    accepted_bytes.binary_patch_arguments("HEAD", paths=inherited_paths), cwd=repository,
                     writable=[repository],
                 )
                 if patch.returncode != 0:
@@ -640,7 +652,7 @@ class GitBroker:
             staged = self._run_git(["add", "--", *prepared], cwd=workspace, writable=[workspace, repository])
             if staged.returncode != 0:
                 raise BrokerError("Git staging failed: " + (staged.stderr.strip() or staged.stdout.strip()))
-            manifest = self._run_git(["diff", "--no-ext-diff", "--cached", "--name-only", "--"], cwd=workspace, writable=[workspace, repository])
+            manifest = self._run_git(accepted_bytes.name_only_arguments(cached=True), cwd=workspace, writable=[workspace, repository])
             staged_paths = sorted(line for line in manifest.stdout.splitlines() if line)
             if manifest.returncode != 0 or not staged_paths:
                 raise BrokerError("stage+commit produced no staged files")
@@ -658,6 +670,108 @@ class GitBroker:
             if status.returncode != 0 or status.stdout.strip():
                 raise RecoveryHoldError("post-commit task worktree is not clean")
             return {"task": task, "subtask": subtask, "commit": identity.commit, "tree": identity.tree, "manifest": staged_paths}
+
+    def reintegrate_main(self, agent_id: str, nonce: int, *, finish: bool = False) -> dict[str, Any]:
+        """Merge ``refs/heads/main`` into the task branch, inside the task worktree.
+
+        2026-09-25 defect #19: when main moved after a task branched, the
+        board said "re-integrate on the task branch" but no governed command
+        existed; Delivery's sandbox cannot write ``.git``, and the broker's
+        path-limited commit is refused by git during a merge. A clean merge
+        is committed here at once as a full merge commit. Conflicts are left
+        in the worktree with their paths returned; Delivery resolves them and
+        calls again with ``finish=True``, which stages the resolved tracked
+        paths and makes the full merge commit.
+        """
+        state = self.state()
+        _, task = self._delivery_task(state, agent_id)
+        with self.project_lock():
+            self.consume_nonce(state, agent_id, nonce, "reintegrate-main")
+            repository = self._repository_for(state, task)
+            workspace = self._workspace_for(state, task)
+            task_branch = str(state.get("task_branches", {}).get(task, {}).get("branch") or "")
+            if not task_branch:
+                raise BrokerError("board state has no governed task branch")
+            symbolic = self._run_git(["symbolic-ref", "-q", "HEAD"], cwd=workspace, writable=[workspace, repository])
+            if symbolic.returncode != 0 or symbolic.stdout.strip() != task_branch:
+                raise RecoveryHoldError("task worktree is not attached to its board-derived branch")
+            main = self._read_ref(repository, "refs/heads/main")
+            if not main or main == ZERO_OID:
+                raise BrokerError("repository has no main branch to re-integrate")
+            merge_head = self._run_git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=workspace, writable=[workspace, repository])
+            merge_in_progress = merge_head.returncode == 0 and bool(merge_head.stdout.strip())
+            transaction = f"reintegrate-{secrets.token_hex(10)}"
+            author = ["-c", "user.name=Harness Git Broker", "-c", "user.email=broker@harness.invalid"]
+            if finish:
+                if not merge_in_progress:
+                    raise BrokerError("no re-integration merge is in progress; run reintegrate-main without --finish first")
+                # Delivery edits the conflicted files but cannot touch the index
+                # (its sandbox has no .git access), so the broker checks each
+                # conflicted path for leftover markers and stages exactly those.
+                unmerged = self._unmerged_paths(workspace, repository)
+                leftover = [path for path in unmerged if _has_conflict_markers(workspace / path)]
+                if leftover:
+                    raise BrokerError("conflict markers are still present in: " + ", ".join(leftover))
+                if unmerged:
+                    staged = self._run_git(["add", "-A", "--", *unmerged], cwd=workspace, writable=[workspace, repository])
+                    if staged.returncode != 0:
+                        raise BrokerError("Git staging failed: " + (staged.stderr.strip() or staged.stdout.strip()))
+                still = self._unmerged_paths(workspace, repository)
+                if still:
+                    raise BrokerError("conflicts are still unresolved in: " + ", ".join(still))
+                merged_from = merge_head.stdout.strip()
+                committed = self._run_git(
+                    [*author, "commit", "--no-gpg-sign", "--no-edit", "-m", f"Re-integrate main {merged_from[:12]} into {task}"],
+                    cwd=workspace, writable=[workspace, repository],
+                )
+                if committed.returncode != 0:
+                    raise BrokerError("Git merge commit failed: " + (committed.stderr.strip() or committed.stdout.strip()))
+                return self._reintegration_outcome(transaction, task, workspace, repository, merged_from, "merged")
+            if merge_in_progress:
+                raise BrokerError(
+                    "a re-integration merge is already in progress; resolve the conflicts in the task worktree, "
+                    "then run reintegrate-main --finish"
+                )
+            status = self._run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=workspace, writable=[workspace, repository])
+            if status.returncode != 0 or status.stdout.strip():
+                detail = status.stderr.strip() or status.stdout.strip() or "status unavailable"
+                raise RecoveryHoldError("task worktree must be clean before re-integrating main: " + detail)
+            head = self._identity(workspace)
+            ancestor = self._run_git(["merge-base", "--is-ancestor", main, head.commit], cwd=repository, writable=[repository])
+            if ancestor.returncode == 0:
+                self._journal(transaction, "reintegrate-main", "done", task=task, main=main, commit=head.commit, tree=head.tree, status="up_to_date")
+                return {"task": task, "status": "up_to_date", "main": main, "commit": head.commit, "tree": head.tree, "conflicts": []}
+            self._refuse_tree_filter_attributes(repository, main, "reintegrate-main")
+            self._journal(transaction, "reintegrate-main", "intent", task=task, main=main, previous_head=head.commit)
+            merged = self._run_git(
+                [*author, "merge", "--no-ff", "--no-edit", "--no-gpg-sign", "-m", f"Re-integrate main {main[:12]} into {task}", main],
+                cwd=workspace, writable=[workspace, repository],
+            )
+            if merged.returncode != 0:
+                unmerged = self._unmerged_paths(workspace, repository)
+                if unmerged:
+                    self._journal(transaction, "reintegrate-main", "conflicts", task=task, main=main, paths=unmerged)
+                    return {"task": task, "status": "conflicts", "main": main, "commit": head.commit, "tree": head.tree, "conflicts": unmerged}
+                self._run_git(["merge", "--abort"], cwd=workspace, writable=[workspace, repository])
+                raise BrokerError("Git merge failed: " + (merged.stderr.strip() or merged.stdout.strip()))
+            return self._reintegration_outcome(transaction, task, workspace, repository, main, "merged")
+
+    def _unmerged_paths(self, workspace: Path, repository: Path) -> list[str]:
+        listed = self._run_git(["ls-files", "-u", "-z"], cwd=workspace, writable=[workspace, repository])
+        return sorted({row.split("\t", 1)[1] for row in listed.stdout.split("\0") if "\t" in row})
+
+    def _reintegration_outcome(
+        self, transaction: str, task: str, workspace: Path, repository: Path, main: str, status: str,
+    ) -> dict[str, Any]:
+        identity = self._identity(workspace)
+        clean = self._run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=workspace, writable=[workspace, repository])
+        if clean.returncode != 0 or clean.stdout.strip():
+            raise RecoveryHoldError("post-merge task worktree is not clean")
+        descends = self._run_git(["merge-base", "--is-ancestor", main, identity.commit], cwd=repository, writable=[repository])
+        if descends.returncode != 0:
+            raise RecoveryHoldError("re-integrated head does not descend from main")
+        self._journal(transaction, "reintegrate-main", "done", task=task, main=main, commit=identity.commit, tree=identity.tree, status=status)
+        return {"task": task, "status": status, "main": main, "commit": identity.commit, "tree": identity.tree, "conflicts": []}
 
     def refresh_subtask_base(self, task: str, subtask: str) -> dict[str, Any]:
         """Move one untouched pending subtask to the latest integrated task head."""
@@ -843,7 +957,7 @@ class GitBroker:
         if ancestor.returncode != 0:
             raise BrokerError("reviewed subtask candidate is not descended from its declared base")
         manifest_result = self._run_git(
-            ["diff", "--no-ext-diff", "--name-only", "-z", base_commit, candidate_commit, "--"],
+            accepted_bytes.name_only_arguments(base_commit, candidate_commit, nul=True),
             cwd=repository, writable=[repository],
         )
         manifest = sorted(path for path in manifest_result.stdout.split("\0") if path)
@@ -911,7 +1025,7 @@ class GitBroker:
                     "task worktree must be clean before a reviewed subtask fold: " + detail
                 )
             patch = self._run_git(
-                ["diff", "--no-ext-diff", "--binary", base_commit, candidate_commit, "--", *manifest],
+                accepted_bytes.binary_patch_arguments(base_commit, candidate_commit, paths=manifest),
                 cwd=repository, writable=[repository],
             )
             if patch.returncode != 0 or not patch.stdout:
@@ -1144,13 +1258,16 @@ class GitBroker:
             if local.commit != commit or local.tree != tree or mirrored != local:
                 raise BrokerError("candidate does not match its immutable mirror certification")
             self._refuse_tree_filter_attributes(repository, commit, "accept-merge")
-            changed = self._run_git(["diff", "--no-ext-diff", "--name-only", f"{base}..{commit}"], cwd=repository, writable=[repository])
+            changed = self._run_git(accepted_bytes.name_only_arguments(f"{base}..{commit}"), cwd=repository, writable=[repository])
             changed_paths = sorted(line for line in changed.stdout.splitlines() if line)
             if changed.returncode != 0 or changed_paths != manifest:
                 raise BrokerError("candidate manifest does not match the certified Git range")
             tracked_status = self._run_git(["status", "--porcelain=v1", "--untracked-files=no"], cwd=repository, writable=[repository])
             if tracked_status.returncode != 0 or tracked_status.stdout.strip():
-                raise BrokerError("acceptance requires a clean governed main worktree")
+                dirty = sorted(line[3:] for line in tracked_status.stdout.splitlines() if len(line) > 3)
+                raise BrokerError(
+                    "acceptance requires a clean governed main worktree: " + (", ".join(dirty) or "status unavailable")
+                )
             self._journal(transaction, "accept-merge", "intent", task=task, mirror_ref=mirror_ref, tree=tree, manifest=manifest, previous_main=base, target_main=commit)
             if crash_after == "intent":
                 raise InjectedCrash("crash after acceptance intent")

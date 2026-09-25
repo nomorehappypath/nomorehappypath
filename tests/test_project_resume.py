@@ -93,12 +93,19 @@ class ProjectResumeTests(unittest.TestCase):
         first = self._resume(manager)
         second = self._resume(manager)
 
+        # 2026-09-24: the owner's press of Resume brings the agents back. Every
+        # staged terminal is relaunched by the resume itself, once; the board's
+        # relaunch button stays only for a launch that failed.
+        self.assertEqual(sorted(launched), sorted([delivery_session["id"], review_session["id"]]),
+                         "resume relaunches the terminals the pause stopped")
+        self.assertEqual(sorted(first["relaunched"]), sorted(launched))
+        self.assertEqual(first["relaunch_failures"], {})
         staged = {
             item["id"] for item in control.snapshot(self.root)["sessions"]
             if item.get("status") == "launching" and not item.get("resume_launch_requested_at")
         }
-        self.assertEqual(staged, set([delivery_session["id"], review_session["id"]]))
-        self.assertEqual(launched, [], "resume must never spawn terminals; the owner's button does")
+        self.assertEqual(staged, set(), "nothing is left waiting for a second button")
+        self.assertEqual(second["relaunched"], [], "a second resume does not spawn duplicates")
         self.assertEqual(second["resume"]["resume_id"], first["resume"]["resume_id"])
         self.assertTrue(second["sessions"])
         self.assertTrue(all(
@@ -114,6 +121,26 @@ class ProjectResumeTests(unittest.TestCase):
         self.assertEqual(claim["claimed_by"], reviewer["id"])
         self.assertEqual(claim["challenge_ledger"], "/durable/reviewer-ledger.md")
 
+
+    def test_a_failed_relaunch_leaves_the_session_staged_for_the_boards_button(self):
+        session = control.create(self.root, "codex_delivery")
+        board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        manager = self._manager([])
+        manager.pause_project(self.entry["id"], drain_seconds=0, stop_timeout=0)
+        def failing(_root, _session):
+            raise ValueError("Terminal.app refused to open a window")
+        manager.terminal_launcher = failing
+        result = self._resume(manager)
+        self.assertEqual(result["relaunched"], [])
+        self.assertIn(session["id"], result["relaunch_failures"])
+        self.assertIn("Terminal.app refused", result["relaunch_failures"][session["id"]])
+        staged = [
+            item for item in control.snapshot(self.root)["sessions"]
+            if item["id"] == session["id"] and item.get("status") == "launching"
+            and not item.get("resume_launch_requested_at") and item.get("resume_offer") == "relaunch"
+        ]
+        self.assertEqual(len(staged), 1, "the failed session is staged again for the board's relaunch button")
+        self.assertEqual(board.snapshot(self.root)["project_pause"]["status"], "active", "the resume itself still completes")
 
     def test_failed_latest_review_restores_inactive_delivery_owner(self):
         session = control.create(self.root, "codex_delivery")
@@ -142,12 +169,12 @@ class ProjectResumeTests(unittest.TestCase):
         launched: list[str] = []
         result = self._resume(self._manager(launched))
 
+        self.assertEqual(launched, [session["id"]], "resume relaunches the terminal the pause stopped")
         staged = {
             item["id"] for item in control.snapshot(self.root)["sessions"]
             if item.get("status") == "launching" and not item.get("resume_launch_requested_at")
         }
-        self.assertEqual(staged, set([session["id"]]))
-        self.assertEqual(launched, [], "resume must never spawn terminals; the owner's button does")
+        self.assertEqual(staged, set(), "nothing waits for a second button")
         self.assertEqual(result["resume"]["restored_agents"], 1)
         restored = board.snapshot(self.root)["agents"][delivery["id"]]
         self.assertTrue(restored["active"])
@@ -171,12 +198,12 @@ class ProjectResumeTests(unittest.TestCase):
         launched: list[str] = []
         self._resume(self._manager(launched))
 
+        self.assertEqual(launched, [session["id"]], "resume relaunches the terminal the pause stopped")
         staged = {
             item["id"] for item in control.snapshot(self.root)["sessions"]
             if item.get("status") == "launching" and not item.get("resume_launch_requested_at")
         }
-        self.assertEqual(staged, set([session["id"]]))
-        self.assertEqual(launched, [], "resume must never spawn terminals; the owner's button does")
+        self.assertEqual(staged, set(), "nothing waits for a second button")
         sessions = {item["id"]: item for item in control.snapshot(self.root)["sessions"]}
         self.assertIn(session["id"], sessions)
         agents = board.snapshot(self.root)["agents"]
@@ -254,10 +281,9 @@ class ProjectResumeTests(unittest.TestCase):
         self.assertNotEqual(offers.get(delivery_session["id"]), "relaunch")
         # The consent boundary is durable: only the offered session may be
         # launched by the owner's button; the retired terminal is refused.
-        control.mark_resume_launch_requested(self.root, reviewer_session["id"])
         with self.assertRaisesRegex(ValueError, "not offered for relaunch|not staged for launch"):
             control.mark_resume_launch_requested(self.root, delivery_session["id"])
-        self.assertEqual(launched, [], "resume must never spawn terminals; the owner's button does")
+        self.assertEqual(launched, [reviewer_session["id"]], "only the offered session is relaunched by the resume")
         self.assertEqual(result["resume"]["restored_agents"], 1)
         self.assertFalse(board.snapshot(self.root)["agents"][delivery["id"]]["active"])
 
@@ -288,9 +314,10 @@ class ProjectResumeTests(unittest.TestCase):
         self.assertEqual(resumed["pid"], process.pid)
 
     def test_resume_recovers_before_and_after_terminal_launch_checkpoint(self):
-        # Resume never launches; it stages. "after" simulated a legacy
-        # already-requested launch, "expired" a stale request that restages.
-        for checkpoint, expected_staged in (("before", 1), ("after", 0), ("expired", 1)):
+        # Resume relaunches what it stages. "after" simulates a legacy
+        # already-requested launch (left alone), "expired" a stale request
+        # that is restaged and therefore relaunched.
+        for checkpoint, expected_launched in (("before", 1), ("after", 0), ("expired", 1)):
             with self.subTest(checkpoint=checkpoint):
                 case = self.base / f"{checkpoint}-launch"
                 case.mkdir()
@@ -322,11 +349,12 @@ class ProjectResumeTests(unittest.TestCase):
                     result = manager.resume_project(entry["id"])
 
                 self.assertEqual(result["resume"]["resume_id"], transaction["resume_id"])
-                self.assertEqual(launched, [], "resume must never spawn terminals")
+                self.assertEqual(len(launched), expected_launched, checkpoint)
                 staged = [
                     item for item in control.snapshot(root)["sessions"]
                     if item.get("status") == "launching" and not item.get("resume_launch_requested_at")
                 ]
+                expected_staged = 0
                 self.assertEqual(len(staged), expected_staged)
                 self.assertEqual(board.pause_state(root)["status"], "active")
                 manager.close_project(entry["id"])

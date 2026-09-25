@@ -29,6 +29,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -183,6 +184,31 @@ def _route_prepared(
     return True
 
 
+def _record_trusted_checks(root: Path, task: str, checks: dict[str, Any]) -> Path | None:
+    """Keep a copy of the checks where no managed agent can write (defect #12).
+
+    The copy under board/evidence stays for humans and the journal; the CTO's
+    release check reuses ONLY this manager-owned copy, because the data root
+    is in every agent's write grant and a forged record there could turn a
+    failed archive/health check green (reviewer finding, 2026-09-25).
+    """
+    from harness import project_registry
+    name = project_registry.trusted_record_name(task)   # validates the id; raises on anything path-like
+    store = project_registry.trusted_project_store(root)
+    if store is None:
+        return None
+    store.mkdir(parents=True, exist_ok=True)
+    if store.is_symlink() or not store.is_dir():
+        raise ValueError("trusted store must be a real directory")
+    path = store / name
+    if path.is_symlink() or path.resolve().parent != store.resolve():
+        raise ValueError("trusted record must be a real file inside the trusted store")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(checks, indent=1, sort_keys=True, default=str), encoding="utf-8")
+    os.replace(temporary, path)
+    return path
+
+
 def _coordinatable_tasks(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     cancelled = state.get("cancelled_tasks") or {}
     releases = state.get("releases") or {}
@@ -279,9 +305,9 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
                             and k != "claim_scope_audit_passed")
             checks_path = board.board_dir(root) / "evidence" / f"release-checks-{task}.json"
             checks_path.parent.mkdir(parents=True, exist_ok=True)
-            checks_path.write_text(json.dumps(
-                {k: v for k, v in checks.items() if isinstance(v, (bool, str, int, list))},
-                indent=1, sort_keys=True, default=str))
+            recorded_checks = {k: v for k, v in checks.items() if isinstance(v, (bool, str, int, list))}
+            checks_path.write_text(json.dumps(recorded_checks, indent=1, sort_keys=True, default=str))
+            _record_trusted_checks(root, task, recorded_checks)
             _journal(root, {"task": task, "commit": commit, "step": "checks",
                             "coordination_key": coordination_key,
                             "failed": failed, "path": str(checks_path)})
@@ -290,6 +316,17 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
             if failed:
                 _journal(root, {"task": task, "commit": commit, "step": "checks_failed",
                                 "coordination_key": coordination_key, "failed": failed})
+                if "main_fast_forward_safe" in failed and set(failed) <= {"main_fast_forward_safe", "main_unchanged_before_accept"}:
+                    # Defects #17/#18: a stale base is product work for Delivery,
+                    # not a control-plane incident to repeat every cycle. Mark it
+                    # once, wake (or reactivate) Delivery, and show the owner one line.
+                    board.route_reintegration(
+                        root, task,
+                        f"main moved after the final review of {commit[:12]}",
+                        source="release-coordinator",
+                    )
+                    outcomes.append({"task": task, "status": "reintegration_required"})
+                    continue
                 _incident(root, task, "checks", "mechanical checks failed: " + ", ".join(failed))
                 outcomes.append({"task": task, "status": "checks_failed", "failed": failed})
                 continue

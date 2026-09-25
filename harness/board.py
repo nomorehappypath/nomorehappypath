@@ -60,6 +60,24 @@ WATCHDOG_INTERVAL_SECONDS = 15
 # granularity does not make the real poll late.
 CTO_MONITOR_INTERVAL_SECONDS = 300
 CTO_MONITOR_ROUTE_SECONDS = CTO_MONITOR_INTERVAL_SECONDS - WATCHDOG_INTERVAL_SECONDS
+# 2026-09-25 defects #13/#20: a CTO status post is a progress event, which
+# cleared the pending-cycle bookkeeping, and the next watchdog tick routed a
+# new cycle at once - one every 15-60 s, scrolling the owner's terminal away.
+# A routine cycle is now never routed sooner than this after the previous one:
+# the busy interval when something material happened on the board since that
+# cycle, the quiet interval when nothing did.
+CTO_MONITOR_BUSY_INTERVAL_SECONDS = 120
+CTO_MONITOR_QUIET_INTERVAL_SECONDS = 300
+# 2026-09-25 defect #15: after this many consecutive failed wake-ups the CTO is
+# reported as not responding (it may need /login) and no longer pinged until it
+# polls again.
+CTO_UNRESPONSIVE_AFTER_STALLS = 3
+CTO_UNRESPONSIVE_NOTE = "CTO is not responding - it may need /login"
+# Board events that only say "the monitor ran": for the CTO, the hot event
+# window keeps the latest of each so real task events are not pushed out.
+ROUTINE_MONITOR_EVENTS = {
+    "agent_automatic_recovery_routed", "instruction_route_queued", "agent_standby", "board_polled",
+}
 # A routed CLI turn has the same observed latency budget as other agent work.
 # Keep it visibly recovering (never healthy) during that bounded response
 # window. Dead managed sessions are still detected immediately above this
@@ -630,6 +648,14 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
         "role": agent["role"] if agent else "system",
         **payload,
     }
+    if agent is not None and agent.get("role") == "cto" and kind in ROUTINE_MONITOR_EVENTS:
+        # Defect #13: monitoring noise filled the retained window. Only the
+        # newest routine event of each kind stays for the CTO; the durable
+        # events.jsonl still receives every one through the usual export.
+        state["events"] = [
+            existing for existing in state["events"]
+            if not (existing.get("kind") == kind and existing.get("agent_id") == agent["id"])
+        ]
     state["events"].append(event)
     if agent is not None and kind in PROGRESS_EVENTS:
         agent["last_progress_at"] = event["at"]
@@ -1864,7 +1890,7 @@ def _next_broker_nonce(
     return value
 
 
-BROKER_REFUSAL_ERRORS = (git_broker.ReplayError, git_broker.RecoveryHoldError)
+BROKER_REFUSAL_ERRORS = (git_broker.ReplayError, git_broker.RecoveryHoldError, git_broker.AuthorizationError)
 
 
 def _record_broker_refusal(
@@ -1879,18 +1905,38 @@ def _record_broker_refusal(
     """
     reason = f"{type(error).__name__}: {error}"
     stamp = now()
+    kind = _broker_refusal_kind(error)
+    route = (
+        "the paths belong to another subtask; declare-subtasks with a subtask that owns them, then continue"
+        if kind == "ownership" else "run recover-git"
+    )
     agent.update({
         "status": "blocked",
         "status_note": f"Git write refused ({operation}): {error}"[:240],
         "last_status_at": stamp,
-        "broker_refusal": {"operation": operation, "reason": reason, "at": stamp},
+        "broker_refusal": {"operation": operation, "reason": reason, "at": stamp, "kind": kind, "route": route},
     })
     _event(state, "broker_write_refused", agent, {
         "task": agent.get("task", ""),
         "operation": operation,
         "reason": reason,
-        "message": "the Git broker refused this write; the agent is blocked, not stalled — run recover-git",
+        "refusal_kind": kind,
+        "message": f"the Git broker refused this write ({kind}); the agent is blocked, not stalled — {route}",
     })
+
+
+def _broker_refusal_kind(error: BaseException) -> str:
+    """Tell an ownership refusal apart from transaction drift.
+
+    2026-09-24 defect: an ownership refusal (a file owned by an already-passed
+    subtask) is legitimate and needs a governed route, not recover-git; it
+    left Delivery idle with every wake-up skipped. Ownership wording comes
+    from the board's and the broker's own checks.
+    """
+    text = str(error).casefold()
+    if "ownership" in text or "owned" in text or "owns" in text:
+        return "ownership"
+    return "transaction"
 
 
 def _clear_broker_refusal(state: dict[str, Any], agent: dict[str, Any]) -> None:
@@ -1984,9 +2030,9 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
         return {"available": False, "commit": "", "branch": "", "files": [], "working_tree_digest": "", "working_tree_files": [], "immutable_clean": False}
     status = git_process.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=root, capture_output=True, text=True)
     status_lines = [line for line in status.stdout.splitlines() if line] if status.returncode == 0 else []
-    manifest_command = ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", head.stdout.strip()]
+    manifest_command = ["git", *accepted_bytes.commit_manifest_arguments(head.stdout.strip())]
     if baseline_commit and baseline_commit != head.stdout.strip():
-        manifest_command = ["git", "diff", "--name-only", f"{baseline_commit}..{head.stdout.strip()}"]
+        manifest_command = ["git", *accepted_bytes.name_only_arguments(f"{baseline_commit}..{head.stdout.strip()}")]
     files = git_process.run(
         manifest_command,
         cwd=root, capture_output=True, text=True,
@@ -2008,7 +2054,7 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
     immutable_candidate = clean or committed_candidate
     digest = hashlib.sha256(status.stdout.encode("utf-8"))
     if not immutable_candidate:
-        diff = git_process.run(["git", "diff", "--binary", "HEAD"], cwd=root, capture_output=True)
+        diff = git_process.run(["git", *accepted_bytes.binary_patch_arguments("HEAD")], cwd=root, capture_output=True)
         digest.update(b"\0" + diff.stdout)
         for line in status_lines:
             if not line.startswith("?? "):
@@ -2590,13 +2636,14 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                     "durable_log": str(board_dir(root) / "events.jsonl"),
                     "message": "Earlier board events were moved out of hot state; read the durable event log before acting so failures are not silently skipped",
                 })
-            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed"}
+            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}
             agent["poll_counter"] += 1
             agent["last_poll_at"] = now()
             agent.update({"liveness": "healthy", "liveness_note": "board heartbeat is current"})
-            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed"}:
+            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}:
                 agent.update({"recovery_state": "resumed", "status": "working", "status_note": "recovery accepted; preserved task and next action resumed", "last_status_at": now()})
                 agent.pop("automatic_recovery_requested_at", None)
+            agent.pop("consecutive_stalls", None)
             if raw_unseen:
                 # Cursor advances over everything SCANNED, not only delivered.
                 agent["cursor"] = raw_unseen[-1]["sequence"]
@@ -2805,7 +2852,50 @@ def _automatic_recovery_instruction(agent: dict[str, Any]) -> str:
         return "MONITORING CYCLE DUE: Poll the board once now, process material changes, route the next concrete action, and post a short human-readable status. Never wait on the product owner: owner touchpoints are asynchronous board surfaces you post and continue past, and an owner rejection is routed to a repair cycle automatically. When only an owner decision is outstanding, record 'awaiting owner decision' and stand by healthy — never hold the cycle for a reply. USER ACTION: None."
     if role == "qa":
         return f"REVIEW ACTION DUE: Poll the board once now and continue the routed review for {task}. Preserve its existing evidence and task memory. USER ACTION: None."
+    refusal = agent.get("broker_refusal") or {}
+    if refusal.get("kind") == "ownership":
+        return (
+            f"TASK ACTION DUE: Poll the board once now. Your last Git write for {task} was refused because "
+            f"{refusal.get('reason', 'the paths belong to another subtask')}. That is an ownership rule, not a fault: "
+            f"{refusal.get('route', 'declare-subtasks with a subtask that owns those paths')}, then continue from your "
+            f"saved next gate. Preserve the owner direction, requirements, evidence, and task memory. USER ACTION: None."
+        )
+    if refusal:
+        return (
+            f"TASK ACTION DUE: Poll the board once now. Your last Git write for {task} was refused by the Git broker: "
+            f"{refusal.get('reason', 'transaction refused')}. You are blocked, not stalled: "
+            f"{refusal.get('route', 'run recover-git')}, then repeat the refused write and continue from your saved next gate. "
+            "Preserve the owner direction, requirements, evidence, and task memory. USER ACTION: None."
+        )
     return f"TASK ACTION DUE: Poll the board once now and continue {task} from its saved next gate. Preserve the owner direction, requirements, evidence, and task memory. USER ACTION: None."
+
+
+def _routine_cycle_due(state: dict[str, Any], agent: dict[str, Any], current: datetime) -> bool:
+    """Whether enough time passed since the CTO's last routed monitoring cycle.
+
+    Applies when the CTO has NOT polled since that cycle (it posted status,
+    which used to clear the bookkeeping and re-route within one tick): busy
+    interval when a material board event (anything but the monitor's own
+    noise and the CTO's own posts) happened since the cycle, quiet interval
+    otherwise. A cycle answered by a real poll is gated by the poll-age rule
+    alone. The first cycle is always due.
+    """
+    last_at = _parsed_timestamp(agent.get("last_routine_cycle_at"))
+    if last_at is None:
+        return True
+    if int(agent.get("poll_counter") or 0) > int(agent.get("last_routine_cycle_poll_counter") or 0):
+        # The previous cycle was answered by a real poll: the poll-age rule
+        # (one cycle per CTO_MONITOR_INTERVAL_SECONDS) already gates this one.
+        return True
+    since = int(agent.get("last_routine_cycle_sequence") or 0)
+    material = any(
+        event.get("sequence", 0) > since
+        and event.get("kind") not in ROUTINE_MONITOR_EVENTS | {"status_update", "agent_stalled", "agent_recovered"}
+        and event.get("agent_id") != agent.get("id")
+        for event in state.get("events", [])
+    )
+    interval = CTO_MONITOR_BUSY_INTERVAL_SECONDS if material else CTO_MONITOR_QUIET_INTERVAL_SECONDS
+    return (current - last_at).total_seconds() >= interval
 
 
 def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[dict[str, Any]]:
@@ -2918,10 +3008,34 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     and heartbeat_at > recovery_at
                 )
                 if not heartbeat_after_request and request_age >= AUTO_RECOVERY_GRACE_SECONDS:
+                    pending_refusal = agent.get("broker_refusal")
+                    if pending_refusal and agent.get("role") != "cto" and pending_refusal.get("kind", "transaction") != "ownership":
+                        # Reviewer finding (2026-09-25, round 1): an unanswered
+                        # refusal wake must stay on the BLOCKED path. No stall,
+                        # no automatic_failed; the refusal branch below repeats
+                        # the wake once per retry window.
+                        note = "the routed refusal got no board heartbeat; it is repeated once per retry window"
+                        agent.update({"liveness_note": note, "recovery_state": "blocked_wake_unanswered"})
+                        _event(state, "broker_refusal_wake_unanswered", agent, {
+                            "task": agent["task"], "age_seconds": int(request_age), "message": note,
+                        })
+                        continue
                     note = f"Automatic wake-up received no board heartbeat for {int(request_age)}s"
-                    agent.update({"liveness": "stalled", "liveness_note": note, "recovery_state": "automatic_failed"})
+                    stalls = int(agent.get("consecutive_stalls") or 0) + 1
+                    agent.update({"liveness": "stalled", "liveness_note": note, "recovery_state": "automatic_failed", "consecutive_stalls": stalls})
                     event = _event(state, "agent_stalled", agent, {"task": agent["task"], "age_seconds": int(age), "message": note})
                     stalled.append(event)
+                    if agent.get("role") == "cto" and stalls >= CTO_UNRESPONSIVE_AFTER_STALLS:
+                        # Defect #15: three wake-ups in a row went unanswered.
+                        # Say so plainly, name the likely cause, and stop
+                        # pinging the dead session; a real poll clears this.
+                        agent.update({"recovery_state": "unresponsive", "liveness_note": CTO_UNRESPONSIVE_NOTE})
+                        _event(state, "agent_unresponsive", agent, {
+                            "task": agent["task"], "stalls": stalls,
+                            "message": f"{CTO_UNRESPONSIVE_NOTE}; automatic wake-ups are paused until it checks the board again",
+                        })
+                continue
+            if agent.get("recovery_state") == "unresponsive":
                 continue
             if agent.get("recovery_state") == "automatic_failed" and recovery_requested_at:
                 # Automatic recovery already failed for this agent. Do NOT re-request a
@@ -2943,8 +3057,19 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             # wake-up nudge cannot help and the generic "resume your saved work"
             # instruction is false. The refusal reason on the card is what the
             # owner and the CTO need; recover-git clears the cause.
-            if agent.get("broker_refusal") and agent.get("role") != "cto":
-                continue
+            refusal = agent.get("broker_refusal")
+            if refusal and agent.get("role") != "cto" and refusal.get("kind", "transaction") != "ownership":
+                # Defect #4 (2026-09-25): a transaction refusal used to switch
+                # wake-ups off entirely and Delivery sat idle until the CTO
+                # routed it by hand. The refusal IS the saved next action:
+                # route it, with the reason and the recover-git step, at most
+                # once per retry window (never every tick).
+                refused_recovery_at = _parsed_timestamp(agent.get("automatic_recovery_requested_at"))
+                if (
+                    refused_recovery_at is not None
+                    and (current - refused_recovery_at).total_seconds() < AUTO_RECOVERY_RETRY_SECONDS
+                ):
+                    continue
             # A blocked agent is not a stalled agent. While its task carries an
             # open control-plane hold, wake-up nudges cannot help and only burn
             # tokens (171 of them on 2026-08-21). Route at most one recovery per
@@ -2961,16 +3086,27 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     and (current - held_recovery_at).total_seconds() < AUTO_RECOVERY_RETRY_SECONDS * 4
                 ):
                     continue
+            routine_cycle = agent.get("role") == "cto"
+            if routine_cycle and not _routine_cycle_due(state, agent, current):
+                continue
             requested_at = now()
             # The CTO's monitoring loop is DRIVEN by these nudges (its cycle is
             # longer than the stale threshold), so for the CTO this is routine
             # scheduling, not failure recovery — label it truthfully (row 4).
-            routine_cycle = agent.get("role") == "cto"
+            if routine_cycle:
+                agent["last_routine_cycle_at"] = requested_at
+                agent["last_routine_cycle_sequence"] = int(state.get("next_event", 1)) - 1
+                agent["last_routine_cycle_poll_counter"] = int(agent.get("poll_counter") or 0)
+            refused_wake = bool(refusal) and agent.get("role") != "cto"
             agent.update({
-                "liveness": "recovering",
+                # A refused write is BLOCKED, never a stall: its liveness is
+                # left alone so the card keeps saying refused, not recovering.
+                **({} if refused_wake else {"liveness": "recovering"}),
                 "liveness_note": (
                     "scheduled monitoring cycle nudge; owner action is not required"
                     if routine_cycle
+                    else "blocked by a refused Git write; the refusal and its recovery step were routed"
+                    if refused_wake
                     else "automatic wake-up routed; owner action is not required"
                 ),
                 "recovery_state": "automatic_requested",
@@ -3047,6 +3183,7 @@ def record_owner_direction(root: Path, session_id: str, text: str) -> dict[str, 
             raise ValueError("owner direction is accepted only for a managed Delivery session")
         if agent["task"] != AWAITING_OWNER_DIRECTION:
             raise ValueError("this Delivery session already has an active task")
+        _archive_consumed_direction(state, session_id)
         if state.get("owner_directions", {}).get(session_id):
             raise ValueError("this Delivery session already has an owner direction")
         direction = {"session_id": session_id, "text": text, "received_at": now(), "consumed": False}
@@ -3129,19 +3266,54 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         raise ValueError("a direction or clarification is required")
     if len(text) > MAX_REASON_LENGTH:
         raise ValueError(f"the message must be {MAX_REASON_LENGTH} characters or fewer")
-    if message_type not in {"direction", "clarification"}:
-        raise ValueError("message type must be direction or clarification")
+    if message_type not in {"direction", "clarification", "cto_message"}:
+        raise ValueError("message type must be direction, clarification, or cto_message")
     prepared = _prepare_owner_message_attachments(attachments or [])
     session_id = ""
     message: dict[str, Any]
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
-        if agent["role"] not in DEVELOPER_ROLES or not agent.get("active"):
+        if message_type == "cto_message":
+            # Defect #14: the owner had no way to write to the CTO except its
+            # scrolling terminal. Same composer, same durable record, routed
+            # to the CTO's inbox as one complete message.
+            if agent["role"] != "cto" or not agent.get("active"):
+                raise ValueError("only the active CTO can receive an owner message of this kind")
+        elif agent["role"] not in DEVELOPER_ROLES or not agent.get("active"):
             raise ValueError("only an active Delivery Agent can receive owner messages")
         session_id = str(agent.get("session_id", "")).strip()
         if not session_id:
-            raise ValueError("the Delivery Agent has no managed CLI session")
+            raise ValueError("the agent has no managed CLI session")
         task = str(agent.get("task", ""))
+        if message_type == "cto_message":
+            message_id = secrets.token_hex(12)
+            metadata = _store_owner_message_attachments(root, message_id, prepared)
+            message = {
+                "id": message_id, "type": "cto_message", "agent_id": agent_id,
+                "session_id": session_id, "task": "", "text": text,
+                "attachments": metadata, "created_at": now(), "status": "queued",
+            }
+            state.setdefault("owner_messages", []).append(message)
+            event = _event(state, "owner_cto_message_received", agent, {
+                "task": agent["task"], "message": "owner message to the CTO recorded from Mission Control",
+                "owner_message": text, "owner_message_id": message_id, "attachments": metadata,
+            })
+    if message_type == "cto_message":
+        attachment_lines = "".join(f"\n- {item['display_name']} ({item['stored_path']})" for item in message["attachments"])
+        routed = f"OWNER MESSAGE TO THE CTO:\n{text}"
+        if attachment_lines:
+            routed += "\nAttachments saved by Mission Control:" + attachment_lines
+        try:
+            from harness import control
+            control.enqueue_instruction(root, session_id, routed, source="owner-cto-message")
+        except (ValueError, OSError):
+            pass
+        return {"message": message, "event": event}
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        task = str(agent.get("task", ""))
+        if task == AWAITING_OWNER_DIRECTION:
+            _archive_consumed_direction(state, session_id)
         if message_type == "direction":
             if task != AWAITING_OWNER_DIRECTION:
                 raise ValueError("this Delivery Agent already has a task; use Send clarification")
@@ -3346,7 +3518,103 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
         if not agent.get("active") or agent.get("status") == "offline" or agent.get("liveness") == "offline":
             raise ValueError("inactive/offline agent cannot post status updates")
         agent.update({"status": state_name, "status_note": note, "last_status_at": now()})
-        return _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
+        event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
+        if agent.get("role") == "cto" and note.upper().startswith(OWNER_ACTION_NOTE_PREFIX):
+            # Defect #22: the agreed "OWNER ACTION:" note never reached the
+            # owner. It becomes a pinned card; the CTO clears it with
+            # owner-action-done once the owner has acted.
+            title = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() or note
+            _record_owner_action(state, agent, title, "", "", agent.get("task", ""))
+        return event
+
+
+OWNER_ACTION_NOTE_PREFIX = "OWNER ACTION:"
+MAX_OWNER_ACTION_COMMAND = 4000
+
+
+def _record_owner_action(state: dict[str, Any], agent: dict[str, Any], title: str, command: str, why: str, task: str) -> dict[str, Any]:
+    actions = state.setdefault("owner_actions", {})
+    for existing in actions.values():
+        if existing.get("status") == "open" and existing.get("title") == title and existing.get("command") == command:
+            return existing
+    action = {
+        "id": f"action-{secrets.token_hex(6)}", "title": title, "command": command, "why": why,
+        "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "agent_id": agent["id"],
+        "status": "open", "recorded_at": now(), "outcome": "", "done_at": "",
+    }
+    actions[action["id"]] = action
+    _event(state, "owner_action_recorded", agent, {
+        "task": action["task"], "action_id": action["id"], "title": title,
+        "message": f"owner action needed: {title}",
+    })
+    return action
+
+
+def record_owner_action(root: Path, agent_id: str, title: str, command: str = "", why: str = "", task: str = "") -> dict[str, Any]:
+    """Pin something the owner must do (usually a Terminal command) in Mission Control.
+
+    2026-09-25 defect #9: the CTO could only ask the owner in its terminal,
+    which scrolls too fast to read. The card stays until owner-action-done.
+    """
+    title, command, why, task = title.strip(), command.strip(), why.strip(), task.strip()
+    if not title or len(title) > 240:
+        raise ValueError("an owner action needs a title of at most 240 characters")
+    if len(command) > MAX_OWNER_ACTION_COMMAND or len(why) > MAX_REASON_LENGTH:
+        raise ValueError("the command or reason is too long")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO records owner actions")
+        return dict(_record_owner_action(state, agent, title, command, why, task))
+
+
+def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
+    """The CTO records what happened; the card leaves Mission Control."""
+    action_id, outcome = action_id.strip(), outcome.strip()
+    if not action_id or not outcome or len(outcome) > MAX_REASON_LENGTH:
+        raise ValueError("owner-action-done needs the action id and a short outcome")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO clears owner actions")
+        action = state.setdefault("owner_actions", {}).get(action_id)
+        if not action:
+            raise ValueError("unknown owner action")
+        if action.get("status") == "done":
+            return dict(action)
+        action.update({"status": "done", "outcome": outcome, "done_at": now()})
+        _event(state, "owner_action_cleared", agent, {
+            "task": action.get("task", ""), "action_id": action_id, "outcome": outcome,
+            "message": f"owner action done: {action.get('title', '')} — {outcome}",
+        })
+        return dict(action)
+
+
+def _archive_consumed_direction(state: dict[str, Any], session_id: str) -> bool:
+    """A consumed direction on a session that is waiting again no longer blocks.
+
+    2026-09-24 defect: after the owner accepted a release, the same managed
+    Delivery terminal re-registered as a new waiting agent, but the previous
+    task's direction (consumed: true) still sat under its session id, so
+    Mission Control stored the new direction as a clarification and
+    `begin-task` refused. The consumed direction belongs to the finished
+    task; it is moved to the session's history and the way is clear.
+    """
+    direction = state.get("owner_directions", {}).get(session_id)
+    if not direction or not direction.get("consumed"):
+        return False
+    still_on_task = any(
+        agent.get("session_id") == session_id and agent.get("active")
+        and agent.get("role") in DEVELOPER_ROLES and agent.get("task") != AWAITING_OWNER_DIRECTION
+        for agent in state.get("agents", {}).values()
+    )
+    if still_on_task:
+        return False
+    archived = state["owner_directions"].pop(session_id)
+    state.setdefault("owner_direction_history", {}).setdefault(session_id, []).append({
+        **archived, "archived_at": now(), "archived_reason": "task finished; session waiting again",
+    })
+    return True
 
 
 def _direction_is_recently_stranded(agent: dict[str, Any], direction: dict[str, Any], recovery_seconds: int = 600) -> bool:
@@ -3437,6 +3705,10 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
     task = task.strip()
     if not task or task == AWAITING_OWNER_DIRECTION:
         raise ValueError("a real internal task identifier is required")
+    # A task id becomes file and branch names everywhere; it is one plain
+    # name or nothing (2026-09-25 reviewer finding: `../../../registry`).
+    from harness import project_registry
+    task = project_registry.plain_task_id(task)
     with _broker_refusal_surface(root, agent_id, "branch-create"), locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES:
@@ -3525,7 +3797,8 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
 
 def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> dict[str, Any]:
     """Attach a replacement visible Delivery session to preserved task memory."""
-    task = task.strip()
+    from harness import project_registry
+    task = project_registry.plain_task_id(task)
     recovery_instruction = ""
     session_id = ""
     source_session_id = ""
@@ -4226,6 +4499,80 @@ def _execute_scenario_simulations(
     return results
 
 
+def _withdraw_reviewer_wake(root: ProjectRoot, wake: dict[str, Any]) -> dict[str, Any]:
+    """A cancelled staged review takes its reviewer wake back (defect #10).
+
+    Still queued → the instruction is withdrawn before the supervisor types
+    it. Already taken → the reviewer gets one line saying the request was
+    withdrawn and why, so it stands by instead of investigating.
+    """
+    from harness import control
+    outcome: dict[str, Any] = {"request_id": wake.get("request_id", ""), "action": "none"}
+    instruction_id = str(wake.get("instruction_id") or "")
+    session_id = str(wake.get("session_id") or "")
+    receipt: dict[str, Any] = {}
+    if instruction_id:
+        try:
+            receipt = control.withdraw_instruction(root, instruction_id)
+        except (ValueError, OSError):
+            receipt = {}
+    if receipt.get("status") == "withdrawn":
+        outcome["action"] = "withdrawn"
+    elif session_id:
+        notice = (
+            f"REVIEW CANCELLED: request {wake.get('request_id', '')} for {wake.get('task', '')} was withdrawn because "
+            f"Delivery's evidence failed ({wake.get('reason', 'see the board')}). Do not investigate it; stand by for "
+            "the next routed request. USER ACTION: None."
+        )
+        try:
+            queued = control.enqueue_instruction(root, session_id, notice, source="review-cancelled")
+            outcome.update({"action": "notified", "instruction_id": queued.get("id", "")})
+        except (ValueError, OSError) as error:
+            outcome.update({"action": "unreachable", "error": str(error)})
+    with locked_state(root) as state:
+        reviewer = state.get("agents", {}).get(str(wake.get("reviewer_id") or ""))
+        _event(state, "review_wake_withdrawn", reviewer, {
+            "task": wake.get("task", ""), "request_id": wake.get("request_id", ""),
+            "instruction_id": instruction_id, "action": outcome["action"],
+            "message": (
+                "the queued reviewer wake was withdrawn before delivery" if outcome["action"] == "withdrawn"
+                else "the reviewer was told in one line that the request was cancelled" if outcome["action"] == "notified"
+                else "no reviewer wake to withdraw or notify"
+            ),
+        })
+    return outcome
+
+
+# Directories a scenario needs that Git never carries (defect #11): they are
+# linked from the reviewed task workspace into the disposable checkout so a
+# build needs no network. Read-only by convention; the link is recorded in
+# `.harness-linked-dependencies` at the checkout root.
+REVIEW_CHECKOUT_LINKED_DEPENDENCIES = ("node_modules",)
+
+
+def _link_build_dependencies(workspace: Path, checkout: Path) -> list[str]:
+    linked: list[str] = []
+    for manifest in sorted(workspace.rglob("package.json")):
+        relative_parent = manifest.parent.relative_to(workspace)
+        if any(part in REVIEW_CHECKOUT_LINKED_DEPENDENCIES or part.startswith(".") for part in relative_parent.parts):
+            continue
+        for name in REVIEW_CHECKOUT_LINKED_DEPENDENCIES:
+            source = manifest.parent / name
+            target_parent = checkout / relative_parent
+            target = target_parent / name
+            if not source.is_dir() or not target_parent.is_dir() or target.exists() or target.is_symlink():
+                continue
+            target.symlink_to(source.resolve(), target_is_directory=True)
+            linked.append(str(relative_parent / name).replace(os.sep, "/") if relative_parent.parts else name)
+    if linked:
+        (checkout / ".harness-linked-dependencies").write_text(
+            "Linked from the reviewed task workspace so the build needs no network; not part of the candidate:\n"
+            + "".join(f"{path} -> {(workspace / path).resolve()}\n" for path in linked),
+            encoding="utf-8",
+        )
+    return linked
+
+
 @contextmanager
 def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[str, Any], source_path: Path) -> Iterator[tuple[Path, Path]]:
     """Run independent scenarios against the immutable reviewed commit.
@@ -4265,6 +4612,7 @@ def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[
         checkout.mkdir()
         with tarfile.open(archive_path, "r") as stream:
             stream.extractall(checkout)
+        _link_build_dependencies(workspace, checkout)
         try:
             relative = source_path.resolve().relative_to(workspace.resolve())
         except ValueError:
@@ -5187,6 +5535,79 @@ def reopen_integrity_requests(root: Path, request_ids: list[str], reason: str) -
     return {"reopened": reopened}
 
 
+def reevaluate_finalization(root: ProjectRoot, task: str, finding: str, reason: str) -> dict[str, Any]:
+    """Re-evaluate finalization coverage for a stuck task under the current rule (Task F, PART 3).
+
+    A task can be held by a rejected classification, or refused before final
+    acceptance ever ran, for a reason the coverage rule of the day could not
+    see. This governed operation recomputes the diff at the task head under
+    the current rule. If it computes, the hold is cleared and an event names
+    the finding it resolves and the superseded paths. If it still raises,
+    nothing changes and the reason is recorded. It never reopens certified
+    product review (qa_requests are untouched) and never rewrites evidence.
+    """
+    task = str(task or "").strip()
+    finding = str(finding or "").strip()
+    reason = str(reason or "").strip()
+    if not task or not finding or len(reason) < 8:
+        raise ValueError("reevaluate-finalization requires a task, the finding it resolves, and a reason")
+    with locked_state(root) as state:
+        plan = state.get("delivery_plans", {}).get(task, {})
+        if plan.get("mode") != "application" or not state.get("task_repositories", {}).get(task):
+            raise ValueError("reevaluate-finalization applies to an application task with a governed repository")
+        if state.get("task_workspaces", {}).get(task):
+            workspace = Path(state["task_workspaces"][task])
+        else:
+            workspace = Path(_broker_for_state(root, state, task).repository)
+        # The task head is read from the repository, never from a stored field
+        # that may predate the latest governed commit.
+        probe = git_process.run(["git", "rev-parse", "HEAD"], cwd=workspace, capture_output=True, text=True, timeout=30)
+        head = probe.stdout.strip() if probe.returncode == 0 else ""
+        if not head:
+            head = str((state.get("task_branches", {}).get(task) or {}).get("head") or "")
+        if not head:
+            raise ValueError("reevaluate-finalization could not determine the task head")
+        hold = (state.get("finalization_holds") or {}).get(task)
+        snapshot = json.loads(json.dumps(state))
+        failure: str | None = None
+        try:
+            diff = _application_finalization_diff(root, snapshot, workspace, task, head)
+        except ValueError as error:
+            failure = str(error)
+    if failure is not None:
+        # Recorded in its own transaction: a raise inside the block above
+        # would roll the event back with everything else.
+        with locked_state(root) as state:
+            _event(state, "finalization_coverage_reevaluation_refused", None, {
+                "task": task, "finding": finding, "reason": reason, "head_commit": head,
+                "error": failure[:300],
+                "message": f"finalization coverage for {task} still does not compute under the current rule; nothing changed",
+            })
+        raise ValueError(f"finalization coverage still fails: {failure}")
+    with locked_state(root) as state:
+        hold = (state.get("finalization_holds") or {}).get(task)
+        superseded = [
+            record for item in (diff or {}).get("accepted_manifests", [])
+            for record in item.get("verification", {}).get("superseded_paths", [])
+        ]
+        cleared = None
+        if hold:
+            cleared = state["finalization_holds"].pop(task)
+        _event(state, "finalization_coverage_reevaluated", None, {
+            "task": task, "finding": finding, "reason": reason, "head_commit": head,
+            "diff_sha256": (diff or {}).get("sha256", ""),
+            "superseded_paths": [record.get("path", "") for record in superseded],
+            "hold_cleared": bool(cleared),
+            "message": (
+                f"finalization coverage for {task} computes under the current rule"
+                + (f"; the hold from request {cleared.get('request_id', '')} is cleared" if cleared else "; no hold was recorded")
+                + f"; resolves {finding}"
+            ),
+        })
+        return {"task": task, "head_commit": head, "diff_sha256": (diff or {}).get("sha256", ""),
+                "superseded_paths": superseded, "hold_cleared": cleared, "finding": finding}
+
+
 def record_control_plane_hold(
     root: ProjectRoot, task: str, source: str, reason: str,
 ) -> dict[str, Any]:
@@ -5379,6 +5800,47 @@ def _path_scopes_overlap(left: str, right: str) -> bool:
     return left_parts[:width] == right_parts[:width]
 
 
+def _base_carried_accepted_paths(
+    state: dict[str, Any], task: str, item: dict[str, Any], workspace: Path, base_commit: str,
+) -> list[dict[str, Any]]:
+    """Paths an earlier acceptance pinned, owned by this subtask, changed in its base.
+
+    2026-09-23: a repair to already-accepted files reached the task head, a
+    new subtask owning them was started from that head, and its own manifest
+    never listed them — nobody was told the reviewer was certifying repaired
+    accepted bytes. This list is recorded on the subtask at start and shown
+    in the review brief. (Building the manifest against the task baseline
+    instead was rejected: a manifest means the bytes this subtask's own
+    commits changed, and every consumer relies on that.)
+    """
+    owned = list(item.get("owned_paths") or ["*"])
+    carried: list[dict[str, Any]] = []
+    for request in _task_requests(state, task):
+        if request.get("phase") != "subtask_acceptance" or request.get("status") != "passed":
+            continue
+        manifest = request.get("accepted_byte_manifest")
+        if not isinstance(manifest, dict):
+            continue
+        for entry in manifest.get("entries") or []:
+            path = str(entry.get("path") or "")
+            if not path or not _path_is_owned(path, owned):
+                continue
+            try:
+                base_entry = accepted_bytes.tree_entry(workspace, base_commit, path)
+            except (OSError, ValueError):
+                base_entry = None
+            if base_entry == entry:
+                continue
+            carried.append({
+                "path": path,
+                "accepted_by": str(request.get("id") or ""),
+                "accepted_subtask": str(request.get("subtask") or ""),
+                "accepted_entry": json.loads(json.dumps(entry)),
+                "base_entry": json.loads(json.dumps(base_entry)) if base_entry else None,
+            })
+    return sorted(carried, key=lambda record: (record["path"], record["accepted_by"]))
+
+
 def _subtask_ownership_overlaps(left: dict[str, Any], right: dict[str, Any]) -> bool:
     left_paths = left.get("owned_paths") or ["*"]
     right_paths = right.get("owned_paths") or ["*"]
@@ -5424,7 +5886,11 @@ def _require_owned_files(item: dict[str, Any], paths: list[str], label: str) -> 
     owned_paths = list(item.get("owned_paths") or ["*"])
     outside = sorted(path for path in paths if not _path_is_owned(path, owned_paths))
     if outside:
-        raise ValueError(
+        # An ownership refusal is a broker-class refusal (still a ValueError
+        # for every caller): the refusal surface records it on the agent as
+        # kind "ownership", with the governed route, instead of leaving the
+        # agent to guess (2026-09-24 defect).
+        raise git_broker.AuthorizationError(
             f"{label} crosses the subtask ownership boundary: " + ", ".join(outside)
         )
 
@@ -5556,6 +6022,12 @@ def start_subtask(root: ProjectRoot, agent_id: str, subtask: str) -> dict[str, A
                 "branch": refreshed["branch"],
                 "base_commit": refreshed["base_commit"],
                 "base_tree": refreshed["base_tree"],
+                # Task F PART 2: already-accepted bytes this subtask owns that
+                # its refreshed base carries in a changed form. The reviewer is
+                # told explicitly it is certifying them (review brief).
+                "base_carried_accepted_paths": _base_carried_accepted_paths(
+                    state, task, item, Path(refreshed["workspace"]), str(refreshed["base_commit"]),
+                ),
             })
         active = [
             (name, candidate)
@@ -5748,6 +6220,166 @@ def reopen_candidate_scope(root: Path, agent_id: str, task: str, reason: str) ->
             "message": f"CTO reopened the frozen candidate scope: {reason[:300]}",
         })
         return dict(record)
+
+
+def _branch_descends_from_main(repository: str, branch: str) -> bool | None:
+    """True/False whether the branch head contains main; None when unknowable."""
+    if not repository or not branch:
+        return None
+    head = git_process.run(["git", "rev-parse", "-q", "--verify", branch], cwd=repository, capture_output=True, text=True)
+    main = git_process.run(["git", "rev-parse", "-q", "--verify", "refs/heads/main"], cwd=repository, capture_output=True, text=True)
+    if head.returncode != 0 or main.returncode != 0:
+        return None
+    check = git_process.run(
+        ["git", "merge-base", "--is-ancestor", main.stdout.strip(), head.stdout.strip()],
+        cwd=repository, capture_output=True, text=True,
+    )
+    return check.returncode == 0
+
+
+def _stale_task_bases(state: dict[str, Any], repository: str, accepted_task: str) -> list[str]:
+    """Open tasks on this repository whose branch no longer contains main."""
+    cancelled = set((state.get("cancelled_tasks") or {}).keys())
+    accepted = set((state.get("git_acceptances") or {}).keys())
+    stale: list[str] = []
+    for task, record in sorted((state.get("task_branches") or {}).items()):
+        if task == accepted_task or task in cancelled or task in accepted:
+            continue
+        if str(state.get("task_repositories", {}).get(task) or "") != repository:
+            continue
+        if _branch_descends_from_main(repository, str(record.get("branch") or "")) is False:
+            stale.append(task)
+    return stale
+
+
+def _mark_reintegration_required(state: dict[str, Any], task: str, reason: str, source: str) -> tuple[bool, str, dict[str, Any] | None]:
+    """Record the marker once; return (newly_marked, session_id, delivery agent)."""
+    markers = state.setdefault("git_reintegration_required", {})
+    delivery = next((
+        agent for agent in state.get("agents", {}).values()
+        if agent.get("role") in DEVELOPER_ROLES and agent.get("task") == task and agent.get("write_authority", True)
+        and agent.get("status") not in {"superseded"}
+    ), None)
+    session_id = str(delivery.get("session_id") or "") if delivery else ""
+    if task in markers:
+        return False, session_id, delivery
+    markers[task] = {
+        "task": task, "reason": reason, "source": source, "recorded_at": now(),
+        "next_action": "Delivery runs reintegrate-main, re-tests, then requests a fresh final review.",
+        "owner_line": "A newer version of main was accepted after this work branched. Delivery is merging it in and will re-test before final review.",
+    }
+    _event(state, "git_reintegration_required", delivery, {
+        "task": task, "source": source,
+        "message": f"main moved; {task} must re-integrate main before final review — {reason}",
+    })
+    return True, session_id, delivery
+
+
+REINTEGRATION_INSTRUCTION = (
+    "TASK ACTION DUE: main moved after your task branched ({reason}). Poll the board once now, then run "
+    "reintegrate-main (the broker merges main into your task branch; if it reports conflicts, resolve them in "
+    "the task worktree and run reintegrate-main --finish), re-run the full suite, and request a fresh final "
+    "review. USER ACTION: None."
+)
+
+
+def route_reintegration(root: ProjectRoot, task: str, reason: str, *, source: str) -> dict[str, Any]:
+    """Mark a stale task once and make sure its Delivery hears about it.
+
+    2026-09-25 defects #17/#18: a stale base surfaced only after a full
+    final PASS, and then no one was woken because the Delivery record was
+    already done. The marker is recorded once; an active Delivery gets the
+    instruction; an inactive record whose terminal is still alive is
+    reactivated; otherwise the owner sees one line saying Delivery must be
+    relaunched. Repeat calls add nothing.
+    """
+    task = task.strip()
+    with locked_state(root) as state:
+        newly, session_id, delivery = _mark_reintegration_required(state, task, reason, source)
+        marker = state["git_reintegration_required"][task]
+        if marker.get("delivery_notified_at"):
+            return dict(marker)
+        outcome = "no_delivery"
+        if delivery and not delivery.get("active") and delivery.get("liveness") != "offline" and delivery.get("status") != "superseded" and _managed_session_is_live(root, session_id):
+            delivery.update({
+                "active": True, "liveness": "healthy",
+                "liveness_note": "reactivated to re-integrate main",
+                "status": "working", "status_note": "main moved; re-integrating main before a fresh final review",
+                "last_status_at": now(),
+            })
+            _event(state, "agent_reactivated_for_reintegration", delivery, {
+                "task": task, "message": "Delivery record reactivated so it can re-integrate main",
+            })
+            outcome = "reactivated"
+        elif delivery and delivery.get("active"):
+            outcome = "active"
+        if outcome == "no_delivery":
+            marker["delivery"] = "relaunch_required"
+            marker["owner_line"] = (
+                "A newer version of main was accepted after this work branched, and this task's Delivery agent is no "
+                "longer running. Open a Delivery agent for this project and have it resume this task; it will merge main in and re-test."
+            )
+        else:
+            marker["delivery"] = outcome
+        marker_copy = dict(marker)
+    if outcome in {"active", "reactivated"} and session_id:
+        try:
+            from harness import control
+            queued = control.enqueue_instruction(
+                root, session_id, REINTEGRATION_INSTRUCTION.format(reason=reason), source="reintegration",
+            )
+        except (ValueError, OSError) as error:
+            queued = {"id": "", "error": str(error)}
+        with locked_state(root) as state:
+            marker = state.setdefault("git_reintegration_required", {}).get(task)
+            if marker is not None:
+                marker["delivery_notified_at"] = now() if queued.get("id") else ""
+                marker["instruction_id"] = queued.get("id", "")
+                if not queued.get("id"):
+                    marker["delivery"] = "relaunch_required"
+                    marker["owner_line"] = (
+                        "A newer version of main was accepted after this work branched, and this task's Delivery agent could not be "
+                        "reached. Open a Delivery agent for this project and have it resume this task; it will merge main in and re-test."
+                    )
+                marker_copy = dict(marker)
+    return marker_copy
+
+
+def broker_reintegrate_main(root: ProjectRoot, agent_id: str, finish: bool = False) -> dict[str, Any]:
+    """Merge main into the task branch through the trusted broker (defect #19)."""
+    with _broker_refusal_surface(root, agent_id, "reintegrate-main"), locked_state(root) as state:
+        developer = _require_writable_agent(state, agent_id)
+        if developer.get("role") not in DEVELOPER_ROLES or not developer.get("active"):
+            raise ValueError("only the active Delivery task owner may re-integrate main")
+        task = str(developer.get("task") or "")
+        if not state.get("task_repositories", {}).get(task):
+            raise ValueError("task has no broker-governed Git repository")
+        broker = _broker_for_state(root, state, task)
+        result = broker.reintegrate_main(
+            agent_id,
+            _next_broker_nonce(state, str(developer.get("session_id") or developer["id"]), broker),
+            finish=finish,
+        )
+        _clear_broker_refusal(state, developer)
+        if result["status"] in {"merged", "up_to_date"}:
+            state.setdefault("git_reintegration_required", {}).pop(task, None)
+            branch_record = state.setdefault("task_branches", {}).setdefault(task, {})
+            branch_record["head"] = result["commit"]
+            _event(state, "git_reintegration_completed", developer, {
+                "task": task, "commit": result["commit"], "main": result["main"],
+                "message": (
+                    "task branch already contained main; nothing to merge" if result["status"] == "up_to_date"
+                    else f"main {result['main'][:12]} merged into the task branch as {result['commit'][:12]}; re-test and request a fresh final review"
+                ),
+            })
+            developer.update({"status": "working", "status_note": "main re-integrated; re-testing before a fresh final review", "last_status_at": now()})
+        else:
+            _event(state, "git_reintegration_conflicts", developer, {
+                "task": task, "paths": result["conflicts"], "main": result["main"],
+                "message": "re-integration stopped on conflicts in: " + ", ".join(result["conflicts"]) + " — resolve them in the task worktree, then run reintegrate-main --finish",
+            })
+            developer.update({"status": "working", "status_note": "resolving re-integration conflicts: " + ", ".join(result["conflicts"])[:160], "last_status_at": now()})
+        return result
 
 
 def broker_stage_commit(
@@ -6092,6 +6724,52 @@ def _application_finalization_diff(
     accepted_paths: dict[str, dict[str, Any]] = {}
     accepted_manifests = []
     task_requests = _task_requests(state, task)
+    passed_acceptances = [
+        request for request in task_requests
+        if request.get("phase") == "subtask_acceptance"
+        and request.get("status") == "passed"
+        and isinstance(request.get("accepted_byte_manifest"), dict)
+    ]
+
+    def _present_identity(entry: dict[str, Any] | None) -> tuple[str, str, str] | None:
+        # The exact identity of a present blob: mode, type and object id. A
+        # deleted or missing entry has no identity and matches nothing.
+        if not isinstance(entry, dict) or entry.get("state") != "present":
+            return None
+        if not (entry.get("mode") and entry.get("type") and entry.get("oid")):
+            return None
+        return (str(entry["mode"]), str(entry["type"]), str(entry["oid"]))
+
+    def _acceptance_order(request: dict[str, Any]) -> tuple[str, int, str]:
+        # "Later" is a strictly later completion; equal timestamps break on
+        # cycle, then id, so the order never depends on wall-clock alone.
+        return (str(request.get("completed_at") or ""), int(request.get("cycle") or 0), str(request.get("id") or ""))
+
+    def _superseding_acceptance(accepted: dict[str, Any], path: str) -> dict[str, Any] | None:
+        # A later independent subtask acceptance whose reviewed commit already
+        # carried the exact final bytes certified them - whether its manifest
+        # lists the path (a governed re-certification) or not (the repair sat
+        # in its base). Directive TASK F, PART 1.
+        final_entry = accepted_bytes.tree_entry(workspace, final_commit, path)
+        if not _present_identity(final_entry):
+            # A path the final tree no longer carries is never "certified" by
+            # anyone. tree_entry answers a missing path with a truthy
+            # {"state": "deleted"} record, so presence is checked explicitly:
+            # absent must never match absent (reviewer finding, 2026-09-24).
+            return None
+        earlier = _acceptance_order(accepted)
+        for later in sorted(passed_acceptances, key=_acceptance_order):
+            if _acceptance_order(later) <= earlier:
+                continue
+            accepted_bytes.verify_manifest(workspace, later["accepted_byte_manifest"])
+            reviewed = str(later["accepted_byte_manifest"].get("reviewed_commit") or "")
+            if not reviewed:
+                continue
+            certified = _present_identity(accepted_bytes.tree_entry(workspace, reviewed, path))
+            if certified and certified == _present_identity(final_entry):
+                return later
+        return None
+
     for subtask, item in sorted((plan.get("subtasks") or {}).items()):
         candidates = [
             request for request in task_requests
@@ -6112,12 +6790,53 @@ def _application_finalization_diff(
         if not isinstance(manifest, dict):
             raise ValueError(f"finalization diff lacks accepted-byte manifest for {subtask}")
         accepted_bytes.verify_manifest(workspace, manifest)
-        verification = accepted_bytes.verify_entries(workspace, final_commit, manifest)
+        superseded = []
+        for entry in manifest["entries"]:
+            if accepted_bytes.tree_entry(workspace, final_commit, entry["path"]) == entry:
+                continue
+            later = _superseding_acceptance(accepted, entry["path"])
+            if later is None:
+                raise ValueError(
+                    "integrated tree does not contain every exact accepted entry: " + entry["path"]
+                )
+            superseded.append({
+                "path": entry["path"], "superseded_by": later.get("id", ""),
+                "in_superseding_manifest": entry["path"] in later["accepted_byte_manifest"].get("paths", []),
+                "superseding_subtask": later.get("subtask", ""),
+                "reviewed_commit": later["accepted_byte_manifest"].get("reviewed_commit", ""),
+            })
+        verification = {
+            "status": "verified", "revision": final_commit,
+            "tree": accepted_bytes.tree_delta(workspace, final_commit, final_commit)["reviewed_tree"],
+            "manifest_sha256": manifest["sha256"], "paths": list(manifest["paths"]),
+        }
+        if superseded:
+            verification["superseded_paths"] = superseded
         integrated_commit = str(item.get("integrated_commit") or accepted.get("integrated_commit") or "")
         if not integrated_commit:
             raise ValueError(f"finalization diff lacks integrated commit for {subtask}")
+        superseded_by_path = {item["path"]: item for item in superseded}
         for entry in manifest["entries"]:
             path = str(entry.get("path") or "")
+            record = superseded_by_path.get(path)
+            if record is not None:
+                # A superseded path is attributed to exactly one manifest: the
+                # later acceptance that certified its final bytes. When that
+                # acceptance's own manifest lists the path, its entry arrives
+                # with that manifest (the overlap rule is unchanged, so nothing
+                # is added here). When the repair sat in its base and its
+                # manifest does not list the path, the path is still COVERED
+                # (PART 1.1) and is entered once now, as the final tree entry
+                # that later acceptance certified, marked superseded.
+                if record["in_superseding_manifest"]:
+                    continue
+                if path in accepted_paths:
+                    raise ValueError(f"accepted-byte manifests overlap at {path}")
+                certified_entry = accepted_bytes.tree_entry(workspace, final_commit, path)
+                if certified_entry.get("state") != "present":
+                    raise ValueError("integrated tree does not contain every exact accepted entry: " + path)
+                accepted_paths[path] = {**json.loads(json.dumps(certified_entry)), "superseded_by": record["superseded_by"]}
+                continue
             if path in accepted_paths:
                 raise ValueError(f"accepted-byte manifests overlap at {path}")
             accepted_paths[path] = json.loads(json.dumps(entry))
@@ -6244,7 +6963,7 @@ def _repair_context(
     prior_commit = str(prior.get("reviewed_commit") or "")
     if workspace and prior_commit and new_commit:
         changed = git_process.run(
-            ["git", "diff", "--name-only", f"{prior_commit}..{new_commit}"],
+            ["git", *accepted_bytes.name_only_arguments(f"{prior_commit}..{new_commit}")],
             cwd=workspace, capture_output=True, text=True)
         if changed.returncode == 0:
             diff_files = sorted(line for line in changed.stdout.splitlines() if line)
@@ -6357,6 +7076,26 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     # Authenticate and reject obviously invalid requests before invoking a
     # command.  The command itself is deliberately outside the state lock: a
     # slow test suite must never block board polling or the watchdog.
+    if phase == "final_acceptance":
+        # Defect #17: a stale base is refused before any review effort is
+        # spent, whether the marker already exists or main moved unnoticed.
+        # The marker is recorded in its own transaction: a refusal raised
+        # inside the main block would roll it back with everything else.
+        with locked_state(root) as state:
+            stale_developer = _require_writable_agent(state, agent_id)
+            stale_task = str(stale_developer.get("task") or "")
+            stale_repository = str(state.get("task_repositories", {}).get(stale_task) or "")
+            stale_branch = str((state.get("task_branches", {}).get(stale_task) or {}).get("branch") or "")
+            stale = stale_task != AWAITING_OWNER_DIRECTION and (
+                stale_task in (state.get("git_reintegration_required") or {})
+                or (bool(stale_repository) and _branch_descends_from_main(stale_repository, stale_branch) is False)
+            )
+        if stale:
+            route_reintegration(root, stale_task, "main moved since this task branched", source="request-review")
+            raise ValueError(
+                "main has moved since this task branched; run reintegrate-main (then --finish if it reports "
+                "conflicts), re-run the full suite, and request final review again"
+            )
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES or not developer.get("vendor"):
@@ -6370,6 +7109,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             for request in state.get("qa_requests", {}).values()
         ):
             raise ValueError("final acceptance cannot start while another review is active")
+
         mode, subtask, chunk = _validate_review_scope(state, developer["task"], phase, subtask, chunk)
         packages = _repair_packages_for_scope(
             state, developer["task"], phase, subtask, chunk,
@@ -6606,6 +7346,17 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                 failures.append(json.loads(json.dumps(staged)))
                 del failures[:-200]
                 state["qa_requests"].pop(request_id, None)
+                cancelled_wake = {
+                    "request_id": request_id, "task": staged.get("task", ""),
+                    "instruction_id": str(staged.get("route_instruction_id") or ""),
+                    "session_id": str(staged.get("routed_session_id") or ""),
+                    "reviewer_id": str(staged.get("routed_to") or staged.get("reserved_by") or ""),
+                    "reason": str(error)[:300],
+                }
+            else:
+                cancelled_wake = None
+        if cancelled_wake:
+            _withdraw_reviewer_wake(root, cancelled_wake)
         raise
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
@@ -7882,7 +8633,7 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
         return dict(release)
 
 
-PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle"}
+PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle", "skipped"}
 
 
 def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> dict[str, Any]:
@@ -7902,7 +8653,7 @@ def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> di
             key: preview[key] for key in (
                 "status", "url", "command", "pid", "start_token", "head_commit",
                 "workspace", "branch", "started_at", "error", "log_tail",
-                "app_path", "app_name", "built_at",
+                "app_path", "app_name", "built_at", "skipped_at",
             ) if preview.get(key) is not None
         }
         value["recorded_at"] = now()
@@ -7947,83 +8698,158 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
         release = state.get("releases", {}).get(task)
         if not release or release.get("status") != "VISUAL_TEST_REQUIRED":
             raise ValueError("owner responses are available only for a released task")
-        if state.setdefault("release_decisions", {}).get(task):
-            raise ValueError("an owner response has already been recorded for this task")
-        response = {
-            "task": task,
-            "decision": decision,
-            "reason": reason if decision == "not_accepted" else "",
-            "attachments": [],
-            "recorded_at": now(),
-        }
-        state["release_decisions"][task] = response
-        governed_acceptance = bool(
-            decision == "accepted"
-            and state.get("task_repositories", {}).get(task)
-            and any(
-                request.get("phase") == "final_acceptance"
-                and request.get("status") == "passed"
-                and request.get("mirror_ref")
-                for request in _task_requests(state, task)
+        prior = state.setdefault("release_decisions", {}).get(task)
+        if prior:
+            # 2026-09-25 defect: a saved Accept whose fast-forward failed could
+            # never be repeated. Pressing Accept again on such a response
+            # retries the Git transaction only; the decision itself stands.
+            retryable = (
+                decision == "accepted"
+                and prior.get("decision") == "accepted"
+                and not state.get("git_acceptances", {}).get(task)
+                and (prior.get("git_acceptance") or {}).get("status") == "failed"
             )
-        )
-        if decision == "not_accepted":
-            release_repairs = state.setdefault("release_repairs", {})
-            release_repairs[task] = {
+            if not retryable:
+                raise ValueError("an owner response has already been recorded for this task")
+            _event(state, "owner_release_acceptance_retried", None, {
                 "task": task,
-                "status": "OWNER_REJECTED_REPAIR_REQUIRED",
-                "reason": reason,
-                "attachments": [],
-                "source_release": {
-                    "head_commit": release.get("head_commit", ""),
-                    "recorded_at": release.get("recorded_at", ""),
-                },
-                "next_action": "Delivery repairs this release using the saved response, then starts a new review and release cycle.",
-                "created_at": response["recorded_at"],
-                "updated_at": response["recorded_at"],
-            }
-        _event(state, "owner_release_decision_recorded", None, {
-            "task": task,
-            "decision": decision,
-            "message": "Owner release response recorded against the released task",
-        })
-        if decision == "accepted":
-            for finding in state.get("deferred_findings", {}).values():
-                if finding.get("status") == "fix_in_progress" and finding.get("follow_up_task") == task:
-                    finding.update({
-                        "status": "resolved",
-                        "resolved_at": response["recorded_at"],
-                        "resolution_evidence": f"Owner accepted released follow-up {task} at commit {release.get('head_commit', '')}.",
-                        "next_action": "Resolved through the independently reviewed and owner-accepted follow-up task.",
-                    })
-                    _event(state, "finding_resolved", None, {
-                        "task": task,
-                        "finding_id": finding.get("id", ""),
-                        "message": finding["next_action"],
-                    })
-                    break
-        if decision == "not_accepted":
-            _event(state, "owner_release_repair_required", None, {
-                "task": task,
-                "message": "Owner response routed to Delivery for a new repair, review, and release cycle",
+                "message": "Owner pressed Accept again after a failed fast-forward; retrying the Git transaction",
             })
-        recorded_response = dict(response)
-    if governed_acceptance:
-        try:
-            recorded_response["git_acceptance"] = accept_owner_release(root, task)
-        except git_broker.MainMovedError as error:
-            with locked_state(root) as state:
-                state.setdefault("git_reintegration_required", {})[task] = {
-                    "task": task, "reason": str(error), "recorded_at": now(),
-                    "next_action": "Re-integrate on the task branch and repeat final QA plus independent review.",
-                }
-                _event(state, "git_acceptance_reintegration_required", None, {
+            retry_response = dict(prior)
+        else:
+            retry_response = None
+        if retry_response is None:
+            response = {
+                "task": task,
+                "decision": decision,
+                "reason": reason if decision == "not_accepted" else "",
+                "attachments": [],
+                "recorded_at": now(),
+            }
+            state["release_decisions"][task] = response
+            governed_acceptance = bool(
+                decision == "accepted"
+                and state.get("task_repositories", {}).get(task)
+                and any(
+                    request.get("phase") == "final_acceptance"
+                    and request.get("status") == "passed"
+                    and request.get("mirror_ref")
+                    for request in _task_requests(state, task)
+                )
+            )
+            if decision == "not_accepted":
+                release_repairs = state.setdefault("release_repairs", {})
+                release_repairs[task] = {
                     "task": task,
-                    "message": "Main moved after final certification; no merge occurred and fresh final review is required",
+                    "status": "OWNER_REJECTED_REPAIR_REQUIRED",
+                    "reason": reason,
+                    "attachments": [],
+                    "source_release": {
+                        "head_commit": release.get("head_commit", ""),
+                        "recorded_at": release.get("recorded_at", ""),
+                    },
+                    "next_action": "Delivery repairs this release using the saved response, then starts a new review and release cycle.",
+                    "created_at": response["recorded_at"],
+                    "updated_at": response["recorded_at"],
+                }
+            _event(state, "owner_release_decision_recorded", None, {
+                "task": task,
+                "decision": decision,
+                "message": "Owner release response recorded against the released task",
+            })
+            if decision == "accepted":
+                for finding in state.get("deferred_findings", {}).values():
+                    if finding.get("status") == "fix_in_progress" and finding.get("follow_up_task") == task:
+                        finding.update({
+                            "status": "resolved",
+                            "resolved_at": response["recorded_at"],
+                            "resolution_evidence": f"Owner accepted released follow-up {task} at commit {release.get('head_commit', '')}.",
+                            "next_action": "Resolved through the independently reviewed and owner-accepted follow-up task.",
+                        })
+                        _event(state, "finding_resolved", None, {
+                            "task": task,
+                            "finding_id": finding.get("id", ""),
+                            "message": finding["next_action"],
+                        })
+                        break
+            if decision == "not_accepted":
+                _event(state, "owner_release_repair_required", None, {
+                    "task": task,
+                    "message": "Owner response routed to Delivery for a new repair, review, and release cycle",
                 })
-            recorded_response["git_acceptance"] = {"status": "reintegration_required", "reason": str(error)}
+            recorded_response = dict(response)
+    if retry_response is not None:
+        return _run_owner_acceptance(root, task, retry_response)
+    if governed_acceptance:
+        recorded_response = _run_owner_acceptance(root, task, recorded_response)
     if decision == "not_accepted":
         route_owner_repairs(root)
+    return recorded_response
+
+
+def _plain_acceptance_failure(detail: str) -> str:
+    """Say in the owner's words why the approved work is not in main yet."""
+    text = detail.strip()
+    if "clean governed main worktree" in text:
+        _, _, paths = text.partition(":")
+        named = paths.strip() or "the list is in the board event"
+        return (
+            f"The main folder has unsaved changes ({named}). Restore or commit those files, "
+            "then press Accept again."
+        )
+    if "manifest does not match" in text:
+        return (
+            "The list of approved files does not match what was reviewed. Ask the CTO to "
+            "re-run the release check, then press Accept again."
+        )
+    if "does not match its immutable mirror" in text or "mirror" in text:
+        return (
+            "The reviewed version no longer matches its sealed copy. Ask the CTO to check the "
+            "release, then press Accept again."
+        )
+    return f"The approved work could not be moved into main: {text}. Fix the cause, then press Accept again."
+
+
+def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, Any]) -> dict[str, Any]:
+    """Fast-forward main for a saved Accept; a refusal is recorded, never lost.
+
+    2026-09-25 defect (#2, #21): three Accepts in a row saved the decision
+    and then hit a broker refusal that reached the page as a raw error, with
+    no way to press Accept again. The refusal is now saved on the decision
+    in plain words, an event names it, and the Accept stays retryable.
+    """
+    try:
+        recorded_response["git_acceptance"] = accept_owner_release(root, task)
+    except git_broker.MainMovedError as error:
+        with locked_state(root) as state:
+            state.setdefault("git_reintegration_required", {})[task] = {
+                "task": task, "reason": str(error), "recorded_at": now(),
+                "next_action": "Re-integrate on the task branch and repeat final QA plus independent review.",
+            }
+            state["release_decisions"][task].pop("git_acceptance", None)
+            _event(state, "git_acceptance_reintegration_required", None, {
+                "task": task,
+                "message": "Main moved after final certification; no merge occurred and fresh final review is required",
+            })
+        recorded_response["git_acceptance"] = {"status": "reintegration_required", "reason": str(error)}
+        return recorded_response
+    except ValueError as error:
+        reason = _plain_acceptance_failure(str(error))
+        with locked_state(root) as state:
+            decision = state["release_decisions"][task]
+            attempts = int((decision.get("git_acceptance") or {}).get("attempts") or 0) + 1
+            decision["git_acceptance"] = {
+                "status": "failed", "reason": reason, "detail": str(error),
+                "at": now(), "attempts": attempts,
+            }
+            _event(state, "git_acceptance_failed", None, {
+                "task": task, "attempts": attempts, "detail": str(error),
+                "message": f"Accept was saved, but the approved work is not in main yet. {reason}",
+            })
+        recorded_response["git_acceptance"] = dict(state["release_decisions"][task]["git_acceptance"])
+        return recorded_response
+    with locked_state(root) as state:
+        state["release_decisions"][task].pop("git_acceptance", None)
     return recorded_response
 
 
@@ -8075,7 +8901,16 @@ def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:
             "mirror_ref": result["mirror_ref"],
             "message": "Owner Accept advanced local main by verified FF-only broker transaction; no remote push occurred",
         })
-        return dict(state["git_acceptances"][task])
+        accepted = dict(state["git_acceptances"][task])
+        # Defect #17: every other open task on this repository whose branch
+        # no longer contains main is told NOW, not after its final review.
+        stale = _stale_task_bases(state, str(state["task_repositories"][task]), task)
+    for other in stale:
+        route_reintegration(
+            root, other, f"main advanced to {result['commit'][:12]} when {task} was accepted",
+            source="owner-accept",
+        )
+    return accepted
 
 
 def record_remote_push_instruction(
@@ -8713,6 +9548,7 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
     recovered: list[dict[str, Any]] = []
     holds: list[dict[str, Any]] = []
     nonce_drift: list[dict[str, Any]] = []
+    cleared_refusals: list[str] = []
     with locked_state(root) as state:
         tasks = sorted(state.get("task_repositories", {}))
         for task in tasks:
@@ -8772,6 +9608,35 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
             _event(state, "git_recovery_completed", None, {
                 "message": f"Git broker reconciled {len(recovered)} incomplete transaction(s) without data loss",
             })
+        # A refusal flag whose task has nothing left to reconcile is stale:
+        # only a later successful write used to clear it, so an agent whose
+        # legitimate write was refused (an ownership rule, say) stayed
+        # "blocked" and unwoken after recover-git found nothing (2026-09-24).
+        held_tasks = {str(item.get("task") or "") for item in holds} | {
+            str(item.get("task") or "") for item in (state.get("git_recovery_holds") or {}).values()
+            if isinstance(item, dict) and item.get("status") in {None, "open", "CTO_RECOVERY_HOLD"}
+        }
+        for agent in state.get("agents", {}).values():
+            refusal = agent.get("broker_refusal")
+            if not refusal or str(agent.get("task") or "") in held_tasks:
+                continue
+            agent.pop("broker_refusal", None)
+            if agent.get("status") == "blocked":
+                agent.update({
+                    "status": "working",
+                    "status_note": (
+                        "the earlier Git refusal is cleared by recover-git; "
+                        + str(refusal.get("route") or "continue from your saved next gate")
+                    )[:240],
+                    "last_status_at": now(),
+                })
+            _event(state, "broker_refusal_cleared_by_recovery", agent, {
+                "task": agent.get("task", ""),
+                "operation": refusal.get("operation", ""),
+                "refusal_kind": refusal.get("kind", "transaction"),
+                "message": "recover-git found no transaction to reconcile for this task; the refusal flag is cleared and wake-ups resume",
+            })
+            cleared_refusals.append(agent.get("id", ""))
         if nonce_drift:
             _event(state, "broker_nonce_drift_reconciled", None, {
                 "message": (
@@ -8780,7 +9645,7 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
                 ),
                 "drift": nonce_drift,
             })
-    return {"recovered": recovered, "holds": holds, "nonce_drift": nonce_drift}
+    return {"recovered": recovered, "holds": holds, "nonce_drift": nonce_drift, "cleared_refusals": cleared_refusals}
 
 
 def _root(value: str) -> Path:
@@ -8854,7 +9719,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate-review-ledgers")
     sub.add_parser("migrate-integrity")
     sub.add_parser("recover-git")
+    p = sub.add_parser("reintegrate-main"); p.add_argument("--agent", required=True); p.add_argument("--finish", action="store_true")
+    p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default="")
+    p = sub.add_parser("owner-action-done"); p.add_argument("--agent", required=True); p.add_argument("--id", required=True); p.add_argument("--outcome", required=True)
     p = sub.add_parser("reopen-integrity"); p.add_argument("--request", action="append", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("reevaluate-finalization"); p.add_argument("--task", required=True); p.add_argument("--finding", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("watch"); p.add_argument("--status-interval", type=int, default=300); p.add_argument("--stale-after", type=int, default=900)
     for command_parser in sub.choices.values():
         command_parser.allow_abbrev = False
@@ -8948,7 +9817,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "migrate-review-ledgers": out = migrate_reviewer_ledgers(root)
         elif args.command == "migrate-integrity": out = migrate_integrity(root)
         elif args.command == "recover-git": out = recover_git_transactions(root)
+        elif args.command == "reintegrate-main": out = broker_reintegrate_main(root, args.agent, args.finish)
+        elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.command, args.why, args.task)
+        elif args.command == "owner-action-done": out = clear_owner_action(root, args.agent, args.id, args.outcome)
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)
+        elif args.command == "reevaluate-finalization": out = reevaluate_finalization(root, args.task, args.finding, args.reason)
         else: out = watch(root, args.status_interval, args.stale_after)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)

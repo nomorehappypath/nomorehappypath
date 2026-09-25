@@ -337,6 +337,105 @@ class RunnerArgvTests(unittest.TestCase):
         self.assertNotIn(conversation.CODEX_MARKER_PREFIX, self.text(), "a resume needs no discovery marker")
 
 
+class RelaunchAfterPauseTests(unittest.TestCase):
+    """The real runner after a project pause: the agent is told it was paused and to continue."""
+
+    def setUp(self):
+        require_loopback()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "project"
+        self.root.mkdir()
+        self.capture = self.root / "captured.txt"
+        self.claude_dir = Path(self.tmp.name) / "claude-config"
+        self.environment = {
+            **os.environ,
+            "HARNESS_CAPTURE": str(self.capture),
+            "HARNESS_CLAUDE_BIN": str(fake_cli(self.root / "fake-claude")),
+            "HARNESS_CODEX_BIN": str(fake_cli(self.root / "fake-codex")),
+            "CLAUDE_CONFIG_DIR": str(self.claude_dir),
+            "CODEX_HOME": str(Path(self.tmp.name) / "codex-home"),
+        }
+
+    def argv(self) -> list[str]:
+        return self.capture.read_text(encoding="utf-8").splitlines()
+
+    def text(self) -> str:
+        return self.capture.read_text(encoding="utf-8")
+
+    def _paused_then_staged(self, session: dict) -> None:
+        # What a project pause leaves behind for a terminal that had attached:
+        # the fake CLI already exited, so the record is set as the pause sets it.
+        with control.locked_state(self.root) as state:
+            state["sessions"][session["id"]].update({
+                "status": "paused", "pid": None, "ended_at": control.now(),
+                "pause_requested_at": control.now(),
+                "reason": "project pause requested; preserving saved session pointer",
+            })
+        [prepared] = control.prepare_resume_sessions(self.root, [session["id"]])
+        self.assertEqual(prepared["action"], "relaunch")
+        control.mark_resume_launch_requested(self.root, session["id"])
+
+    def test_claude_resumed_after_a_pause_gets_the_pause_message_and_a_plain_relaunch_does_not(self):
+        session = control.create(self.root, "claude_cto")
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        minted = self.argv()[self.argv().index("--session-id") + 1]
+        store = self.claude_dir / "projects" / "-project"; store.mkdir(parents=True)
+        (store / f"{minted}.jsonl").write_text("{}\n", encoding="utf-8")
+
+        self._paused_then_staged(session)
+        self.assertTrue(control.cli_session(self.root, session["id"])["resumed_after_pause_at"])
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        prompt = self.text()
+        self.assertIn("--resume", self.argv())
+        self.assertIn(conversation.PAUSE_RESUME_LABEL, prompt)
+        self.assertIn("paused this project and has now resumed it", prompt)
+        self.assertIn("Continue the task you were working on", prompt)
+        self.assertNotIn(conversation.RECOVERY_LABEL, prompt)
+
+        # The launch was noted: the pause marker is spent, so a later ordinary
+        # relaunch (a crash, say) gets the ordinary recovery message.
+        self.assertIsNone(control.cli_session(self.root, session["id"])["resumed_after_pause_at"])
+        with control.locked_state(self.root) as state:
+            state["sessions"][session["id"]].update({"status": "exited", "pid": None, "ended_at": control.now()})
+        stage_relaunch(self.root, session["id"])
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(conversation.RECOVERY_LABEL, self.text())
+        self.assertNotIn(conversation.PAUSE_RESUME_LABEL, self.text())
+
+    def test_a_fresh_launch_after_a_pause_still_says_what_happened_and_where_the_record_is(self):
+        session = control.create(self.root, "claude_cto")
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        # The CLI's store does NOT hold the conversation: the relaunch is fresh.
+        self._paused_then_staged(session)
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        prompt = self.text()
+        self.assertNotIn("--resume", self.argv())
+        self.assertIn(conversation.PAUSE_RESUME_LABEL, prompt)
+        self.assertIn("could not be resumed by the CLI", prompt)
+        self.assertIn(f"conversation --session-id {session['id']}", prompt)
+        self.assertIn("# CTO Directive", prompt, "the fresh launch still carries the full directive")
+
+    def test_the_readable_view_folds_the_pause_message_like_a_launch_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "projects" / "-project"; store.mkdir(parents=True)
+            path = store / "00000000-0000-0000-0000-00000000abcd.jsonl"
+            path.write_text(json.dumps({"type": "user", "timestamp": "2026-09-24T01:00:00Z",
+                                        "message": {"role": "user", "content": conversation.pause_resume_note("cmd") + " more"}}) + "\n"
+                            + json.dumps({"type": "assistant", "timestamp": "2026-09-24T01:00:05Z",
+                                          "message": {"role": "assistant", "content": [{"type": "text", "text": "Continuing the task."}]}}) + "\n",
+                            encoding="utf-8")
+            entries = conversation.read_claude_conversation(path)
+            rendered = conversation.render_conversation(entries, agent_label="CTO", header=[])
+            self.assertIn("Continuing the task.", rendered)
+            self.assertNotIn("could not be resumed by the CLI", rendered, "the system prompt is folded, not shown in full")
+
+
 class CodexStoreClearedRelaunchTests(unittest.TestCase):
     """Round-2 blocking finding, end to end with the real runner.
 
@@ -545,6 +644,24 @@ class ReadableConversationTests(unittest.TestCase):
         message = conversation.recovery_message("id", "/t.log", "cto-1", "python3 board.py", "python3 control.py conversation --session-id s")
         self.assertIn("run: python3 control.py conversation --session-id s", message)
         self.assertNotIn("/t.log", message)
+        self.assertTrue(message.startswith(conversation.RECOVERY_LABEL))
+        self.assertNotIn("paused", message)
+
+    def test_after_a_pause_the_returning_agent_is_told_to_continue_its_task(self):
+        """The owner's rule (2026-09-24): pause interrupts, resume asks the agent to pick the task back up."""
+        message = conversation.recovery_message("id", "/t.log", "cto-1", "python3 board.py",
+                                                "python3 control.py conversation --session-id s", after_pause=True)
+        self.assertTrue(message.startswith(conversation.PAUSE_RESUME_LABEL))
+        self.assertIn("paused this project and has now resumed it", message)
+        self.assertIn("Continue the task you were working on", message)
+        self.assertIn("saved next action", message)
+        self.assertIn("Do not start over", message)
+        self.assertIn("USER ACTION: None", message)
+        note = conversation.pause_resume_note("python3 control.py conversation --session-id s")
+        self.assertTrue(note.startswith(conversation.PAUSE_RESUME_LABEL))
+        self.assertIn("could not be resumed by the CLI", note)
+        self.assertIn("run python3 control.py conversation --session-id s", note)
+        self.assertIn("do not start over", note)
 
 
 class RoleContinuityTests(unittest.TestCase):

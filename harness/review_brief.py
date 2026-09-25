@@ -158,6 +158,12 @@ def build(
             "tree": _text(request.get("reviewed_tree_hash")),
             "changed_paths": _bounded(list(request.get("reviewed_files") or [])),
             "accepted_byte_manifest": request.get("accepted_byte_manifest") or {},
+            # Task F PART 2: already-accepted bytes this subtask owns that its
+            # base carried in a changed form. Certifying this candidate
+            # certifies them too; the reviewer must know.
+            "base_carried_accepted_paths": _bounded(list(
+                ((plan.get("subtasks") or {}).get(_text(request.get("subtask")) or "") or {}).get("base_carried_accepted_paths") or []
+            )),
         },
         "integration_integrity": _bounded(integrations),
         "finalization_diff": request.get("finalization_diff"),
