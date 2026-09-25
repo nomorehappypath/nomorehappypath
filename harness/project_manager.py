@@ -417,6 +417,7 @@ class ProjectManager:
             "providers": control.PROVIDERS,
             "provider_efforts": control.PROVIDER_EFFORTS,
             "provider_models": control.PROVIDER_MODELS,
+            "provider_model_descriptions": control.PROVIDER_MODEL_DESCRIPTIONS,
             "openai": global_settings.openai_status(self.home),
             "chat_model": global_settings.chat_settings(self.home)["model"],
         }
@@ -949,11 +950,39 @@ class ProjectManager:
             opened = self.open_project(project_id, _from_resume=True)
             worker = {"board_url": opened["board_url"], "worker_pid": opened["worker_pid"]}
 
-        # Preserved terminals are NEVER relaunched automatically: spawning
-        # windows and spending tokens is the owner's decision. Staged sessions
-        # surface on the board with a relaunch button; their saved next
-        # actions wait durably until the owner presses it.
+        # The owner's press of "Resume project" IS the decision to bring the
+        # agents back. Until 2026-09-24 the staged terminals waited for a
+        # second button on the studio board, and from the owner's chair a
+        # resume that left every agent gone read as "resume kills all CLI
+        # agents". Each staged terminal is relaunched here; with conversation
+        # memory it continues where it stopped. A launch that fails leaves
+        # the session staged, and the board's relaunch button remains the
+        # fallback for exactly that session.
+        relaunched, relaunch_failures = [], {}
+        for item in prepared:
+            if item.get("action") != "relaunch":
+                continue
+            session_id = str(item.get("id") or "")
+            try:
+                session = control.mark_resume_launch_requested(context, session_id)
+                self._launch_resumed_terminal(context, session)
+                relaunched.append(session_id)
+            except (OSError, ValueError) as error:
+                relaunch_failures[session_id] = str(error)[:200]
+                try:
+                    control.restage_resume_launch(context, session_id)
+                except ValueError:
+                    pass
         if not already_complete:
+            board.record_project_resume_checkpoint(context, resume_id, "terminals_relaunched", {
+                "message": (
+                    f"Resume relaunched {len(relaunched)} preserved terminal(s)"
+                    + (f"; {len(relaunch_failures)} could not be relaunched and stay staged for the board's relaunch button"
+                       if relaunch_failures else "")
+                ),
+                "relaunched": relaunched,
+                "failed": relaunch_failures,
+            })
             completed = board.finish_project_resume(context, resume_id)
 
         return {
@@ -962,6 +991,8 @@ class ProjectManager:
             "memory": memory,
             "evidence_reuse": evidence_reuse,
             "sessions": prepared,
+            "relaunched": relaunched,
+            "relaunch_failures": relaunch_failures,
             **worker,
         }
 

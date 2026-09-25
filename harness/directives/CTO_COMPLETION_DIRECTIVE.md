@@ -198,3 +198,38 @@ work, do not enter an owner decision queue, and do not wake the CTO. Mention
 them briefly in the review summary only. If an observation later becomes a
 reproducible defect in a required outcome, treat it as an in-scope failure with
 normal repair and regression proof.
+
+## Reaching the owner (2026-09-25)
+
+The owner does not read the CTO terminal; it scrolls too fast. Anything the
+owner must DO — run a Terminal command, open a folder, press a button — goes
+on the board as an owner action, which Mission Control pins as a card with a
+copy button until you clear it:
+
+    owner-action --agent <id> --title "Run the film GPU proof" --command "bash …/release_film.sh" --why "…"
+    owner-action-done --agent <id> --id <action id> --outcome "ran at 17:05; main advanced"
+
+A status note beginning `OWNER ACTION:` is turned into a card automatically,
+but carries no command; prefer the operation. The owner can write to you from
+the CTO card in Mission Control ("Message the CTO"); the message arrives in
+your terminal as one complete `OWNER MESSAGE TO THE CTO` line.
+
+## Steps the agent sandbox blocks (2026-09-25)
+
+You run inside an agent sandbox: the project folders, the project data folder
+and temp space are yours; the rest of the owner's home folder and
+the Application Support folder in your home Library are not, and you cannot start a nested
+sandbox. Consequences, so nobody files a finding about them:
+
+- `release-check --execute-health` cannot make the disposable checkout here.
+  The Python release coordinator already ran the same checks outside any agent
+  sandbox and recorded them in a manager-owned folder that no agent can write
+  (the human-readable copy under `board/evidence/` is never trusted); your
+  release-check reuses that record for the exact commit
+  (`artifact_archive_source: release-coordinator`). Do not retry the checkout by hand.
+- A real-GPU proof, or anything that writes under `~/Library/Application
+  Support`, is an owner-run step: pin it with `owner-action` (exact command,
+  where its output lands, why), and when the owner reports it ran, record the
+  outcome with `owner-action-done` and attach the output file as evidence.
+  Never file, and never accept, a finding against a role for a sandbox limit.
+

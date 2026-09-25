@@ -923,12 +923,45 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(migrated["cto"]["model"], "opus")
             self.assertEqual(migrated["reviewer"]["model"], "opus")
 
-    def test_effort_names_are_normalized_to_each_cli(self):
-        self.assertEqual(control.normalize_provider_effort("claude", "xhigh"), "max")
-        self.assertEqual(control.normalize_provider_effort("codex", "max"), "xhigh")
-        self.assertIn("max", control.PROVIDER_EFFORTS["claude"])
-        self.assertNotIn("xhigh", control.PROVIDER_EFFORTS["claude"])
-        self.assertIn("xhigh", control.PROVIDER_EFFORTS["codex"])
+    def test_effort_levels_pass_through_and_both_catalogs_offer_todays_levels(self):
+        # Verified live 2026-09-24: Claude Code 2.1.281 accepts --effort xhigh
+        # and max; Codex's API accepts xhigh and max, and its catalog "ultra".
+        self.assertEqual(control.normalize_provider_effort("claude", "xhigh"), "xhigh")
+        self.assertEqual(control.normalize_provider_effort("claude", "max"), "max")
+        self.assertEqual(control.normalize_provider_effort("codex", "max"), "max")
+        self.assertEqual(control.normalize_provider_effort("codex", "ultra"), "ultra")
+        self.assertEqual(control.normalize_provider_effort("codex", "Extra high"), "xhigh")
+        self.assertEqual(list(control.PROVIDER_EFFORTS["claude"]), ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(list(control.PROVIDER_EFFORTS["codex"]), ["low", "medium", "high", "xhigh", "max", "ultra"])
+
+    def test_model_lists_offer_todays_models_newest_first_and_drop_nothing(self):
+        codex, claude = control.PROVIDER_MODELS["codex"], control.PROVIDER_MODELS["claude"]
+        # The order Codex's own picker uses (owner's paste, 2026-09-24): Astra
+        # (frontier), Sol (workhorse), Luna (fast and affordable).
+        self.assertEqual(codex[:3], ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])
+        for kept in ("gpt-5.6-sol", "gpt-5.6-sol-wm", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                     "gpt-5.4-mini", "gpt-5.3-codex-spark", "codex-auto-review"):
+            self.assertIn(kept, codex)
+        # Claude Code's picker: Opus 5.5 (default, 1M) first, then Fable 5.1.
+        self.assertEqual(claude[:6], ["claude-opus-5-5[1m]", "claude-opus-5-5", "opus[1m]",
+                                      "claude-fable-5-1[1m]", "claude-fable-5-1", "fable"])
+        for kept in ("claude-fable-5[1m]", "claude-fable-5", "claude-opus-5", "claude-sonnet-5", "opus", "sonnet",
+                     "haiku", "claude-haiku-4-5-20251001"):
+            self.assertIn(kept, claude)
+        self.assertEqual(len(codex), len(set(codex))); self.assertEqual(len(claude), len(set(claude)))
+
+    def test_every_suggested_model_has_a_plain_description_of_what_it_is_for(self):
+        """Owner 2026-09-24: 'add the description to the models so we remember which one is best for what'."""
+        for provider, models in control.PROVIDER_MODELS.items():
+            descriptions = control.PROVIDER_MODEL_DESCRIPTIONS[provider]
+            for model in models:
+                self.assertIn(model, descriptions, f"{provider}: {model} has no description")
+                self.assertGreater(len(descriptions[model]), 12, f"{provider}: {model}")
+            self.assertEqual(set(descriptions) - set(models), set(), "no description without a model")
+        self.assertIn("Frontier", control.PROVIDER_MODEL_DESCRIPTIONS["codex"]["gpt-6-astra"])
+        self.assertIn("Fast and affordable", control.PROVIDER_MODEL_DESCRIPTIONS["codex"]["gpt-6-luna"])
+        self.assertIn("1M context", control.PROVIDER_MODEL_DESCRIPTIONS["claude"]["claude-opus-5-5[1m]"])
+        self.assertIn("hardest", control.PROVIDER_MODEL_DESCRIPTIONS["claude"]["claude-fable-5-1"])
 
     def test_runner_uses_selected_provider_model_and_effort_for_delivery(self):
         with TemporaryDirectory() as tmp:
@@ -1068,3 +1101,61 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(__import__("json").loads(urlopen(request, timeout=3).read())["settings"], recovered)
             finally:
                 server.shutdown(); thread.join(timeout=3); server.server_close()
+
+
+class RenderedModelDescriptionTests(unittest.TestCase):
+    """The Settings page shows, next to each model, what it is for (owner, 2026-09-24)."""
+
+    def test_settings_dropdown_shows_each_models_description(self):
+        import tempfile, threading, time
+        from http.server import ThreadingHTTPServer
+        from harness import browser_acceptance, project_manager
+        from tests.test_branding_rendered import probe_proxy
+        from tests.environment_support import require_loopback
+        try:
+            browser_acceptance.resolve_binary()
+        except (FileNotFoundError, ValueError) as error:
+            raise unittest.SkipTest(str(error)) from error
+        require_loopback()
+        probe = r"""
+<script>
+(async () => {
+  document.querySelector('[data-page="settings"]').click();
+  let select = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    select = document.querySelector('[data-setting-model-choice="delivery"]');
+    if (select && select.options.length > 1) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const options = select ? Array.from(select.options).map(option => option.textContent) : [];
+  const claude = document.querySelector('[data-setting-model-choice="cto"]');
+  const claudeOptions = claude ? Array.from(claude.options).map(option => option.textContent) : [];
+  await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({options, claudeOptions, visible: select ? select.getBoundingClientRect().width > 0 : false})});
+})();
+</script>
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            manager = project_manager.ProjectManager(Path(temporary) / "home", board_port=0)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), project_manager.make_handler(manager))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+            sink: dict = {}
+            proxy = ThreadingHTTPServer(("127.0.0.1", 0), probe_proxy(f"http://127.0.0.1:{server.server_address[1]}", sink, probe))
+            threading.Thread(target=proxy.serve_forever, daemon=True).start()
+            self.addCleanup(proxy.server_close); self.addCleanup(proxy.shutdown)
+            profile = tempfile.TemporaryDirectory(); self.addCleanup(profile.cleanup)
+            process = browser_acceptance.launch(f"http://127.0.0.1:{proxy.server_address[1]}/", Path(profile.name), width=1280, height=900)
+            try:
+                deadline = time.monotonic() + 45
+                while time.monotonic() < deadline and "value" not in sink:
+                    time.sleep(0.1)
+            finally:
+                process.close()
+        reading = sink.get("value") or {}
+        self.assertTrue(reading, "Chrome reported nothing for the Settings page")
+        self.assertTrue(reading["visible"], reading)
+        self.assertIn("gpt-6-astra — Frontier intelligence for the most demanding work (Codex default)", reading["options"])
+        self.assertIn("gpt-6-luna — Fast and affordable model for easier tasks", reading["options"])
+        self.assertIn("claude-opus-5-5[1m] — Opus 5.5 with 1M context — best for everyday, complex tasks (Claude default)", reading["claudeOptions"])
+        self.assertIn("Custom model ID…", reading["options"][-1])

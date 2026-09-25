@@ -179,6 +179,7 @@ plan_cli_launch() {
   launch_reason="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["reason"])' <<<"$plan_json")"
   codex_marker="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("codex_marker",""))' <<<"$plan_json")"
   predecessor_session="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("predecessor",""))' <<<"$plan_json")"
+  after_pause="$("$python_bin" -E -c 'import json,sys; print("1" if json.load(sys.stdin).get("after_pause") else "")' <<<"$plan_json")"
   mkdir -p "$(dirname "$transcript_path")"
   printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" >> "$transcript_path"
   if [[ "$launch_mode" == "resume" ]]; then
@@ -205,11 +206,20 @@ PY
 recovery_prompt() {
   local conversation_command
   conversation_command="$(conversation_command_for "$session_id")"
-  "$python_bin" -E - "$harness_root" "$cli_session_id" "$transcript_path" "$agent_id" "$board_command_prefix" "$conversation_command" <<'PY'
+  "$python_bin" -E - "$harness_root" "$cli_session_id" "$transcript_path" "$agent_id" "$board_command_prefix" "$conversation_command" "$after_pause" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from harness.conversation import recovery_message
-print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
+print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], after_pause=bool(sys.argv[7])))
+PY
+}
+
+pause_resume_note() {
+  "$python_bin" -E - "$harness_root" "$(conversation_command_for "$session_id")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from harness.conversation import pause_resume_note
+print(pause_resume_note(sys.argv[2]))
 PY
 }
 
@@ -225,6 +235,14 @@ launch_agent_cli() {
       prompt="${prompt}
 
 $(earlier_conversation_note)"
+    fi
+    if [[ -n "$after_pause" ]]; then
+      # The pause closed this terminal and the CLI's store no longer holds
+      # its conversation: the fresh agent is told what happened and where
+      # the record is, and to continue the task rather than start over.
+      prompt="${prompt}
+
+$(pause_resume_note)"
     fi
     if [[ "$provider" == "codex" && -n "$codex_marker" ]]; then
       # Codex records this prompt as the first message of its rollout; the

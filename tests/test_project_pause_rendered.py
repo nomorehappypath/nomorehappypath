@@ -178,7 +178,8 @@ class RenderedPauseTests(unittest.TestCase):
         self.assertIn("paused", rendered["cardClass"].split())
         self.assertEqual(rendered["badges"].count("Paused"), 1)
         self.assertIn("Paused safely", rendered["progress"])
-        self.assertIn("Open project", rendered["actions"])
+        self.assertIn("Resume project", rendered["actions"], "a paused project's button says what it does")
+        self.assertNotIn("Open project", rendered["actions"])
         self.assertNotIn("View paused board", rendered["actions"])
 
     def test_projects_pause_button_executes_real_pause_and_renders_result(self):
@@ -205,7 +206,8 @@ class RenderedPauseTests(unittest.TestCase):
 
         self.assertEqual(rendered["badgeText"].count("Paused"), 1, rendered)
         self.assertIn("paused safely", rendered["notice"].casefold())
-        self.assertIn("Open project", rendered["actions"])
+        self.assertIn("Resume project", rendered["actions"])
+        self.assertNotIn("Open project", rendered["actions"])
         self.assertNotIn("Pause project", rendered["actions"])
         self.assertEqual(board.pause_state(context)["status"], "paused")
 

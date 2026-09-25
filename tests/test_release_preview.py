@@ -113,6 +113,33 @@ class UnconfiguredReleaseTests(PreviewFixture):
         self.assertNotIn("preview", self.release())
 
 
+class SkippedPreviewTests(PreviewFixture):
+    """The owner can say there is nothing to run; the acceptance step proceeds on the files."""
+
+    def test_a_skipped_preview_is_kept_and_never_overwritten_by_the_supervisor(self):
+        self.seed_release()
+        self.supervisor.tick()
+        self.assertEqual(self.release()["preview"]["status"], "unconfigured")
+        recorded = board.record_release_preview(self.root, "TASK", {
+            "status": "skipped", "head_commit": self.commit, "workspace": str(self.workspace),
+            "branch": "harness/tasks/TASK/task", "skipped_at": board.now(),
+        })
+        self.assertEqual(recorded["status"], "skipped")
+        self.supervisor.tick(); self.supervisor.tick()
+        preview = self.release()["preview"]
+        self.assertEqual(preview["status"], "skipped", "a later tick must not put the box back")
+        self.assertEqual(preview["workspace"], str(self.workspace))
+        self.assertTrue(preview["skipped_at"])
+        # Changing their mind clears it; the next tick offers the setup box again.
+        board.clear_release_preview(self.root, "TASK")
+        self.supervisor.tick()
+        self.assertEqual(self.release()["preview"]["status"], "unconfigured")
+
+    def test_skip_needs_a_release_awaiting_the_owner(self):
+        with self.assertRaises(ValueError):
+            board.record_release_preview(self.root, "NOPE", {"status": "skipped"})
+
+
 class RunningPreviewTests(PreviewFixture):
     def test_preview_serves_the_exact_reviewed_commit(self):
         self.seed_release()
@@ -332,6 +359,34 @@ class EndpointTests(PreviewFixture):
         self.assertEqual(status, 200)
         self.assertNotIn("preview", board.snapshot(self.root)["releases"]["TASK"])
 
+    def test_no_preview_needed_records_skipped_and_is_refused_while_paused(self):
+        self.seed_release()
+        base = self.serve()
+        status, value = self.post(base, "/api/releases/TASK/preview-skip", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(value["preview"]["status"], "skipped")
+        self.assertEqual(value["preview"]["workspace"], str(self.workspace))
+        self.assertEqual(value["preview"]["branch"], "harness/tasks/TASK/task")
+        self.assertTrue(value["preview"]["skipped_at"])
+        recorded = board.snapshot(self.root)["releases"]["TASK"]["preview"]
+        self.assertEqual(recorded["status"], "skipped")
+        # Changing their mind goes through the same retry the failed state uses.
+        status, _ = self.post(base, "/api/releases/TASK/preview-retry", {})
+        self.assertEqual(status, 200)
+        self.assertNotIn("preview", board.snapshot(self.root)["releases"]["TASK"])
+        # A paused project is read-only for this too.
+        with board.locked_state(self.root) as state:
+            state["project_pause"] = {"status": "paused"}
+        status, value = self.post(base, "/api/releases/TASK/preview-skip", {}, expect_error=True)
+        self.assertEqual(status, 409)
+        self.assertIn("paused", value["error"])
+
+    def test_skip_without_a_release_awaiting_the_owner_is_a_clear_error(self):
+        base = self.serve()
+        status, value = self.post(base, "/api/releases/NOPE/preview-skip", {}, expect_error=True)
+        self.assertIn(status, (400, 404))
+        self.assertIn("awaiting the owner", value["error"])
+
     def test_settings_payload_includes_preview_section(self):
         base = self.serve()
         with urlopen(base + "/api/settings", timeout=10) as response:
@@ -511,10 +566,33 @@ class ReleaseCardRenderTests(unittest.TestCase):
             "status": "unconfigured", "workspace": "/tmp/workspace",
             "branch": "harness/tasks/TASK/task",
         }))
-        self.assertIn("Set up a candidate preview", html)
+        # Plain words for a non-engineer (owner feedback 2026-09-24): what it
+        # is asking, where the work is, and a way to say there is nothing to run.
+        self.assertIn("Do you want to see it running first?", html)
+        self.assertIn("Where the delivered work is:", html)
         self.assertIn("harness/tasks/TASK/task", html)
         self.assertIn("/tmp/workspace", html)
+        self.assertIn("Run it for me", html)
+        self.assertIn("No preview needed", html)
+        self.assertIn("skipPreview(", html)
         self.assertIn("savePreviewCommand()", html)
+        self.assertNotIn("Set up a candidate preview", html)
+        self.assertNotIn("Enter the command that starts this project", html)
+        main_text = html.split("<small>Advanced:")[0]
+        self.assertNotIn("{port}", main_text, "engineer placeholders stay out of the main text")
+        self.assertNotIn("{state_dir}", main_text)
+
+    def test_skipped_preview_renders_the_files_path_and_a_way_back(self):
+        html = self.render_card(self.release({
+            "status": "skipped", "workspace": "/tmp/workspace",
+            "branch": "harness/tasks/TASK/task", "skipped_at": "2026-09-24T01:00:00+00:00",
+        }))
+        self.assertIn("No preview", html)
+        self.assertIn("reviewing the delivered files", html)
+        self.assertIn("/tmp/workspace", html)
+        self.assertIn("I do want to run it", html)
+        self.assertIn("retryPreview(", html)
+        self.assertNotIn("preview-command", html)
 
     def test_app_bundle_preview_renders_the_open_button(self):
         html = self.render_card(self.release({

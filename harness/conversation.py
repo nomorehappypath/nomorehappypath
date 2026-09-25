@@ -43,6 +43,7 @@ _TWO_BYTE = re.compile(r"\x1b[@-Z\\-_]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 RECOVERY_LABEL = "[SYSTEM CONTROL — conversation recovered]"
+PAUSE_RESUME_LABEL = "[SYSTEM CONTROL — project resumed]"
 
 
 def _now() -> str:
@@ -264,15 +265,16 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
     launches = int(record.get("cli_launches") or 0)
     transcript = str(transcript_path(root, session_id))
     predecessor = str(record.get("continues_session") or "")
+    after_pause = bool(record.get("resumed_after_pause_at"))
     if launches > 0 and known:
         if provider == "claude" and claude_session_exists(known):
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
                     "transcript": transcript, "reason": f"resuming Claude Code session {known}",
-                    "predecessor": predecessor}
+                    "predecessor": predecessor, "after_pause": after_pause}
         if provider == "codex" and codex_rollout_path(known) is not None:
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
                     "transcript": transcript, "reason": f"resuming Codex session {known}",
-                    "predecessor": predecessor}
+                    "predecessor": predecessor, "after_pause": after_pause}
         reason = f"previous {provider} session {known} is not in the vendor store; starting fresh"
         # The stale id must go: the supervisor discovers a NEW Codex rollout only
         # while the record carries no id, and a later plan would otherwise keep
@@ -287,19 +289,31 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
         minted = str(uuid.uuid4())
         control.record_cli_session(root, session_id, minted, provider)
         return {"mode": "fresh", "provider": provider, "cli_session_id": minted,
-                "transcript": transcript, "reason": reason, "predecessor": predecessor}
+                "transcript": transcript, "reason": reason, "predecessor": predecessor, "after_pause": after_pause}
     return {"mode": "fresh", "provider": provider, "cli_session_id": "",
-            "transcript": transcript, "reason": reason, "predecessor": predecessor,
+            "transcript": transcript, "reason": reason, "predecessor": predecessor, "after_pause": after_pause,
             "codex_marker": codex_launch_marker(session_id, launches + 1)}
 
 
 def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_command_prefix: str,
-                     conversation_command: str = "") -> str:
+                     conversation_command: str = "", after_pause: bool = False) -> str:
     reread = (
         f"To reread the conversation in readable form, run: {conversation_command}"
         if conversation_command else
         f"The raw terminal record of what was said, both sides, is at {transcript}"
     )
+    if after_pause:
+        # The owner's rule (2026-09-24): pause interrupts the agents, resume
+        # asks them to pick the task back up. Say so in those words.
+        return (
+            f"{PAUSE_RESUME_LABEL} The owner paused this project and has now resumed it. Your "
+            f"terminal was closed by the pause and your previous conversation (session {cli_session_id}) "
+            f"has been resumed. Continue the task you were working on from exactly where you stopped: "
+            f"first read your saved next action and current state on the board, then carry on. {reread}. "
+            f"Do not start over and do not ask the owner to repeat anything that is in the conversation. "
+            f"You remain agent {agent_id} on the board; for every board command, start with: "
+            f"{board_command_prefix}. USER ACTION: None."
+        )
     return (
         f"{RECOVERY_LABEL} This managed terminal was relaunched by the harness and your "
         f"previous conversation (session {cli_session_id}) was resumed. {reread}. Read it if "
@@ -307,6 +321,16 @@ def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_
         f"start over and do not ask the owner to repeat anything that is in it. You remain agent "
         f"{agent_id} on the board; for every board command, start with: {board_command_prefix}. "
         f"USER ACTION: None."
+    )
+
+
+def pause_resume_note(conversation_command: str) -> str:
+    """For a fresh launch after a pause when the CLI's store lost the conversation."""
+    return (
+        f"{PAUSE_RESUME_LABEL} The owner paused this project and has now resumed it. Your previous "
+        f"terminal's conversation could not be resumed by the CLI, but its readable record is available: "
+        f"run {conversation_command} and read it before you start. Then continue the task you were "
+        f"working on from your saved next action on the board; do not start over. USER ACTION: None."
     )
 
 
@@ -362,7 +386,7 @@ def wait_for_codex_session_id(root: ProjectRoot, session_id: str, since: float, 
 # ---------------------------------------------------------------- readable view
 
 LAUNCH_SIGNATURES = ("For every board command, start with:", "# AGENTS.md instructions",
-                     RECOVERY_LABEL)
+                     RECOVERY_LABEL, PAUSE_RESUME_LABEL)
 ROLE_LABELS = {"claude_cto": "CTO", "claude_reviewer": "REVIEWER", "codex_delivery": "DELIVERY AGENT"}
 
 

@@ -14,6 +14,35 @@ from typing import Any, Iterable
 MANIFEST_VERSION = 1
 
 
+# One rename rule for every path manifest. Git pairs a deleted file with a
+# similar added file as a "rename", but only where rename detection is on, so
+# on 2026-09-24 a rebuilt hashed asset (index-OLD.css -> index-NEW.css) listed
+# two paths on the request side and one in the fold guard, and the harness
+# refused its own correct candidate. Every manifest or patch the harness
+# compares is built from these arguments, so no site can disagree again.
+RENAME_RULE = ("--no-ext-diff", "--no-renames")
+
+
+def name_only_arguments(*revisions: str, cached: bool = False, nul: bool = False) -> list[str]:
+    """Arguments after ``git`` that list changed paths under the one rename rule."""
+    arguments = ["diff", *RENAME_RULE, "--name-only"]
+    if cached:
+        arguments.append("--cached")
+    if nul:
+        arguments.append("-z")
+    return [*arguments, *revisions, "--"]
+
+
+def binary_patch_arguments(*revisions: str, paths: Iterable[str] = ()) -> list[str]:
+    """Arguments after ``git`` for a binary patch under the one rename rule."""
+    return ["diff", *RENAME_RULE, "--binary", *revisions, "--", *paths]
+
+
+def commit_manifest_arguments(commit: str) -> list[str]:
+    """Arguments after ``git`` that list the paths one commit changed."""
+    return ["diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-r", commit, "--"]
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
@@ -42,10 +71,7 @@ def _tree(repo: Path, revision: str) -> str:
 
 
 def _changed_paths(repo: Path, base: str, reviewed: str) -> list[str]:
-    output = _git(
-        repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
-        base, reviewed, "--",
-    ).stdout
+    output = _git(repo, *name_only_arguments(base, reviewed, nul=True)).stdout
     return sorted({_safe_path(value.decode("utf-8", errors="strict")) for value in output.split(b"\0") if value})
 
 

@@ -188,8 +188,19 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
             agent = state["agents"][self.delivery["id"]]
             self.assertNotIn(agent.get("liveness"), {"stalled", "recovering"},
                              "a refused write must not be treated as a stall")
-            self.assertIsNone(agent.get("automatic_recovery_requested_at"),
-                              "the generic recover instruction must not be routed to a blocked agent")
+            # 2026-09-25 defect #4: the refusal IS the saved next action. It is
+            # routed once, naming the reason and the recovery step - never the
+            # generic "resume your saved work" wake.
+            self.assertTrue(agent.get("automatic_recovery_requested_at"),
+                            "a refused Delivery must be woken with its refusal")
+            self.assertIn("refused Git write", agent.get("liveness_note", ""))
+        with control.locked_state(self.root) as control_state:
+            queued = [item["text"] for item in (control_state.get("inbox") or {}).get(self.delivery["session_id"], [])]
+        self.assertEqual(len(queued), 1, queued)
+        self.assertIn("refused by the Git broker", queued[0])
+        self.assertIn("replay refused", queued[0])
+        self.assertIn("recover-git", queued[0])
+        self.assertNotIn("continue GIT-MODEL from its saved next gate", queued[0])
 
         committed = board.broker_stage_commit(self.root, self.delivery["id"], ["product.txt"], "after the refusal")
         self.assertTrue(committed["commit"])
@@ -210,6 +221,56 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
         state = board.snapshot(self.root)
         self.assertEqual(state["git_acceptances"]["GIT-MODEL"]["tree"], committed["tree"])
         self.assertNotIn("GIT-MODEL", state.get("remote_push_outcomes", {}))
+
+    def test_failed_fast_forward_is_recorded_in_plain_words_and_accept_can_be_retried(self):
+        """2026-09-25 defects #2/#21: three Accepts saved the decision, then the
+        broker refused the fast-forward, the raw error reached the page, and a
+        second Accept was refused as "already recorded"."""
+        committed = self.certified_candidate()
+        with board.locked_state(self.root) as state:
+            state["releases"]["GIT-MODEL"]["acceptance_manifest"] = []  # the release check paired a rename
+        response = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(response["decision"], "accepted")
+        self.assertEqual(response["git_acceptance"]["status"], "failed")
+        self.assertIn("press Accept again", response["git_acceptance"]["reason"])
+        self.assertNotIn("manifest", response["git_acceptance"]["reason"])
+        self.assertEqual(self.git("rev-parse", "main").strip(), self.base_commit)
+        state = board.snapshot(self.root)
+        self.assertNotIn("GIT-MODEL", state.get("git_acceptances", {}))
+        self.assertEqual(state["release_decisions"]["GIT-MODEL"]["git_acceptance"]["attempts"], 1)
+        kinds = [event["kind"] for event in state["events"]]
+        self.assertIn("git_acceptance_failed", kinds)
+        self.assertNotIn("git_acceptance_completed", kinds)
+        with self.assertRaisesRegex(ValueError, "already been recorded"):
+            board.record_release_decision(self.root, "GIT-MODEL", "not_accepted", "changed my mind")
+
+        with board.locked_state(self.root) as state:
+            state["releases"]["GIT-MODEL"]["acceptance_manifest"] = committed["manifest"]
+        retried = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(retried["git_acceptance"]["commit"], committed["commit"])
+        self.assertEqual(self.git("rev-parse", "main").strip(), committed["commit"])
+        state = board.snapshot(self.root)
+        self.assertEqual(state["git_acceptances"]["GIT-MODEL"]["tree"], committed["tree"])
+        self.assertNotIn("git_acceptance", state["release_decisions"]["GIT-MODEL"])
+        kinds = [event["kind"] for event in state["events"]]
+        self.assertIn("owner_release_acceptance_retried", kinds)
+        self.assertIn("git_acceptance_completed", kinds)
+        with self.assertRaisesRegex(ValueError, "already been recorded"):
+            board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+
+    def test_uncommitted_files_in_main_are_named_and_accept_succeeds_once_restored(self):
+        committed = self.certified_candidate()
+        (self.root / "product.txt").write_text("edited in main by hand\n", encoding="utf-8")
+        response = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(response["git_acceptance"]["status"], "failed")
+        self.assertIn("product.txt", response["git_acceptance"]["reason"])
+        self.assertIn("unsaved changes", response["git_acceptance"]["reason"])
+        self.assertEqual(self.git("rev-parse", "main").strip(), self.base_commit)
+        self.git("checkout", "--", "product.txt")
+        retried = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(retried["git_acceptance"]["commit"], committed["commit"])
+        self.assertEqual(self.git("rev-parse", "main").strip(), committed["commit"])
+        self.assertEqual((self.root / "product.txt").read_text(encoding="utf-8"), "accepted\n")
 
     def test_moved_main_routes_reintegration_and_preserves_external_commit(self):
         committed = self.certified_candidate()

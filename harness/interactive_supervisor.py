@@ -22,6 +22,7 @@ import array
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import subprocess
@@ -41,6 +42,31 @@ from harness.project_context import add_context_arguments, context_from_args
 PASTE_START = b"\x1b[200~"
 PASTE_END = b"\x1b[201~"
 PASTE_BUFFER = b"\0HARNESS_PASTE\0"
+# 2026-09-25 defect #13: controller messages were typed into the terminal
+# while the owner was mid-sentence, submitting half of what they had written.
+# A queued message waits while unsent owner input exists, up to this long
+# after the last keystroke (an abandoned half-line must not block forever).
+OWNER_INPUT_HOLD_SECONDS = 120.0
+
+
+_TERMINAL_REPLY = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[@-Z\\-_]|\x1bP[^\x1b]*\x1b\\")
+
+
+def _owner_input_pending(typed: bytes) -> bool:
+    """Unsent owner text: bytes after the last submitted line, ignoring control replies."""
+    if not typed:
+        return False
+    if typed.startswith(PASTE_BUFFER) or PASTE_START in typed:
+        return True
+    plain = _TERMINAL_REPLY.sub(b"", typed)
+    return any(byte >= 0x20 and byte != 0x7F for byte in plain)
+
+
+def _controller_delivery_allowed(typed: bytes, last_key_at: float, now_monotonic: float) -> bool:
+    """Deliver a controller message only when the owner is not mid-input."""
+    if not _owner_input_pending(typed):
+        return True
+    return (now_monotonic - last_key_at) >= OWNER_INPUT_HOLD_SECONDS
 
 
 def _write(fd: int, data: bytes) -> None:
@@ -346,6 +372,7 @@ def run(
     os.close(slave)
     original = termios.tcgetattr(stdin_fd)
     typed = bytearray()
+    last_owner_key_at = 0.0
     pending_owner_input = bytearray()
     controller_queue: list[dict] = []
     child_output_seen = False
@@ -392,6 +419,7 @@ def run(
                 if not data:
                     break
                 typed.extend(data)
+                last_owner_key_at = time.monotonic()
                 note_attention(watch.owner_typed())
                 _record_owner_lines(root, session_id, typed, transcript)
                 if child_output_seen:
@@ -417,7 +445,7 @@ def run(
             # A supervisor-ready banner only proves the wrapper started. Wait
             # for the child CLI's first output so a slow-starting CLI cannot
             # receive controller input before it has configured its terminal.
-            if child_output_seen and controller_queue:
+            if child_output_seen and controller_queue and _controller_delivery_allowed(bytes(typed), last_owner_key_at, time.monotonic()):
                 item = controller_queue.pop(0)
                 transcript.note(f"controller message ({item['source']}): {item['text']}")
                 _submit_controller_message(master, item["source"], item["text"])

@@ -199,3 +199,13 @@ marked non-blocking, is out of scope for later rounds. Never weaken or
 downgrade a protective refusal, gate, or guard on your own inference about an
 environment you have not reproduced. To change accepted behavior at all, raise
 it as a new claim with executed evidence that the old behavior was wrong.
+
+## Sandbox limits are not findings (2026-09-25)
+
+Every role runs inside an agent sandbox: its own worktree, the project data
+folder and temp space. Nobody can write under the Application Support folder in your home Library
+or start a nested sandbox. If a proof needs that (a real-GPU run, a runtime
+that writes to Application Support), do not record a finding against the CTO
+or the reviewer: post a status note naming the exact command and the output
+path, and the CTO pins it in Mission Control as an owner-run step.
+

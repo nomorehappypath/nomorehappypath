@@ -40,6 +40,11 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
      "is asking permission to continue ('Do you want to proceed?')"),
     (re.compile(r"USER ACTION:\s*Needed", re.IGNORECASE),
      "says it needs you to act ('USER ACTION: Needed')"),
+    # 2026-09-25 defect #15: an expired login stalled the CTO for three hours
+    # and only the event log knew. The login prompt is its own cause.
+    (re.compile(r"(?:run|use|type|try)\s+/login|not logged in|please log ?in|login required|"
+                r"authentication (?:failed|expired|required|error)|session expired|token expired", re.IGNORECASE),
+     "appears to be logged out (open its terminal and run /login)"),
 )
 
 # One token of the stream: an escape sequence, a control character, or text.

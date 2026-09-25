@@ -775,6 +775,38 @@ class BoardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already has an active task"):
             board.record_owner_direction(self.root, session["id"], "second direction")
 
+    def test_a_finished_tasks_consumed_direction_does_not_block_the_next_direction_on_the_same_terminal(self):
+        """2026-09-24 defect: after acceptance the same terminal re-registered as a new waiting agent and was refused."""
+        session = control.create(self.root, "codex_delivery")
+        first = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        board.record_owner_direction(self.root, session["id"], "Build the first thing")
+        board.begin_task(self.root, first["id"], "FIRST-TASK")
+        self.assertTrue(board.snapshot(self.root)["owner_directions"][session["id"]]["consumed"])
+        # The task is over: the agent is done and inactive; the terminal registers again, waiting.
+        with board.locked_state(self.root) as state:
+            state["agents"][first["id"]].update({"active": False, "status": "done"})
+        again = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        self.assertNotEqual(again["id"], first["id"])
+        # Mission Control's direction path and the terminal path both accept a new direction.
+        board.record_owner_message(self.root, again["id"], "Build the second thing")
+        state = board.snapshot(self.root)
+        self.assertEqual(state["owner_directions"][session["id"]]["text"], "Build the second thing")
+        self.assertFalse(state["owner_directions"][session["id"]]["consumed"])
+        archived = state["owner_direction_history"][session["id"]]
+        self.assertEqual([item["text"] for item in archived], ["Build the first thing"])
+        self.assertTrue(archived[0]["consumed"]); self.assertIn("waiting again", archived[0]["archived_reason"])
+        begun = board.begin_task(self.root, again["id"], "SECOND-TASK")
+        self.assertEqual(begun["owner_direction"], "Build the second thing")
+
+    def test_a_consumed_direction_still_blocks_while_its_task_is_active(self):
+        session = control.create(self.root, "codex_delivery")
+        dev = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        board.record_owner_direction(self.root, session["id"], "Build the first thing")
+        board.begin_task(self.root, dev["id"], "FIRST-TASK")
+        with self.assertRaisesRegex(ValueError, "already has an active task|already has a task"):
+            board.record_owner_direction(self.root, session["id"], "a second direction mid-task")
+        self.assertNotIn("owner_direction_history", board.snapshot(self.root))
+
     def test_later_terminal_approval_cannot_replace_mission_control_direction(self):
         session = control.create(self.root, "codex_delivery")
         dev = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
