@@ -199,6 +199,94 @@ class StallNoticeTests(_CtoFixture):
         self.assertIsNone(attention.detect("Reading files… 42% done"))
 
 
+class StatusWithoutPollTests(_CtoFixture):
+    """2026-09-26: a CTO that answers wakes with status posts is alive, never "not responding"."""
+
+    def wake_pending(self, **fields):
+        with board.locked_state(self.root) as state:
+            state["agents"][self.delivery["id"]].update({"task": "WORK", "active": True, "last_poll_at": board.now()})
+            state["agents"][self.cto["id"]].update({
+                "last_poll_at": _ago(900), "recovery_state": "automatic_requested", "liveness": "recovering",
+                "automatic_recovery_requested_at": _ago(board.AUTO_RECOVERY_GRACE_SECONDS + 5),
+                "last_routine_cycle_at": _ago(board.CTO_MONITOR_QUIET_INTERVAL_SECONDS + 10),
+                "last_routine_cycle_sequence": 0, "last_routine_cycle_poll_counter": 0,
+                **fields,
+            })
+
+    def test_a_status_post_answers_the_wake_and_is_never_counted_as_a_stall(self):
+        self.wake_pending(consecutive_stalls=board.CTO_UNRESPONSIVE_AFTER_STALLS - 1)
+        board.status(self.root, self.cto["id"], "no change; all tasks progressing", "working")
+        agent = self.cto_agent()
+        self.assertEqual(agent["recovery_state"], "answered_without_poll")
+        self.assertEqual(agent["liveness_note"], board.CTO_STATUS_WITHOUT_POLL_NOTE)
+        self.assertNotIn("consecutive_stalls", agent)
+        self.assertEqual(len(self.events("cto_status_without_poll")), 1)
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+            board.mark_stalled(self.root)
+        agent = self.cto_agent()
+        self.assertEqual(self.events("agent_stalled"), [], "a status post is not silence")
+        self.assertEqual(self.events("agent_unresponsive"), [])
+        self.assertNotEqual(agent["recovery_state"], "unresponsive")
+        self.assertEqual(enqueue.call_count, 1, "the next cycle is routed on the normal cadence")
+        text = enqueue.call_args.args[2]
+        self.assertIn("posted status but never polled", text)
+        self.assertIn(f"poll --agent {self.cto['id']}", text)
+
+    def test_an_unresponsive_cto_that_posts_status_gets_its_cycles_back(self):
+        self.wake_pending(recovery_state="unresponsive", liveness="stalled",
+                          liveness_note=board.CTO_UNRESPONSIVE_NOTE, consecutive_stalls=3)
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+            board.mark_stalled(self.root)
+            enqueue.assert_not_called()
+            board.status(self.root, self.cto["id"], "logged back in; reviewing the board", "working")
+            self.assertEqual(self.cto_agent()["recovery_state"], "answered_without_poll")
+            board.mark_stalled(self.root)
+            self.assertEqual(enqueue.call_count, 1, "monitoring resumes without a relaunch")
+        agent = self.cto_agent()
+        self.assertEqual(agent["recovery_state"], "automatic_requested")
+        self.assertEqual(agent["liveness_note"], "scheduled monitoring cycle nudge; owner action is not required")
+        self.assertNotIn("consecutive_stalls", agent)
+
+    def test_repeated_status_posts_record_the_answer_once_per_wake(self):
+        self.wake_pending()
+        board.status(self.root, self.cto["id"], "first", "working")
+        board.status(self.root, self.cto["id"], "second", "working")
+        self.assertEqual(len(self.events("cto_status_without_poll")), 1)
+
+    def test_every_cycle_names_the_poll_command(self):
+        self.wake_pending()
+        with board.locked_state(self.root) as state:
+            agent = state["agents"][self.cto["id"]]
+            agent.pop("recovery_state"); agent.pop("automatic_recovery_requested_at")
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+            board.mark_stalled(self.root)
+        text = enqueue.call_args.args[2]
+        self.assertTrue(text.startswith("MONITORING CYCLE DUE: First run the board command `poll --agent "), text)
+        self.assertIn(f"`poll --agent {self.cto['id']}`", text)
+        self.assertIn("posting status are not a poll", text)
+        self.assertNotIn("posted status but never polled", text)
+
+    def test_a_poll_after_a_status_only_answer_is_a_full_recovery(self):
+        self.wake_pending()
+        board.status(self.root, self.cto["id"], "status only", "working")
+        board.poll(self.root, self.cto["id"])
+        agent = self.cto_agent()
+        self.assertEqual(agent["recovery_state"], "resumed")
+        self.assertEqual(agent["liveness"], "healthy")
+        self.assertEqual(len(self.events("agent_recovered")), 1)
+
+    def test_a_delivery_status_post_is_untouched_by_the_cto_rule(self):
+        with board.locked_state(self.root) as state:
+            state["agents"][self.delivery["id"]].update({
+                "task": "WORK", "active": True, "recovery_state": "automatic_requested",
+                "automatic_recovery_requested_at": _ago(10),
+            })
+        board.status(self.root, self.delivery["id"], "working on it", "working")
+        agent = board.snapshot(self.root)["agents"][self.delivery["id"]]
+        self.assertEqual(agent["recovery_state"], "automatic_requested")
+        self.assertEqual(self.events("cto_status_without_poll"), [])
+
+
 class SupervisorTypingGateTests(unittest.TestCase):
     def test_delivery_waits_for_unsent_input_but_not_forever(self):
         allowed = interactive_supervisor._controller_delivery_allowed

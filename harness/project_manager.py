@@ -250,6 +250,17 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                 and str(task) not in accepted_tasks
                 and not releases.get(str(task))
             }
+            # Backlog #4 (2026-09-27): a requirements proposal waiting for the
+            # owner's Go ahead / Modify is also waiting on the owner.
+            confirmations = state.get("requirement_confirmations") or {}
+            cancelled = state.get("cancelled_tasks") or {}
+            awaiting_requirements = {
+                str(task) for task, proposal in (state.get("requirement_proposals") or {}).items()
+                if isinstance(proposal, dict) and proposal.get("status") == "awaiting_owner"
+                and str(task) not in accepted_tasks and str(task) not in cancelled
+                and not (confirmations.get(str(task)) or {}).get("text")
+            }
+            awaiting_owner = awaiting_owner | awaiting_requirements
             counts["awaiting_owner"] = len(awaiting_owner)
             counts["open"] = len({task for task in live if str(task) not in awaiting_owner})
             running = bool({task for task in live if str(task) not in awaiting_owner})
@@ -299,6 +310,13 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                 latest_progress = "Complete — waiting for your test and acceptance."
             elif str(latest_task) in awaiting_owner:
                 latest_progress = "Complete — waiting for your test and acceptance."
+            if awaiting_requirements and (not latest_task or str(latest_task) in awaiting_requirements
+                                          or str(latest_task) not in awaiting_owner):
+                latest_task = str(latest_task) if str(latest_task) in awaiting_requirements else sorted(awaiting_requirements)[0]
+                latest_progress = (
+                    "Your decision needed: the requirements are ready. Open Mission Control and "
+                    "press Go ahead, or Modify to ask for changes."
+                )
             event_times = [str(event.get("at", "")) for event in events if event.get("at")]
             if event_times:
                 last_board_activity = max(event_times)

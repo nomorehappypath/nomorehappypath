@@ -28,6 +28,32 @@ If it is unavailable, create the same `.harness/board/BOARD.md` and
 `.harness/board/events.jsonl` protocol yourself and report the unavailable tool
 as a technical blocker to the CTO—not to the owner.
 
+## The owner's logins are never yours to read or copy
+
+Never read, copy, move, print, or hand to another program the owner's Claude
+or Codex login: `~/.claude/.credentials.json`, a `.credentials.json` in any
+config folder, the "Claude Code-credentials" Keychain item, or
+`~/.codex/auth.json`. Never create a second CLI config folder that holds a copy
+of a login. On 2026-09-26 a scenario script copied the owner's login into
+temporary config folders to run `claude -p` "isolated"; the copies shared one
+session, and when one of them refreshed it, every Claude login on the machine
+stopped working. The harness now refuses these reads where the operating system
+allows it; where it cannot, this rule is the boundary.
+
+When a test or scenario needs an isolated, authenticated CLI run, do not
+improvise one. The only sanctioned way is a long-lived token the owner creates
+themselves with `claude setup-token`, passed to the run as the
+`CLAUDE_CODE_OAUTH_TOKEN` environment variable
+(https://code.claude.com/docs/en/authentication.md). If no such token has been
+provided, the run is an owner action: record what you need and why for the CTO
+to pin as an owner-action card, and continue with the rest of the work. A
+config folder isolated for hermeticity (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
+pointed at a temporary folder) stays empty of logins.
+
+Every process you start inherits your session's `HARNESS_MANAGED_SESSION`
+marker; when your session ends, the harness stops whatever still carries it.
+Do not leave CLI probes running in the background.
+
 ## Visible board protocol
 
 When launched from Mission Control, the supervisor pre-registers you on the

@@ -160,6 +160,22 @@ class _ProcProcessIdentity(_ProcessIdentity):
             return fallback  # kernel threads have an empty cmdline
         return " ".join(part for part in raw.decode("utf-8", "replace").split("\x00") if part)
 
+    def processes_with_environment_entry(self, entry: str) -> list[int]:
+        """PIDs whose /proc/<pid>/environ holds exactly `entry`, excluding this process."""
+        own = os.getpid()
+        wanted = entry.encode("utf-8")
+        found: list[int] = []
+        for item in Path("/proc").iterdir():
+            if not item.name.isdigit() or int(item.name) == own:
+                continue
+            try:
+                environ = (item / "environ").read_bytes()
+            except OSError:
+                continue
+            if wanted in environ.split(b"\0"):
+                found.append(int(item.name))
+        return found
+
     def start_token(self, pid: int) -> str:
         """An empty token means the pid is gone — an ANSWER, not a failure."""
         stat = self._read_stat(self.PROC / str(int(pid)))
@@ -367,7 +383,34 @@ class _BwrapAgentConfinement(_AgentConfinement):
     def available(self) -> bool:
         return self.binary() is not None
 
-    def wrap(self, argv, writable: list[str], *, store) -> list[str]:
+    def login_file_paths(self, home, claude_config_dir=None) -> list[str]:
+        home = Path(home).expanduser()
+        paths = [str(home / ".claude" / ".credentials.json")]
+        if claude_config_dir:
+            paths.append(str(Path(claude_config_dir).expanduser() / ".credentials.json"))
+        return list(dict.fromkeys(paths))
+
+    def protected_read_paths(self, home, claude_config_dir=None) -> list[str]:
+        """Nothing for the agent itself: Linux has no Keychain, so this file IS
+        the managed Claude agent's own login and it must stay readable to it.
+        Harness-run commands are still guarded by `read_guard`."""
+        return []
+
+    def read_guard(self, argv, protected: list[str], *, store) -> list[str]:
+        """Mask the owner's login files with an empty file; every other read and write is as before.
+
+        Without bubblewrap the command runs as it always has (a Linux host that
+        runs managed agents has it: the agent launch refuses without it)."""
+        bwrap = self.binary()
+        if not bwrap:
+            return list(argv)
+        command = [bwrap, "--die-with-parent", "--bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+        for path in protected:
+            if Path(path).is_file():
+                command += ["--ro-bind", "/dev/null", str(Path(path))]
+        return command + ["--", *list(argv)]
+
+    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None) -> list[str]:
         bwrap = self.binary()
         if not bwrap:
             raise AgentConfinementUnavailable(

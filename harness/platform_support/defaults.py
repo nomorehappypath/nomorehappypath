@@ -190,6 +190,28 @@ class _ProcessIdentity:
         )
         return int(result.stdout.strip())
 
+    def processes_with_environment_entry(self, entry: str) -> list[int]:
+        """PIDs whose environment holds exactly `entry` (KEY=VALUE), excluding this process.
+
+        macOS: `ps -E` shows a same-user process's launch environment. It does
+        not show it for Apple platform binaries (/bin/sh, /bin/zsh, /bin/sleep);
+        the CLIs a managed agent leaves behind (claude, codex, node, python)
+        are not platform binaries and are found (measured 2026-09-26).
+        """
+        own = os.getpid()
+        try:
+            listing = subprocess.run(
+                ["ps", "-Eww", "-A", "-o", "pid=,command="], capture_output=True, text=True, timeout=10,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        found: list[int] = []
+        for line in listing.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) != own and entry in parts[1].split():
+                found.append(int(parts[0]))
+        return found
+
     def terminate_group(self, process: "subprocess.Popen", sig: int) -> bool:
         """Signal a live child's OWN process group, or refuse.
 
@@ -624,13 +646,60 @@ class _AgentConfinement:
     def _quote(path: str) -> str:
         return path.replace("\\", "\\\\").replace('"', '\\"')
 
-    def profile(self, writable: list[str]) -> str:
-        """Seatbelt: allow default, deny file-write*, allow file-write* only inside the grant.
+    def login_file_paths(self, home, claude_config_dir=None) -> list[str]:
+        """The owner's Claude login files: the default config folder's, and any relocated one's."""
+        home = Path(home).expanduser()
+        paths = [str(home / ".claude" / ".credentials.json")]
+        if claude_config_dir:
+            paths.append(str(Path(claude_config_dir).expanduser() / ".credentials.json"))
+        return list(dict.fromkeys(paths))
+
+    def read_guard(self, argv, protected: list[str], *, store) -> list[str]:
+        """Run `argv` with every read and write it had before, except the protected files.
+
+        For commands the harness itself runs outside any agent sandbox (ledger
+        simulations in the worker). Writes are NOT confined here: this guard
+        takes nothing away from the command except the owner's login.
+        """
+        if not self.available():
+            raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to run the command without the login guard")
+        lines = ["(version 1)", "(allow default)"]
+        for path in protected:
+            real = self._quote(self._real(path))
+            lines.append(f'(deny file-read* (literal "{real}"))')
+        profile = "\n".join(lines) + "\n"
+        store = Path(store)
+        store.mkdir(parents=True, exist_ok=True)
+        path = store / f"read-guard-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"
+        if not path.is_file() or path.read_text(encoding="utf-8") != profile:
+            path.write_text(profile, encoding="utf-8")
+        return ["/usr/bin/sandbox-exec", "-f", str(path), *list(argv)]
+
+    def protected_read_paths(self, home, claude_config_dir=None) -> list[str]:
+        """Owner login material no managed agent may read (2026-09-26 incident).
+
+        On macOS the CLI authenticates through the Keychain (the security
+        service), not by reading this file, so denying it keeps the agent's own
+        login working (proven live: `claude auth status` → loggedIn under the
+        deny) and stops the copy of the owner's login file into another config
+        folder that broke every login on the machine.
+        """
+        # The Keychain folder is deliberately NOT denied: the CLI's own login
+        # goes through the system security service, which reads it; denying it
+        # breaks `security find-generic-password` (proven live 2026-09-26).
+        return self.login_file_paths(home, claude_config_dir)
+
+    def profile(self, writable: list[str], protected_reads: list[str] | None = None) -> str:
+        """Seatbelt: allow default, deny file-write*, allow file-write* only inside the grant;
+        deny file-read* on the owner's login material.
 
         Files the CLI writes NEXT TO its config (`~/.claude.json.backup`,
         `.lock` …) are matched by prefix.
         """
         lines = ["(version 1)", "(allow default)", "(deny file-write*)"]
+        for path in protected_reads or []:
+            real = self._real(path)
+            lines.append(f'(deny file-read* (literal "{self._quote(real)}") (subpath "{self._quote(real)}"))')
         for path in writable:
             real = self._real(path)
             if Path(real).is_file() or real.endswith(".claude.json"):
@@ -640,11 +709,11 @@ class _AgentConfinement:
         lines.append('(allow file-write* (subpath "/dev"))')
         return "\n".join(lines) + "\n"
 
-    def wrap(self, argv, writable: list[str], *, store) -> list[str]:
-        """The command to run so that `argv` can write only inside `writable`."""
+    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None) -> list[str]:
+        """The command to run so that `argv` can write only inside `writable` and never reads the protected paths."""
         if not self.available():
             raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to launch the agent unconfined")
-        profile = self.profile(writable)
+        profile = self.profile(writable, protected_reads)
         store = Path(store)
         store.mkdir(parents=True, exist_ok=True)
         path = store / f"agent-sandbox-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"

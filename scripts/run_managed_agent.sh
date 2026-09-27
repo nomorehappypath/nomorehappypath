@@ -60,6 +60,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$target_root" && -n "$session_id" && -n "$kind" ]] || { echo "Missing managed-session arguments" >&2; exit 2; }
+# Every process this session starts - the CLI, its tools, and anything they
+# start in turn - inherits this non-secret marker, even after it is reparented.
+# When the session ends, the harness stops whatever still carries it
+# (2026-09-26: CLI probes started by an agent outlived it for hours).
+export HARNESS_MANAGED_SESSION="$session_id"
 if [[ -n "$board_endpoint" && -z "$board_bootstrap" ]]; then
   echo "--board-endpoint bootstrap is no longer accepted; use --board-bootstrap" >&2
   exit 2
@@ -162,6 +167,25 @@ effort="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["effo
 vendor="OpenAI"
 if [[ "$provider" == "claude" ]]; then vendor="Anthropic"; fi
 
+# ONE CLI, CHOSEN DETERMINISTICALLY. This Terminal's own PATH decides nothing:
+# on 2026-09-26 a months-old Homebrew `claude` sat first on it and the agents
+# ran that. The harness resolves the CLI (HARNESS_*_BIN if set, otherwise the
+# newest of the copies it can find), launches exactly that file, and puts its
+# folder first on PATH so every `claude`/`codex` the agent itself runs is the
+# same one. The launch line in the transcript names the path and version.
+resolved_cli_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness import global_settings
+print(json.dumps(global_settings.resolved_cli(sys.argv[2])))
+' "$harness_root" "$provider")" || resolved_cli_json='{}'
+cli_path="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("path",""))' <<<"$resolved_cli_json")"
+cli_version="$("$python_bin" -E -c 'import json,sys; d=json.load(sys.stdin); print(d.get("version") or ("set by HARNESS_%s_BIN" % sys.argv[1].upper() if d.get("source")=="configured" else "unknown"))' "$provider" <<<"$resolved_cli_json")"
+if [[ -n "$cli_path" ]]; then
+  if [[ "$provider" == "codex" ]]; then export HARNESS_CODEX_BIN="$cli_path"; else export HARNESS_CLAUDE_BIN="$cli_path"; fi
+  export PATH="$(dirname "$cli_path"):$PATH"
+fi
+
 # The CLI keeps its own memory of a conversation, and the harness keeps the
 # vendor's session id so a relaunch RESUMES that memory instead of starting a
 # stranger. On 2026-09-22 an afternoon of CTO design work was lost this way.
@@ -181,7 +205,7 @@ plan_cli_launch() {
   predecessor_session="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("predecessor",""))' <<<"$plan_json")"
   after_pause="$("$python_bin" -E -c 'import json,sys; print("1" if json.load(sys.stdin).get("after_pause") else "")' <<<"$plan_json")"
   mkdir -p "$(dirname "$transcript_path")"
-  printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" >> "$transcript_path"
+  printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s) cli=%s version=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" "${cli_path:-not-found}" "$cli_version" >> "$transcript_path"
   if [[ "$launch_mode" == "resume" ]]; then
     "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" --resumed >/dev/null
   else

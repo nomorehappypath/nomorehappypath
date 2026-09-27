@@ -105,7 +105,24 @@ def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str |
         # it is a write to its parent, which is outside the grant. Found by
         # the end-to-end run, not by the unit tests.
         Path(root).mkdir(parents=True, exist_ok=True)
-    return implementation.wrap(list(argv), writable, store=Path(store))
+    protected = getattr(implementation, "protected_read_paths", None)
+    protected_reads = protected(home, claude_config_dir) if protected else []
+    return implementation.wrap(list(argv), writable, store=Path(store), protected_reads=protected_reads)
+
+
+def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_dir: str | None = None,
+               implementation=None) -> list[str]:
+    """Run a harness-owned command (a ledger simulation) without access to the owner's Claude login.
+
+    2026-09-26: a delivery copied the owner's login file into temporary config
+    folders to run the CLI "isolated"; the copies shared one session and broke
+    every login on the machine. The only sanctioned way to authenticate an
+    isolated run is a token the owner creates with `claude setup-token`,
+    passed as CLAUDE_CODE_OAUTH_TOKEN — never a copy of the login file.
+    """
+    implementation = implementation or platform_support.agent_confinement()
+    protected = implementation.login_file_paths(home, claude_config_dir)
+    return implementation.read_guard(list(argv), protected, store=Path(store))
 
 
 def main(argv: list[str] | None = None) -> int:

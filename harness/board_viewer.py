@@ -29,6 +29,9 @@ from harness.project_context import ProjectRoot, add_context_arguments, context_
 
 OWNER_MESSAGE_MAX_BYTES = 20_000
 OWNER_DIRECTIVE_EXTENSIONS = {".md", ".txt"}
+# Backlog #7: the Mission Control lines for what the harness did by itself.
+HARNESS_ACTION_EVENTS = {"agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up"}
+HARNESS_ACTION_LINES = 5
 DASHBOARD_REVIEW_LIMIT_PER_TASK = 40
 
 
@@ -51,7 +54,7 @@ PAGE = r"""<!doctype html>
 @media (prefers-reduced-motion:reduce){.waiting-banner{animation:none;outline:4px solid #7a1610}}
 .badge.tone-waiting{background:var(--red);color:#fff;animation:waiting-blink 1.1s steps(2,start) infinite}
 @media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
-.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.harness-actions{border:1px solid #b8c9e8;background:#f7faff}.harness-actions h2{margin:0 0 6px;font-size:16px}.harness-actions ul{margin:0;padding-left:20px}.harness-actions li{margin:4px 0}.harness-actions li.gave-up{color:#8a2c1f;font-weight:700}.harness-actions small{color:var(--muted)}.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
 .release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
 .release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
 .modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}
@@ -83,7 +86,9 @@ PAGE = r"""<!doctype html>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
+<section id="decision-banner" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
+<section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
 <section id="attention" class="panel section" aria-live="polite"></section>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
 <section class="layout"><div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only current work appears here. Component counts are supporting evidence, not a completion claim.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div><aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside></section>
@@ -247,7 +252,7 @@ function reviewScope(review){
 function taskGate(state,name,contract,agent,reviews,total,done){
   const release=(state.releases||{})[name];
   const decision=(state.release_decisions||{})[name]?.decision;
-  const released=release?.status==='VISUAL_TEST_REQUIRED';
+  const released=['VISUAL_TEST_REQUIRED','ACCEPTED'].includes(release?.status);
   const externalTarget=release?.runtime_verification_deferred_to_target_acceptance===true;
   const runtimeGated=Boolean(release?.checks?.deployed_runtime_verified||release?.checks?.deployed_chat_verified);
   const deployedRelease=externalTarget||!runtimeGated||!released||!loadedRuntimeManaged||(Boolean(loadedRuntimeCommit)&&release?.head_commit===loadedRuntimeCommit);
@@ -304,7 +309,7 @@ function taskProgress(state,name,facts,gate,confirmation={}){
   const confirmed=Boolean(confirmation.text||(state.requirement_confirmations||{})[name]?.text);
   const deliveryCertified=reviews.some(item=>item.delivery_state==='passed'&&Boolean(item.delivery_evidence));
   const finalReviewed=reviews.some(item=>item.phase==='final_acceptance'&&item.status==='passed');
-  const released=(state.releases||{})[name]?.status==='VISUAL_TEST_REQUIRED';
+  const released=['VISUAL_TEST_REQUIRED','ACCEPTED'].includes((state.releases||{})[name]?.status);
   const accepted=(state.release_decisions||{})[name]?.decision==='accepted';
   const overallChecks=[confirmed,deliveryCertified,finalReviewed,released,accepted];
   const paused=['draining','paused'].includes(state.project_pause?.status);
@@ -469,7 +474,7 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const changeHistory=structureChanges.map(change=>`<div class="scope-change"><strong>Work added after planning</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc((change.added||[]).join(', '))}</small></div>`).join('');
   const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${facts.subtasks.map(item=>`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
   const proposal=(state.requirement_proposals||{})[name]||{};
-  const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?`<div class="requirements-confirmation requirements-proposal"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small><div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">Go ahead — this is the contract</button><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div><p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`
+  const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?`<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small><div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">Go ahead — this is the contract</button><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div><p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
     :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.</div>`
     :'';
@@ -483,6 +488,31 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const accepted=progress.overall.completed===progress.overall.total;
   const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
+}
+
+// Backlog #4 (2026-09-27): a requirements proposal waiting for the owner is
+// named at the top of the board, with a button that brings its Go ahead /
+// Modify block into view. Only tasks whose block is actually on the page.
+function renderDecisionBanner(state){
+  const section=el('#decision-banner');if(!section)return;
+  const confirmations=state.requirement_confirmations||{};
+  const waiting=Object.entries(state.requirement_proposals||{})
+    .filter(([name,proposal])=>proposal?.status==='awaiting_owner'&&!(confirmations[name]||{}).text)
+    .map(([name])=>name)
+    .filter(name=>typeof document.getElementById!=='function'||document.getElementById(`req-decision-${name}`));
+  if(!waiting.length){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  section.hidden=false;
+  const html=`<h2>Your decision needed</h2>${waiting.map(name=>`<p>Delivery has written the final requirements for <strong>${esc(objectiveSummary(name))}</strong>. Nothing is built until you press <strong>Go ahead</strong> or <strong>Modify…</strong>.</p><div class="actions"><button type="button" data-show-decision="${esc(name)}">Show me the requirements</button></div>`).join('')}`;
+  // Rewrite only on a real change: every refresh re-announcing the live region
+  // (and dropping keyboard focus on its button) is noise for the owner.
+  const signature=_cardSignature(html);
+  if(section.dataset.signature===signature)return;
+  section.dataset.signature=signature;
+  section.innerHTML=html;
+  section.querySelectorAll('[data-show-decision]').forEach(button=>button.onclick=()=>{
+    const target=document.getElementById(`req-decision-${button.dataset.showDecision}`);
+    if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.querySelector('[data-req-go]')?.focus({preventScroll:true});}
+  });
 }
 
 function _cardSignature(html){let hash=5381;for(let i=0;i<html.length;i++){hash=((hash<<5)+hash+html.charCodeAt(i))|0;}return String(hash);}
@@ -695,6 +725,7 @@ function humanTask(agent,state={}){
 
 function humanStage(agent,state,contracts){
   if(agent.status==='paused')return'PAUSED';
+  if(agent.liveness==='needs_sign_in')return'NEEDS SIGN-IN';
   if(agent.role==='cto'){
     if(agent.recovery_state==='unresponsive')return'CTO NOT RESPONDING';
     if(agent.liveness==='stalled')return'CTO RECOVERY REQUIRED';
@@ -754,7 +785,9 @@ function agentStatusSummary(agent,state,contracts){
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
+  if(agent.liveness==='needs_sign_in')return{summary:agent.liveness_note||'This agent needs you to sign in again: open its terminal and run /login.',next:'Run /login in its terminal. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and run /login.'};
   if(agent.role==='cto'&&agent.recovery_state==='unresponsive')return{summary:'CTO is not responding - it may need /login. Three wake-ups in a row went unanswered, so the harness has stopped pinging it.',next:'Open the CTO terminal; if it shows a login prompt, run /login. The CTO resumes once it checks the board again.',ownerAction:'Open the CTO terminal and run /login if it asks you to sign in.'};
+  if(agent.role==='cto'&&agent.recovery_state==='answered_without_poll')return{summary:'The CTO answered its last wake-up with a status update but has not polled the board yet. It is alive; the harness keeps waking it on the normal schedule and names the poll command each time.',next:'Run the board poll on the next cycle, then continue monitoring. Your action: none.',ownerAction:'None.'};
   if(agent.liveness==='stalled')return{summary:`The ${agent.role==='qa'?'Independent Reviewer':agent.role==='cto'?'CTO':'Delivery Agent'} for ${humanTask(agent,state)} stopped checking the board. The harness must recover it; you do not need to intervene.`,next:'Resume the saved work and report a plain-language update. Your action: none.'};
   if(agent.task==='AWAITING_OWNER_DIRECTION')return{summary:'This Delivery Agent is open and waiting for your development direction.',next:'Use Give direction in Mission Control when you are ready.'};
   if(agent.role==='cto'){
@@ -884,9 +917,15 @@ function renderWaiting(sessionItems){
   const waiting=waitingSessions(sessionItems);
   if(!waiting.length){banner.hidden=true;banner.replaceChildren();return;}
   banner.hidden=false;
+  // 2026-09-27 backlog #8: a signed-out agent is not a stray prompt. Say who
+  // needs signing in and how, and nothing else, and do not call it a bug.
+  const signedOut=waiting.filter(session=>String(session.attention_reason||'').includes('/login'));
+  const prompts=waiting.filter(session=>!signedOut.includes(session));
+  const roleName=session=>({'Independent Reviewer':'Reviewer','Delivery Agent':'Delivery agent'})[session.role]||session.role||session.label;
   banner.innerHTML=`<div>${waiting.length===1?'An agent is waiting for you':`${waiting.length} agents are waiting for you`} — nothing moves until you answer in its Terminal window.</div>`+
-    waiting.map(session=>`<p>${esc(session.role||session.label)} (${esc(session.label)}) ${esc(session.attention_reason||'is waiting for you')} — waiting ${esc(waitingSince(session))}.</p>`).join('')+
-    `<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`;
+    signedOut.map(session=>`<p class="sign-in-needed">The ${esc(roleName(session))} needs you to sign in again: open its terminal and run /login. Its work is paused, not lost — waiting ${esc(waitingSince(session))}.</p>`).join('')+
+    prompts.map(session=>`<p>${esc(session.role||session.label)} (${esc(session.label)}) ${esc(session.attention_reason||'is waiting for you')} — waiting ${esc(waitingSince(session))}.</p>`).join('')+
+    (prompts.length?`<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`:`<small>Signing in is the only thing needed; the harness holds its messages until then and carries on by itself.</small>`);
 }
 function waitingBadge(session){
   return session&&session.attention_since?'<span class="badge tone-waiting">WAITING FOR YOU</span>':'';
@@ -940,7 +979,7 @@ function openAgents(state,contracts,sessionItems=[]){
       const recover=document.createElement('button');recover.type='button';recover.textContent='Recover agent';recover.onclick=()=>recoverAgent(agent.id,humanTask(agent,state));actions.append(recover);
     }
     if(session){
-      const stop=document.createElement('button');stop.className='stop';stop.type='button';stop.textContent='Stop terminal';stop.disabled=session.status==='stopping';stop.onclick=()=>confirmStopSession(session.id,session.label,task,stage);actions.append(stop);
+      const stop=document.createElement('button');stop.className='stop';stop.type='button';stop.textContent='Stop terminal';stop.disabled=session.status==='stopping';stop.onclick=()=>confirmStopSession(session.id,session.label,task,stage,agent.task);actions.append(stop);
     }else{
       const disconnected=document.createElement('small');disconnected.className='agent-meta';disconnected.textContent='Terminal is not currently connected; task memory remains on the board.';actions.append(disconnected);
     }
@@ -956,7 +995,7 @@ function openAgents(state,contracts,sessionItems=[]){
     row.innerHTML=`<div class="row"><div><strong>${esc(session.label)} — ${esc(task)}</strong><small class="agent-meta">${esc(note)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div>`;
     const actions=document.createElement('div');actions.className='actions';
     const conversation=document.createElement('a');conversation.className='secondary conversation-link';conversation.href=apiPath(`/api/transcripts/${encodeURIComponent(session.id)}`);conversation.target='_blank';conversation.rel='noopener';conversation.textContent='Conversation';actions.append(conversation);
-    const stop=document.createElement('button');stop.className='stop';stop.type='button';stop.textContent='Stop terminal';stop.disabled=session.status==='stopping';stop.onclick=()=>confirmStopSession(session.id,session.label,task,stage);actions.append(stop);
+    const stop=document.createElement('button');stop.className='stop';stop.type='button';stop.textContent='Stop terminal';stop.disabled=session.status==='stopping';stop.onclick=()=>confirmStopSession(session.id,session.label,task,stage,session.task);actions.append(stop);
     row.append(actions);out.append(row);
   }
 }
@@ -989,6 +1028,15 @@ async function submitOwnerMessage(event){
   }catch(failure){error.textContent=failure.message;}
   finally{submit.disabled=false;}
   return false;
+}
+
+function renderHarnessActions(state){
+  // Backlog #7: one plain line for each thing the harness did by itself.
+  const section=el('#harness-actions');
+  const lines=Array.isArray(state.harness_actions)?state.harness_actions:[];
+  if(!lines.length){section.hidden=true;section.innerHTML='';return;}
+  section.hidden=false;
+  section.innerHTML='<h2>What the harness did for you</h2><ul>'+lines.map(item=>`<li class="${item.kind==='self_heal_gave_up'?'gave-up':''}">${esc(item.message)} <small>${esc(relativeUpdate(item.at))}</small></li>`).join('')+'</ul>';
 }
 
 function renderOwnerActions(state){
@@ -1079,12 +1127,21 @@ function sessions(items,state,contracts){
   }
 }
 
-async function confirmStopSession(id,label,task,stage){
-  const approved=window.confirm(`Stop ${label} for “${task}”?\n\nCurrent stage: ${stage}\n\nIf this is an unfinished Delivery task, its board records and isolated workspace will be removed. Unexpected terminal crashes still preserve recovery memory.`);
+async function confirmStopSession(id,label,task,stage,taskId){
+  // 2026-09-27: an accepted task is finished work in main; stopping its
+  // Delivery only closes the terminal and removes nothing. `task` is the
+  // display name; the board keys decisions by the task id.
+  const boardState=lastBoard?.state||{};
+  const boundTask=taskId||Object.values(boardState.agents||{}).find(agent=>agent.session_id===id)?.task||task;
+  const acceptedTask=(boardState.accepted_tasks||[]).includes(boundTask)||(boardState.release_decisions||{})[boundTask]?.decision==='accepted';
+  const approved=window.confirm(acceptedTask
+    ?`Stop ${label} for “${task}”?\n\nThis task is accepted and already in main. Stopping only closes the Delivery terminal; nothing is removed.`
+    :`Stop ${label} for “${task}”?\n\nCurrent stage: ${stage}\n\nIf this is an unfinished Delivery task, its board records and isolated workspace will be removed. Unexpected terminal crashes still preserve recovery memory.`);
   if(!approved)return false;
   try{
-    await call('/api/sessions/'+encodeURIComponent(id)+'/stop');
-    el('#notice').textContent=`Stopped ${label} — ${task}. Unfinished Delivery work was cleaned from the board.`;
+    const result=await call('/api/sessions/'+encodeURIComponent(id)+'/stop');
+    const accepted=acceptedTask||(result?.cleanup?.accepted_tasks||[]).length>0;
+    el('#notice').textContent=accepted?'Task accepted, Dev agent stopped.':`Stopped ${label} — ${task}. Unfinished Delivery work was cleaned from the board.`;
     await refresh();
     return true;
   }catch(error){el('#notice').textContent='Could not stop session: '+error.message;return false;}
@@ -1123,12 +1180,14 @@ function render(data,managed){
   const liveTasks=new Set(data.live_tasks||[]);
   el('#passed').textContent=reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length;
   renderOwnerActions(state);
+  renderHarnessActions(state);
   const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
   const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!recentOutputActive(agent)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
   if(unresponsive.length)el('#attention').innerHTML=`<h2>CTO is not responding - it may need /login</h2><p><strong>Your action:</strong> open the CTO terminal window. If it shows a login prompt, run <code>/login</code> and sign in; the CTO picks up where it left off once it checks the board again. Automatic wake-ups are paused until then.</p>`;
   else if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
   else el('#attention').innerHTML='<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
   tasks(state,contracts,data.owner_directions||{},data.live_tasks,data.in_scope_findings||[],data.requirement_confirmations||{});
+  renderDecisionBanner(state);
   currentHistoryVersion=String(data.history_version||'');
   if(historyLoaded&&historyLoadedAtVersion!==currentHistoryVersion)loadHistory(true);
   renderWaiting(managed.sessions||[]);
@@ -1538,6 +1597,23 @@ def _compact_dashboard_state(
             task: value for task, value in (state.get(key) or {}).items()
             if task in live
         }
+    # 2026-09-27: an accepted task is no longer live, so its decision is not in
+    # the projection above; the Stop prompt still has to know its Delivery is
+    # finished. Only tasks whose Delivery agent is still on the page.
+    accepted = {
+        task for task, decision in (state.get("release_decisions") or {}).items()
+        if (decision or {}).get("decision") == "accepted"
+    } | set((state.get("git_acceptances") or {}).keys())
+    compact["accepted_tasks"] = sorted({
+        str(value.get("task")) for value in compact["agents"].values()
+        if value.get("task") in accepted
+    })
+    # Backlog #7: the last few things the harness did by itself, newest first.
+    compact["harness_actions"] = [
+        {"kind": event.get("kind"), "at": event.get("at"), "message": event.get("message", "")}
+        for event in reversed(state.get("events") or [])
+        if event.get("kind") in HARNESS_ACTION_EVENTS and event.get("message")
+    ][:HARNESS_ACTION_LINES]
     compact["owner_actions"] = {
         key: value for key, value in (state.get("owner_actions") or {}).items()
         if value.get("status") == "open"

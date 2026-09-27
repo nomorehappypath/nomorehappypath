@@ -1036,8 +1036,14 @@ class GitBroker:
                     ["read-tree", current.commit], cwd=repository, writable=[repository],
                     index_file=temporary_index,
                 )
+                # The fold reproduces the reviewed bytes exactly; verify_entries
+                # below refuses any byte that differs from the certified manifest.
+                # A whitespace lint here (2026-09-26, defect #10) could only refuse
+                # bytes the reviewer already accepted — Markdown's two-space hard
+                # line break and blank lines at end of file did exactly that — so
+                # the apply is byte-faithful, as it is for inherited candidates.
                 applied = self._run_git(
-                    ["apply", "--cached", "--whitespace=error", "-"], cwd=repository,
+                    ["apply", "--cached", "--whitespace=nowarn", "-"], cwd=repository,
                     writable=[repository], input=patch.stdout, index_file=temporary_index,
                 )
                 written = self._run_git(

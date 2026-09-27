@@ -157,6 +157,18 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(source_control["superseded_by_session_id"], replacement_session["id"])
         self.assertEqual(control.take_instructions(self.root, source["session_id"]), [])
 
+    def test_resuming_a_cancelled_task_makes_it_live_again(self):
+        source = self.delivery("TASK-REVIVE")
+        with board.locked_state(self.root) as state:
+            state.setdefault("cancelled_tasks", {})["TASK-REVIVE"] = {"cancelled_at": board.now(), "reason": "owner stopped the Delivery"}
+        board.offline(self.root, source["id"], "visible CLI terminal ended", transport_ended=True)
+        replacement_session = control.create(self.root, "codex_delivery")
+        replacement = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=replacement_session["id"])
+        board.resume_task(self.root, replacement["id"], source["id"], "TASK-REVIVE")
+        snapshot = board.snapshot(self.root)
+        self.assertNotIn("TASK-REVIVE", snapshot.get("cancelled_tasks", {}))
+        self.assertTrue(any(e["kind"] == "task_uncancelled" and e.get("task") == "TASK-REVIVE" for e in snapshot["events"]))
+
     def test_failed_task_recovery_is_transactional_and_leaves_predecessor_unchanged(self):
         source = self.delivery("TASK-RECOVERY-ROLLBACK")
         board.offline(self.root, source["id"], "visible CLI terminal ended", transport_ended=True)

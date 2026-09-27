@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from harness import board, board_viewer, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity
+from harness import board, board_viewer, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity, self_heal
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -203,9 +203,14 @@ class ProjectWatchdog:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.last_report: dict = {}
+        self.self_heal = None  # set by serve_worker once terminals can be opened
 
     def tick(self) -> list[dict]:
         self.last_report = control_plane.tick(self.root, self.stale_after)
+        if self.self_heal is not None and self.last_report.get("status") == "active":
+            # Backlog #7: the harness restarts stuck agents itself. It runs
+            # here, in the worker, because only the worker may open terminals.
+            self.last_report["self_heal"] = self.self_heal()
         return list(self.last_report.get("stalled", []))
 
     def _run(self) -> None:
@@ -612,6 +617,20 @@ def serve(
         )
         bootstrap_thread = threading.Thread(target=bootstrap_server.serve_forever, daemon=True)
         bootstrap_thread.start()
+        def self_heal_create(kind: str) -> dict:
+            settings_override = global_settings.load(settings_home)["agent_settings"] if settings_home else None
+            return control.create(root, kind, settings_override=settings_override)
+
+        def self_heal_launch(session: dict) -> None:
+            authority.prepare(session["id"])
+            try:
+                launch_terminal(root, session, str(bootstrap_path), manager_home=settings_home)
+            except Exception as error:
+                authority.revoke(session["id"])
+                control.fail_launch(root, session["id"], f"the harness could not reopen the terminal: {error}")
+                raise RuntimeError(str(error)) from error
+
+        watchdog.self_heal = lambda: self_heal.run_once(root, self_heal_launch, create=self_heal_create)
         watchdog.start()
         preview_supervisor.start()
         print(f"Live Harness Project Worker: {address['endpoint']}/", flush=True)

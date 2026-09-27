@@ -11,7 +11,7 @@ import threading
 import unittest
 from urllib.request import Request, urlopen
 
-from harness import board, board_viewer, contract, control
+from harness import board, board_viewer, contract, control, git_broker
 from tests.environment_support import require_loopback
 from tests.requirements_support import agreed_requirements
 
@@ -271,6 +271,50 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
         self.assertEqual(retried["git_acceptance"]["commit"], committed["commit"])
         self.assertEqual(self.git("rev-parse", "main").strip(), committed["commit"])
         self.assertEqual((self.root / "product.txt").read_text(encoding="utf-8"), "accepted\n")
+
+    def test_a_completed_accept_records_the_release_as_accepted(self):
+        """Backlog #3 (2026-09-27): the release kept VISUAL_TEST_REQUIRED for ever."""
+        committed = self.certified_candidate()
+        self.assertEqual(board.snapshot(self.root)["releases"]["GIT-MODEL"]["status"], "VISUAL_TEST_REQUIRED")
+        response = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(response["git_acceptance"]["commit"], committed["commit"])
+        release = board.snapshot(self.root)["releases"]["GIT-MODEL"]
+        self.assertEqual(release["status"], "ACCEPTED")
+        self.assertTrue(release["accepted_at"])
+
+    def test_a_failed_accept_keeps_the_release_ready_so_it_can_be_retried(self):
+        committed = self.certified_candidate()
+        with board.locked_state(self.root) as state:
+            state["releases"]["GIT-MODEL"]["acceptance_manifest"] = []
+        board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(board.snapshot(self.root)["releases"]["GIT-MODEL"]["status"], "VISUAL_TEST_REQUIRED",
+                         "a failed fast-forward is not an acceptance")
+        with board.locked_state(self.root) as state:
+            state["releases"]["GIT-MODEL"]["acceptance_manifest"] = committed["manifest"]
+        board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(board.snapshot(self.root)["releases"]["GIT-MODEL"]["status"], "ACCEPTED")
+
+    def test_an_accept_that_crashed_after_moving_main_is_recorded_as_accepted_on_recovery(self):
+        """Backlog #3 audit: the worker died after main moved and before the board
+        was written; worker-start recovery records the acceptance and the release
+        must read ACCEPTED, not "ready for your test"."""
+        from unittest import mock
+        committed = self.certified_candidate()
+        real_accept = git_broker.GitBroker.accept_merge
+
+        def crash_after_main_moved(broker, *args, **kwargs):
+            return real_accept(broker, *args, **{**kwargs, "crash_after": "git_mutation"})
+
+        with mock.patch.object(git_broker.GitBroker, "accept_merge", crash_after_main_moved):
+            with self.assertRaises(git_broker.InjectedCrash):
+                board.record_release_decision(self.root, "GIT-MODEL", "accepted")
+        self.assertEqual(board.snapshot(self.root)["releases"]["GIT-MODEL"]["status"], "VISUAL_TEST_REQUIRED")
+        board.recover_git_transactions(self.root)
+        with board.locked_state(self.root) as state:
+            self.assertEqual(state["git_acceptances"]["GIT-MODEL"]["commit"], committed["commit"])
+            release = dict(state["releases"]["GIT-MODEL"])
+        self.assertEqual(release["status"], "ACCEPTED")
+        self.assertTrue(release["accepted_at"])
 
     def test_moved_main_routes_reintegration_and_preserves_external_commit(self):
         committed = self.certified_candidate()

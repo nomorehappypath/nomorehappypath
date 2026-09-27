@@ -73,6 +73,14 @@ CTO_MONITOR_QUIET_INTERVAL_SECONDS = 300
 # polls again.
 CTO_UNRESPONSIVE_AFTER_STALLS = 3
 CTO_UNRESPONSIVE_NOTE = "CTO is not responding - it may need /login"
+# 2026-09-26: "not responding" is a claim of silence. A CTO that answers a
+# wake-up with a status post but no poll is alive and logged in (the studio
+# CTO did exactly that for 70 minutes while its cycles stayed switched off).
+# Such an answer is never a stall: it is recorded as answered-without-poll,
+# the next cycle is routed on the normal cadence, and the wake names the
+# exact poll command. Only a wake with no board write at all counts as silent.
+CTO_STATUS_WITHOUT_POLL_NOTE = "CTO posted status but has not polled the board; the next cycle names the poll command"
+CTO_WAKE_ANSWERED_STATES = {"automatic_requested", "automatic_failed", "unresponsive"}
 # Board events that only say "the monitor ran": for the CTO, the hot event
 # window keeps the latest of each so real task events are not pushed out.
 ROUTINE_MONITOR_EVENTS = {
@@ -240,6 +248,37 @@ def _recover_from_backup(root: Path, allow_restore: bool) -> dict[str, Any] | No
         _log_board_recovery(root, f"restored board from backup {snap.name}")
         return recovered
     return None
+
+
+# Backlog #3 (2026-09-27): a release the owner accepted and main fast-forwarded
+# is ACCEPTED. It used to keep its pre-decision status VISUAL_TEST_REQUIRED
+# ("ready for your test") for ever. "Released" readers accept both statuses.
+RELEASE_ACCEPTED = "ACCEPTED"
+RELEASED_STATUSES = frozenset({"VISUAL_TEST_REQUIRED", RELEASE_ACCEPTED})
+
+
+def _upgrade_accepted_releases(state: dict[str, Any]) -> dict[str, Any]:
+    """Boards saved before backlog #3: an accepted, fast-forwarded release reads ACCEPTED.
+
+    Only a release whose owner decision is `accepted`, whose Git acceptance
+    completed, and whose Accept did not fail is changed; nothing else is.
+    """
+    releases = state.get("releases")
+    if not isinstance(releases, dict):
+        return state
+    decisions = state.get("release_decisions") or {}
+    acceptances = state.get("git_acceptances") or {}
+    for task, release in releases.items():
+        decision = decisions.get(task) if isinstance(decisions, dict) else None
+        if (
+            isinstance(release, dict) and release.get("status") == "VISUAL_TEST_REQUIRED"
+            and isinstance(decision, dict) and decision.get("decision") == "accepted"
+            and (decision.get("git_acceptance") or {}).get("status") != "failed"
+            and isinstance(acceptances, dict) and (acceptances.get(task) or {}).get("commit")
+        ):
+            release["status"] = RELEASE_ACCEPTED
+            release.setdefault("accepted_at", (acceptances.get(task) or {}).get("accepted_at", ""))
+    return state
 
 
 def _load_or_recover_state(root: Path, allow_restore: bool) -> dict[str, Any]:
@@ -525,7 +564,7 @@ def locked_state(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         path = _state_path(root)
         try:
-            state = _load_or_recover_state(root, allow_restore=True)
+            state = _upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=True))
             pause = state.setdefault("project_pause", {"status": "active"})
             saved_resume_session = bool(
                 pause.get("status") == "resuming"
@@ -608,7 +647,7 @@ def _read_state(root: Path) -> dict[str, Any]:
         fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
         try:
             path = _state_path(root)
-            return _load_or_recover_state(root, allow_restore=False)
+            return _upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=False))
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -2319,6 +2358,32 @@ def owner_direction_for_task(state: dict[str, Any], agent_id: str, task: str) ->
     return resolve(agent_id, task, set())
 
 
+def _role_label(agent: dict[str, Any]) -> str:
+    role = agent.get("role")
+    return "The CTO" if role == "cto" else "The Reviewer" if role == "qa" else "The Delivery Agent"
+
+
+def request_agent_restart(root: Path, agent_id: str, reason: str) -> dict[str, Any]:
+    """Mark an agent so that its terminal's relaunch reattaches it (backlog #7).
+
+    Only the harness's own self-restart calls this. The task is never
+    cancelled: the old terminal is stopped (or already ended), the SAME
+    session is relaunched, and `register` brings back the SAME agent.
+    """
+    reason = str(reason or "").strip()[:240]
+    with locked_state(root) as state:
+        agent = _require_agent(state, agent_id)
+        if agent.get("restart_requested_at"):
+            return dict(agent)
+        agent["restart_requested_at"] = now()
+        agent["restart_reason"] = reason
+        _event(state, "agent_restart_requested", agent, {
+            "task": agent.get("task", ""), "reason": reason,
+            "message": f"The harness is restarting {'t' + _role_label(agent)[1:]}: {reason}",
+        })
+        return dict(agent)
+
+
 def register(root: Path, role: str, task: str, display_name: str = "", vendor: str = "", session_id: str = "") -> dict[str, Any]:
     if role not in ROLES:
         raise ValueError(f"invalid role {role!r}; choose one of: {', '.join(sorted(ROLES))}")
@@ -2339,9 +2404,14 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
             saved.get("session_id") == session_id
             for saved in pause.get("agents", {}).values()
         )
+        restart_marked = bool(existing and existing.get("restart_requested_at"))
         if existing and existing.get("role") == role and (
             (pause.get("status") == "resuming" and saved_for_session)
             or (pause.get("status") == "active" and existing.get("active"))
+            # Backlog #7: the harness restarted this terminal itself. Its agent
+            # went offline when the old terminal ended; it comes back as the
+            # SAME agent, task and memory intact, never as a new empty one.
+            or (pause.get("status") == "active" and restart_marked)
         ):
             # Reattachment proves only that a fresh transport is starting. It
             # does not fabricate a poll or progress event, but the watchdog must
@@ -2363,6 +2433,16 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
                 "liveness_note": "resumed terminal attached; awaiting its first board heartbeat",
                 "session_reattached_at": attached_at,
             })
+            if restart_marked:
+                reason = str(existing.pop("restart_reason", "") or "")
+                existing.pop("restart_requested_at", None)
+                _event(state, "agent_restarted_by_harness", existing, {
+                    "task": existing.get("task", task),
+                    "session_id": session_id,
+                    "reason": reason,
+                    "message": f"{_role_label(existing)} is back after the harness restarted it; its task and memory are kept",
+                })
+                return dict(existing)
             _event(state, "agent_resume_session_attached", existing, {
                 "task": existing.get("task", task),
                 "session_id": session_id,
@@ -2636,11 +2716,11 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                     "durable_log": str(board_dir(root) / "events.jsonl"),
                     "message": "Earlier board events were moved out of hot state; read the durable event log before acting so failures are not silently skipped",
                 })
-            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}
+            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered", "answered_without_poll"}
             agent["poll_counter"] += 1
             agent["last_poll_at"] = now()
             agent.update({"liveness": "healthy", "liveness_note": "board heartbeat is current"})
-            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}:
+            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered", "answered_without_poll"}:
                 agent.update({"recovery_state": "resumed", "status": "working", "status_note": "recovery accepted; preserved task and next action resumed", "last_status_at": now()})
                 agent.pop("automatic_recovery_requested_at", None)
             agent.pop("consecutive_stalls", None)
@@ -2784,7 +2864,7 @@ def _agent_has_actionable_work(state: dict[str, Any], agent: dict[str, Any]) -> 
             request.get("phase") == "final_acceptance"
             and request.get("status") == "passed"
             and request.get("task") not in cancelled
-            and releases.get(request.get("task"), {}).get("status") != "VISUAL_TEST_REQUIRED"
+            and releases.get(request.get("task"), {}).get("status") not in RELEASED_STATUSES
             for request in state.get("qa_requests", {}).values()
         )
     if role in DEVELOPER_ROLES:
@@ -2849,7 +2929,20 @@ def _automatic_recovery_instruction(agent: dict[str, Any]) -> str:
     role = agent.get("role")
     task = agent.get("task", "current work")
     if role == "cto":
-        return "MONITORING CYCLE DUE: Poll the board once now, process material changes, route the next concrete action, and post a short human-readable status. Never wait on the product owner: owner touchpoints are asynchronous board surfaces you post and continue past, and an owner rejection is routed to a repair cycle automatically. When only an owner decision is outstanding, record 'awaiting owner decision' and stand by healthy — never hold the cycle for a reply. USER ACTION: None."
+        poll_command = f"poll --agent {agent.get('id', '')}"
+        preface = (
+            "Your last cycle posted status but never polled, so the board still has no heartbeat from you. "
+            if agent.get("recovery_state") == "answered_without_poll" else ""
+        )
+        return (
+            f"MONITORING CYCLE DUE: {preface}First run the board command `{poll_command}` (your launch board command "
+            f"prefix followed by `{poll_command}`); reading BOARD.md or state.json and posting status are not a poll "
+            "and do not count as the heartbeat. Then process material changes, route the next concrete action, and post "
+            "a short human-readable status. Never wait on the product owner: owner touchpoints are asynchronous board "
+            "surfaces you post and continue past, and an owner rejection is routed to a repair cycle automatically. When "
+            "only an owner decision is outstanding, record 'awaiting owner decision' and stand by healthy — never hold "
+            "the cycle for a reply. USER ACTION: None."
+        )
     if role == "qa":
         return f"REVIEW ACTION DUE: Poll the board once now and continue the routed review for {task}. Preserve its existing evidence and task memory. USER ACTION: None."
     refusal = agent.get("broker_refusal") or {}
@@ -2898,6 +2991,16 @@ def _routine_cycle_due(state: dict[str, Any], agent: dict[str, Any], current: da
     return (current - last_at).total_seconds() >= interval
 
 
+SIGNED_OUT_LIVENESS = "needs_sign_in"
+ROLE_NAMES = {"qa": "Reviewer", "cto": "CTO", "engineering": "Delivery agent", "development": "Delivery agent"}
+
+
+def sign_in_message(agent: dict[str, Any]) -> str:
+    """One plain line naming who needs signing in and how (backlog #8)."""
+    role = ROLE_NAMES.get(str(agent.get("role", "")), "agent")
+    return f"The {role} needs you to sign in again: open its terminal and run /login."
+
+
 def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[dict[str, Any]]:
     """Record missing board heartbeats without changing the agent's workflow state.
 
@@ -2911,18 +3014,44 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
     stalled: list[dict[str, Any]] = []
     recovery_routes: list[dict[str, str]] = []
     try:
-        from harness import control
+        from harness import attention, control
         sessions_snapshot = control.snapshot(root).get("sessions", [])
         live_session_ids = {
             item.get("id") for item in sessions_snapshot
             if item.get("status") in control.ACTIVE_STATUSES
         }
+        signed_out_session_ids = {
+            item.get("id") for item in sessions_snapshot
+            if item.get("status") in control.ACTIVE_STATUSES and attention.needs_sign_in(item)
+        }
     except (OSError, ValueError):
         live_session_ids = None
+        signed_out_session_ids = set()
     with locked_state(root) as state:
         for agent in state["agents"].values():
             if not agent.get("active"):
                 continue
+            # 2026-09-27 backlog #8: a signed-out terminal cannot act on a
+            # wake-up; routing to it only piled up undelivered messages for an
+            # hour. Hold every wake, say plainly who needs signing in, and
+            # resume on the first check after the prompt leaves the screen.
+            if agent.get("session_id") in signed_out_session_ids:
+                if agent.get("liveness") != SIGNED_OUT_LIVENESS:
+                    note = sign_in_message(agent)
+                    agent.update({"liveness": SIGNED_OUT_LIVENESS, "liveness_note": note})
+                    agent.pop("automatic_recovery_requested_at", None)
+                    agent.pop("consecutive_stalls", None)
+                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive", "answered_without_poll"}:
+                        agent["recovery_state"] = "signed_out"
+                    _event(state, "agent_needs_sign_in", agent, {"task": agent.get("task", ""), "message": note})
+                continue
+            if agent.get("liveness") == SIGNED_OUT_LIVENESS:
+                agent.update({"liveness": "recovering", "liveness_note": "signed in again; wake-ups resumed"})
+                if agent.get("recovery_state") == "signed_out":
+                    agent.pop("recovery_state", None)
+                _event(state, "agent_signed_in", agent, {
+                    "task": agent.get("task", ""), "message": "signed in again; wake-ups resumed",
+                })
             if _review_execution_is_current(agent):
                 continue
             # A dead terminal is never "healthy standby" (issue row 9): standby
@@ -3098,6 +3227,9 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                 agent["last_routine_cycle_sequence"] = int(state.get("next_event", 1)) - 1
                 agent["last_routine_cycle_poll_counter"] = int(agent.get("poll_counter") or 0)
             refused_wake = bool(refusal) and agent.get("role") != "cto"
+            # Built before the state below is overwritten: the text depends on
+            # how the previous wake was answered (status-only, refused, ...).
+            instruction = _automatic_recovery_instruction(agent)
             agent.update({
                 # A refused write is BLOCKED, never a stall: its liveness is
                 # left alone so the card keeps saying refused, not recovering.
@@ -3126,7 +3258,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                 "agent_id": agent["id"],
                 "session_id": str(agent.get("session_id", "")),
                 "requested_at": requested_at,
-                "instruction": _automatic_recovery_instruction(agent),
+                "instruction": instruction,
             })
     for route in recovery_routes:
         try:
@@ -3518,7 +3650,22 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
         if not agent.get("active") or agent.get("status") == "offline" or agent.get("liveness") == "offline":
             raise ValueError("inactive/offline agent cannot post status updates")
         agent.update({"status": state_name, "status_note": note, "last_status_at": now()})
+        wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
+        if wake_pending:
+            # A board write from the CTO refutes "not responding": it is alive
+            # and logged in. It has still not polled, so the poll stays the
+            # only heartbeat and the next cycle is routed on the normal
+            # cadence naming the command; the stall count does not carry over.
+            # (_event above already treats the post as progress for a pending
+            # wake; this also covers the unresponsive mark, which it does not.)
+            agent.update({"recovery_state": "answered_without_poll", "liveness_note": CTO_STATUS_WITHOUT_POLL_NOTE})
+            agent.pop("consecutive_stalls", None)
+            agent.pop("automatic_recovery_requested_at", None)
+            _event(state, "cto_status_without_poll", agent, {
+                "task": agent["task"],
+                "message": CTO_STATUS_WITHOUT_POLL_NOTE + "; automatic cycles continue",
+            })
         if agent.get("role") == "cto" and note.upper().startswith(OWNER_ACTION_NOTE_PREFIX):
             # Defect #22: the agreed "OWNER ACTION:" note never reached the
             # owner. It becomes a pinned card; the CTO clears it with
@@ -3817,6 +3964,14 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
         brief = state.get("task_briefs", {}).get(task, {})
         next_action = brief.get("update") or "Poll the board and resume the preserved task from its latest review or release gate."
         resumed_at = now()
+        # A replacement Delivery that resumes a cancelled task revives it. Without
+        # this, the task stays in cancelled_tasks and Mission Control hides it.
+        revived = (state.get("cancelled_tasks") or {}).pop(task, None)
+        if revived is not None:
+            _event(state, "task_uncancelled", agent, {
+                "task": task, "cancelled": revived,
+                "message": "replacement Delivery resumed a cancelled task; it is live again",
+            })
         agent.update({
             "task": task,
             "status": "recovered",
@@ -4139,7 +4294,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
     A durable ``routed_to`` assignment prevents
     duplicate reviewers; an overdue route is re-sent to the same live terminal.
     """
-    from harness import control
+    from harness import attention, control
 
     release_expired_review_reservations(root)
 
@@ -4149,8 +4304,14 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
         for session in managed.get("sessions", [])
         if session.get("status") in control.ACTIVE_STATUSES
     }
+    # 2026-09-27 backlog #8: a signed-out reviewer is not eligible. The board
+    # re-routed one review to a logged-out reviewer every 90 s for an hour.
+    signed_out = {
+        session_id for session_id, session in active_sessions.items() if attention.needs_sign_in(session)
+    }
     current = datetime.now(timezone.utc)
     deliveries: list[dict[str, Any]] = []
+    superseded_routes: list[dict[str, Any]] = []
     with locked_state(root) as state:
         open_requests = sorted(
             (request for request in state.get("qa_requests", {}).values() if request.get("status") in {"authoring", "open"}),
@@ -4180,8 +4341,9 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 and routed.get("active")
                 and routed.get("role") == "qa"
                 and routed_session
+                and routed.get("session_id") not in signed_out
                 and routed.get("id") not in held_reviewers
-                and routed.get("task") in {"REVIEW_QUEUE", request.get("task")}
+                and (routed.get("task") in {"REVIEW_QUEUE", request.get("task")} or _task_finished(state, routed.get("task", "")))
                 and (
                     request.get("stage") != INDEPENDENT_REVIEW
                     or (routed.get("vendor") and routed.get("vendor") != developer_vendor)
@@ -4205,7 +4367,9 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     session_id = candidate.get("session_id", "")
                     if not candidate.get("active") or candidate.get("role") != "qa" or session_id not in active_sessions:
                         continue
-                    if candidate.get("task") not in {"REVIEW_QUEUE", request.get("task")}:
+                    if session_id in signed_out:
+                        continue
+                    if candidate.get("task") not in {"REVIEW_QUEUE", request.get("task")} and not _task_finished(state, candidate.get("task", "")):
                         continue
                     if request.get("stage") == INDEPENDENT_REVIEW and (
                         not candidate.get("vendor") or candidate.get("vendor") == developer_vendor
@@ -4221,21 +4385,53 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     candidates.append(candidate)
                 if not candidates:
                     request["route_state"] = "waiting_for_eligible_reviewer"
-                    if not state.get("reviewer_needed"):
+                    waiting_for_sign_in = any(
+                        agent.get("active") and agent.get("role") == "qa" and agent.get("session_id") in signed_out
+                        for agent in state.get("agents", {}).values()
+                    )
+                    reason = (
+                        "The Reviewer needs you to sign in again: open its terminal and run /login."
+                        if waiting_for_sign_in else
+                        "open review queue has no live eligible reviewer; start one from Mission Control"
+                    )
+                    needed = state.get("reviewer_needed") or {}
+                    if not needed or needed.get("message") != reason:
                         state["reviewer_needed"] = {
-                            "requested_at": now(),
+                            "requested_at": needed.get("requested_at") or now(),
                             "request_id": request.get("id", ""),
+                            "message": reason,
+                            "sign_in": waiting_for_sign_in,
                         }
                         _event(state, "reviewer_needed", None, {
                             "task": request.get("task", ""),
                             "request_id": request.get("id", ""),
-                            "message": "open review queue has no live eligible reviewer; start one from Mission Control",
+                            "message": reason,
                         })
                     continue
                 reviewer = min(candidates, key=lambda item: (item.get("spawned_at", ""), item.get("id", "")))
                 reserved.add(reviewer["id"])
 
             routed_time = now()
+            # Review round 1 (backlog #8): the previous route's assignment must
+            # not survive a new route. Withdraw it if still queued; if a
+            # DIFFERENT reviewer already took it, tell that reviewer to stand
+            # down. Re-sending to the same reviewer withdraws the old copy only.
+            prior_instruction = str(request.get("route_instruction_id") or "")
+            if prior_instruction:
+                prior_reviewer = str(request.get("routed_to") or "")
+                superseded_routes.append({
+                    "instruction_id": prior_instruction,
+                    "session_id": str(request.get("routed_session_id") or ""),
+                    "reviewer_id": prior_reviewer, "request_id": request["id"], "task": request["task"],
+                    "notify": bool(prior_reviewer and prior_reviewer != reviewer["id"]),
+                    "notice": (
+                        f"REVIEW REASSIGNED: request {request['id']} for {request['task']} was given to another "
+                        "reviewer because this terminal needed sign-in or did not take it in time. Do not reserve, "
+                        "claim or investigate it; stand by for the next routed request. USER ACTION: None."
+                    ),
+                    "event_message": "the previous reviewer's assignment was withdrawn before the review was routed again",
+                })
+                request["route_instruction_id"] = ""
             request.update({
                 "routed_to": reviewer["id"],
                 "routed_session_id": reviewer.get("session_id", ""),
@@ -4267,6 +4463,8 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "route_attempt": request["route_attempts"],
             })
 
+    for superseded in superseded_routes:
+        _withdraw_reviewer_wake(root, superseded)
     for delivery in deliveries:
         if delivery["delivery_state"] == "executing":
             instruction = (
@@ -4518,8 +4716,8 @@ def _withdraw_reviewer_wake(root: ProjectRoot, wake: dict[str, Any]) -> dict[str
             receipt = {}
     if receipt.get("status") == "withdrawn":
         outcome["action"] = "withdrawn"
-    elif session_id:
-        notice = (
+    elif session_id and wake.get("notify", True):
+        notice = wake.get("notice") or (
             f"REVIEW CANCELLED: request {wake.get('request_id', '')} for {wake.get('task', '')} was withdrawn because "
             f"Delivery's evidence failed ({wake.get('reason', 'see the board')}). Do not investigate it; stand by for "
             "the next routed request. USER ACTION: None."
@@ -4535,7 +4733,9 @@ def _withdraw_reviewer_wake(root: ProjectRoot, wake: dict[str, Any]) -> dict[str
             "task": wake.get("task", ""), "request_id": wake.get("request_id", ""),
             "instruction_id": instruction_id, "action": outcome["action"],
             "message": (
-                "the queued reviewer wake was withdrawn before delivery" if outcome["action"] == "withdrawn"
+                wake.get("event_message") if wake.get("event_message") and outcome["action"] == "withdrawn"
+                else "the queued reviewer wake was withdrawn before delivery" if outcome["action"] == "withdrawn"
+                else "the previous reviewer was told in one line to stand down" if outcome["action"] == "notified" and wake.get("notice")
                 else "the reviewer was told in one line that the request was cancelled" if outcome["action"] == "notified"
                 else "no reviewer wake to withdraw or notify"
             ),
@@ -8556,6 +8756,47 @@ BROKER_RELEASE_REQUIRED_CHECKS = {
 }
 
 
+def _task_finished(state: dict[str, Any], task: str) -> bool:
+    """Released to the owner or accepted: no more review work of its own."""
+    return bool(
+        (state.get("releases") or {}).get(task, {}).get("status") in RELEASED_STATUSES
+        or ((state.get("release_decisions") or {}).get(task) or {}).get("decision") == "accepted"
+        or task in (state.get("git_acceptances") or {})
+    )
+
+
+def _return_reviewers_to_queue(state: dict[str, Any], task: str, how: str) -> list[str]:
+    """2026-09-27 backlog #6: a Reviewer stayed pinned to a finished task.
+
+    The router only offers new work to reviewers on REVIEW_QUEUE (or on the
+    request's own task), so a healthy Reviewer idled while the next task
+    waited for "a live eligible reviewer". When a task is released or
+    accepted, every active Reviewer still bound to it and not holding a
+    review goes back to the shared queue, with one plain line.
+    """
+    holding = {
+        reviewer_id
+        for request in (state.get("qa_requests") or {}).values()
+        if request.get("status") in {"reserved", "claimed"}
+        for reviewer_id in (request.get("reserved_by"), request.get("claimed_by"))
+        if reviewer_id
+    }
+    returned: list[str] = []
+    for agent in (state.get("agents") or {}).values():
+        if agent.get("role") != "qa" or not agent.get("active") or agent.get("task") != task:
+            continue
+        if agent.get("id") in holding:
+            continue
+        message = f"Reviewer returned to the review queue after {task} was {how}."
+        agent.update({
+            "task": "REVIEW_QUEUE", "status": "waiting",
+            "status_note": message, "last_status_at": now(),
+        })
+        _event(state, "reviewer_returned_to_queue", agent, {"task": task, "message": message})
+        returned.append(str(agent.get("id", "")))
+    return returned
+
+
 def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str, Any]) -> dict[str, Any]:
     """Record the only state that Mission Control may present as complete."""
     with locked_state(root) as state:
@@ -8630,7 +8871,11 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
                 else "Release gates passed on clean pushed main; owner visual test may begin"
             ),
         })
-        return dict(release)
+        returned = _return_reviewers_to_queue(state, task, "released")
+        result = dict(release)
+    if returned:
+        route_open_reviews(root)
+    return result
 
 
 PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle", "skipped"}
@@ -8696,7 +8941,7 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
     governed_acceptance = False
     with locked_state(root) as state:
         release = state.get("releases", {}).get(task)
-        if not release or release.get("status") != "VISUAL_TEST_REQUIRED":
+        if not release or release.get("status") not in RELEASED_STATUSES:
             raise ValueError("owner responses are available only for a released task")
         prior = state.setdefault("release_decisions", {}).get(task)
         if prior:
@@ -8896,11 +9141,15 @@ def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:
             }),
         )
         state.setdefault("git_reintegration_required", {}).pop(task, None)
+        release = state.get("releases", {}).get(task)
+        if isinstance(release, dict):
+            release.update({"status": RELEASE_ACCEPTED, "accepted_at": now()})
         _event(state, "git_acceptance_completed", None, {
             "task": task, "commit": result["commit"], "tree": result["tree"],
             "mirror_ref": result["mirror_ref"],
             "message": "Owner Accept advanced local main by verified FF-only broker transaction; no remote push occurred",
         })
+        returned_reviewers = _return_reviewers_to_queue(state, task, "accepted")
         accepted = dict(state["git_acceptances"][task])
         # Defect #17: every other open task on this repository whose branch
         # no longer contains main is told NOW, not after its final review.
@@ -8910,6 +9159,8 @@ def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:
             root, other, f"main advanced to {result['commit'][:12]} when {task} was accepted",
             source="owner-accept",
         )
+    if returned_reviewers:
+        route_open_reviews(root)
     return accepted
 
 
@@ -9302,6 +9553,9 @@ def _remove_cancelled_task_files(root: Path, task: str, artifact_values: list[st
     return {"removed_runtime_artifacts": removed_artifacts, "workspace_removed": workspace_removed}
 
 
+ACCEPTED_STOP_MESSAGE = "Task accepted, Dev agent stopped."
+
+
 def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
     """Cancel unfinished work when the owner deliberately stops one terminal.
 
@@ -9317,11 +9571,24 @@ def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
     workspace_values: dict[str, str] = {}
     with locked_state(root) as state:
         matched = [agent for agent in state.get("agents", {}).values() if agent.get("session_id") == session_id]
+        # 2026-09-27: an ACCEPTED task is finished work in main. Stopping its
+        # Delivery only closes the terminal. It used to be spared only because
+        # its release status still read VISUAL_TEST_REQUIRED after acceptance;
+        # the acceptance itself is now the guard.
+        accepted = {
+            task for task, decision in (state.get("release_decisions") or {}).items()
+            if (decision or {}).get("decision") == "accepted"
+        } | set((state.get("git_acceptances") or {}).keys())
+        accepted_tasks = sorted({
+            agent.get("task", "") for agent in matched
+            if agent.get("role") in DEVELOPER_ROLES and agent.get("task") in accepted
+        })
         task_candidates = {
             agent.get("task", "") for agent in matched
             if agent.get("role") in DEVELOPER_ROLES
             and agent.get("task") not in {"", AWAITING_OWNER_DIRECTION}
-            and state.get("releases", {}).get(agent.get("task", ""), {}).get("status") != "VISUAL_TEST_REQUIRED"
+            and agent.get("task") not in accepted
+            and state.get("releases", {}).get(agent.get("task", ""), {}).get("status") not in RELEASED_STATUSES
         }
         for task in sorted(task_candidates):
             requests = [request for request in _task_requests(state, task)]
@@ -9384,6 +9651,18 @@ def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
             if agent.get("task") == AWAITING_OWNER_DIRECTION:
                 state.get("owner_directions", {}).pop(session_id, None)
                 state.get("pending_owner_clarifications", {}).pop(session_id, None)
+            if agent.get("role") in DEVELOPER_ROLES and agent.get("task") in accepted:
+                agent.update({
+                    "active": False, "write_authority": False,
+                    "status": "stopped", "liveness": "offline",
+                    "status_note": ACCEPTED_STOP_MESSAGE,
+                    "liveness_note": "task accepted; terminal stopped by owner",
+                    "last_status_at": now(),
+                })
+                _event(state, "delivery_stopped_after_acceptance", agent, {
+                    "task": agent.get("task", ""), "message": ACCEPTED_STOP_MESSAGE,
+                })
+                continue
             agent.update({
                 "active": False, "write_authority": False,
                 "status": "cancelled", "liveness": "offline",
@@ -9425,6 +9704,7 @@ def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
         "session_id": session_id,
         "related_session_ids": sorted(related_session_ids),
         "cancelled_tasks": cancelled_tasks,
+        "accepted_tasks": accepted_tasks,
         "cleanup": file_results,
     }
 
@@ -9445,7 +9725,7 @@ def cancel_all_unfinished_work(root: Path) -> dict[str, Any]:
         if agent.get("role") in DEVELOPER_ROLES
         and agent.get("session_id")
         and agent.get("task") not in {"", AWAITING_OWNER_DIRECTION}
-        and refreshed.get("releases", {}).get(agent.get("task", ""), {}).get("status") != "VISUAL_TEST_REQUIRED"
+        and refreshed.get("releases", {}).get(agent.get("task", ""), {}).get("status") not in RELEASED_STATUSES
         and agent.get("task") not in refreshed.get("cancelled_tasks", {})
     })
     results.extend(cancel_session_work(root, session_id) for session_id in orphan_sessions)
@@ -9464,7 +9744,7 @@ def cleanup(root: Path) -> dict[str, int]:
             state["archive"].append({"kind": "qa_request", "archived_at": now(), "value": state["qa_requests"].pop(key)})
         removed = 0
         for task, release in state.get("releases", {}).items():
-            if release.get("status") != "VISUAL_TEST_REQUIRED":
+            if release.get("status") not in RELEASED_STATUSES:
                 continue
             workspace_value = state.get("task_workspaces", {}).get(task)
             if not workspace_value:
@@ -9560,6 +9840,11 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
                     state.setdefault("git_acceptances", {})[task] = {
                         **outcome, "accepted_at": now(), "recovered": True,
                     }
+                    # Backlog #3: main already holds the accepted work, so the
+                    # release is finished whichever path recorded it.
+                    release = state.get("releases", {}).get(task)
+                    if isinstance(release, dict) and release.get("status") == "VISUAL_TEST_REQUIRED":
+                        release.update({"status": RELEASE_ACCEPTED, "accepted_at": now()})
                 elif outcome.get("operation") == "subtask-fold":
                     request = state.get("qa_requests", {}).get(outcome.get("request_id"))
                     if not request:
