@@ -235,6 +235,7 @@ PAGE = r'''<!doctype html>
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
     }
+    .metric.waiting-you { color: #8a2c0d; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -632,6 +633,7 @@ PAGE = r'''<!doctype html>
             <span class="metric"><strong>${counts.total}</strong> tasks</span>
             <span class="metric"><strong>${counts.passed}</strong> accepted</span>
             <span class="metric"><strong>${counts.open}</strong> in progress</span>
+            ${counts.awaiting_owner ? `<span class="metric waiting-you"><strong>${counts.awaiting_owner}</strong> waiting for you</span>` : ''}
             <span class="metric"><strong>${agents.total || 0}</strong> active agents</span>
           </div>
           <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${project.latest_task ? esc(project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>

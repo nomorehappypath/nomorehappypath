@@ -42,10 +42,26 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
      "says it needs you to act ('USER ACTION: Needed')"),
     # 2026-09-25 defect #15: an expired login stalled the CTO for three hours
     # and only the event log knew. The login prompt is its own cause.
-    (re.compile(r"(?:run|use|type|try)\s+/login|not logged in|please log ?in|login required|"
-                r"authentication (?:failed|expired|required|error)|session expired|token expired", re.IGNORECASE),
-     "appears to be logged out (open its terminal and run /login)"),
+    # 2026-09-27 backlog #8: "Login expired" and the bare 401 "access token has
+    # been revoked" line (no "/login" on screen) went unrecognised.
+    (re.compile(r"(?:run|use|type|try)\s+/login|not logged in|please log ?in|login required|login expired|"
+                r"authentication (?:failed|expired|required|error)|session expired|token expired|"
+                r"access token has been revoked|OAuth (?:access )?token (?:has expired|is invalid)|API Error:\s*401",
+                re.IGNORECASE),
+     "is logged out and needs you to sign in again (open its terminal and run /login)"),
 )
+
+LOGIN_REASON = "is logged out and needs you to sign in again (open its terminal and run /login)"
+
+
+def needs_sign_in(session: dict | None) -> bool:
+    """Whether a managed session's screen shows it is signed out.
+
+    Nothing routed to such a session can run until the owner signs it in
+    again, so the board stops routing to it (2026-09-27 backlog #8). The state
+    clears by itself when the prompt leaves the screen after /login.
+    """
+    return "/login" in str((session or {}).get("attention_reason") or "")
 
 # One token of the stream: an escape sequence, a control character, or text.
 _TOKEN = re.compile(

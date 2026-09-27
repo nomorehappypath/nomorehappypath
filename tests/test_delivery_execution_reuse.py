@@ -12,6 +12,16 @@ from harness import board, certified_execution, contract, control, execution_ide
 from tests.requirements_support import agreed_requirements
 
 
+
+def _is_certified_launch(args, kwargs) -> bool:
+    """The certified command's own launch: `/bin/sh -c <command>`, with the
+    login guard (2026-09-26) in front of it, or the older `shell=True` form.
+    Every other Popen in the process (ps, git) is not counted."""
+    argv = args[0] if args else kwargs.get("args")
+    if kwargs.get("shell"):
+        return True
+    return isinstance(argv, (list, tuple)) and len(argv) >= 3 and list(argv[-3:-1]) == ["/bin/sh", "-c"]
+
 class DeliveryExecutionReuseTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -60,7 +70,7 @@ class DeliveryExecutionReuseTests(unittest.TestCase):
 
         def counted(*args, **kwargs):
             nonlocal calls
-            if kwargs.get("shell"):
+            if _is_certified_launch(args, kwargs):
                 calls += 1
             return original(*args, **kwargs)
 
@@ -86,7 +96,7 @@ class DeliveryExecutionReuseTests(unittest.TestCase):
 
         def counted(*args, **kwargs):
             nonlocal calls
-            if kwargs.get("shell"):
+            if _is_certified_launch(args, kwargs):
                 calls += 1
             return original(*args, **kwargs)
 
@@ -111,7 +121,7 @@ class DeliveryExecutionReuseTests(unittest.TestCase):
 
         def counted(*args, **kwargs):
             nonlocal calls
-            if kwargs.get("shell"):
+            if _is_certified_launch(args, kwargs):
                 calls += 1
             return original(*args, **kwargs)
 

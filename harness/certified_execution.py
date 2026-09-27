@@ -13,10 +13,11 @@ import re
 import shlex
 import signal
 import subprocess
+import tempfile
 import threading
 from typing import Any, Iterator, Mapping
 
-from harness import browser_acceptance, execution_identity
+from harness import browser_acceptance, execution_identity, agent_confinement
 
 
 def _reports_zero_executed_tests(output: str) -> bool:
@@ -84,6 +85,14 @@ def _write_process_audit(board_root: Any, audit: dict[str, Any]) -> dict[str, st
     return {"path": str(path), "sha256": digest}
 
 
+def _owner_home() -> Path:
+    """The home folder of the user the worker runs as: whose login is protected.
+
+    Deliberately not taken from the command's environment, which a ledger
+    author controls; tests patch this function to point at a fixture home."""
+    return Path.home()
+
+
 def _run_observed(
     command: str, execution_root: Path, environment: Mapping[str, str], timeout_seconds: int,
 ) -> tuple[int, str, dict[str, Any]]:
@@ -92,8 +101,17 @@ def _run_observed(
     baseline_apps = browser_acceptance._app_processes(baseline)
     baseline_prompts = _protected_prompt_processes(baseline)
     baseline_handlers = browser_acceptance._default_handlers_digest()
+    # The command runs with every read and write it had before, except the
+    # owner's Claude login file (2026-09-26 incident: a copy of it broke every
+    # login on the machine). The worker runs outside any agent sandbox, so this
+    # never nests.
+    guarded = agent_confinement.read_guard(
+        ["/bin/sh", "-c", command], home=_owner_home(),
+        claude_config_dir=environment.get("CLAUDE_CONFIG_DIR") or None,
+        store=Path(tempfile.gettempdir()) / "harness-read-guard",
+    )
     process = subprocess.Popen(
-        command, cwd=execution_root, shell=True, stdout=subprocess.PIPE,
+        guarded, cwd=execution_root, shell=False, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, env=dict(environment),
         start_new_session=True,
     )

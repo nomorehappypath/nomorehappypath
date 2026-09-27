@@ -335,6 +335,42 @@ def _pid_is_alive(pid: int | None) -> bool:
     return True
 
 
+MANAGED_SESSION_ENV = "HARNESS_MANAGED_SESSION"
+SESSION_SWEEP_GRACE_SECONDS = 0.5
+
+
+def _processes_carrying(marker: str) -> list[int]:
+    """PIDs whose environment holds exactly `marker`; the platform decides how to look."""
+    from harness import platform_support
+    return platform_support.process_identity().processes_with_environment_entry(marker)
+
+
+def _sweep_session_descendants(session_id: str) -> list[int]:
+    """Stop every process a managed session left behind; return their PIDs.
+
+    Matching is by the inherited marker only, never by folder or program name,
+    so the owner's own CLI sessions in the same project are never touched.
+    A platform shell wrapping one of those CLIs exits once the CLI is
+    stopped (see `processes_with_environment_entry` for what each platform
+    can see).
+    """
+    marker = f"{MANAGED_SESSION_ENV}={session_id}"
+    pids = _processes_carrying(marker)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if pids:
+        time.sleep(SESSION_SWEEP_GRACE_SECONDS)
+        for pid in _processes_carrying(marker):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return pids
+
+
 def _reconcile(state: dict[str, Any]) -> None:
     for session in state["sessions"].values():
         if session["status"] not in ACTIVE_STATUSES:
@@ -342,6 +378,9 @@ def _reconcile(state: dict[str, Any]) -> None:
         if session["pid"]:
             if _pid_is_alive(session["pid"]):
                 continue
+            swept = _sweep_session_descendants(str(session["id"]))
+            if swept:
+                session["swept_descendants"] = swept
             if session.get("pause_requested_at"):
                 session["status"] = "paused"
             else:
@@ -764,6 +803,30 @@ def take_instructions(root: Path, session_id: str) -> list[dict[str, Any]]:
         return json.loads(json.dumps(entries))
 
 
+def return_instructions(root: Path, session_id: str, entries: list[dict[str, Any]]) -> int:
+    """Put taken-but-untyped messages back at the head of a terminal's queue.
+
+    Backlog #8, review round 1: a terminal that needs sign-in must not hold
+    messages the board can no longer withdraw. When its supervisor sees the
+    sign-in prompt it returns what it had taken but not typed, so a review
+    moved to another reviewer takes its old assignment back cleanly.
+    Entries that are no longer "taken" (withdrawn, delivered) are dropped.
+    """
+    returned: list[dict[str, Any]] = []
+    with locked_state(root) as state:
+        receipts = state.setdefault("instruction_receipts", {})
+        for entry in entries:
+            receipt = receipts.get(entry.get("id"), {})
+            if receipt.get("status") != "taken":
+                continue
+            receipt.update({"status": "queued", "taken_at": None})
+            returned.append(dict(entry))
+        if returned:
+            inbox = state.setdefault("inbox", {})
+            inbox[session_id] = returned + list(inbox.get(session_id, []))
+    return len(returned)
+
+
 def withdraw_instruction(root: Path, instruction_id: str) -> dict[str, Any]:
     """Remove a queued instruction before the supervisor takes it.
 
@@ -1036,6 +1099,16 @@ def mark_resume_launch_requested(root: Path, session_id: str) -> dict[str, Any]:
         session["resume_launch_requested_at"] = now()
         session["reason"] = "resume terminal launch requested; waiting for attachment"
         return dict(session)
+
+
+def queued_instructions(root: Path) -> dict[str, Any]:
+    """Read-only copy of undelivered controller messages, for the self-restart (backlog #7)."""
+    with locked_state(root) as state:
+        _reconcile(state)
+        return json.loads(json.dumps({
+            "inbox": state.get("inbox") or {},
+            "receipts": state.get("instruction_receipts") or {},
+        }))
 
 
 def snapshot(root: Path) -> dict[str, Any]:

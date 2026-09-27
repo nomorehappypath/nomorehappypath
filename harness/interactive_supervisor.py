@@ -345,10 +345,23 @@ def run(
     # and the session record carries it, so Mission Control can shout.
     watch = attention.PromptWatch(height=_terminal_rows(stdin_fd))
 
+    sign_in_needed = False
+    controller_queue: list[dict] = []
+
     def note_attention(change: tuple[str, str | None] | None) -> None:
+        nonlocal sign_in_needed
         if not change:
             return
         kind, reason = change
+        sign_in_needed = kind == "waiting" and attention.needs_sign_in({"attention_reason": reason or ""})
+        if sign_in_needed and controller_queue:
+            # Backlog #8, review round 1: give back what was taken but not
+            # typed, so the board can withdraw it if the work moves elsewhere.
+            try:
+                control.return_instructions(root, session_id, controller_queue)
+            except ValueError:
+                pass
+            controller_queue.clear()
         try:
             if kind == "waiting":
                 control.record_attention(root, session_id, reason or "is waiting for you")
@@ -374,7 +387,6 @@ def run(
     typed = bytearray()
     last_owner_key_at = 0.0
     pending_owner_input = bytearray()
-    controller_queue: list[dict] = []
     child_output_seen = False
     stop_requested = False
 
@@ -441,11 +453,14 @@ def run(
                 elif time.time() - launched_at > 120:
                     transcript.note("codex session id not found within 120s; a relaunch will start fresh")
                     codex_id_pending = False
-            controller_queue.extend(control.take_instructions(root, session_id))
+            if not sign_in_needed:
+                # A terminal that needs sign-in takes nothing: its messages stay
+                # queued where the board can still withdraw them (backlog #8).
+                controller_queue.extend(control.take_instructions(root, session_id))
             # A supervisor-ready banner only proves the wrapper started. Wait
             # for the child CLI's first output so a slow-starting CLI cannot
             # receive controller input before it has configured its terminal.
-            if child_output_seen and controller_queue and _controller_delivery_allowed(bytes(typed), last_owner_key_at, time.monotonic()):
+            if child_output_seen and controller_queue and not sign_in_needed and _controller_delivery_allowed(bytes(typed), last_owner_key_at, time.monotonic()):
                 item = controller_queue.pop(0)
                 transcript.note(f"controller message ({item['source']}): {item['text']}")
                 _submit_controller_message(master, item["source"], item["text"])

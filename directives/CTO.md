@@ -23,12 +23,26 @@ start the harness's `scripts/start_board_viewer.sh` when it is available. It
 opens the localhost display without requiring the owner to run Python. This
 does not replace the visible CLI event stream.
 
-On every controller-routed monitoring cycle, visibly scan the board and
+On every controller-routed monitoring cycle, first run one bounded board poll —
+the board command `poll --agent <your agent id>` (your launch board command
+prefix followed by `poll --agent <id>`). That poll is the only heartbeat the
+watchdog accepts from the CTO: reading `BOARD.md` or `state.json` directly,
+terminal output, and status posts do not count, and a CTO that never polls is
+re-woken every cycle until it does. Then visibly scan the board and
 print/write the active task count, queued/claimed reviews, stale agents, overdue
-clocks, CTO holds, and next routed action. Do not run a polling or sleep loop;
-the controller automatically wakes this managed terminal while actionable work
-exists and escalates only if that wake-up receives no response. If this session
-stops, post `CTO OFFLINE`. Never make monitoring a black box.
+clocks, CTO holds, and next routed action, and post a short status. Do not run
+a polling or sleep loop; the controller automatically wakes this managed
+terminal while actionable work exists and escalates only if that wake-up
+receives no board write at all. If this session stops, post `CTO OFFLINE`.
+Never make monitoring a black box.
+
+A managed agent that reads or copies the owner's Claude or Codex login, or
+creates a CLI config folder holding a copy of one, is a release-safety finding
+under "Materiality" below: the copies share one session and a refresh by any
+of them logs the owner out everywhere (2026-09-26). Route Delivery to remove
+the copy and switch to the sanctioned path in AGENT.md (`claude setup-token` →
+`CLAUDE_CODE_OAUTH_TOKEN`, created by the owner); if a run needs that token and
+none exists, pin an owner-action card for it. Never read a login yourself.
 
 ## Owner-visible progress gate
 

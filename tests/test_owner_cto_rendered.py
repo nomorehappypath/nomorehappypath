@@ -54,6 +54,7 @@ PROBE = r"""
     reading.submitLabel = (document.querySelector('#owner-message-submit')?.textContent || '').trim();
   }
   reading.attention = (document.querySelector('#attention')?.textContent || '').trim();
+  reading.ctoRowText = ctoRow ? ctoRow.textContent.trim() : '';
   reading.badges = Array.from(document.querySelectorAll('#agents .badge')).map(n => n.textContent.trim());
   await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(reading)});
 })();
@@ -131,6 +132,19 @@ class RenderedOwnerCtoTests(unittest.TestCase):
         self.assertEqual(reading.get("submitLabel"), "Send to the CTO")
         self.assertIn("CTO is not responding - it may need /login", reading["attention"])
         self.assertIn("CTO NOT RESPONDING", reading["badges"])
+
+    def test_a_status_only_cto_is_shown_alive_not_as_not_responding(self):
+        with board.locked_state(self.root) as state:
+            state["agents"][self.cto["id"]].update({
+                "recovery_state": "unresponsive", "liveness": "stalled", "liveness_note": board.CTO_UNRESPONSIVE_NOTE,
+                "consecutive_stalls": 3,
+            })
+        board.status(self.root, self.cto["id"], "logged back in; reviewing the board", "working")
+        reading = self.render()
+        self.assertIn("has not polled the board yet", reading["ctoRowText"], json.dumps(reading, indent=2))
+        self.assertIn("keeps waking it on the normal schedule", reading["ctoRowText"])
+        self.assertNotIn("CTO NOT RESPONDING", reading["badges"])
+        self.assertNotIn("not responding", reading["attention"])
 
     def test_a_cleared_action_leaves_the_page(self):
         action = board.record_owner_action(self.root, self.cto["id"], "Open the folder", command="open ~/Desktop")

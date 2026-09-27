@@ -469,7 +469,72 @@ def provider_executable(
     for value in (*inherited.split(os.pathsep), *extra_directories, *PROVIDER_SEARCH_DIRECTORIES):
         if value and value not in directories:
             directories.append(value)
-    return shutil.which(configured, path=os.pathsep.join(directories)) or ""
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for directory in directories:
+        found = shutil.which(configured, path=directory)
+        if found and os.path.realpath(found) not in seen:
+            seen.add(os.path.realpath(found))
+            candidates.append(found)
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else ""
+    # 2026-09-26: a months-old Homebrew `claude` sat before the current one on
+    # PATH and the agents ran it. With several copies the newest version wins;
+    # PATH order only breaks a tie. `--version` runs only in this ambiguous case.
+    return max(candidates, key=lambda item: (_version_key(cli_version(item)), -candidates.index(item)))
+
+
+CLI_VERSION_PROBE_SECONDS = 10
+_CLI_VERSIONS: dict[tuple[str, float], str] = {}
+
+
+def _version_key(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split(".")) if text else (-1,)
+
+
+def cli_version(executable: str) -> str:
+    """`<executable> --version` as "x.y.z", or "" when it cannot be read in time.
+
+    Bounded: a CLI that hangs (one `claude auth status` hung for hours on
+    2026-09-26) can never stall a launch or a Settings check.
+    """
+    try:
+        real = os.path.realpath(executable)
+        key = (real, os.stat(real).st_mtime)
+    except OSError:
+        return ""
+    if key in _CLI_VERSIONS:
+        return _CLI_VERSIONS[key]
+    try:
+        completed = subprocess.run(
+            [executable, "--version"], capture_output=True, text=True,
+            timeout=CLI_VERSION_PROBE_SECONDS, env=provider_environment(executable),
+        )
+        match = re.search(r"\d+(?:\.\d+)+", f"{completed.stdout}\n{completed.stderr}")
+        version = match.group(0) if match else ""
+    except (OSError, subprocess.TimeoutExpired):
+        version = ""
+    _CLI_VERSIONS[key] = version
+    return version
+
+
+def resolved_cli(provider: str, *, source_environment: dict[str, str] | None = None) -> dict[str, str]:
+    """The CLI a managed agent will run and its version, for the launch line and Settings.
+
+    A binary named by HARNESS_CLAUDE_BIN / HARNESS_CODEX_BIN is the owner's
+    explicit choice: it is used as given and never executed just to read a version.
+    """
+    provider = str(provider).strip().lower()
+    if provider not in control.PROVIDERS:
+        return {"path": "", "version": "", "source": "unknown"}
+    environment = os.environ if source_environment is None else source_environment
+    explicit = str(environment.get(control.PROVIDERS[provider]["binary_env"], ""))
+    path = provider_executable(provider, source_environment=environment)
+    if not path:
+        return {"path": "", "version": "", "source": "missing"}
+    if explicit and os.path.isabs(explicit):
+        return {"path": path, "version": "", "source": "configured"}
+    return {"path": path, "version": cli_version(path), "source": "discovered"}
 
 
 def provider_environment(
@@ -609,10 +674,16 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
             "tested_at": tested_at, "message": message,
         })
         raise ValueError(message)
+    # An explicitly configured binary (HARNESS_*_BIN) is never executed just to read its version.
+    version = "" if os.path.isabs(configured) else cli_version(executable)
     result = {
         "ok": True, "provider": provider, "model": model, "effort": effort,
-        "tested_at": tested_at,
-        "message": f"{provider.title()} ran a one-word test with model {model} at {effort} effort and answered. This was a real request on your own account and costs a fraction of a cent.",
+        "tested_at": tested_at, "cli_path": executable, "cli_version": version,
+        "message": (
+            f"{provider.title()} ran a one-word test with model {model} at {effort} effort and answered. "
+            f"This was a real request on your own account and costs a fraction of a cent. "
+            f"The agents use {provider.title()} {version or '(version not reported)'} at {executable}."
+        ),
     }
     recorded = _record_connectivity(
         home, provider, {key: value for key, value in result.items() if key != "provider"},
