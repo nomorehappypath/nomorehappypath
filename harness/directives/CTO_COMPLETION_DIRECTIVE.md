@@ -209,6 +209,14 @@ copy button until you clear it:
     owner-action --agent <id> --title "Run the film GPU proof" --command "bash …/release_film.sh" --why "…"
     owner-action-done --agent <id> --id <action id> --outcome "ran at 17:05; main advanced"
 
+Name what the card is about so it clears itself (2026-09-27): `--task <task>`
+clears it when that task is accepted, released or cancelled; `--for-agent <agent
+id>` when that agent is stopped, restarted or signed in again; `--kind decision`
+when the owner chooses Go ahead or Modify; `--kind reviewer` when a Reviewer
+starts. A card tied to none of these expires after 24 hours. The same request
+about the same task or agent is never pinned twice. `owner-action-done` still
+clears any card at once.
+
 A status note beginning `OWNER ACTION:` is turned into a card automatically,
 but carries no command; prefer the operation. The owner can write to you from
 the CTO card in Mission Control ("Message the CTO"); the message arrives in

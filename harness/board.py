@@ -696,6 +696,8 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
             if not (existing.get("kind") == kind and existing.get("agent_id") == agent["id"])
         ]
     state["events"].append(event)
+    if kind in OWNER_ACTION_TRIGGER_EVENTS and state.get("owner_actions"):
+        _settle_owner_actions(state, event, agent)
     if agent is not None and kind in PROGRESS_EVENTS:
         agent["last_progress_at"] = event["at"]
         if agent.get("liveness") in {"stalled", "recovering"}:
@@ -3028,6 +3030,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         live_session_ids = None
         signed_out_session_ids = set()
     with locked_state(root) as state:
+        _expire_owner_actions(state, current)
         for agent in state["agents"].values():
             if not agent.get("active"):
                 continue
@@ -3677,17 +3680,197 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
 
 OWNER_ACTION_NOTE_PREFIX = "OWNER ACTION:"
 MAX_OWNER_ACTION_COMMAND = 4000
+# Backlog #9: a card that no event can clear leaves Mission Control after this.
+OWNER_ACTION_TTL = timedelta(hours=24)
+OWNER_ACTION_KINDS = ("task", "agent", "decision", "reviewer", "other")
+OWNER_ACTION_EXPIRED = "Expired: no longer current"
+_OWNER_ACTION_AGENT_WORDS = (
+    "frozen", "stuck", "restart", "/login", "sign in", "signed out", "not responding",
+    "went idle",
+)
+# Backlog #9: the events that make a card obsolete. Each maps to the plain line
+# recorded as the card's outcome.
+_OWNER_ACTION_TASK_EVENTS = {
+    "git_acceptance_completed": "Resolved: task accepted",
+    "delivery_stopped_after_acceptance": "Resolved: task accepted",
+    "owner_release_decision_recorded": "Resolved: task accepted",
+    "visual_test_required": "Resolved: task released",
+    "task_cancelled": "Resolved: task cancelled",
+}
+_OWNER_ACTION_AGENT_EVENTS = {
+    "agent_offline": "Resolved: agent stopped",
+    "agent_stopped_by_owner": "Resolved: agent stopped",
+    "agent_restart_requested": "Resolved: agent restarted",
+    "agent_restarted_by_harness": "Resolved: agent restarted",
+    "agent_resume_session_attached": "Resolved: agent restarted",
+    "project_resume_session_replaced": "Resolved: agent session replaced",
+    "agent_signed_in": "Resolved: agent signed in again",
+}
+_OWNER_ACTION_DECISION_EVENTS = {
+    "requirements_go_ahead": "Resolved: you chose Go ahead",
+    "requirements_modify": "Resolved: you chose Modify",
+}
+_OWNER_ACTION_REVIEWER_EVENTS = {"agent_registered", "agent_resume_session_attached", "agent_restarted_by_harness"}
+OWNER_ACTION_TRIGGER_EVENTS = frozenset(
+    set(_OWNER_ACTION_TASK_EVENTS) | set(_OWNER_ACTION_AGENT_EVENTS)
+    | set(_OWNER_ACTION_DECISION_EVENTS) | _OWNER_ACTION_REVIEWER_EVENTS
+)
 
 
-def _record_owner_action(state: dict[str, Any], agent: dict[str, Any], title: str, command: str, why: str, task: str) -> dict[str, Any]:
+def _mentions(text: str, name: str) -> bool:
+    return bool(name) and re.search(rf"(?<![\w-]){re.escape(name.lower())}(?![\w-])", text) is not None
+
+
+def _owner_action_target(state: dict[str, Any], text: str, task: str, for_agent: str) -> tuple[str, str]:
+    """The task and agent a card is about, named explicitly or in its words."""
+    if not task:
+        known = set(state.get("task_repositories") or {}) | set(state.get("requirement_proposals") or {}) | set(state.get("releases") or {})
+        task = next((name for name in sorted(known, key=len, reverse=True) if _mentions(text, name)), "")
+    if not for_agent:
+        for agent in state.get("agents", {}).values():
+            if agent.get("role") == "cto":
+                continue
+            short = str(agent.get("id", "")).rsplit("-", 1)[0]
+            if _mentions(text, str(agent.get("id", ""))) or _mentions(text, short):
+                for_agent = str(agent["id"])
+                break
+    return task, for_agent
+
+
+def _owner_action_kind(text: str, task: str, for_agent: str) -> str:
+    if "reviewer" in text and ("start" in text or "no reviewer" in text):
+        return "reviewer"
+    if "requirements" in text and any(word in text for word in ("decision", "go ahead", "modify")):
+        return "decision"
+    if for_agent or any(word in text for word in _OWNER_ACTION_AGENT_WORDS):
+        return "agent"
+    return "task" if task else "other"
+
+
+def _classify_owner_action(state: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:
+    """Give a card (new or recorded before backlog #9) its kind and target."""
+    if action.get("kind") in OWNER_ACTION_KINDS and "for_agent" in action:
+        return action
+    text = " ".join(str(action.get(key) or "") for key in ("title", "why", "command")).lower()
+    task, for_agent = _owner_action_target(state, text, str(action.get("task") or ""), str(action.get("for_agent") or ""))
+    kind = action.get("kind") if action.get("kind") in OWNER_ACTION_KINDS else _owner_action_kind(text, task, for_agent)
+    action.update({"task": task, "for_agent": for_agent, "kind": kind})
+    return action
+
+
+def owner_action_expires_at(action: dict[str, Any]) -> datetime | None:
+    """Only a card no event can clear expires; the others wait for their event."""
+    if action.get("kind", "other") != "other":
+        return None
+    try:
+        return datetime.fromisoformat(str(action.get("recorded_at"))) + OWNER_ACTION_TTL
+    except ValueError:
+        return None
+
+
+def owner_action_clears_when(action: dict[str, Any], current: datetime | None = None) -> str:
+    """The plain line under a card telling the owner what will clear it."""
+    kind = action.get("kind", "other")
+    if kind == "task":
+        return "Clears when the task is accepted"
+    if kind == "agent":
+        return "Clears when the agent restarts"
+    if kind == "decision":
+        return "Clears when you choose Go ahead or Modify"
+    if kind == "reviewer":
+        return "Clears when a Reviewer starts"
+    expires = owner_action_expires_at(action)
+    if expires is None:
+        return f"Expires {int(OWNER_ACTION_TTL.total_seconds() // 3600)} h after it was recorded"
+    left = (expires - (current or datetime.now(timezone.utc))).total_seconds()
+    return f"Expires in {max(1, -(-int(left) // 3600))} h"
+
+
+def _resolve_owner_action(state: dict[str, Any], action: dict[str, Any], outcome: str, cause: str) -> None:
+    action.update({"status": "done", "outcome": outcome, "done_at": now(), "resolved_by": cause})
+    _event(state, "owner_action_cleared", None, {
+        "task": action.get("task", ""), "action_id": action["id"], "outcome": outcome,
+        "message": f"owner action done: {action.get('title', '')} — {outcome}",
+    })
+
+
+def _settle_owner_actions(state: dict[str, Any], event: dict[str, Any], agent: dict[str, Any] | None) -> None:
+    """Backlog #9: the event that makes a card obsolete clears it.
+
+    The CTO rarely ran owner-action-done, so cards promised a clearing that
+    never came and piled up for days. Accept / release / cancel clear a task's
+    cards; stop / restart / new session clear an agent's; Go ahead / Modify
+    clear a requirements decision; a live Reviewer clears "start a Reviewer".
+    """
+    kind = str(event.get("kind", ""))
+    if kind == "owner_release_decision_recorded" and event.get("decision") != "accepted":
+        return
+    task = str(event.get("task") or (agent or {}).get("task") or "")
+    agent_id = str((agent or {}).get("id") or "")
+    role = str((agent or {}).get("role") or event.get("role") or "")
+    for action in list(state.get("owner_actions", {}).values()):
+        if action.get("status") != "open":
+            continue
+        card = _classify_owner_action(state, action)
+        outcome = ""
+        if kind in _OWNER_ACTION_TASK_EVENTS and card.get("task") and card["task"] == task:
+            outcome = _OWNER_ACTION_TASK_EVENTS[kind]
+        elif kind in _OWNER_ACTION_AGENT_EVENTS and card["kind"] == "agent" and agent_id:
+            # A card naming no agent is about whichever worker the owner had
+            # to rescue (on its task, when it names one); never the CTO itself.
+            target = card.get("for_agent") or ""
+            if target == agent_id or (not target and role != "cto" and card.get("task", "") in {"", task}):
+                outcome = _OWNER_ACTION_AGENT_EVENTS[kind]
+        if not outcome and kind in _OWNER_ACTION_DECISION_EVENTS and card["kind"] == "decision":
+            if not card.get("task") or card["task"] == task:
+                outcome = _OWNER_ACTION_DECISION_EVENTS[kind]
+        if not outcome and kind in _OWNER_ACTION_REVIEWER_EVENTS and card["kind"] == "reviewer" and role == "qa":
+            outcome = "Resolved: a Reviewer is running"
+        if outcome:
+            _resolve_owner_action(state, card, outcome, kind)
+
+
+def _expire_owner_actions(state: dict[str, Any], current: datetime) -> list[str]:
+    """Backlog #9: a card no event can clear leaves after OWNER_ACTION_TTL."""
+    expired = []
+    for action in list(state.get("owner_actions", {}).values()):
+        if action.get("status") != "open":
+            continue
+        expires = owner_action_expires_at(_classify_owner_action(state, action))
+        if expires is not None and expires <= current:
+            _resolve_owner_action(state, action, OWNER_ACTION_EXPIRED, "expired")
+            expired.append(str(action["id"]))
+    return expired
+
+
+def _record_owner_action(
+    state: dict[str, Any], agent: dict[str, Any], title: str, command: str, why: str, task: str,
+    kind: str = "", for_agent: str = "",
+) -> dict[str, Any]:
     actions = state.setdefault("owner_actions", {})
+    card = _classify_owner_action(state, {
+        "title": title, "command": command, "why": why,
+        "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "for_agent": for_agent,
+        **({"kind": kind} if kind else {}),
+    })
     for existing in actions.values():
-        if existing.get("status") == "open" and existing.get("title") == title and existing.get("command") == command:
+        if existing.get("status") != "open":
+            continue
+        # Backlog #9: the same request about the same task or agent is one
+        # card. A card that names neither is only ever the same word for word:
+        # two different targetless requests are two things for the owner to do.
+        known = _classify_owner_action(state, existing)
+        same_target = all(known.get(key, "") == card[key] for key in ("task", "for_agent"))
+        if not same_target:
+            continue
+        if existing.get("title") == title and existing.get("command") == command:
+            return existing
+        if (card["task"] or card["for_agent"]) and known.get("kind") == card["kind"]:
             return existing
     action = {
         "id": f"action-{secrets.token_hex(6)}", "title": title, "command": command, "why": why,
-        "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "agent_id": agent["id"],
-        "status": "open", "recorded_at": now(), "outcome": "", "done_at": "",
+        "task": card["task"], "for_agent": card["for_agent"], "kind": card["kind"],
+        "agent_id": agent["id"], "status": "open", "recorded_at": now(), "outcome": "", "done_at": "",
     }
     actions[action["id"]] = action
     _event(state, "owner_action_recorded", agent, {
@@ -3697,13 +3880,21 @@ def _record_owner_action(state: dict[str, Any], agent: dict[str, Any], title: st
     return action
 
 
-def record_owner_action(root: Path, agent_id: str, title: str, command: str = "", why: str = "", task: str = "") -> dict[str, Any]:
+def record_owner_action(
+    root: Path, agent_id: str, title: str, command: str = "", why: str = "", task: str = "",
+    kind: str = "", for_agent: str = "",
+) -> dict[str, Any]:
     """Pin something the owner must do (usually a Terminal command) in Mission Control.
 
     2026-09-25 defect #9: the CTO could only ask the owner in its terminal,
-    which scrolls too fast to read. The card stays until owner-action-done.
+    which scrolls too fast to read. Backlog #9: the card clears itself on the
+    event it waits for (see _settle_owner_actions), expires if no event can
+    clear it, or leaves on owner-action-done.
     """
     title, command, why, task = title.strip(), command.strip(), why.strip(), task.strip()
+    kind, for_agent = kind.strip().lower(), for_agent.strip()
+    if kind and kind not in OWNER_ACTION_KINDS:
+        raise ValueError(f"the kind must be one of: {', '.join(OWNER_ACTION_KINDS)}")
     if not title or len(title) > 240:
         raise ValueError("an owner action needs a title of at most 240 characters")
     if len(command) > MAX_OWNER_ACTION_COMMAND or len(why) > MAX_REASON_LENGTH:
@@ -3712,7 +3903,9 @@ def record_owner_action(root: Path, agent_id: str, title: str, command: str = ""
         agent = _require_writable_agent(state, agent_id)
         if agent.get("role") != "cto" or not agent.get("active"):
             raise ValueError("only the active CTO records owner actions")
-        return dict(_record_owner_action(state, agent, title, command, why, task))
+        if for_agent and for_agent not in state.get("agents", {}):
+            raise ValueError("unknown agent for this owner action")
+        return dict(_record_owner_action(state, agent, title, command, why, task, kind, for_agent))
 
 
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
@@ -9670,6 +9863,11 @@ def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
                 "liveness_note": "terminal intentionally stopped by owner",
                 "last_status_at": now(),
             })
+        # Backlog #9: the owner stopped these terminals; cards asking to stop
+        # or restart them are done. Stop records no per-agent event.
+        if state.get("owner_actions"):
+            for agent in matched:
+                _settle_owner_actions(state, {"kind": "agent_stopped_by_owner", "task": agent.get("task", "")}, agent)
         # If a reviewer is intentionally stopped, return its unfinished claim
         # to the queue instead of leaving a review owned by a dead agent.
         matched_ids = {agent.get("id") for agent in matched}
@@ -10005,7 +10203,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate-integrity")
     sub.add_parser("recover-git")
     p = sub.add_parser("reintegrate-main"); p.add_argument("--agent", required=True); p.add_argument("--finish", action="store_true")
-    p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default="")
+    p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", dest="owner_command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default=""); p.add_argument("--kind", default="", choices=["", *OWNER_ACTION_KINDS]); p.add_argument("--for-agent", default="")
     p = sub.add_parser("owner-action-done"); p.add_argument("--agent", required=True); p.add_argument("--id", required=True); p.add_argument("--outcome", required=True)
     p = sub.add_parser("reopen-integrity"); p.add_argument("--request", action="append", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("reevaluate-finalization"); p.add_argument("--task", required=True); p.add_argument("--finding", required=True); p.add_argument("--reason", required=True)
@@ -10103,7 +10301,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "migrate-integrity": out = migrate_integrity(root)
         elif args.command == "recover-git": out = recover_git_transactions(root)
         elif args.command == "reintegrate-main": out = broker_reintegrate_main(root, args.agent, args.finish)
-        elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.command, args.why, args.task)
+        elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.owner_command, args.why, args.task, args.kind, args.for_agent)
         elif args.command == "owner-action-done": out = clear_owner_action(root, args.agent, args.id, args.outcome)
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)
         elif args.command == "reevaluate-finalization": out = reevaluate_finalization(root, args.task, args.finding, args.reason)
