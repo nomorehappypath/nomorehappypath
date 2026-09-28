@@ -132,7 +132,7 @@ class HistoryKeepsAllLedgers(unittest.TestCase):
                 "routed_session_id": "", "routed_at": None, "completed_at": None, "result": None,
             }
         before = {r["id"]: copy.deepcopy(r) for r in settled}
-        board.cancel_session_work(self.root, qa_session["id"])
+        board.stop_session(self.root, qa_session["id"])
         state = board.snapshot(self.root)
         for rid, prior in before.items():
             after = state["qa_requests"][rid]

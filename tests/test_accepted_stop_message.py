@@ -45,10 +45,10 @@ class AcceptedStopTests(_Fixture):
     def test_stopping_the_delivery_of_an_accepted_task_says_so_and_cancels_nothing(self):
         dev = self.delivery("ACCEPTED-TASK")
         self.accept("ACCEPTED-TASK")
-        result = board.cancel_session_work(self.root, dev["session_id"])
+        result = board.stop_session(self.root, dev["session_id"])
         state = board.snapshot(self.root)
         self.assertEqual(result["accepted_tasks"], ["ACCEPTED-TASK"])
-        self.assertEqual(result["cancelled_tasks"], [])
+        self.assertEqual(result["kept_tasks"], [])
         # a finished, inactive Delivery of an accepted task is archived at once
         # (existing behaviour); the live list no longer holds it
         self.assertNotIn(dev["id"], state["agents"])
@@ -63,8 +63,8 @@ class AcceptedStopTests(_Fixture):
     def test_the_acceptance_itself_guards_the_task_whatever_its_release_status_reads(self):
         dev = self.delivery("ACCEPTED-LATER-STATUS")
         self.accept("ACCEPTED-LATER-STATUS", release_status="ACCEPTED")
-        result = board.cancel_session_work(self.root, dev["session_id"])
-        self.assertEqual(result["cancelled_tasks"], [], "an accepted task is never cancelled by Stop")
+        result = board.stop_session(self.root, dev["session_id"])
+        self.assertEqual(result["kept_tasks"], [], "an accepted task is finished, not kept for a new agent")
         self.assertEqual(result["accepted_tasks"], ["ACCEPTED-LATER-STATUS"])
         state = board.snapshot(self.root)
         self.assertEqual(state["release_decisions"]["ACCEPTED-LATER-STATUS"]["decision"], "accepted")
@@ -72,13 +72,15 @@ class AcceptedStopTests(_Fixture):
         self.assertNotIn("ACCEPTED-LATER-STATUS", state.get("cancelled_tasks", {}))
         self.assertNotIn("task_cancelled", [event["kind"] for event in state["events"]])
 
-    def test_an_unfinished_task_is_still_cancelled_as_before(self):
+    def test_an_unfinished_task_is_kept_not_cancelled(self):
+        # Backlog #10 (owner's decision 2026-09-27): Stop never cancels a task;
+        # this test asserted the old cancel-on-Stop and now asserts the opposite.
         dev = self.delivery("UNFINISHED-TASK")
-        result = board.cancel_session_work(self.root, dev["session_id"])
+        result = board.stop_session(self.root, dev["session_id"])
         state = board.snapshot(self.root)
-        self.assertEqual(result["cancelled_tasks"], ["UNFINISHED-TASK"])
+        self.assertEqual(result["kept_tasks"], ["UNFINISHED-TASK"])
         self.assertEqual(result["accepted_tasks"], [])
-        self.assertIn("task_cancelled", [event["kind"] for event in state["events"]])
+        self.assertNotIn("task_cancelled", [event["kind"] for event in state["events"]])
 
 
 class AcceptedStopPageTests(unittest.TestCase):
@@ -89,21 +91,21 @@ class AcceptedStopPageTests(unittest.TestCase):
     declarations_only = _viewer_tests.BoardViewerTests.declarations_only
     run_node = _viewer_tests.BoardViewerTests.run_node
 
-    def _run(self, decision: str | None) -> dict:
+    def _run(self, decision: str | None, kept: bool = False) -> dict:
         state = {"release_decisions": {"TASK-ONE": {"decision": decision}}} if decision else {}
         return self.run_node("""
 const nodes={notice:{textContent:''}};
 globalThis.document={querySelector(selector){return nodes[selector.slice(1)]||null;}};
 let prompt='';
 globalThis.window={confirm(message){prompt=message;return true;}};
-globalThis.fetch=async path=>({ok:true,json:async()=>({cleanup:{accepted_tasks:[],cancelled_tasks:[]}})});
+globalThis.fetch=async path=>({ok:true,json:async()=>({cleanup:{accepted_tasks:[],kept_tasks:%s}})});
 refresh=async()=>{};
 lastBoard={state:%s};
 (async()=>{
   await confirmStopSession('codex-one','CODEX CLI · Delivery Agent','Task One','COMPLETE','TASK-ONE');
   process.stdout.write(JSON.stringify({prompt,notice:nodes.notice.textContent}));
 })();
-""" % json.dumps(state))
+""" % (json.dumps(["TASK-ONE"] if kept else []), json.dumps(state)))
 
     def test_an_accepted_task_gets_the_accepted_prompt_and_notice(self):
         result = self._run("accepted")
@@ -112,10 +114,12 @@ lastBoard={state:%s};
         self.assertIn("nothing is removed", result["prompt"])
         self.assertNotIn("will be removed", result["prompt"])
 
-    def test_an_unfinished_task_keeps_the_unfinished_wording(self):
-        result = self._run(None)
-        self.assertIn("Unfinished Delivery work was cleaned from the board.", result["notice"])
-        self.assertIn("will be removed", result["prompt"])
+    def test_an_unfinished_task_is_kept_in_the_wording(self):
+        # Backlog #10: the Stop prompt and notice say the task is kept.
+        result = self._run(None, kept=True)
+        self.assertEqual(result["notice"], "Agent stopped. The task is kept — start a new agent to carry on.")
+        self.assertIn("The task is kept", result["prompt"])
+        self.assertNotIn("will be removed", result["prompt"])
 
 
 PROBE = r"""

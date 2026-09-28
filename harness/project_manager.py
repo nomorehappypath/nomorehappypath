@@ -193,6 +193,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     paused = False
     board_pause_status = ""
     control_plane_hold = ""
+    control_plane_hold_task = ""
     state_path = Path(entry["data_root"]) / "board" / "state.json"
     if state_path.is_file():
         try:
@@ -220,9 +221,19 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
 
             paused = pause.get("status") in {"paused", "resuming"}
             board_pause_status = str(pause.get("status") or "")
-            for hold in (state.get("control_plane_holds") or {}).values():
-                if isinstance(hold, dict) and hold.get("status") == "open":
+            # Backlog #11: a hold on a task that has since been cancelled,
+            # accepted or released (recorded before holds closed themselves)
+            # needs no repair; the card names the task that does.
+            concluded = set(state.get("cancelled_tasks") or {}) | {
+                str(task) for task, decision in releases.items() if decision.get("decision") == "accepted"
+            } | {
+                str(task) for task, record in (state.get("releases") or {}).items()
+                if isinstance(record, dict) and record.get("status") in {"VISUAL_TEST_REQUIRED", "ACCEPTED"}
+            }
+            for held_task, hold in sorted((state.get("control_plane_holds") or {}).items()):
+                if isinstance(hold, dict) and hold.get("status") == "open" and str(hold.get("task") or held_task) not in concluded:
                     control_plane_hold = str(hold.get("reason") or "control-plane repair is required")[:300]
+                    control_plane_hold_task = str(hold.get("task") or held_task)
                     break
 
             counts["total"] = len(directions)
@@ -351,6 +362,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
         "paused": paused,
         "board_pause_status": board_pause_status,
         "control_plane_hold": control_plane_hold,
+        "control_plane_hold_task": control_plane_hold_task,
         "resume_available": resume_available,
         "latest_task": latest_task,
         "latest_progress": latest_progress,
