@@ -698,6 +698,8 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
     state["events"].append(event)
     if kind in OWNER_ACTION_TRIGGER_EVENTS and state.get("owner_actions"):
         _settle_owner_actions(state, event, agent)
+    if kind in _HOLD_ENDING_EVENTS and state.get("control_plane_holds"):
+        _resolve_concluded_hold(state, event)
     if agent is not None and kind in PROGRESS_EVENTS:
         agent["last_progress_at"] = event["at"]
         if agent.get("liveness") in {"stalled", "recovering"}:
@@ -2512,6 +2514,17 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
                     "message": "unconsumed owner direction transferred to the replacement Delivery terminal",
                 })
         result = dict(agent)
+        resume_source, resume_target = "", ""
+        if role in DEVELOPER_ROLES and task == AWAITING_OWNER_DIRECTION and session_id and not recovered_direction:
+            resume_source, resume_target = _stopped_task_to_resume(state, agent_id)
+    if resume_target:
+        # Backlog #10: the owner stopped a task's Delivery and started a new
+        # one; it carries the same task on instead of waiting for direction.
+        try:
+            resume_task(root, result["id"], resume_source, resume_target)
+            result = dict(snapshot(root)["agents"][result["id"]])
+        except ValueError:
+            pass  # nothing to carry on after all; the agent waits for direction
     if recovered_direction:
         try:
             from harness import control
@@ -6025,6 +6038,38 @@ def record_control_plane_hold(
             "message": "control-plane repair is required; certified product PASS remains unchanged",
         })
         return json.loads(json.dumps(hold))
+
+
+# Backlog #11: a hold is about a task's orchestration; once the task itself is
+# cancelled, accepted or released there is nothing left to repair.
+_HOLD_ENDING_EVENTS = {
+    "task_cancelled": "Resolved: task was cancelled",
+    "git_acceptance_completed": "Resolved: task was accepted",
+    "owner_release_decision_recorded": "Resolved: task was accepted",
+    "delivery_stopped_after_acceptance": "Resolved: task was accepted",
+    "visual_test_required": "Resolved: task was released",
+}
+
+
+def _resolve_concluded_hold(state: dict[str, Any], event: dict[str, Any]) -> None:
+    """The event that ends a task also closes its open control-plane hold.
+
+    2026-09-27 (backlog #11): a hold recorded on 2026-09-23 outlived its
+    cancelled task and kept the whole project card at "Needs repair" for days.
+    """
+    kind = str(event.get("kind", ""))
+    if kind == "owner_release_decision_recorded" and event.get("decision") != "accepted":
+        return
+    task = str(event.get("task") or "")
+    hold = (state.get("control_plane_holds") or {}).get(task)
+    if not task or not isinstance(hold, dict) or hold.get("status") != "open":
+        return
+    outcome = _HOLD_ENDING_EVENTS[kind]
+    hold.update({"status": "resolved", "resolved_at": now(), "resolved_by": kind, "outcome": outcome})
+    _event(state, "control_plane_hold_resolved", None, {
+        "task": task, "source": kind, "outcome": outcome,
+        "message": f"control-plane hold closed: {outcome}",
+    })
 
 
 def clear_control_plane_hold(root: ProjectRoot, task: str, source: str) -> dict[str, Any] | None:
@@ -9749,188 +9794,247 @@ def _remove_cancelled_task_files(root: Path, task: str, artifact_values: list[st
 ACCEPTED_STOP_MESSAGE = "Task accepted, Dev agent stopped."
 
 
-def cancel_session_work(root: Path, session_id: str) -> dict[str, Any]:
-    """Cancel unfinished work when the owner deliberately stops one terminal.
+STOP_KEEPS_TASK_MESSAGE = "Agent stopped. The task is kept — start a new agent to carry on."
 
-    A transport crash still uses :func:`offline` and preserves recovery memory.
-    This operation is only for an explicit Stop action from Mission Control.
+
+def _accepted_task_ids(state: dict[str, Any]) -> set[str]:
+    return {
+        task for task, decision in (state.get("release_decisions") or {}).items()
+        if (decision or {}).get("decision") == "accepted"
+    } | set((state.get("git_acceptances") or {}).keys())
+
+
+def stop_session(root: Path, session_id: str) -> dict[str, Any]:
+    """The owner pressed Stop on one agent: close it and keep its task.
+
+    Backlog #10 (owner's decision 2026-09-27): Stop used to cancel an
+    unfinished Delivery task with it — records and workspace removed, the task
+    hidden — which lost the content-planning task on 2026-09-26. Stop now only
+    closes the agent. The task keeps its records, requirements, workspace and
+    history, and the next Delivery agent the owner starts carries it on
+    (see _stopped_task_to_resume). Abandoning a task is cancel_task.
     """
     session_id = str(session_id or "").strip()
     if not session_id:
         raise ValueError("managed session ID is required")
-    cancelled_tasks: list[str] = []
-    related_session_ids: set[str] = {session_id}
-    artifact_values: dict[str, list[str]] = {}
-    workspace_values: dict[str, str] = {}
     with locked_state(root) as state:
         matched = [agent for agent in state.get("agents", {}).values() if agent.get("session_id") == session_id]
-        # 2026-09-27: an ACCEPTED task is finished work in main. Stopping its
-        # Delivery only closes the terminal. It used to be spared only because
-        # its release status still read VISUAL_TEST_REQUIRED after acceptance;
-        # the acceptance itself is now the guard.
-        accepted = {
-            task for task, decision in (state.get("release_decisions") or {}).items()
-            if (decision or {}).get("decision") == "accepted"
-        } | set((state.get("git_acceptances") or {}).keys())
-        accepted_tasks = sorted({
-            agent.get("task", "") for agent in matched
-            if agent.get("role") in DEVELOPER_ROLES and agent.get("task") in accepted
-        })
-        task_candidates = {
-            agent.get("task", "") for agent in matched
-            if agent.get("role") in DEVELOPER_ROLES
-            and agent.get("task") not in {"", AWAITING_OWNER_DIRECTION}
-            and agent.get("task") not in accepted
-            and state.get("releases", {}).get(agent.get("task", ""), {}).get("status") not in RELEASED_STATUSES
-        }
-        for task in sorted(task_candidates):
-            requests = [request for request in _task_requests(state, task)]
-            artifact_values[task] = [
-                str(request.get("challenge_ledger", ""))
-                for request in requests if request.get("challenge_ledger")
-            ]
-            workspace_values[task] = str(state.get("task_workspaces", {}).get(task, ""))
-            for key in list(state.get("qa_requests", {})):
-                if state["qa_requests"][key].get("task") == task:
-                    state["qa_requests"].pop(key, None)
-            for key in list(state.get("qa_request_index", {})):
-                if state["qa_request_index"][key].get("task") == task:
-                    state["qa_request_index"].pop(key, None)
-            state["archive"] = [
-                entry for entry in state.get("archive", [])
-                if entry.get("value", {}).get("task") != task
-            ]
-            for key in (
-                "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
-                "task_workspaces", "subtask_workspaces", "subtask_branches",
-                "task_owner_directions", "task_lineage",
-                "owner_clarifications", "requirement_confirmations", "releases",
-                "release_decisions", "release_repairs",
-            ):
-                state.setdefault(key, {}).pop(task, None)
-            state["owner_messages"] = [message for message in state.get("owner_messages", []) if message.get("task") != task]
-            for finding_id, finding in list(state.get("deferred_findings", {}).items()):
-                if finding.get("task") == task or finding.get("follow_up_task") == task:
-                    state["deferred_findings"].pop(finding_id, None)
-            for agent in state.get("agents", {}).values():
-                if agent.get("task") == task:
-                    if agent.get("session_id"):
-                        related_session_ids.add(str(agent["session_id"]))
-                    agent.update({
-                        "active": False, "write_authority": False,
-                        "status": "cancelled", "liveness": "offline",
-                        "status_note": "owner intentionally stopped this unfinished task; runtime work was removed",
-                        "liveness_note": "task cancelled by owner",
-                        "last_status_at": now(),
-                    })
-                    if agent.get("session_id"):
-                        state.get("owner_directions", {}).pop(agent["session_id"], None)
-                        state.get("pending_owner_clarifications", {}).pop(agent["session_id"], None)
-            cancelled_at = now()
-            state.setdefault("cancelled_tasks", {})[task] = {
-                "cancelled_at": cancelled_at,
-                "reason": "owner intentionally stopped the Delivery task; unfinished runtime work was removed",
-            }
-            _event(state, "task_cancelled", matched[0] if matched else None, {
-                "task": task,
-                "message": "owner intentionally stopped the Delivery task; unfinished runtime work and workspace were removed",
-            })
-            cancelled_tasks.append(task)
-
-        # A waiting Delivery terminal may hold an unconsumed direction but no
-        # task yet. Explicit Stop discards that intake so it cannot reappear in
-        # the next terminal as a phantom project.
+        accepted = _accepted_task_ids(state)
+        accepted_tasks: set[str] = set()
+        kept_tasks: set[str] = set()
+        stopped_at = now()
         for agent in matched:
-            if agent.get("task") == AWAITING_OWNER_DIRECTION:
+            task = str(agent.get("task") or "")
+            if task == AWAITING_OWNER_DIRECTION:
+                # A waiting terminal's unconsumed intake would otherwise
+                # reappear in the next terminal as a phantom project.
                 state.get("owner_directions", {}).pop(session_id, None)
                 state.get("pending_owner_clarifications", {}).pop(session_id, None)
-            if agent.get("role") in DEVELOPER_ROLES and agent.get("task") in accepted:
+            if agent.get("role") in DEVELOPER_ROLES and task in accepted:
                 agent.update({
                     "active": False, "write_authority": False,
                     "status": "stopped", "liveness": "offline",
                     "status_note": ACCEPTED_STOP_MESSAGE,
                     "liveness_note": "task accepted; terminal stopped by owner",
-                    "last_status_at": now(),
+                    "last_status_at": stopped_at,
                 })
                 _event(state, "delivery_stopped_after_acceptance", agent, {
-                    "task": agent.get("task", ""), "message": ACCEPTED_STOP_MESSAGE,
+                    "task": task, "message": ACCEPTED_STOP_MESSAGE,
                 })
+                accepted_tasks.add(task)
                 continue
+            # A release waiting for the owner's test is kept too, but it is
+            # not handed to the next agent: the owner answers it first.
+            keeps_task = (
+                agent.get("role") in DEVELOPER_ROLES
+                and task not in {"", AWAITING_OWNER_DIRECTION}
+                and task not in (state.get("cancelled_tasks") or {})
+                and state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES
+            )
             agent.update({
                 "active": False, "write_authority": False,
-                "status": "cancelled", "liveness": "offline",
-                "status_note": "terminal intentionally stopped by owner",
-                "liveness_note": "terminal intentionally stopped by owner",
-                "last_status_at": now(),
+                "status": "stopped", "liveness": "offline",
+                "status_note": STOP_KEEPS_TASK_MESSAGE if keeps_task else "terminal stopped by owner",
+                "liveness_note": "terminal stopped by owner",
+                "last_status_at": stopped_at,
             })
+            if keeps_task:
+                agent["stopped_by_owner_at"] = stopped_at
+                kept_tasks.add(task)
+                _event(state, "delivery_stopped_task_kept", agent, {
+                    "task": task, "message": STOP_KEEPS_TASK_MESSAGE,
+                })
         # Backlog #9: the owner stopped these terminals; cards asking to stop
         # or restart them are done. Stop records no per-agent event.
         if state.get("owner_actions"):
             for agent in matched:
                 _settle_owner_actions(state, {"kind": "agent_stopped_by_owner", "task": agent.get("task", "")}, agent)
-        # If a reviewer is intentionally stopped, return its unfinished claim
-        # to the queue instead of leaving a review owned by a dead agent.
-        matched_ids = {agent.get("id") for agent in matched}
-        for request in state.get("qa_requests", {}).values():
-            # Settled verdicts are immutable history. Only UNFINISHED work returns
-            # to the queue; a completed review keeps its verdict, its reviewer
-            # attribution, and its challenge ledger. Without this guard, stopping
-            # a reviewer erased the ledger reference of every review it had ever
-            # completed (owner-reported data loss, 2026-08-15).
-            if request.get("status") not in ("authoring", "open", "reserved", "claimed"):
-                continue
-            if request.get("reserved_by") in matched_ids or request.get("claimed_by") in matched_ids:
-                prior_reviewer = str(request.get("reserved_by") or request.get("claimed_by") or "")
-                _abandon_review_intents(request, prior_reviewer, "reviewer terminal stopped")
-                request.update({
-                    "status": "authoring" if request.get("delivery_state") == "executing" else "open",
-                    "reserved_by": None, "reserved_at": None,
-                    "claimed_by": None, "claimed_at": None, "routed_to": None,
-                    "routed_session_id": "", "routed_at": None,
-                    "challenge_ledger": None, "route_state": "reviewer_stopped_reopened",
-                })
-
-    cancelled = set(cancelled_tasks)
-    if cancelled:
-        _rewrite_cold(root, "qa_requests", [value for value in _read_cold(root, "qa_requests") if value.get("task") not in cancelled])
-        _rewrite_cold(root, "agents", [value for value in _read_cold(root, "agents") if value.get("task") not in cancelled])
-    file_results = {
-        task: _remove_cancelled_task_files(root, task, artifact_values.get(task, []), workspace_values.get(task, ""))
-        for task in cancelled_tasks
-    }
+        _reopen_stopped_reviews(state, {agent.get("id") for agent in matched})
     return {
         "session_id": session_id,
-        "related_session_ids": sorted(related_session_ids),
-        "cancelled_tasks": cancelled_tasks,
-        "accepted_tasks": accepted_tasks,
-        "cleanup": file_results,
+        "related_session_ids": [session_id],
+        "kept_tasks": sorted(kept_tasks),
+        "accepted_tasks": sorted(accepted_tasks),
     }
 
 
-def cancel_all_unfinished_work(root: Path) -> dict[str, Any]:
-    """Cancel every owner-visible unfinished task after an explicit Stop All."""
+def _reopen_stopped_reviews(state: dict[str, Any], agent_ids: set[Any]) -> None:
+    """A stopped reviewer's UNFINISHED claims return to the queue.
+
+    Settled verdicts are immutable history: a completed review keeps its
+    verdict, its reviewer attribution, and its challenge ledger. Without this
+    guard, stopping a reviewer erased the ledger reference of every review it
+    had ever completed (owner-reported data loss, 2026-08-15).
+    """
+    for request in state.get("qa_requests", {}).values():
+        if request.get("status") not in ("authoring", "open", "reserved", "claimed"):
+            continue
+        if request.get("reserved_by") in agent_ids or request.get("claimed_by") in agent_ids:
+            prior_reviewer = str(request.get("reserved_by") or request.get("claimed_by") or "")
+            _abandon_review_intents(request, prior_reviewer, "reviewer terminal stopped")
+            request.update({
+                "status": "authoring" if request.get("delivery_state") == "executing" else "open",
+                "reserved_by": None, "reserved_at": None,
+                "claimed_by": None, "claimed_at": None, "routed_to": None,
+                "routed_session_id": "", "routed_at": None,
+                "challenge_ledger": None, "route_state": "reviewer_stopped_reopened",
+            })
+
+
+def stop_all_sessions(root: Path) -> dict[str, Any]:
+    """Stop All: every agent stops, no task is cancelled (backlog #10)."""
     state = snapshot(root)
     session_ids = sorted({
         str(agent.get("session_id")) for agent in state.get("agents", {}).values()
         if agent.get("session_id") and agent.get("active")
     })
-    results = [cancel_session_work(root, session_id) for session_id in session_ids]
-    # Include an orphaned Delivery task whose terminal already died before the
-    # owner pressed Stop All by routing it through its preserved session ID.
-    refreshed = snapshot(root)
-    orphan_sessions = sorted({
-        str(agent.get("session_id")) for agent in refreshed.get("agents", {}).values()
-        if agent.get("role") in DEVELOPER_ROLES
-        and agent.get("session_id")
-        and agent.get("task") not in {"", AWAITING_OWNER_DIRECTION}
-        and refreshed.get("releases", {}).get(agent.get("task", ""), {}).get("status") not in RELEASED_STATUSES
-        and agent.get("task") not in refreshed.get("cancelled_tasks", {})
-    })
-    results.extend(cancel_session_work(root, session_id) for session_id in orphan_sessions)
+    results = [stop_session(root, session_id) for session_id in session_ids]
     return {
-        "sessions_cleaned": len({value["session_id"] for value in results}),
-        "cancelled_tasks": sorted({task for value in results for task in value.get("cancelled_tasks", [])}),
+        "sessions_cleaned": len(results),
+        "kept_tasks": sorted({task for value in results for task in value.get("kept_tasks", [])}),
     }
+
+
+def cancel_task(root: Path, task: str) -> dict[str, Any]:
+    """The owner's explicit Cancel task: abandon one unfinished task.
+
+    Backlog #10: this is now the ONLY way a task is cancelled. Its board
+    records, reviews and runtime artifacts are removed, every agent on it is
+    stopped, and its Git worktree is kept for recovery (the board never becomes
+    a second Git writer). Accepted work, and a release waiting for the owner's
+    test, are never cancelled here.
+    """
+    from harness import project_registry
+    task = project_registry.plain_task_id(str(task or "").strip())
+    if not task or task == AWAITING_OWNER_DIRECTION:
+        raise ValueError("name the task to cancel")
+    related_session_ids: set[str] = set()
+    with locked_state(root) as state:
+        known = {
+            str(agent.get("task")) for agent in state.get("agents", {}).values()
+            if agent.get("role") in DEVELOPER_ROLES
+        } | set(state.get("task_briefs") or {}) | set(state.get("delivery_plans") or {}) | set(state.get("requirement_proposals") or {})
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError("this task is already cancelled")
+        if task not in known:
+            raise ValueError("unknown task")
+        if task in _accepted_task_ids(state):
+            raise ValueError("this task is accepted and already in main; there is nothing to cancel")
+        if state.get("releases", {}).get(task, {}).get("status") in RELEASED_STATUSES:
+            raise ValueError("this task is waiting for your test; answer it with Accept or Not accepted")
+        requests = list(_task_requests(state, task))
+        artifact_values = [
+            str(request.get("challenge_ledger", ""))
+            for request in requests if request.get("challenge_ledger")
+        ]
+        workspace_value = str(state.get("task_workspaces", {}).get(task, ""))
+        for key in list(state.get("qa_requests", {})):
+            if state["qa_requests"][key].get("task") == task:
+                state["qa_requests"].pop(key, None)
+        for key in list(state.get("qa_request_index", {})):
+            if state["qa_request_index"][key].get("task") == task:
+                state["qa_request_index"].pop(key, None)
+        state["archive"] = [
+            entry for entry in state.get("archive", [])
+            if entry.get("value", {}).get("task") != task
+        ]
+        for key in (
+            "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
+            "task_workspaces", "subtask_workspaces", "subtask_branches",
+            "task_owner_directions", "task_lineage",
+            "owner_clarifications", "requirement_confirmations", "releases",
+            "release_decisions", "release_repairs",
+        ):
+            state.setdefault(key, {}).pop(task, None)
+        state["owner_messages"] = [message for message in state.get("owner_messages", []) if message.get("task") != task]
+        for finding_id, finding in list(state.get("deferred_findings", {}).items()):
+            if finding.get("task") == task or finding.get("follow_up_task") == task:
+                state["deferred_findings"].pop(finding_id, None)
+        on_task = [agent for agent in state.get("agents", {}).values() if agent.get("task") == task]
+        for agent in on_task:
+            if agent.get("session_id") and agent.get("active"):
+                related_session_ids.add(str(agent["session_id"]))
+            agent.update({
+                "active": False, "write_authority": False,
+                "status": "cancelled", "liveness": "offline",
+                "status_note": "owner cancelled this unfinished task; its records were removed",
+                "liveness_note": "task cancelled by owner",
+                "last_status_at": now(),
+            })
+            agent.pop("stopped_by_owner_at", None)
+            if agent.get("session_id"):
+                state.get("owner_directions", {}).pop(agent["session_id"], None)
+                state.get("pending_owner_clarifications", {}).pop(agent["session_id"], None)
+        state.setdefault("cancelled_tasks", {})[task] = {
+            "cancelled_at": now(),
+            "reason": "owner cancelled the unfinished task; its runtime work was removed",
+        }
+        _event(state, "task_cancelled", None, {
+            "task": task,
+            "message": "owner cancelled the unfinished task; its runtime work was removed",
+        })
+        _reopen_stopped_reviews(state, {agent.get("id") for agent in on_task})
+    _rewrite_cold(root, "qa_requests", [value for value in _read_cold(root, "qa_requests") if value.get("task") != task])
+    _rewrite_cold(root, "agents", [value for value in _read_cold(root, "agents") if value.get("task") != task])
+    return {
+        "task": task,
+        "cancelled_tasks": [task],
+        "related_session_ids": sorted(related_session_ids),
+        "cleanup": _remove_cancelled_task_files(root, task, artifact_values, workspace_value),
+    }
+
+
+def _stopped_task_to_resume(state: dict[str, Any], agent_id: str) -> tuple[str, str]:
+    """Backlog #10: the task a newly started Delivery agent carries on.
+
+    The earliest task whose Delivery the owner stopped, which nobody has
+    picked up, cancelled or accepted since, and whose owner direction is
+    preserved (resume_task needs it). ("", "") when there is none.
+    """
+    accepted = _accepted_task_ids(state)
+    cancelled = state.get("cancelled_tasks") or {}
+    owned = {
+        agent.get("task") for agent in state.get("agents", {}).values()
+        if agent.get("active") and agent.get("role") in DEVELOPER_ROLES and agent.get("id") != agent_id
+    }
+    candidates = []
+    for source in state.get("agents", {}).values():
+        task = str(source.get("task") or "")
+        if (
+            source.get("role") in DEVELOPER_ROLES
+            and source.get("stopped_by_owner_at")
+            and not source.get("active")
+            and not source.get("superseded_by_agent_id")
+            and task not in {"", AWAITING_OWNER_DIRECTION}
+            and task not in accepted and task not in cancelled and task not in owned
+            and state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES
+            and owner_direction_for_task(state, str(source["id"]), task)
+        ):
+            candidates.append((str(source["stopped_by_owner_at"]), str(source["id"]), task))
+    if not candidates:
+        return "", ""
+    _, source_id, task = min(candidates)
+    return source_id, task
 
 
 def cleanup(root: Path) -> dict[str, int]:

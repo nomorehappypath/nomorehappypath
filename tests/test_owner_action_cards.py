@@ -77,9 +77,9 @@ class TaskCardTests(_Fixture):
         self.assertCleared(card["id"], "Resolved: task released")
 
     def test_cancelling_the_task_clears_its_card(self):
-        dev = self.delivery("SHIP")
+        self.delivery("SHIP")
         card = self.pin("Answer the Delivery question on SHIP.", task="SHIP", kind="task")
-        board.cancel_session_work(self.root, dev["session_id"])
+        board.cancel_task(self.root, "SHIP")
         self.assertCleared(card["id"], "Resolved: task cancelled")
 
     def test_a_task_named_only_in_the_words_is_still_tied_to_it(self):
@@ -108,7 +108,7 @@ class AgentCardTests(_Fixture):
         dev = self.waiting_delivery()
         card = self.pin("Delivery is frozen. Stop it and start a fresh one.", for_agent=dev["id"])
         self.assertEqual(self.card(card["id"])["kind"], "agent")
-        board.cancel_session_work(self.root, dev["session_id"])
+        board.stop_session(self.root, dev["session_id"])
         self.assertCleared(card["id"], "Resolved: agent stopped")
 
     def test_the_terminal_ending_clears_its_card(self):

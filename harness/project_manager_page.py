@@ -636,7 +636,7 @@ PAGE = r'''<!doctype html>
             ${counts.awaiting_owner ? `<span class="metric waiting-you"><strong>${counts.awaiting_owner}</strong> waiting for you</span>` : ''}
             <span class="metric"><strong>${agents.total || 0}</strong> active agents</span>
           </div>
-          <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${project.latest_task ? esc(project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>
+          <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) ? esc(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>
           <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
         </div>
         <div class="project-side">

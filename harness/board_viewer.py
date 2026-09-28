@@ -46,7 +46,7 @@ PAGE = r"""<!doctype html>
 <link rel="icon" type="image/png" href="favicon.png?v=2">
 <style>
 :root{--ink:#18212b;--muted:#687583;--line:#dce3e8;--paper:#f7f9fb;--card:#fff;--nav:#0d1728;--blue:#155eef;--blue-soft:#eaf1ff;--green:#067647;--green-soft:#e7f6ee;--amber:#b54708;--amber-soft:#fff1db;--red:#b42318;--red-soft:#ffebe9}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1360px;margin:auto;padding:34px 28px 56px}.top,.launch,.row,.task-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.top{border-bottom:1px solid var(--line);padding-bottom:24px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;color:var(--blue);text-transform:uppercase}.back-link{display:inline-block;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none;margin-bottom:10px}.back-link:hover{text-decoration:underline}#board-offline{position:fixed;inset:0;background:rgba(247,249,251,.97);display:none;align-items:center;justify-content:center;z-index:50}#board-offline.show{display:flex}#board-offline .panel{max-width:440px;text-align:center;padding:30px}#board-offline h2{margin:0 0 8px}h1{font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:5px 0 8px}h2{font-size:17px;margin:0}h3{font-size:16px;margin:0}.sub,#updated,.section>p,.launch p,small{color:var(--muted)}.live{display:inline-flex;gap:8px;align-items:center;background:var(--green-soft);color:var(--green);border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 2px #1018280a}.launch{align-items:center;margin-top:24px}.launch p,.section>p{margin:4px 0 0}.actions{display:flex;gap:9px;flex-wrap:wrap}button{appearance:none;border:0;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font:inherit;font-weight:700;cursor:pointer}button:hover{filter:brightness(.94)}button.secondary{background:var(--blue-soft);color:#174ea6}.actions a.conversation-link{display:inline-flex;align-items:center;box-sizing:border-box;border-radius:8px;background:var(--blue-soft);color:#174ea6;padding:7px 10px;font:inherit;font-size:13px;font-weight:700;text-decoration:none;line-height:normal}.actions a.conversation-link:hover{text-decoration:none;filter:brightness(.97)}button.stop{background:var(--red-soft);color:var(--red)}button:disabled{background:#e4e8ec;color:#8994a0;cursor:not-allowed}.notice{margin-top:13px;color:var(--muted);min-height:22px}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1360px;margin:auto;padding:34px 28px 56px}.top,.launch,.row,.task-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.top{border-bottom:1px solid var(--line);padding-bottom:24px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;color:var(--blue);text-transform:uppercase}.back-link{display:inline-block;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none;margin-bottom:10px}.back-link:hover{text-decoration:underline}#board-offline{position:fixed;inset:0;background:rgba(247,249,251,.97);display:none;align-items:center;justify-content:center;z-index:50}#board-offline.show{display:flex}#board-offline .panel{max-width:440px;text-align:center;padding:30px}#board-offline h2{margin:0 0 8px}h1{font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:5px 0 8px}h2{font-size:17px;margin:0}h3{font-size:16px;margin:0}.sub,#updated,.section>p,.launch p,small{color:var(--muted)}.live{display:inline-flex;gap:8px;align-items:center;background:var(--green-soft);color:var(--green);border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 2px #1018280a}.launch{align-items:center;margin-top:24px}.launch p,.section>p{margin:4px 0 0}.actions{display:flex;gap:9px;flex-wrap:wrap}button{appearance:none;border:0;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font:inherit;font-weight:700;cursor:pointer}button:hover{filter:brightness(.94)}button.secondary{background:var(--blue-soft);color:#174ea6}.actions a.conversation-link{display:inline-flex;align-items:center;box-sizing:border-box;border-radius:8px;background:var(--blue-soft);color:#174ea6;padding:7px 10px;font:inherit;font-size:13px;font-weight:700;text-decoration:none;line-height:normal}.actions a.conversation-link:hover{text-decoration:none;filter:brightness(.97)}button.stop{background:var(--red-soft);color:var(--red)}.task-actions{display:flex;gap:10px;align-items:center;margin-top:12px}.task-actions small{color:var(--muted)}button:disabled{background:#e4e8ec;color:#8994a0;cursor:not-allowed}.notice{margin-top:13px;color:var(--muted);min-height:22px}
 .waiting-banner{margin:14px 0 0;padding:16px 20px;border-radius:14px;background:var(--red);color:#fff;font-size:17px;font-weight:800;line-height:1.35;box-shadow:0 12px 32px rgba(180,35,24,.28);animation:waiting-blink 1.1s steps(2,start) infinite}
 .waiting-banner p{margin:6px 0 0;font-size:15px;font-weight:600}
 .waiting-banner small{display:block;margin-top:8px;font-size:13px;font-weight:500;opacity:.92}
@@ -285,6 +285,7 @@ function taskGate(state,name,contract,agent,reviews,total,done){
   if(reintegration&&!decision)return{status:'RE-INTEGRATION NEEDED',progress:Math.max(deliveryProgress,60),progressTone:'repair',ctoAction:reintegration.delivery==='relaunch_required'?'Owner: relaunch Delivery for this task':'Delivery: merging main in',next:String(reintegration.owner_line||'A newer version of main was accepted after this work branched. Delivery is merging it in and will re-test before final review.')};
   if(decision==='not_accepted')return{status:'OWNER REJECTED / REPAIR REQUIRED',progress:100,progressTone:'repair',ctoAction:'Delivery: repair required',next:'Your reason and attachments are saved. Delivery will use them in a new repair, review, and release cycle.'};
   if(released&&!deployedRelease)return{status:'DEPLOYMENT REFRESH REQUIRED',progress:96,progressTone:'repair',ctoAction:'CTO: loading the reviewed release',next:'The reviewed release is not the version serving this page. Acceptance is disabled until Mission Control is running the exact reviewed commit. Your action: none.'};
+  if((state.stopped_tasks||{})[name]&&!released)return{status:'STOPPED — TASK KEPT',progress:deliveryProgress,progressTone:'repair',ctoAction:'Waiting for a new Delivery agent',next:'You stopped the Delivery agent. The task is kept with all its work. Start a new Delivery agent to carry on, or use Cancel task to abandon it.'};
   if(agent?.task===name&&!((state.requirement_confirmations||{})[name]?.text))return{status:'AWAITING FINAL REQUIREMENTS',progress:0,progressTone:'active',ctoAction:'CTO: monitoring requirements capture',next:'Delivery is clarifying the request. No implementation or review may begin until you say go ahead and the final requirements are recorded.'};
   if(released)return{status:'READY FOR YOUR TEST',progress:100,progressTone:'ready',ctoAction:'CTO: release approved',next:'The exact tested version is clean and pushed to main. Your visual test is now required.'};
   if(latest?.status==='failed'){const final=latest.phase==='final_acceptance';return{status:'REPAIR IN PROGRESS',progress:final?86:staged(.85),progressTone:'repair',ctoAction:'CTO: blocking release and routing repair',next:'Independent review found a defect. Delivery must repair it and submit a new review cycle. Your action: none.'};}
@@ -486,8 +487,27 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
+}
+
+// Backlog #10: abandoning a task is its own action on the task, never a side
+// effect of stopping an agent. Only unfinished work can be cancelled.
+function cancelTaskHtml(state,name){
+  const releaseStatus=(state.releases||{})[name]?.status;
+  if(['VISUAL_TEST_REQUIRED','ACCEPTED'].includes(releaseStatus)||(state.release_decisions||{})[name]?.decision==='accepted'||(state.accepted_tasks||[]).includes(name))return '';
+  return `<div class="task-actions"><button type="button" class="stop cancel-task" onclick="confirmCancelTask(${esc(JSON.stringify(name))})">Cancel task</button><small>Abandon this task for good. Stopping an agent never does this.</small></div>`;
+}
+
+async function confirmCancelTask(task){
+  const approved=window.confirm(`Cancel the task “${objectiveSummary(task)}”?\n\nThis abandons the task for good. Its board records and its workspace will be removed, and any agent working on it will be stopped.\n\nTo only close an agent and keep the task, use Stop instead.`);
+  if(!approved)return false;
+  try{
+    await call('/api/tasks/'+encodeURIComponent(task)+'/cancel',{});
+    el('#notice').textContent=`Task cancelled — ${objectiveSummary(task)}. Its records and workspace were removed.`;
+    await refresh();
+    return true;
+  }catch(error){el('#notice').textContent='Could not cancel the task: '+error.message;return false;}
 }
 
 // Backlog #4 (2026-09-27): a requirements proposal waiting for the owner is
@@ -1136,23 +1156,23 @@ async function confirmStopSession(id,label,task,stage,taskId){
   const acceptedTask=(boardState.accepted_tasks||[]).includes(boundTask)||(boardState.release_decisions||{})[boundTask]?.decision==='accepted';
   const approved=window.confirm(acceptedTask
     ?`Stop ${label} for “${task}”?\n\nThis task is accepted and already in main. Stopping only closes the Delivery terminal; nothing is removed.`
-    :`Stop ${label} for “${task}”?\n\nCurrent stage: ${stage}\n\nIf this is an unfinished Delivery task, its board records and isolated workspace will be removed. Unexpected terminal crashes still preserve recovery memory.`);
+    :`Stop ${label} for “${task}”?\n\nCurrent stage: ${stage}\n\nThis closes the agent. The task is kept with all its work — start a new agent to carry on. To abandon the task instead, use Cancel task on the task.`);
   if(!approved)return false;
   try{
     const result=await call('/api/sessions/'+encodeURIComponent(id)+'/stop');
     const accepted=acceptedTask||(result?.cleanup?.accepted_tasks||[]).length>0;
-    el('#notice').textContent=accepted?'Task accepted, Dev agent stopped.':`Stopped ${label} — ${task}. Unfinished Delivery work was cleaned from the board.`;
+    el('#notice').textContent=accepted?'Task accepted, Dev agent stopped.':(result?.cleanup?.kept_tasks||[]).length?'Agent stopped. The task is kept — start a new agent to carry on.':`Agent stopped — ${label}, ${task}.`;
     await refresh();
     return true;
   }catch(error){el('#notice').textContent='Could not stop session: '+error.message;return false;}
 }
 
 async function stopAllAgents(){
-  const approved=window.confirm('Stop all agents?\n\nEvery live terminal will stop. All unfinished Delivery tasks, review requests, and isolated task workspaces will be removed from the board. Released work waiting for your acceptance is preserved.');
+  const approved=window.confirm('Stop all agents?\n\nEvery live terminal will stop. Every task is kept with all its work — start new agents to carry on. Nothing is removed.');
   if(!approved)return false;
   try{
     const result=await call('/api/sessions/stop-all',{});
-    el('#notice').textContent=`Stopped ${result.stopped_sessions||0} terminals and removed ${result.cancelled_tasks?.length||0} unfinished tasks.`;
+    el('#notice').textContent=`Stopped ${result.stopped_sessions||0} terminals. Every task is kept — start a new agent to carry on.`;
     await refresh();
     return true;
   }catch(error){el('#notice').textContent='Could not stop all agents: '+error.message;return false;}
@@ -1218,7 +1238,7 @@ function render(data,managed){
   }
   const activeTotal=Object.values(counts).reduce((total,value)=>total+Number(value||0),0);
   el('#stop-all').disabled=activeTotal===0;
-  el('#stop-all').title=activeTotal?`Stop ${activeTotal} live terminal${activeTotal===1?'':'s'} and clean unfinished work.`:'No live terminals to stop.';
+  el('#stop-all').title=activeTotal?`Stop ${activeTotal} live terminal${activeTotal===1?'':'s'}. Every task is kept.`:'No live terminals to stop.';
   document.body.classList.toggle('project-paused',projectPaused);
   el('#paused-banner').hidden=!projectPaused;
   if(projectPaused){
@@ -1604,6 +1624,7 @@ def _compact_dashboard_state(
         task for task, decision in (state.get("release_decisions") or {}).items()
         if (decision or {}).get("decision") == "accepted"
     } | set((state.get("git_acceptances") or {}).keys())
+    compact["stopped_tasks"] = {task: value for task, value in _stopped_tasks(state).items() if task in live}
     compact["accepted_tasks"] = sorted({
         str(value.get("task")) for value in compact["agents"].values()
         if value.get("task") in accepted
@@ -2163,6 +2184,26 @@ def _agent_checklists(root: Path, state: dict, agents: dict) -> dict[str, dict]:
             )
             result[agent_id] = {"role": "delivery", "state": "assigned", "section": section}
     return result
+def _stopped_tasks(state: dict) -> dict[str, dict]:
+    """Unfinished tasks whose Delivery the owner stopped and nobody has resumed."""
+    cancelled = state.get("cancelled_tasks") or {}
+    owned = {
+        agent.get("task") for agent in (state.get("agents") or {}).values()
+        if agent.get("active") and agent.get("role") in board.DEVELOPER_ROLES
+    }
+    stopped: dict[str, dict] = {}
+    for agent in (state.get("agents") or {}).values():
+        task = agent.get("task")
+        if (
+            agent.get("role") in board.DEVELOPER_ROLES and agent.get("stopped_by_owner_at")
+            and not agent.get("active") and not agent.get("superseded_by_agent_id")
+            and task and task not in cancelled and task not in owned
+            and (state.get("releases") or {}).get(task, {}).get("status") not in board.RELEASED_STATUSES
+        ):
+            stopped[str(task)] = {"agent_id": agent.get("id"), "stopped_at": agent.get("stopped_by_owner_at")}
+    return stopped
+
+
 def _live_task_names(state: dict, contracts: dict) -> list[str]:
     """Return only work that still belongs in the live Delivery progress area.
 
@@ -2186,6 +2227,9 @@ def _live_task_names(state: dict, contracts: dict) -> list[str]:
     for agent in (state.get("agents") or {}).values():
         if (agent.get("active") or agent.get("status") == "paused") and agent.get("role") in board.DEVELOPER_ROLES and agent.get("task") in names and agent.get("task") not in accepted:
             live.add(agent["task"])
+    # Backlog #10: a task whose Delivery the owner stopped is kept, not
+    # finished; it stays on the board until a new agent carries it on.
+    live.update(task for task in _stopped_tasks(state) if task in names and task not in accepted)
     for request in (state.get("qa_requests") or {}).values():
         if request.get("status") in {"authoring", "open", "reserved", "claimed", "suspended"} and request.get("task") in names and request.get("task") not in accepted:
             live.add(request["task"])
@@ -3111,7 +3155,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     )
                     self.send_json(201, {"finding": finding}); return
                 if path == "/api/sessions/stop-all":
-                    cleanup = board.cancel_all_unfinished_work(root)
+                    cleanup = board.stop_all_sessions(root)
                     active = [
                         session for session in control.snapshot(root).get("sessions", [])
                         if session.get("status") in control.ACTIVE_STATUSES
@@ -3125,10 +3169,17 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 prefix, suffix = "/api/sessions/", "/stop"
                 if path.startswith(prefix) and path.endswith(suffix):
                     session_id = path[len(prefix):-len(suffix)]
-                    cleanup = board.cancel_session_work(root, session_id)
+                    cleanup = board.stop_session(root, session_id)
                     stopped = [control.stop(root, value) for value in cleanup.get("related_session_ids", [session_id])]
                     primary = next((value for value in stopped if value.get("id") == session_id), stopped[0] if stopped else {})
                     self.send_json(200, {"session": primary, "stopped_sessions": stopped, "cleanup": cleanup}); return
+                task_prefix, cancel_suffix = "/api/tasks/", "/cancel"
+                if path.startswith(task_prefix) and path.endswith(cancel_suffix):
+                    # Backlog #10: the owner's explicit Cancel task, the only
+                    # action that cancels a task; Stop keeps it.
+                    cleanup = board.cancel_task(root, unquote(path[len(task_prefix):-len(cancel_suffix)]))
+                    stopped = [control.stop(root, value) for value in cleanup.get("related_session_ids", [])]
+                    self.send_json(200, {**cleanup, "stopped_sessions": stopped}); return
                 agent_prefix, recovery_suffix = "/api/agents/", "/recover"
                 if path.startswith(agent_prefix) and path.endswith(recovery_suffix):
                     agent_id = path[len(agent_prefix):-len(recovery_suffix)]

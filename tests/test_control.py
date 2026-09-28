@@ -732,7 +732,9 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(session["color"], "blue")
             self.assertEqual(stopped["status"], "stopped")
 
-    def test_stop_all_api_cleans_every_unfinished_delivery_task_and_terminal(self):
+    def test_stop_all_api_stops_every_terminal_and_keeps_every_task(self):
+        # Backlog #10 (owner's decision): Stop All used to cancel every
+        # unfinished task; it now stops every terminal and cancels none.
         with TemporaryDirectory() as tmp, patch("harness.board_viewer.launch_terminal"):
             root = Path(tmp)
             tasks = []
@@ -755,13 +757,16 @@ class ControlTests(unittest.TestCase):
             finally:
                 server.shutdown(); thread.join(timeout=3); server.server_close()
             self.assertEqual(response["stopped_sessions"], 2)
-            self.assertEqual(response["cancelled_tasks"], tasks)
+            self.assertEqual(response["kept_tasks"], tasks)
+            self.assertNotIn("cancelled_tasks", response)
             self.assertEqual(control.snapshot(root)["active_counts"]["codex_delivery"], 0)
-            self.assertEqual(board_viewer.dashboard_payload(root)["live_tasks"], [])
-            self.assertEqual(board_viewer.history_payload(root)["task_history"], [])
-            self.assertEqual(list((root / ".harness" / "tasks").glob("*.json")), [])
+            self.assertEqual(sorted(board_viewer.dashboard_payload(root)["live_tasks"]), tasks)
+            self.assertEqual(board.snapshot(root).get("cancelled_tasks", {}), {})
+            self.assertEqual(len(list((root / ".harness" / "tasks").glob("*.json"))), 2)
 
-    def test_stopping_delivery_also_stops_its_associated_review_terminal(self):
+    def test_cancel_task_stops_its_delivery_and_its_review_terminal(self):
+        # Backlog #10: Stop closes one agent and keeps the task, so the
+        # task-wide shutdown this test proved moved to Cancel task.
         with TemporaryDirectory() as tmp, patch("harness.board_viewer.launch_terminal"):
             root = Path(tmp)
             delivery_session = control.create(root, "codex_delivery")
@@ -775,7 +780,7 @@ class ControlTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
             try:
                 request = Request(
-                    f"http://127.0.0.1:{server.server_address[1]}/api/sessions/{delivery_session['id']}/stop",
+                    f"http://127.0.0.1:{server.server_address[1]}/api/tasks/STOP-WITH-REVIEWER/cancel",
                     data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
                 )
                 response = __import__("json").loads(urlopen(request, timeout=3).read())

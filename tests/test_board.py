@@ -360,7 +360,9 @@ class BoardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "still active"):
             board.resume_task(self.root, replacement["id"], source["id"], "TASK-NO-DUPLICATE")
 
-    def test_owner_stop_cancels_unfinished_delivery_without_leaving_a_phantom_task(self):
+    def test_owner_cancel_task_removes_unfinished_delivery_without_leaving_a_phantom_task(self):
+        # Backlog #10: cancelling moved from Stop to the explicit Cancel task
+        # (board.cancel_task); the removal it proves is unchanged.
         dev = self.delivery("TASK-OWNER-CANCEL")
         self.atomic_plan(dev["id"])
         finding = board.record_finding(self.root, "TASK-OWNER-CANCEL", "Cancelled task finding", "This belongs only to the cancelled task", False)
@@ -371,7 +373,7 @@ class BoardTests(unittest.TestCase):
                 "phase": "final_acceptance", "subtask": "", "chunk": "final",
                 "claimed_by": None, "review_wait_started_at": board.now(),
             }
-        result = board.cancel_session_work(self.root, dev["session_id"])
+        result = board.cancel_task(self.root, "TASK-OWNER-CANCEL")
         state = board.snapshot(self.root)
         self.assertEqual(result["cancelled_tasks"], ["TASK-OWNER-CANCEL"])
         self.assertEqual(state["agents"][dev["id"]]["status"], "cancelled")
@@ -398,9 +400,9 @@ class BoardTests(unittest.TestCase):
                 "reserved_by": reviewer["id"], "reserved_at": board.now(),
                 "review_wait_started_at": board.now(), "challenge_ledger": "challenge.md",
             }
-        result = board.cancel_session_work(self.root, reviewer_session["id"])
+        result = board.stop_session(self.root, reviewer_session["id"])
         state = board.snapshot(self.root)
-        self.assertEqual(result["cancelled_tasks"], [])
+        self.assertEqual(result["kept_tasks"], [])
         self.assertEqual(state["qa_requests"]["review-reopen"]["status"], "open")
         self.assertIsNone(state["qa_requests"]["review-reopen"]["claimed_by"])
         self.assertIsNone(state["qa_requests"]["review-reopen"]["challenge_ledger"])
