@@ -1046,8 +1046,8 @@ function renderOwnerActions(state){
   section.hidden=false;
   section.innerHTML=`<h2>${open.length===1?'One thing the CTO needs you to do':`${open.length} things the CTO needs you to do`}</h2>`+open.map(item=>{
     const id=esc(JSON.stringify(item.id));
-    const command=item.command?`<pre id="command-${esc(item.id)}">${esc(item.command)}</pre><div class="actions"><button type="button" onclick="copyOwnerActionCommand(${id})">Copy</button><small>Paste it into Terminal, then wait for the CTO to confirm.</small></div>`:'';
-    return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}. This card clears when the CTO records the outcome.</small></div>`;
+    const command=item.command?`<pre id="command-${esc(item.id)}">${esc(item.command)}</pre><div class="actions"><button type="button" onclick="copyOwnerActionCommand(${id})">Copy</button><small>Paste it into Terminal and press Return.</small></div>`:'';
+    return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
   }).join('');
 }
 
@@ -1614,10 +1614,18 @@ def _compact_dashboard_state(
         for event in reversed(state.get("events") or [])
         if event.get("kind") in HARNESS_ACTION_EVENTS and event.get("message")
     ][:HARNESS_ACTION_LINES]
-    compact["owner_actions"] = {
-        key: value for key, value in (state.get("owner_actions") or {}).items()
-        if value.get("status") == "open"
-    }
+    # Backlog #9: each card says what clears it; an expired card is never
+    # shown, even before the watchdog's next sweep marks it done.
+    current = datetime.now(timezone.utc)
+    compact["owner_actions"] = {}
+    for key, value in (state.get("owner_actions") or {}).items():
+        if value.get("status") != "open":
+            continue
+        card = board._classify_owner_action(state, dict(value))
+        expires = board.owner_action_expires_at(card)
+        if expires is not None and expires <= current:
+            continue
+        compact["owner_actions"][key] = {**card, "clears_when": board.owner_action_clears_when(card, current)}
     active_sessions = {value.get("session_id") for value in compact["agents"].values() if value.get("session_id")}
     compact["owner_directions"] = {
         session: value for session, value in (state.get("owner_directions") or {}).items()
