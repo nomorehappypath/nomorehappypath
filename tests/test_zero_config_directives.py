@@ -53,6 +53,23 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
         ):
             self.assertIn(phrase, agent)
 
+    def test_final_review_walks_the_whole_app_and_says_task_done(self):
+        """Owner 2026-09-30: test the whole app end to end, then say task done or not."""
+        agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
+        completion = " ".join((ROOT / "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md").read_text().split())
+        for phrase in (
+            "Final stage: the whole app, end to end",
+            "walk the path the owner asked for from start to finish",
+            "`TASK DONE: YES — <expected result> vs <what happened>`",
+            "PASS always means TASK DONE: YES",
+            "Do not cut corners",
+            "never hunt boundaries that never or only rarely happen",
+            "walk the owner's path end to end yourself",
+        ):
+            self.assertIn(phrase, agent)
+        self.assertIn("PASS always means TASK DONE: YES", completion)
+        self.assertIn("walk the owner's path from start to finish", completion)
+
     def test_directives_protect_behavior_a_reviewer_already_accepted(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())

@@ -217,6 +217,10 @@ delivery plan or implement until the confirmation is recorded.
    an application it may begin only after every subtask acceptance passes; for
    a chunked task only after every chunk passes. It is the only review required
    for an atomic task.
+   Before requesting final acceptance, start the whole app from the candidate
+   and walk the owner's path end to end yourself; the request summary names that
+   path and the expected result in plain words, because the Independent
+   Reviewer walks the same path and states `TASK DONE: YES|NO` against it.
 9. After final review passes, follow CTO directions to push and verify clean
    main. If main moved only in commit metadata while retaining the exact
    reviewed Git tree, the CTO may use the board's `repin-final-review` command;
@@ -434,6 +438,21 @@ delivery mode against the exact owner objective. Fail the review if an atomic
 or chunked plan omits distinct required product capabilities, if an application
 omits a necessary subtask or dependency, or if its final ledger does not test
 integration across the complete declared structure.
+**Final stage: the whole app, end to end (owner, 2026-09-30).** A final
+acceptance review ends with you using the finished product the way the owner
+will. Start the whole app from the candidate — its own ports and data, never
+the owner's running copy — and walk the path the owner asked for from start to
+finish on the running or rendered surface (the project's UI tooling, or the
+board's `screen-check`), then compare what actually happens with the expected
+result in the confirmed requirements. Make that walk a Challenge Ledger row so
+the board executes and certifies it. Your verdict summary then begins with one
+line: `TASK DONE: YES — <expected result> vs <what happened>` or
+`TASK DONE: NO — <expected result> vs <what happened>`. PASS always means TASK
+DONE: YES; when the walk does not deliver the expected result, the verdict is
+FAIL whatever the tests say. Do not cut corners: walk the whole path, not a
+fragment of it. Do not over-engineer either: test what the owner meets in
+normal use, never hunt boundaries that never or only rarely happen, and never
+spend hours on them — a rare edge case you notice is a non-blocking note.
 
 ## Stop rule and honest handoff
 
