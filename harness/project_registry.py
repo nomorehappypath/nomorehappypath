@@ -442,6 +442,50 @@ def deactivate(home: Path, project_id: str) -> None:
     _audit(home, f"deactivated project {project_id}")
 
 
+def hold_for_restart(home: Path, project_id: str) -> bool:
+    """Keep the owner's open project open while the app itself restarts.
+
+    2026-09-28 (owner: "yes should not close"): every app update stopped the
+    manager, and its shutdown released the activation, so the owner's open
+    paused project came back closed. The lock is now kept, marked for the next
+    manager to take over (``adopt_held``). Only this project's lock is marked.
+    """
+    path = _lock_path(home)
+    current = _read_lock(path)
+    if not current or current.get("project_id") != project_id:
+        return False
+    record = {**current, "held_for_restart": True, "held_at": _now()}
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(temp, path)
+    _audit(home, f"kept project {project_id} open across the app restart")
+    return True
+
+
+def adopt_held(home: Path, pid: int | None = None) -> dict[str, Any] | None:
+    """The new manager takes over a project kept open across its restart.
+
+    Only a lock marked by ``hold_for_restart`` whose previous owner has exited
+    is adopted, and only while its project is still registered.
+    """
+    path = _lock_path(home)
+    current = _read_lock(path)
+    if not current or not current.get("held_for_restart") or _pid_alive(int(current.get("pid", 0))):
+        return None
+    project_id = str(current.get("project_id") or "")
+    try:
+        _find(load(home), project_id)
+    except (KeyError, ValueError, OSError):
+        return None
+    record = {key: value for key, value in current.items() if key not in {"held_for_restart", "held_at"}}
+    record.update({"pid": int(pid if pid is not None else os.getpid()), "acquired_at": _now()})
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(temp, path)
+    _audit(home, f"project {project_id} is still open after the app restart pid={record['pid']}")
+    return record
+
+
 # --- migration -------------------------------------------------------------
 
 def migrate_single_root(home: Path, root: Path) -> dict[str, Any]:

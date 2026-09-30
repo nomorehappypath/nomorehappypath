@@ -29,9 +29,11 @@ REFUSAL_ANSWER = "I can answer questions about this project, but I cannot make c
 MAX_QUESTION_BYTES = 2_048
 MAX_FACT_VALUE_BYTES = 4_096
 MAX_PACKAGE_BYTES = 48_000
-MAX_SELECTED_FACTS = 12
+MAX_SELECTED_FACTS = 24
 RECENT_TASK_LIMIT = 5
-MAX_PROVIDER_RESPONSE_BYTES = 8_192
+HISTORY_DELIVERABLE_LIMIT = 5
+MAX_PROVIDER_RESPONSE_BYTES = 16_384
+MAX_COMPOSED_ANSWER_BYTES = 12_000
 PROVIDER_TIMEOUT_SECONDS = 30.0
 KEY_VERIFY_TIMEOUT_SECONDS = 20.0
 KEY_VERIFY_MAX_OUTPUT_TOKENS = 16
@@ -60,6 +62,7 @@ FACT_LABELS = {
     "owner_action": "Your next action",
     "task_list": "Tasks",
     "task_overview": "Current task",
+    "project:completed_work": "Completed work",
 }
 
 ACTION_VERBS = (
@@ -86,11 +89,31 @@ def fact_label(fact_id: str) -> str:
         return FACT_LABELS[fact_id]
     parts = str(fact_id).split(":")
     if len(parts) == 3 and parts[0] == "task":
+        if parts[2] == "history":
+            return task_title(parts[1])
         field = parts[2].replace("_", " ")
-        return f"{parts[1]} — {field}"
+        return f"{task_title(parts[1])} — {field}"
     if len(parts) == 2 and parts[0] == "project":
         return parts[1].replace("_", " ").capitalize()
     return fact_id
+
+
+def task_title(task: str) -> str:
+    """A plain title for a task id: 'brand-identity-upgrade' -> 'Brand identity upgrade'."""
+    words = re.sub(r"[-_]+", " ", str(task)).strip()
+    return words[:1].upper() + words[1:] if words else str(task)
+
+
+def human_date(value: Any) -> str:
+    """'2026-09-27T14:17:26+00:00' -> 'Sep 27, 2026'; unparseable values stay as written."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}"
 
 
 class ChatError(RuntimeError):
@@ -325,33 +348,38 @@ def _contract(root: ProjectRoot, task: str) -> dict[str, Any]:
 
 
 def _remaining_work(root: ProjectRoot, state: dict[str, Any], tasks: list[str]) -> tuple[str, list[tuple[str, str, str]]]:
+    """What is left, one unfinished task per line; accepted and closed tasks are done."""
     rows: list[str] = []
     pointers: list[tuple[str, str, str]] = []
+    gates = {
+        "awaiting review", "awaiting owner test", "repair required", "active repair",
+        "failed review", "blocked", "paused",
+    }
     for task in tasks:
         decision = (state.get("release_decisions") or {}).get(task, {})
         if isinstance(decision, dict) and decision.get("decision") == "accepted":
             continue
-        task_rows_before = len(rows)
+        cancelled = state.get("cancelled_tasks")
+        if isinstance(cancelled, dict) and task in cancelled:
+            continue
         contract = _contract(root, task)
         remaining = contract.get("remaining_work") if isinstance(contract, dict) else None
-        if isinstance(remaining, list):
-            clean = [_bounded_text(item, 1_000) for item in remaining]
-            clean = [item for item in clean if item]
-            if clean:
-                rows.append(f"{task}: " + "; ".join(clean))
-                pointers.append(("contract", task, "remaining_work"))
+        items = [_bounded_text(item, 1_000) for item in remaining] if isinstance(remaining, list) else []
+        items = [item for item in items if item]
         status = _task_status(state, task)
-        if status in {
-            "awaiting review", "awaiting owner test", "repair required", "active repair",
-            "failed review", "blocked", "paused",
-        }:
-            gate = f"{task}: {status}."
-            if gate not in rows:
-                rows.append(gate)
-                pointers.append(("board", task, f"gate:{status}"))
-        if len(rows) == task_rows_before:
-            rows.append(f"{task}: delivery and acceptance remain.")
+        if status in gates:
+            phrase = status
+            pointers.append(("board", task, f"gate:{status}"))
+        elif items:
+            phrase = "in progress"
+        else:
+            phrase = "delivery and acceptance remain"
             pointers.append(("board", task, "unaccepted"))
+        row = f"• {task_title(task)} — {phrase}."
+        if items:
+            row += " Still to deliver: " + "; ".join(items) + "."
+            pointers.append(("contract", task, "remaining_work"))
+        rows.append(row)
 
     findings = state.get("deferred_findings")
     values = findings.values() if isinstance(findings, dict) else []
@@ -362,10 +390,10 @@ def _remaining_work(root: ProjectRoot, state: dict[str, Any], tasks: list[str]) 
         and _bounded_text(value.get("title"), 500)
     )
     if approved:
-        rows.append("Approved deferred work: " + "; ".join(approved))
+        rows.append("• Approved follow-up work: " + "; ".join(approved) + ".")
         pointers.append(("board", "deferred-findings", "approved"))
     if rows:
-        return " ".join(rows), pointers
+        return "\n".join(rows), pointers
     if tasks:
         return "Nothing remains.", [("board", "tasks", "all-accepted")]
     return "", []
@@ -454,7 +482,7 @@ def _task_review_summary(state: dict[str, Any], task: str) -> str:
             + (f" with {len(scenario_ids)} certified scenarios" if scenario_ids else "")
             + (f", reviewed by {terminal.get('claimed_by')}" if terminal.get("claimed_by") else "")
             + (f", on commit {str(terminal.get('reviewed_commit', ''))[:10]}" if terminal.get("reviewed_commit") else "")
-            + (f", completed {terminal.get('completed_at')}" if terminal.get("completed_at") else "")
+            + (f", completed {human_date(terminal.get('completed_at'))}" if terminal.get("completed_at") else "")
             + "."
         )
     elif latest is not None:
@@ -466,7 +494,7 @@ def _task_outcome_line(state: dict[str, Any], task: str) -> str:
     decision = (state.get("release_decisions") or {}).get(task) or {}
     release = (state.get("releases") or {}).get(task) or {}
     if decision.get("decision") == "accepted":
-        return f"The owner accepted it on {decision.get('recorded_at', '')}."
+        return f"The owner accepted it on {human_date(decision.get('recorded_at'))}."
     if decision.get("decision") == "not_accepted":
         return "The owner rejected the release; repair is required."
     if release.get("status") == "VISUAL_TEST_REQUIRED":
@@ -477,6 +505,99 @@ def _task_outcome_line(state: dict[str, Any], task: str) -> str:
         )
         return "It awaits the owner's visual test." + extra
     return ""
+
+
+def _task_summary_text(root: ProjectRoot, state: dict[str, Any], task: str) -> str:
+    """The clearest one-line statement of what a task set out to do.
+
+    The accepted contract's objective is written for exactly this; the agent's
+    brief plan and then the owner's raw direction are fallbacks for tasks that
+    never reached a contract.
+    """
+    contract_record = _contract(root, task)
+    objective = _bounded_text(contract_record.get("objective"), 600) if isinstance(contract_record, dict) else ""
+    if objective:
+        return objective
+    brief = (state.get("task_briefs") or {}).get(task)
+    plan = _bounded_text(brief.get("plan"), 600) if isinstance(brief, dict) else ""
+    return plan or _task_objective_text(state, task)
+
+
+def _task_state_phrase(state: dict[str, Any], task: str) -> str:
+    status = _task_status(state, task)
+    decision = (state.get("release_decisions") or {}).get(task) or {}
+    if status == "accepted":
+        when = human_date(decision.get("recorded_at"))
+        return f"accepted on {when}" if when else "accepted"
+    if status == "closed":
+        return "closed without a release"
+    return status
+
+
+def _task_history_line(root: ProjectRoot, state: dict[str, Any], task: str) -> str:
+    """One self-contained history entry: title, outcome, purpose, deliverables."""
+    line = f"{task_title(task)} ({task}): {_task_state_phrase(state, task)}."
+    summary = _task_summary_text(root, state, task)
+    if summary:
+        line += " " + (summary if summary.endswith((".", "!", "?")) else summary + ".")
+    contract_record = _contract(root, task)
+    deliverables = contract_record.get("deliverables") if isinstance(contract_record, dict) else None
+    names = [
+        _bounded_text(item.get("name"), 160)
+        for item in (deliverables if isinstance(deliverables, list) else [])
+        if isinstance(item, dict) and _bounded_text(item.get("name"), 160)
+    ]
+    if names:
+        shown = names[:HISTORY_DELIVERABLE_LIMIT]
+        more = len(names) - len(shown)
+        line += " Delivered: " + "; ".join(shown) + (f"; and {more} more" if more > 0 else "") + "."
+    return line
+
+
+def _history_order(state: dict[str, Any], ordered_tasks: list[str]) -> list[str]:
+    """Owner-facing order: unfinished work first, then finished work newest first.
+
+    Finished tasks sort by the owner's acceptance date, not by the last board
+    event, so later housekeeping on an old task never makes it look new.
+    Closed tasks come last.
+    """
+    rank = {task: index for index, task in enumerate(ordered_tasks)}
+
+    def key(task: str) -> tuple[int, tuple[int, str], int]:
+        status = _task_status(state, task)
+        if status == "closed":
+            return (2, (0, ""), rank[task])
+        if status == "accepted":
+            decision = (state.get("release_decisions") or {}).get(task) or {}
+            valid, when = _parse_time(decision.get("recorded_at"))
+            return (1, (-valid, _descending(when)), rank[task])
+        return (0, (0, ""), rank[task])
+
+    return sorted(ordered_tasks, key=key)
+
+
+def _descending(text: str) -> str:
+    """A sort key that orders ISO timestamps newest first."""
+    return "".join(chr(0x10FFFF - ord(character)) for character in text)
+
+
+def _first_sentence(text: str, limit: int = 240) -> str:
+    match = re.match(r"(.+?[.!?])(?:\s|$)", text, re.S)
+    sentence = (match.group(1) if match else text).strip()
+    return _bounded_text(sentence, limit)
+
+
+def _task_list_text(state: dict[str, Any], tasks: list[str]) -> str:
+    """A readable list: a count line, then one task per line, unfinished first."""
+    counts: dict[str, int] = {}
+    for task in tasks:
+        status = _task_status(state, task)
+        counts[status] = counts.get(status, 0) + 1
+    plural = "s" if len(tasks) != 1 else ""
+    breakdown = ", ".join(f"{count} {status}" for status, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+    lines = [f"{len(tasks)} task{plural} recorded ({breakdown}); unfinished work first, then finished work newest first:"]
+    lines.extend(f"• {task_title(task)} — {_task_state_phrase(state, task)}" for task in _history_order(state, tasks))
+    return "\n".join(lines)
 
 
 def _owner_action_rows(state: dict[str, Any]) -> list[tuple[str, list[tuple[str, str, str]]]]:
@@ -614,8 +735,7 @@ def build_fact_package(
 
     def build_task_list() -> None:
         if ordered_tasks:
-            rendered = "; ".join(f"{task} ({_task_status(state, task)})" for task in ordered_tasks)
-            add_fact("task_list", f"Tasks: {rendered}.", [("board", "tasks", "list")])
+            add_fact("task_list", _task_list_text(state, ordered_tasks), [("board", "tasks", "list")])
         else:
             add_fact("task_list", "No tasks have been recorded in this project yet.", [("board", "tasks", "empty")])
 
@@ -671,6 +791,32 @@ def build_fact_package(
                 for event in recent
             ]
             add_fact("project:recent_events", "Recent activity:\n" + "\n".join(lines), [("board", "events", "recent")])
+        # The whole history comes before the recent-task detail, so a size
+        # trim drops detail first and never forgets that a task happened.
+        history_tasks = _history_order(state, ordered_tasks)
+        accepted = [task for task in history_tasks if _task_status(state, task) == "accepted"]
+        if ordered_tasks:
+            open_tasks = [
+                task for task in history_tasks
+                if _task_status(state, task) not in {"accepted", "closed"}
+            ]
+            lines = [f"{len(accepted)} of {len(ordered_tasks)} recorded tasks are accepted (finished), newest first:"]
+            for task in accepted:
+                summary = _first_sentence(_task_summary_text(context, state, task))
+                lines.append(
+                    f"• {task_title(task)} — {_task_state_phrase(state, task)}"
+                    + (f": {summary}" if summary else "")
+                )
+            if open_tasks:
+                lines.append("Not finished yet: " + "; ".join(
+                    f"{task_title(task)} ({_task_state_phrase(state, task)})" for task in open_tasks
+                ) + ".")
+            closed = [task for task in history_tasks if _task_status(state, task) == "closed"]
+            if closed:
+                lines.append("Closed without a release: " + "; ".join(task_title(task) for task in closed) + ".")
+            add_fact("project:completed_work", "\n".join(lines), [("board", "tasks", "completed")])
+        for task in history_tasks:
+            add_fact(f"task:{task}:history", _task_history_line(context, state, task), [("board", task, "history")])
         for task in ordered_tasks[:RECENT_TASK_LIMIT]:
             objective_text = _task_objective_text(state, task)
             if objective_text:
@@ -684,7 +830,7 @@ def build_fact_package(
                 preview = release.get("preview") or {}
                 add_fact(
                     f"task:{task}:release",
-                    f"Release of {task}: {release.get('status')}, recorded {release.get('recorded_at', '')}, "
+                    f"Release of {task}: {release.get('status')}, recorded {human_date(release.get('recorded_at'))}, "
                     f"candidate commit {str(release.get('head_commit', ''))[:10]}."
                     + (
                         f" A candidate preview is running at {preview.get('url', '')}."
@@ -696,7 +842,7 @@ def build_fact_package(
             if isinstance(decision, dict) and decision.get("decision"):
                 add_fact(
                     f"task:{task}:decision",
-                    f"Owner decision for {task}: {decision.get('decision')} at {decision.get('recorded_at', '')}."
+                    f"Owner decision for {task}: {decision.get('decision')} on {human_date(decision.get('recorded_at'))}."
                     + (f" Reason: {_bounded_text(decision.get('reason'), 300)}" if decision.get("reason") else ""),
                     [("board", task, "decision")],
                 )
@@ -728,11 +874,11 @@ def build_fact_package(
                 )
             timing_parts = []
             if isinstance(contract_record, dict) and contract_record.get("created_at"):
-                timing_parts.append(f"started {contract_record['created_at']}")
+                timing_parts.append(f"started {human_date(contract_record['created_at'])}")
             if isinstance(release, dict) and release.get("recorded_at"):
-                timing_parts.append(f"release ready {release['recorded_at']}")
+                timing_parts.append(f"release ready {human_date(release['recorded_at'])}")
             if isinstance(decision, dict) and decision.get("recorded_at"):
-                timing_parts.append(f"owner responded {decision['recorded_at']}")
+                timing_parts.append(f"owner responded {human_date(decision['recorded_at'])}")
             if timing_parts:
                 add_fact(f"task:{task}:timing", f"Timing of {task}: " + "; ".join(timing_parts) + ".", [("board", task, "timing")])
         if not facts:
@@ -798,8 +944,9 @@ def _output_schema(package: dict[str, Any]) -> dict[str, Any]:
                 "maxItems": MAX_SELECTED_FACTS,
                 "items": {"type": "string", "enum": fact_ids},
             },
+            "answer": {"type": "string"},
         },
-        "required": ["in_scope", "action_oriented", "claims"],
+        "required": ["in_scope", "action_oriented", "claims", "answer"],
     }
 
 
@@ -822,8 +969,24 @@ def provider_prompt(question: str, package: dict[str, Any]) -> str:
         "set that fully answers the question: one overview fact alone is often complete; "
         "never also select facts an overview already contains (its task's objective and "
         "status). Prefer information-dense facts (overview, objective, reviews, timing) "
-        "over one-line status facts. When nothing in the facts answers the question, "
-        "return an empty claims list. Never answer from your own knowledge.\n"
+        "over one-line status facts. Questions about the project's history (what was "
+        "done, solved, finished, upgraded, or added) are answered from the task history "
+        "facts and project:completed_work, which cover EVERY task, not only the current "
+        "one. When nothing in the facts answers the question, return an empty claims "
+        "list. Never answer from your own knowledge.\n"
+        "4. answer: write the reply the project owner reads, using ONLY the selected "
+        "facts. The owner is not an engineer: plain, friendly sentences, no jargon. "
+        "Start with one sentence that directly answers the question; for a yes/no "
+        "question start with Yes or No. When several items follow, put each on its own "
+        "line starting with \"• \" and refer to tasks by their plain title, not the "
+        "hyphenated id. Use absolute dates as the facts write them, never relative time "
+        "such as today, yesterday, or last week. When listing finished or past work, give each task its date and "
+        "a short phrase saying what it did, taken from the facts. Copy every date and number exactly as the facts write it and "
+        "never add a date, number, or task the selected facts do not contain - that "
+        "includes counts you work out yourself (write '16:9, 9:16 and 1:1', not 'three "
+        "formats') and numbers spelled out in words. No "
+        "markdown headings, bold, tables, or numbered lists. Return an empty answer when "
+        "claims is empty or the question is out of scope or an action.\n"
         "Return only the required JSON object.\n"
         + json.dumps({"question": question, "fact_package": package}, sort_keys=True, separators=(",", ":"))
     )
@@ -965,7 +1128,6 @@ def invoke_provider(
         "reasoning": {"effort": setting["effort"]},
         "tools": [],
         "store": False,
-        "max_output_tokens": 2_048,
         "text": {
             "format": {
                 "type": "json_schema",
@@ -1022,7 +1184,9 @@ def validate_provider_output(raw: str | dict[str, Any], package: dict[str, Any])
         raise ProviderMalformedOutput("The configured provider returned malformed output") from error
     if (
         not isinstance(value, dict)
-        or set(value) != {"in_scope", "action_oriented", "claims"}
+        or not {"in_scope", "action_oriented", "claims"} <= set(value)
+        or not set(value) <= {"in_scope", "action_oriented", "claims", "answer"}
+        or not isinstance(value.get("answer", ""), str)
         or not isinstance(value.get("in_scope"), bool)
         or not isinstance(value.get("action_oriented"), bool)
         or not isinstance(value.get("claims"), list)
@@ -1042,7 +1206,137 @@ def validate_provider_output(raw: str | dict[str, Any], package: dict[str, Any])
         "in_scope": value["in_scope"],
         "action_oriented": value["action_oriented"],
         "fact_ids": selected,
+        "answer": clean_answer(value.get("answer", "")),
     }
+
+
+ANSWER_END = frozenset(".!?)\"'")
+
+
+def clean_answer(text: str) -> str:
+    """Trim whitespace and stray trailing symbols a model sometimes emits (e.g. '】【。')."""
+    answer = str(text or "").strip()
+    while answer and not answer[-1].isalnum() and answer[-1] not in ANSWER_END:
+        answer = answer[:-1].rstrip()
+    return answer
+
+
+MONTHS = {
+    name: index + 1 for index, names in enumerate((
+        ("jan", "january"), ("feb", "february"), ("mar", "march"), ("apr", "april"),
+        ("may",), ("jun", "june"), ("jul", "july"), ("aug", "august"),
+        ("sep", "sept", "september"), ("oct", "october"), ("nov", "november"), ("dec", "december"),
+    )) for name in names
+}
+_MONTH = r"(" + "|".join(sorted(MONTHS, key=len, reverse=True)) + r")\.?"
+_ORDINAL = r"(?:st|nd|rd|th)?"
+DATE_FORMS = (
+    # "Sep 11, 2026", "September 11", "Sep 11th 2026"
+    (re.compile(r"\b" + _MONTH + r"\s+(\d{1,2})" + _ORDINAL + r"(?:,?\s+(\d{4}))?\b", re.I), ("month", "day", "year")),
+    # "11 September 2026", "11th Sep"
+    (re.compile(r"\b(\d{1,2})" + _ORDINAL + r"\s+(?:of\s+)?" + _MONTH + r"(?:,?\s+(\d{4}))?\b", re.I), ("day", "month", "year")),
+    # "2026-09-11" and ISO timestamps
+    (re.compile(r"\b(\d{4})-(\d{2})-(\d{2})"), ("year", "month", "day")),
+    # "September 2026"
+    (re.compile(r"\b" + _MONTH + r",?\s+(\d{4})\b", re.I), ("month", "year")),
+)
+NUMBER = re.compile(r"\d+(?:[.,:]\d+)*")
+# Spelled-out counts are claims too ("one" is left out: it is mostly a pronoun).
+NUMBER_WORD = re.compile(
+    r"\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
+    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|dozen|dozens|"
+    r"hundred|hundreds|thousand|thousands)\b", re.I,
+)
+# Relative time cannot be checked against the absolute dates in the facts.
+RELATIVE_TIME = re.compile(
+    r"\b(today|tonight|yesterday|tomorrow|ago|recently|last|this|next)\b"
+    r"(?:\s+(week|weeks|month|months|year|years|night|morning|afternoon|evening))?", re.I,
+)
+NEXT_WORD = re.compile(r"[\s-]*([A-Za-z]+)")
+
+
+def _dates(text: str) -> tuple[list[tuple[int, int | None, int | None]], str]:
+    """Every date written in text as (month, day, year), and the text with them blanked.
+
+    A date is one claim: its month, day and year are checked together, so no
+    part of it can be borrowed from another date or from a count.
+    """
+    found: list[tuple[int, int | None, int | None]] = []
+    for pattern, fields in DATE_FORMS:
+        def take(match: re.Match[str]) -> str:
+            parts = dict(zip(fields, match.groups()))
+            month_text = str(parts.get("month") or "")
+            month = int(month_text) if month_text.isdigit() else MONTHS[month_text.casefold()]
+            day = int(parts["day"]) if parts.get("day") else None
+            year = int(parts["year"]) if parts.get("year") else None
+            found.append((month, day, year))
+            return " \u2063 "  # a separator no number or word can join across
+        text = pattern.sub(take, text)
+    return found, text
+
+
+def _number_claims(text: str) -> set[str]:
+    """Each number with the word that follows it ("12 of", "3 keyword"), or alone."""
+    claims = set()
+    for match in NUMBER.finditer(text):
+        claims.add(match.group(0))
+        word = NEXT_WORD.match(text, match.end())
+        if word:
+            claims.add(f"{match.group(0)} {word.group(1).casefold()}")
+    return claims
+
+
+def grounded_answer(answer: str, package: dict[str, Any], fact_ids: list[str]) -> bool:
+    """Accept model wording only when it adds no number, date, or task of its own.
+
+    The model phrases; the facts decide. Every date in the answer must be a
+    date the cited facts contain (month, day and year together). Every other
+    number must occur in the cited facts outside their dates, followed by the
+    same word, so a count can never borrow digits from a date or another
+    count. Every task id or title it names must occur in a cited fact.
+    Anything else falls back to the verbatim facts.
+    """
+    facts = package.get("facts") or {}
+    if not answer or not fact_ids or len(answer.encode("utf-8")) > MAX_COMPOSED_ANSWER_BYTES:
+        return False
+    cited = "\n".join(str(facts[fact_id].get("value", "")) for fact_id in fact_ids if fact_id in facts)
+    if not cited:
+        return False
+    cited_dates, cited_rest = _dates(cited)
+    answer_dates, answer_rest = _dates(answer)
+    for month, day, year in answer_dates:
+        if not any(
+            month == cited_month
+            and (day is None or day == cited_day)
+            and (year is None or year == cited_year)
+            for cited_month, cited_day, cited_year in cited_dates
+        ):
+            return False
+    cited_numbers = _number_claims(cited_rest)
+    for match in NUMBER.finditer(answer_rest):
+        word = NEXT_WORD.match(answer_rest, match.end())
+        claim = f"{match.group(0)} {word.group(1).casefold()}" if word else match.group(0)
+        if claim not in cited_numbers:
+            return False
+    cited_words = {word.casefold() for word in NUMBER_WORD.findall(cited)}
+    if any(word.casefold() not in cited_words for word in NUMBER_WORD.findall(answer)):
+        return False
+    for match in RELATIVE_TIME.finditer(answer):
+        head, unit = match.group(1).casefold(), match.group(2)
+        if head in {"last", "this", "next"} and not unit:
+            continue  # "the last task", "this project" are not time claims
+        if match.group(0).casefold() not in cited.casefold():
+            return False
+    known_tasks = {
+        fact_id.split(":")[1] for fact_id in facts
+        if fact_id.startswith("task:") and fact_id.count(":") == 2
+    }
+    cited_lower, answer_lower = cited.casefold(), answer.casefold()
+    for task in known_tasks:
+        for name in (task, task_title(task)):
+            if name.casefold() in answer_lower and name.casefold() not in cited_lower:
+                return False
+    return True
 
 
 def render_claims(package: dict[str, Any], fact_ids: list[str]) -> dict[str, Any]:
@@ -1189,6 +1483,12 @@ def answer_question(
                 "snapshot": analyst_package["snapshot"], "unknown": False, "refused": True,
             }
         result = render_claims(analyst_package, verdict["fact_ids"])
+        composed = result["answer"] != UNKNOWN_ANSWER and grounded_answer(
+            verdict["answer"], analyst_package, verdict["fact_ids"],
+        )
+        if composed:
+            result["answer"] = verdict["answer"]
+        result["composed"] = composed
         lifecycle_metrics.record_chat_measurement(
             root, outcome="unknown" if result["answer"] == UNKNOWN_ANSWER else "answered",
             selection_ms=selection_ms, provider_ms=provider_ms,

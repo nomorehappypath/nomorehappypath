@@ -38,8 +38,11 @@ import dataclasses
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping
+
+from harness.terminal_titles import role_title
 
 
 class _Discovery:
@@ -123,6 +126,112 @@ class ProcessTableUnavailable(OSError):
     """
 
 
+def _normal_token(value: str) -> str:
+    """One spelling of a start time. `ps` pads single-digit days ("Oct  1");
+    the table's column split collapses that, so both routes normalize."""
+    return " ".join(str(value or "").split())
+
+
+class _Libproc:
+    """The macOS process table read through libproc, with no helper program.
+
+    2026-09-28: certified runs could not launch the acceptance browser because
+    `/bin/ps` is setuid root and every Seatbelt sandbox (the harness's agent
+    profile and Codex's workspace sandbox alike) refuses to execute a setuid
+    program. libproc reads the same kernel table in-process and is permitted
+    there (measured: ~1000 same-user processes under both sandboxes). Start
+    tokens use ps's `lstart` spelling so the two routes agree.
+    """
+
+    PROC_PIDTBSDINFO = 3
+    CTL_KERN, KERN_ARGMAX, KERN_PROCARGS2 = 1, 8, 49
+
+    def __init__(self) -> None:
+        self._library = None
+
+    def _load(self):
+        if self._library is None:
+            if sys.platform != "darwin":
+                raise ProcessTableUnavailable("cannot read the process table: libproc exists only on macOS")
+            import ctypes
+
+            class BsdInfo(ctypes.Structure):
+                _fields_ = [
+                    *((name, ctypes.c_uint32) for name in (
+                        "flags", "status", "xstatus", "pid", "ppid", "uid", "gid",
+                        "ruid", "rgid", "svuid", "svgid", "rfu_1")),
+                    ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+                    *((name, ctypes.c_uint32) for name in ("nfiles", "pgid", "pjobc", "e_tdev", "e_tpgid")),
+                    ("nice", ctypes.c_int32), ("start_tvsec", ctypes.c_uint64), ("start_tvusec", ctypes.c_uint64),
+                ]
+
+            if ctypes.sizeof(BsdInfo) != 136:
+                raise ProcessTableUnavailable("cannot read the process table: unexpected proc_bsdinfo layout")
+            try:
+                libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+                libc = ctypes.CDLL(None, use_errno=True)
+            except OSError as error:
+                raise ProcessTableUnavailable(f"cannot read the process table: libproc could not be loaded ({error})") from error
+            self._library = (ctypes, libproc, libc, BsdInfo)
+        return self._library
+
+    def _info(self, pid: int):
+        ctypes, libproc, _libc, BsdInfo = self._load()
+        info = BsdInfo()
+        size = libproc.proc_pidinfo(int(pid), self.PROC_PIDTBSDINFO, ctypes.c_uint64(0),
+                                    ctypes.byref(info), ctypes.sizeof(info))
+        return info if size == ctypes.sizeof(info) else None
+
+    @staticmethod
+    def _token(info) -> str:
+        return _normal_token(time.strftime("%a %b %e %H:%M:%S %Y", time.localtime(int(info.start_tvsec))))
+
+    def _command(self, pid: int, info) -> str:
+        ctypes, libproc, libc, _BsdInfo = self._load()
+        argmax, width = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+        mib = (ctypes.c_int * 2)(self.CTL_KERN, self.KERN_ARGMAX)
+        if libc.sysctl(mib, 2, ctypes.byref(argmax), ctypes.byref(width), None, 0) == 0 and argmax.value > 0:
+            buffer, size = ctypes.create_string_buffer(argmax.value), ctypes.c_size_t(argmax.value)
+            mib = (ctypes.c_int * 3)(self.CTL_KERN, self.KERN_PROCARGS2, int(pid))
+            if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0 and size.value > 4:
+                raw = buffer.raw[:size.value]
+                argc = struct.unpack("i", raw[:4])[0]
+                _executable, _, rest = raw[4:].partition(b"\0")
+                arguments = rest.lstrip(b"\0").split(b"\0")[:max(argc, 0)]
+                if arguments and arguments[0]:
+                    return " ".join(value.decode("utf-8", "replace") for value in arguments)
+        path = ctypes.create_string_buffer(4096)
+        if libproc.proc_pidpath(int(pid), path, ctypes.sizeof(path)) > 0:
+            return path.value.decode("utf-8", "replace")
+        return "(" + info.comm.decode("utf-8", "replace") + ")"
+
+    def start_token(self, pid: int) -> str:
+        info = self._info(pid)
+        return self._token(info) if info is not None and int(info.pid) == int(pid) else ""
+
+    def process_table(self) -> dict[int, dict[str, Any]]:
+        ctypes, libproc, _libc, _BsdInfo = self._load()
+        count = libproc.proc_listallpids(None, 0)
+        pids = (ctypes.c_int * (max(count, 0) + 256))()
+        count = libproc.proc_listallpids(pids, ctypes.sizeof(pids))
+        table: dict[int, dict[str, Any]] = {}
+        for pid in pids[:max(count, 0)]:
+            info = self._info(pid)
+            if info is None or int(info.pid) != pid:
+                continue
+            table[pid] = {
+                "pid": pid, "ppid": int(info.ppid), "pgid": int(info.pgid),
+                "start_token": self._token(info), "command": self._command(pid, info),
+            }
+        if os.getpid() not in table:
+            # An empty or blind listing must never read as "nothing was running".
+            raise ProcessTableUnavailable("cannot read the process table: libproc returned no usable listing")
+        return table
+
+
+LIBPROC = _Libproc()
+
+
 class _ProcessIdentity:
     """Who is running, and proof that it is still the same process.
 
@@ -147,11 +256,25 @@ class _ProcessIdentity:
                 f"cannot read the process table: 'ps' failed ({detail})"
             ) from error
 
+    @staticmethod
+    def _without_ps(refusal: ProcessTableUnavailable, read):
+        """`ps` could not run (a sandbox refuses setuid programs): read libproc instead.
+
+        Both routes failing stays the named refusal, carrying both reasons.
+        """
+        try:
+            return read()
+        except (ProcessTableUnavailable, OSError) as fallback:
+            raise ProcessTableUnavailable(f"{refusal}; {fallback}") from refusal
+
     def start_token(self, pid: int) -> str:
         # A non-zero exit means that pid is gone, which is an ANSWER, not a
         # failure - it stays an empty token exactly as before.
-        result = self.run_ps(["-p", str(pid), "-o", "lstart="], check=False)
-        return result.stdout.strip() if result.returncode == 0 else ""
+        try:
+            result = self.run_ps(["-p", str(pid), "-o", "lstart="], check=False)
+        except ProcessTableUnavailable as refusal:
+            return self._without_ps(refusal, lambda: LIBPROC.start_token(pid))
+        return _normal_token(result.stdout) if result.returncode == 0 else ""
 
     def process_table(self) -> dict[int, dict[str, Any]]:
         """A plain mapping of plain dicts.
@@ -161,7 +284,10 @@ class _ProcessIdentity:
         would break all three, so Stage 0 keeps the shape and leaves that to a
         stage that can migrate the consumers with it.
         """
-        result = self.run_ps(["-axo", "pid=,ppid=,pgid=,lstart=,command="], check=True)
+        try:
+            result = self.run_ps(["-axo", "pid=,ppid=,pgid=,lstart=,command="], check=True)
+        except ProcessTableUnavailable as refusal:
+            return self._without_ps(refusal, LIBPROC.process_table)
         table: dict[int, dict[str, Any]] = {}
         for raw in result.stdout.splitlines():
             parts = raw.strip().split(None, 8)
@@ -407,6 +533,25 @@ class _BrowserHost:
     def cache_layout(self):
         return self.MACOS_LAYOUT if sys.platform == "darwin" else self.LINUX_LAYOUT
 
+    def inside_os_sandbox(self) -> bool:
+        """True when this process already runs inside a Seatbelt sandbox.
+
+        2026-09-28: there, Chrome's own inner sandbox cannot initialize
+        ("sandbox initialization failed: Operation not permitted", then the GPU
+        process is fatal) and no page ever renders. The outer sandbox is then
+        the browser's confinement. Outside one, Chrome keeps its own sandbox.
+        """
+        if sys.platform != "darwin":
+            return False
+        import ctypes
+        try:
+            check = ctypes.CDLL("/usr/lib/libSystem.B.dylib").sandbox_check
+        except (OSError, AttributeError):
+            return False
+        check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        check.restype = ctypes.c_int
+        return check(os.getpid(), None, 0) == 1
+
     PATH_NAMES: tuple[str, ...] = ("chrome-headless-shell", "chromium", "chromium-browser")
 
     def headless_cache_candidates(self) -> list[Path]:
@@ -516,13 +661,16 @@ class _TerminalHost:
         """0-255 to AppleScript's 0-65535. Preserved exactly, rounding included."""
         return "{" + ", ".join(str(round(channel * 65535 / 255)) for channel in color_rgb) + "}"
 
-    def _open_script(self, color_rgb) -> str:
+    def _open_script(self, color_rgb, title: str = "") -> str:
         rgb = self._colour_literal(color_rgb)
         return f'''on run argv
  tell application "Terminal"
  activate
  set newTab to do script (item 1 of argv)
  tell newTab
+  try
+   if "{title}" is not "" then set custom title to "{title}"
+  end try
   set background color to {rgb}
   set normal text color to {{65535, 65535, 65535}}
  end tell
@@ -534,9 +682,10 @@ end run'''
             raise UnsupportedPlatformOperation(
                 "central CLI launch currently requires macOS Terminal"
             )
+        title = role_title(session_id)
         command = "exec " + shlex.join(list(argv))
         subprocess.run(
-            ["/usr/bin/osascript", "-e", self._open_script(color_rgb), command],
+            ["/usr/bin/osascript", "-e", self._open_script(color_rgb, title), command],
             check=True, capture_output=True, text=True,
         )
         return SessionSurface(session_id=session_id)

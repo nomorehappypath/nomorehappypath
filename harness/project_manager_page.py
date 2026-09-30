@@ -506,7 +506,7 @@ PAGE = r'''<!doctype html>
 
         <section class="help-section" aria-labelledby="help-chat-title">
           <h2 id="help-chat-title">Ask About This Project</h2>
-          <p>The project assistant is read-only. Ask about current status, completed tasks, remaining work, blockers, reviews, releases, timing, or what you should do next. It answers from project records only and refuses unrelated general questions or requests to build code. It needs your OpenAI key from Settings (see "Switch On Project Chat") and costs a fraction of a cent per question.</p>
+          <p>The project assistant is read-only. Ask about anything in the project's history — what has been finished so far, whether something was already done ("did we upgrade the SEO agent?"), current status, remaining work, blockers, reviews, releases, timing, or what you should do next. Answers cover every task the project has recorded, in plain sentences. It answers from project records only and refuses unrelated general questions or requests to build code. It needs your OpenAI key from Settings (see "Switch On Project Chat") and costs a fraction of a cent per question.</p>
         </section>
       </div>
     </section>
@@ -609,9 +609,13 @@ PAGE = r'''<!doctype html>
       const workerStopped = Boolean(project.worker_error);
       const held = Boolean(project.control_plane_hold);
       const state = !project.health.ok || held ? 'unhealthy' : project.paused ? 'paused' : workerStopped ? 'stopped' : project.active ? 'active' : project.running ? 'running' : 'idle';
-      const stateLabel = !project.health.ok ? 'Needs repair' : held ? 'Needs repair' : project.paused ? 'Paused' : workerStopped ? 'Board stopped' : project.active ? 'Open' : project.running ? 'Running' : 'Idle';
+      const stateLabel = !project.health.ok ? 'Needs repair' : held ? 'Needs repair' : project.paused ? (project.active ? 'Paused · open' : 'Paused') : workerStopped ? 'Board stopped' : project.active ? 'Open' : project.running ? 'Running' : 'Idle';
       const health = project.health.ok ? '' : `<span class="badge bad" title="${esc(project.health.reasons.join('; '))}">Needs repair</span>`;
-      const stateTitle = workerStopped ? ` title="${esc(project.worker_error)}"` : '';
+      // The open project cannot be removed (see Remove below); a paused one
+      // looked identical to the closed paused ones, so it says why.
+      const pausedOpen = project.health.ok && !held && project.paused && project.active;
+      const stateTitle = pausedOpen ? ' title="Still your open project. Close it from its board to remove it from this list."'
+        : workerStopped ? ` title="${esc(project.worker_error)}"` : '';
       const counts = project.task_counts;
       const agents = project.agent_counts || {total: 0};
       const description = project.description

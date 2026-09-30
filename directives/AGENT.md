@@ -265,6 +265,13 @@ review.
   project's own UI test tooling or a headless driver you add under `.harness`
   when it has none. Reading served markup, template source, or a build log is
   not seeing the page; an empty or error render is a FAIL row, not a pass.
+  When your own browser cannot open the page (a sandbox or browser-tool
+  policy refuses localhost), ask the harness instead: the board command
+  `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"` opens
+  your running app in the harness browser, outside your sandbox, and returns
+  the rendered text; the HTML and a screenshot are saved as board evidence
+  under a `screen-...` id you cite in the ledger. It accepts only loopback
+  addresses of your own app, never a harness port.
   Where the project genuinely cannot be driven this way, record the limitation
   as an approved Completion Contract exclusion with its reason, and never
   present an unexecuted surface as covered by a chunk or final review
@@ -385,6 +392,13 @@ only then execute the review. The board validates distinctness before changing
 the state to “review executing.” A reservation with no valid attached ledger
 expires after ten minutes and visibly reopens, so never use reservation as a
 parking state.
+**What justifies a FAIL (owner, 2026-09-29).** FAIL only when, in normal use,
+the owner would get a wrong, missing or unusable result, or the change causes
+a safety or data-loss harm. Rare edge cases (a coincidence of failures the
+owner will not meet in normal use), test housekeeping, wording and style are
+NON-BLOCKING notes in the verdict summary, never a reason for another repair
+round. When in doubt, PASS with notes. This is the verdict-level twin of the
+material-rows-only rule for the Challenge Ledger below.
 The Challenge Ledger admits material rows only: every row names the
 acceptance criterion it challenges, the procedural classes named in the
 Delivery quality bar are not written, and the ledger stays within the row cap

@@ -426,7 +426,7 @@ class ProjectChatTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     remaining["facts"]["remaining_work"]["value"],
-                    "REJECTED: repair required.",
+                    "• REJECTED — repair required.",
                 )
 
     def test_unapproved_deferred_finding_is_not_committed_remaining_work(self):
@@ -683,7 +683,7 @@ class ProjectChatTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:52245/", owner)
         blockers = facts["task:TASK-RICH:blockers"]["value"]
         self.assertIn("Login page drops the session cookie", blockers)
-        self.assertIn("TASK-RICH (awaiting owner test)", facts["task_list"]["value"])
+        self.assertIn("• TASK RICH — awaiting owner test", facts["task_list"]["value"])
         for fact in facts.values():
             self.assertLessEqual(len(str(fact["value"]).encode()), project_chat.MAX_FACT_VALUE_BYTES)
 
@@ -697,7 +697,7 @@ class ProjectChatTests(unittest.TestCase):
                 "claims": ["task:TASK-RICH:reviews", "owner_action"],
             },
         )
-        self.assertIn("• TASK-RICH — reviews:", result["answer"])
+        self.assertIn("• TASK RICH — reviews:", result["answer"])
         self.assertIn("• Your next action:", result["answer"])
         self.assertIn("2 review cycles recorded", result["answer"])
         self.assertTrue(result["source_ids"])
@@ -714,7 +714,7 @@ class ProjectChatTests(unittest.TestCase):
         tasks = project_chat.answer_question(
             self.root, "Which tasks are done?", settings_home=self.settings_home, provider=provider,
         )
-        self.assertIn("TASK-RICH", tasks["answer"])
+        self.assertIn("• TASK RICH — awaiting owner test", tasks["answer"])
         self.assertEqual(called, [])
 
     def test_project_about_is_a_composed_overview_not_a_bare_description(self):

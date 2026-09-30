@@ -1024,6 +1024,46 @@ class GitBroker:
                 raise RecoveryHoldError(
                     "task worktree must be clean before a reviewed subtask fold: " + detail
                 )
+            try:
+                already = accepted_bytes.verify_entries(repository, current.commit, accepted_manifest)
+            except ValueError:
+                already = None
+            if already is not None:
+                # 2026-09-28: a subtask re-certified after resume already has its
+                # exact accepted bytes on the task head (folded before, then given
+                # a new commit id). Re-applying the patch fails ("patch does not
+                # apply") and the PASS could never be recorded. A subtask fold
+                # changes only these paths, so the folded tree IS the current
+                # tree: record the fold as a no-op on the unchanged head.
+                transaction = f"subtask-{secrets.token_hex(10)}"
+                intent = {
+                    "task": task, "subtask": subtask, "request_id": request_id,
+                    "branch": task_branch, "previous_head": current.commit,
+                    "target_head": current.commit, "tree": current.tree,
+                    "candidate_commit": candidate_commit, "candidate_tree": candidate_tree,
+                    "base_commit": base_commit, "manifest": manifest,
+                    "accepted_byte_manifest": accepted_manifest, "already_applied": True,
+                }
+                self._journal(transaction, "subtask-fold", "intent", **intent)
+                outcome = {
+                    "status": "completed",
+                    "transaction_id": transaction,
+                    "operation": "subtask-fold",
+                    "task": task, "subtask": subtask, "request_id": request_id,
+                    "commit": current.commit, "tree": current.tree,
+                    "candidate_commit": candidate_commit, "manifest": manifest,
+                    "accepted_byte_manifest": accepted_manifest,
+                    "accepted_byte_verification": already,
+                    "already_applied": True,
+                }
+                board_mutation(outcome)
+                for step in ("board_mutation", "done"):
+                    self._journal(
+                        transaction, "subtask-fold", step,
+                        task=task, subtask=subtask, request_id=request_id,
+                        commit=current.commit, tree=current.tree,
+                    )
+                return outcome
             patch = self._run_git(
                 accepted_bytes.binary_patch_arguments(base_commit, candidate_commit, paths=manifest),
                 cwd=repository, writable=[repository],

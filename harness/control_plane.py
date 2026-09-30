@@ -40,15 +40,7 @@ def _route_final_pass_completion(root: Path) -> list[dict[str, Any]]:
     routes: list[dict[str, str]] = []
     current = datetime.now(timezone.utc)
     with board.locked_state(root) as state:
-        releases = state.get("releases", {})
-        for request in state.get("qa_requests", {}).values():
-            task = str(request.get("task") or "")
-            if (
-                request.get("phase") != "final_acceptance"
-                or request.get("status") != "passed" or not task
-                or task in releases
-            ):
-                continue
+        for task, request in board.unreleased_final_passes(state):
             developer = state.get("agents", {}).get(request.get("developer_id", ""), {})
             if not developer.get("active") or not developer.get("session_id"):
                 continue

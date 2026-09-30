@@ -229,8 +229,13 @@ def run(
     with _identity_lock(board_root, identity["sha256"]):
         decision = execution_identity.lookup(board_root, identity)
         execution_identity.audit_decision(board_root, identity, decision)
+        cached = execution_identity.load_output(decision["entry"]) if decision["status"] == "hit" else ""
+        if decision["status"] == "hit" and browser_acceptance.blocked_note(cached):
+            # A success stored before 2026-09-28 could carry a reported browser
+            # failure (review r2 B3); it is never reused as a pass.
+            decision = {"status": "miss", "reason": "cached_success_reported_a_blocked_browser"}
         if decision["status"] == "hit":
-            output = execution_identity.load_output(decision["entry"])
+            output = cached
             timestamp = _at()
             return {
                 "output": output,
@@ -256,15 +261,23 @@ def run(
         )
         audit_manifest = _write_process_audit(board_root, process_audit)
         if process_audit["timed_out"]:
-            raise ValueError(
-                f"internal-QA test command timed out after {timeout_seconds} seconds; partial output was not certified"
-            )
+            raise ValueError(browser_acceptance.with_blocked_note(
+                f"internal-QA test command timed out after {timeout_seconds} seconds; partial output was not certified",
+                output,
+            ))
         finished_at = _at()
         duration = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
         problem = ""
         if process_audit["problems"]:
             exit_code = exit_code or 3
             problem = "; ".join(process_audit["problems"])
+        # Review r2 B3: a check whose browser could not run inside the sandbox
+        # is not a pass, even when its tests reported OK. Decided before the
+        # result is certified, so no such run is ever stored as a success.
+        blocked = browser_acceptance.blocked_note(output)
+        if exit_code == 0 and blocked:
+            exit_code = 4
+            problem = f"the screen check could not run: {blocked}"
         count = _test_count(output)
         if exit_code == 0 and count == 0:
             exit_code = 2
@@ -301,8 +314,11 @@ def run(
         # it. board.py carries the same guard; both call sites need it because
         # either can be the one that runs the command.
         if _reports_zero_executed_tests(output):
-            raise ValueError("internal-QA test command reported zero executed tests")
+            raise ValueError(browser_acceptance.with_blocked_note(
+                "internal-QA test command reported zero executed tests", output,
+            ))
         if exit_code != 0:
-            detail = problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}"
-            raise ValueError(detail)
+            raise ValueError(browser_acceptance.with_blocked_note(
+                problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}", output,
+            ))
         return {"output": output, "measurement": measurement}

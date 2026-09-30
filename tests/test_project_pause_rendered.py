@@ -204,7 +204,8 @@ class RenderedPauseTests(unittest.TestCase):
             thread.join(timeout=3)
             server.server_close()
 
-        self.assertEqual(rendered["badgeText"].count("Paused"), 1, rendered)
+        # The project paused here is still the open one (2026-09-28 label).
+        self.assertEqual(rendered["badgeText"].count("Paused · open"), 1, rendered)
         self.assertIn("paused safely", rendered["notice"].casefold())
         self.assertIn("Resume project", rendered["actions"])
         self.assertNotIn("Open project", rendered["actions"])

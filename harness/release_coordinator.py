@@ -211,23 +211,21 @@ def _record_trusted_checks(root: Path, task: str, checks: dict[str, Any]) -> Pat
 
 def _coordinatable_tasks(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     cancelled = state.get("cancelled_tasks") or {}
-    releases = state.get("releases") or {}
     found: list[tuple[str, dict[str, Any]]] = []
-    for request in (state.get("qa_requests") or {}).values():
-        task = str(request.get("task") or "")
-        if (
-            request.get("phase") != "final_acceptance"
-            or request.get("status") != "passed"
-            or not task or task in cancelled or task in releases
-        ):
+    for task, request in board.unreleased_final_passes(state):
+        if task in cancelled:
             continue
         developers_live = any(
             agent.get("active") and agent.get("role") in board.DEVELOPER_ROLES
             and agent.get("task") == task
             for agent in (state.get("agents") or {}).values()
         )
+        # The completion must follow THIS pass: a repaired task still carries
+        # the first cycle's development_complete (backlog #13).
+        passed_at = str(request.get("completed_at") or "")
         completed = any(
             event.get("kind") == "development_complete" and event.get("task") == task
+            and str(event.get("at") or "") >= passed_at
             for event in state.get("events", [])
         ) or not developers_live
         if completed:

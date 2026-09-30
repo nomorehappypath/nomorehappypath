@@ -16,6 +16,7 @@ sandboxed.
 from __future__ import annotations
 
 import html
+import functools
 import hmac
 import json
 import os
@@ -370,6 +371,15 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _one_lifecycle_step(method):
+    """Run a project lifecycle step while holding the manager's lifecycle lock."""
+    @functools.wraps(method)
+    def serialized(self, *args, **kwargs):
+        with self.__dict__.setdefault("_lifecycle", threading.RLock()):
+            return method(self, *args, **kwargs)
+    return serialized
+
+
 class ProjectManager:
     """Registry-backed state machine behind the HTTP surface (unit-testable)."""
 
@@ -411,6 +421,10 @@ class ProjectManager:
         self.worker_failure: dict[str, str] = {}
         self.terminal_launcher = terminal_launcher
         self.runtime = runtime or runtime_identity.PROCESS
+        # 2026-09-28: two Resume clicks ran at once; the second released the
+        # first's activation and started a second worker, orphaning the first.
+        # Opening, resuming, closing and pausing a project are one at a time.
+        self._lifecycle = threading.RLock()
 
     # -- render ------------------------------------------------------------
     def projects_payload(self) -> dict[str, Any]:
@@ -655,6 +669,7 @@ class ProjectManager:
             "worker_pid": self.worker.pid,
         }
 
+    @_one_lifecycle_step
     def open_project(self, project_id: str, _from_resume: bool = False) -> dict[str, Any]:
         self._reconcile_worker()
         entry = registry._find(registry.load(self.home), project_id)
@@ -719,6 +734,11 @@ class ProjectManager:
                     f"HARNESS PROVIDER ACCESS | {provider} apply failed for "
                     f"{entry['name']}: {str(error)[:200]}", flush=True,
                 )
+        if self.worker is not None and self.worker.poll() is None:
+            # Never overwrite the handle of a worker that still runs: it would
+            # be orphaned on the board port and every later start would fail
+            # with "Address already in use" (2026-09-28).
+            self._stop_worker()
         ready_token = uuid.uuid4().hex
         try:
             self.worker_action_token = ready_token
@@ -817,6 +837,7 @@ class ProjectManager:
             value["ready"] = False
         return value
 
+    @_one_lifecycle_step
     def close_project(self, project_id: str) -> dict[str, Any]:
         if self.worker_project == project_id:
             self._stop_worker()
@@ -824,12 +845,35 @@ class ProjectManager:
         return {"closed": project_id}
 
     def shutdown(self) -> None:
-        """Stop the private worker and release this manager's activation."""
+        """Stop the private worker and release this manager's activation.
+
+        A PAUSED open project stays open across the restart (owner, 2026-09-28:
+        an app update must not close it): its activation is kept for the next
+        manager instead of released. Anything else is released as before.
+        """
         project_id = self.worker_project
+        if not project_id:
+            active = registry.active_project(self.home)
+            if active and int(active.get("pid", 0)) == os.getpid():
+                project_id = str(active.get("project_id") or "")
+        keep = bool(project_id) and self._paused(project_id)
         self._stop_worker()
         if project_id:
-            registry.deactivate(self.home, project_id)
+            if not (keep and registry.hold_for_restart(self.home, project_id)):
+                registry.deactivate(self.home, project_id)
 
+    def keep_held_project_open(self) -> dict[str, Any] | None:
+        """On start, take over a paused project the previous manager kept open."""
+        return registry.adopt_held(self.home)
+
+    def _paused(self, project_id: str) -> bool:
+        try:
+            entry = registry._find(registry.load(self.home), project_id)
+            return board.pause_state(registry.context_for_entry(entry)).get("status") == "paused"
+        except (OSError, ValueError, KeyError):
+            return False
+
+    @_one_lifecycle_step
     def pause_project(
         self, project_id: str, *, drain_seconds: float = PAUSE_DRAIN_SECONDS,
         stop_timeout: float = PAUSE_STOP_TIMEOUT,
@@ -871,6 +915,7 @@ class ProjectManager:
             "sessions": stopped,
         }
 
+    @_one_lifecycle_step
     def resume_project(self, project_id: str) -> dict[str, Any]:
         """Reconcile authoritative state and terminals, then reopen one project."""
         entry = registry._find(registry.load(self.home), project_id)
@@ -1315,6 +1360,7 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
     if port == board_port:
         raise ValueError("manager and private worker ports must be different")
     manager = ProjectManager(home, board_port=board_port)
+    manager.keep_held_project_open()
     server = ThreadingHTTPServer((host, port), make_handler(manager))
     manager.manager_url = f"http://{host}:{server.server_address[1]}/"
     manager.public_board_url = manager.manager_url.rstrip("/") + PROJECT_ROUTE

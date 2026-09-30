@@ -43,6 +43,16 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
         self.assertIn("A green result from a place the failure cannot occur is not evidence", agent)
         self.assertIn("belongs in the repository as a script or a test", spawn)
 
+    def test_reviewer_fails_only_on_material_issues(self):
+        """Owner 2026-09-29: "over engineering reviews kills the app"."""
+        agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
+        for phrase in (
+            "FAIL only when, in normal use, the owner would get a wrong, missing or unusable result",
+            "never a reason for another repair round",
+            "When in doubt, PASS with notes.",
+        ):
+            self.assertIn(phrase, agent)
+
     def test_directives_protect_behavior_a_reviewer_already_accepted(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())

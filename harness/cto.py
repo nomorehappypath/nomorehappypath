@@ -22,7 +22,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import (
-    accepted_bytes, board, child_process, contract, execution_identity, git_broker, git_process,
+    accepted_bytes, board, browser_acceptance, child_process, contract, execution_identity, git_broker, git_process,
     lifecycle, runtime_probe,
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
@@ -180,6 +180,41 @@ def _task_lineage(state: dict[str, Any], task: str, developers: list[dict[str, A
         "duplicate_active": duplicate_active,
         "invalid": invalid,
     }
+
+
+REOPENING_EVENTS = frozenset({
+    "qa_requested", "independent_review_requested", "task_resumed",
+    "owner_release_decision_recorded", "task_cancelled",
+})
+
+
+def _delivery_completed(state: dict[str, Any], task: str, agent: dict[str, Any]) -> bool:
+    """A Delivery is complete when it says so, or when its recorded completion stands.
+
+    2026-09-28: a review PASS recorded after Delivery completed set its status
+    back to "independent_review_passed"; Delivery had ended, so no one set
+    "done" again and the owner never got Accept. The board no longer does that
+    (qa_result), and a board already in that state is read truthfully here: a
+    stopped Delivery whose last `development_complete` was followed only by
+    passing reviews has completed. Anything that reopens the work does not.
+    """
+    if agent.get("status") == "done":
+        return True
+    if agent.get("active") or agent.get("status") not in {"independent_review_passed", "development_qa_passed"}:
+        return False
+    events = [event for event in state.get("events", []) if event.get("task") == task]
+    completions = [
+        int(event.get("sequence") or 0) for event in events
+        if event.get("kind") == "development_complete" and event.get("agent_id") == agent.get("id")
+    ]
+    if not completions:
+        return False
+    after = [event for event in events if int(event.get("sequence") or 0) > max(completions)]
+    return not any(
+        event.get("kind") in REOPENING_EVENTS
+        or (event.get("kind") == "qa_result" and event.get("result") != "passed")
+        for event in after
+    )
 
 
 def _coordinator_recorded_checks(root: Path, task: str, reviewed_commit: str) -> dict[str, Any]:
@@ -453,6 +488,8 @@ def _certified_delivery_health(
     ]
     if not counts or max(counts) < 1:
         return failed
+    if browser_acceptance.blocked_note(output):
+        return failed   # a reported browser failure is never release health (review r2 B3)
     return {
         "verified": True,
         "source": "certified_delivery_full_suite",
@@ -584,8 +621,8 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     checks["delivery_lineage_superseded_ids"] = lineage["superseded"]
     checks["delivery_lineage_invalid"] = lineage["invalid"]
     checks["live_duplicate_delivery_agents"] = lineage["live_superseded"] if lineage["duplicate_active"] else []
-    checks["development_agents_complete"] = bool(lineage["endpoints"]) and not lineage["duplicate_active"] and not lineage["invalid"] and all(agent.get("status") == "done" for agent in lineage["endpoints"])
-    checks["incomplete_development_agents"] = [agent["id"] for agent in lineage["endpoints"] if agent.get("status") != "done"] + lineage["live_superseded"] + lineage["invalid"]
+    checks["development_agents_complete"] = bool(lineage["endpoints"]) and not lineage["duplicate_active"] and not lineage["invalid"] and all(_delivery_completed(state, task, agent) for agent in lineage["endpoints"])
+    checks["incomplete_development_agents"] = [agent["id"] for agent in lineage["endpoints"] if not _delivery_completed(state, task, agent)] + lineage["live_superseded"] + lineage["invalid"]
     certified_delivery = Path(str((latest_review or {}).get("certified_artifacts", {}).get("delivery_ledger", {}).get("path", ""))) if latest_review else None
     ledger_for_gate = certified_delivery if certified_delivery and certified_delivery.is_file() else ledger
     ledger_ok, ledger_problems = ledger_complete(ledger_for_gate)

@@ -181,6 +181,70 @@ class ReleaseCoordinatorTests(unittest.TestCase):
         outcomes = release_coordinator.coordinate(self.root)
         self.assertEqual(outcomes, [])
 
+    # ---- backlog #13: a release the owner rejected is prepared again once repaired ----
+    def _release_on(self, task: str, head_commit: str, decision: str = "not_accepted") -> None:
+        with board.locked_state(self.root) as state:
+            state["releases"][task] = {
+                "task": task, "status": "VISUAL_TEST_REQUIRED",
+                "head_commit": head_commit, "cto_id": "cto", "recorded_at": board.now()}
+            if decision:
+                state.setdefault("release_decisions", {})[task] = {
+                    "task": task, "decision": decision, "recorded_at": board.now()}
+
+    def test_repaired_release_on_new_commit_is_coordinated_again(self):
+        self._strand("TASK_REPAIRED")
+        self._release_on("TASK_REPAIRED", "0" * 40)
+        outcomes = release_coordinator.coordinate(self.root)
+        self.assertEqual([item.get("task") for item in outcomes], ["TASK_REPAIRED"])
+
+    def test_release_on_the_passed_commit_is_not_coordinated_again(self):
+        self._strand("TASK_RELEASED")
+        self._release_on("TASK_RELEASED", self.reviewed, decision="")
+        self.assertEqual(release_coordinator.coordinate(self.root), [])
+
+    def test_rejected_candidates_old_pass_never_comes_back(self):
+        # Cycle 1 passed on the candidate the owner rejected; cycle 2 passed on
+        # the repair and was released. The old PASS must stay dead.
+        self._strand("TASK_TWO_PASSES")
+        with board.locked_state(self.root) as state:
+            old = dict(state["qa_requests"]["final-TASK_TWO_PASSES"])
+            old.update({"id": "final-old", "cycle": 1, "reviewed_commit": "1" * 40})
+            state["qa_requests"]["final-old"] = old
+            state["qa_requests"]["final-TASK_TWO_PASSES"]["cycle"] = 2
+        self._release_on("TASK_TWO_PASSES", self.reviewed, decision="")
+        self.assertEqual(release_coordinator.coordinate(self.root), [])
+
+    def test_first_cycles_completion_does_not_release_the_repair_early(self):
+        # Delivery is still live and has not completed since the repair PASS;
+        # the development_complete from the rejected cycle must not count.
+        self._strand("TASK_EARLY")
+        self._release_on("TASK_EARLY", "0" * 40)
+        with board.locked_state(self.root) as state:
+            state["agents"]["dev"]["active"] = True
+            state["qa_requests"]["final-TASK_EARLY"]["completed_at"] = "9999-01-01T00:00:00+00:00"
+        self.assertEqual(release_coordinator.coordinate(self.root), [])
+        with board.locked_state(self.root) as state:
+            state["qa_requests"]["final-TASK_EARLY"]["completed_at"] = "2000-01-01T00:00:00+00:00"
+        self.assertEqual(
+            [item.get("task") for item in release_coordinator.coordinate(self.root)], ["TASK_EARLY"],
+        )
+
+    # ---- 2026-09-28: a subtask PASS recorded later re-opens the coordinator's check ----
+    def test_a_subtask_pass_changes_the_coordination_key_so_failed_checks_rerun(self):
+        # A failed check is journalled per coordination key and not repeated for
+        # the same key. Recording the re-certified subtask PASS changes the
+        # plan, and so the key: the coordinator re-checks and can clear its hold.
+        self._strand("TASK_RECHECK")
+        with board.locked_state(self.root) as state:
+            state["delivery_plans"]["TASK_RECHECK"] = {"mode": "application", "subtasks": {"alpha": {"status": "open"}}}
+        state = board.snapshot(self.root)
+        request = state["qa_requests"]["final-TASK_RECHECK"]
+        before = release_coordinator._coordination_identity(state, "TASK_RECHECK", request, self.repo)
+        with board.locked_state(self.root) as state:
+            state["delivery_plans"]["TASK_RECHECK"]["subtasks"]["alpha"]["status"] = "passed"
+        after = release_coordinator._coordination_identity(board.snapshot(self.root), "TASK_RECHECK", request, self.repo)
+        self.assertNotEqual(before, after)
+
     # ---- S-COORD-007: mechanical check failure is an incident, CTO is not engaged ----
     def test_checks_failure_is_classified_and_stops(self):
         self._strand("TASK_BADCHECKS")
