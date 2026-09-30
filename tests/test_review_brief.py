@@ -34,6 +34,17 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertEqual(first["delivery_scenarios"][0]["recorded"], "executed")
         self.assertNotIn("proposed_verdict", first)
 
+    def test_final_brief_orders_the_whole_app_end_to_end_and_a_task_done_line(self):
+        """Owner 2026-09-30: the final review walks the whole app and says whether the task is done."""
+        final = review_brief.build(self.root, self.state, self.request)
+        stage = final["final_stage"]
+        self.assertIn("walk the owner's path from start to finish", stage["end_to_end"])
+        self.assertIn("expected result in the confirmed requirements", stage["end_to_end"])
+        self.assertTrue(stage["verdict_first_line"].startswith("TASK DONE: YES|NO"))
+        self.assertIn("PASS always means TASK DONE: YES", stage["rule"])
+        self.request["phase"] = "chunk"
+        self.assertNotIn("final_stage", review_brief.build(self.root, self.state, self.request))
+
     def test_authoring_brief_withholds_delivery_evidence(self):
         result = review_brief.build(
             self.root, self.state, self.request,

@@ -180,6 +180,22 @@ def build(
             "and record an independent semantic verdict."
         ),
     }
+    if request.get("phase") == "final_acceptance":
+        # Owner 2026-09-30: the final review ends with the whole app, end to
+        # end, and a plain statement of whether the owner's task is done.
+        brief["final_stage"] = {
+            "end_to_end": (
+                "Start the whole app from the candidate (its own ports and data, never the "
+                "owner's running copy), walk the owner's path from start to finish on the "
+                "running or rendered surface, and compare what happens with the expected "
+                "result in the confirmed requirements. Make the walk a Challenge Ledger row."
+            ),
+            "verdict_first_line": "TASK DONE: YES|NO — <expected result> vs <what happened>",
+            "rule": (
+                "PASS always means TASK DONE: YES. Walk the whole path, not a fragment; do not "
+                "hunt boundaries that never or only rarely happen - note them as non-blocking."
+            ),
+        }
     encoded = json.dumps(brief, sort_keys=True, separators=(",", ":")).encode("utf-8")
     brief["sha256"] = hashlib.sha256(encoded).hexdigest()
     return brief

@@ -85,6 +85,13 @@ never creates separate board work, an owner decision, or a delayed release.
 A FAIL states, for every blocking finding: the material impact, the executed
 proof, and the required correction.
 
+A final acceptance review ends with the whole app, end to end (owner,
+2026-09-30): start it from the candidate, walk the owner's path from start to
+finish, and compare with the expected result in the confirmed requirements. The
+verdict summary begins `TASK DONE: YES|NO — <expected> vs <what happened>`, and
+PASS always means TASK DONE: YES. No cut corners, and no hunting boundaries
+that never or only rarely happen.
+
 Repair cycles are reviewed proportionally: verify the fix, the surfaces it
 touched, and the suite — a full fresh adversarial sweep is for first cycles
 and architectural repairs, not for a two-line correction. Previously closed
