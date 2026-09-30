@@ -61,6 +61,7 @@ ALL_BOARD_OPERATIONS = {
     "reopen-integrity", "watch", "reopen-candidate-scope", "reevaluate-finalization",
     "reintegrate-main",
     "owner-action", "owner-action-done",
+    "screen-check",
 }
 COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
@@ -72,6 +73,9 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "repin-final-review",
     # Defect #19: Delivery merges main into its own task branch through the broker.
     "reintegrate-main",
+    # Owner 2026-09-29 (option 1): the harness renders the project's own local
+    # page outside the agent sandbox; the agent never gets a browser.
+    "screen-check",
     # Recovery valve for the scaffold wedge: --repo is a PROTECTED argument the
     # surface refuses from clients, so an authenticated Delivery bind can only
     # ever target the server-derived project repository.
@@ -80,6 +84,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "execute-challenge", "findings", "claim-qa", "reserve-qa",
     "review-brief", "review-intents", "attach-challenge-ledger", "qa-result", "split-repair-package",
+    "screen-check",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "record-finding", "finding-triage", "finding-resolved", "findings",
@@ -128,7 +133,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "attach-challenge-ledger",
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
-    "reopen-candidate-scope", "owner-action", "owner-action-done",
+    "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",
@@ -558,6 +563,8 @@ class CommandGateway:
         self.lock_path = self.directory / ".board-command.lock"
         self.execution_lock_path = self.directory / ".board-command-execution.lock"
         self.thread_lock = _project_command_lock(authority.project_id)
+        # Ports this worker itself serves; a screen check may never render them.
+        self.served_ports: set[int] = set()
         self.nonce_thread_lock = _project_nonce_lock(authority.project_id)
         self._refusals: dict[tuple[str, str], list[float]] = {}
         self._refusal_holds: set[tuple[str, str]] = set()
@@ -695,6 +702,14 @@ class CommandGateway:
                 raise SurfaceAuthorizationError("caller task does not match the authenticated session")
             if operation in {"record-finding", "claim-release-repair", "repin-final-review"}:
                 arguments = _canonical_argument(arguments, "--task", identity.task)
+        if operation == "screen-check":
+            from urllib.parse import urlsplit
+            try:
+                port = urlsplit(_argument_value(arguments, "--url") or "").port
+            except ValueError:
+                port = None
+            if port in self.served_ports:
+                raise SurfaceAuthorizationError("a screen check cannot render the harness's own board")
         if operation == "repin-final-review":
             if _argument_value(arguments, "--repo") is not None:
                 raise SurfaceAuthorizationError("client-supplied repository paths are not accepted")

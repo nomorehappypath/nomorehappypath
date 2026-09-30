@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 
 from harness import platform_support
 import threading
@@ -19,7 +20,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-LIVE_HARNESS_PORTS = {8740, 8742}
+# Mission Control, the project board worker, and the standalone board viewer.
+LIVE_HARNESS_PORTS = {8740, 8741, 8742}
+# Time a one-shot capture lets page scripts run before it reads the page.
+SETTLE_MILLISECONDS = 5_000
 _IDENTITIES: dict[tuple[str, int, int], dict[str, str]] = {}
 _PROCESS_LOCK = threading.Lock()
 _UNSAFE_EXTRA_ARG_PREFIXES = (
@@ -110,6 +114,36 @@ def browser_identity(binary: str) -> dict[str, str]:
 # Moved into harness/platform_support. The name stays here because callers and
 # tests import it from this module, and Stage 0 changes nothing observable.
 ProcessTableUnavailable = platform_support.ProcessTableUnavailable
+
+# 2026-09-28 (owner: "if running the app crashes, let the mission control give
+# the full command"): one line a certified check's output carries when the
+# acceptance browser could not run inside the agent's sandbox. The board turns
+# it into an owner card with the command to run the same check outside.
+SANDBOX_BLOCKED = "HARNESS BROWSER BLOCKED IN SANDBOX"
+
+
+def _report_blocked(reason: str) -> None:
+    if platform_support.browser_host().inside_os_sandbox():
+        print(f"{SANDBOX_BLOCKED}: {reason}", file=sys.stderr, flush=True)
+
+
+def with_blocked_note(message: str, output: str) -> str:
+    """A refusal message that keeps the blocked-browser reason, whatever the refusal.
+
+    Review r3 B4: a browser that died in setUpClass left "Ran 0 tests", and the
+    zero-tests refusal dropped the marker, so the owner got no card. Every
+    refusal raised after a command's output exists goes through here.
+    """
+    note = blocked_note(output)
+    return f"{message} | {note}" if note and note not in message else message
+
+
+def blocked_note(output: str) -> str:
+    """The marker line from a command's output, or "" when there is none."""
+    for line in str(output or "").splitlines():
+        if SANDBOX_BLOCKED in line:
+            return line.strip()[:300]
+    return ""
 
 
 def _run_ps(arguments: list[str], *, check: bool) -> subprocess.CompletedProcess:
@@ -254,6 +288,15 @@ class BrowserProcess:
         if self._closed:
             return json.loads((self.runtime / "acceptance-audit.json").read_text(encoding="utf-8"))
         try:
+            # Review r2 B2: a browser that fails to initialize exits with a
+            # plain non-zero code, not only a signal. Either way it ended on
+            # its own before the check was done with it.
+            ended = self.process.poll()
+            if ended is not None and ended != 0:
+                _report_blocked(
+                    f"the browser crashed (signal {-ended}) before the check finished" if ended < 0
+                    else f"the browser exited with code {ended} before the check finished"
+                )
             before_cleanup = _process_table()
             _record_owned(self.owned_identities, before_cleanup, self.pgid)
             current_token = str(before_cleanup.get(self.pid, {}).get("start_token") or _start_token(self.pid))
@@ -357,7 +400,15 @@ class BrowserProcess:
 def launch(
     url: str, runtime: Path, *, width: int = 1400, height: int = 1000,
     extra_args: list[str] | None = None, capture_output: bool = False,
+    one_shot: bool = False,
 ) -> BrowserProcess:
+    """Start the acceptance browser on a loopback URL.
+
+    ``one_shot`` runs a headless command (--dump-dom, --screenshot) that
+    prints its result and exits. Chrome refuses those together with a remote
+    debugging port ("Headless commands are not compatible with remote
+    debugging"), so a one-shot launch omits it.
+    """
     _validate_url(url)
     extra_args = list(extra_args or [])
     unsafe = [
@@ -383,8 +434,15 @@ def launch(
         "--no-default-browser-check", "--disable-extensions", "--disable-sync",
         "--disable-background-networking", "--password-store=basic", "--use-mock-keychain",
         f"--user-data-dir={runtime / 'profile'}", f"--disk-cache-dir={runtime / 'cache'}",
-        f"--crash-dumps-dir={runtime / 'crash'}", "--remote-debugging-port=0",
-        f"--window-size={int(width)},{int(height)}", *extra_args, url,
+        f"--crash-dumps-dir={runtime / 'crash'}",
+        *([] if one_shot else ["--remote-debugging-port=0"]),
+        f"--window-size={int(width)},{int(height)}",
+        # Inside an agent's sandbox Chrome cannot build its own; the outer one
+        # confines it, and the URL is already limited to loopback. Codex's
+        # sandbox also refuses the Mach service Chrome's child processes meet
+        # through (review 2026-09-28 B1), so the renderer stays in-process.
+        *(["--no-sandbox", "--single-process"] if platform_support.browser_host().inside_os_sandbox() else []),
+        *extra_args, url,
     ]
     # Everything from here to the successful return holds two locks. Any escape
     # that does not release BOTH deadlocks every later launch in this process:
@@ -436,7 +494,8 @@ def launch(
             owned_identities=owned_identities, observer_stop=observer_stop,
             observer=observer, lock_handle=lock_handle,
         )
-    except BaseException:
+    except BaseException as error:
+        _report_blocked(f"the browser could not start: {str(error)[:200]}")
         if observer_stop is not None:
             observer_stop.set()
         if observer is not None:
@@ -450,12 +509,181 @@ def launch(
         raise
 
 
-def dump_dom(url: str, runtime: Path, *, timeout: float = 30) -> str:
-    session = launch(url, runtime, extra_args=["--dump-dom"], capture_output=True)
+def validate_url(url: str) -> int:
+    """The loopback-only, no-harness-port rule every capture obeys; returns the port."""
+    return _validate_url(url)
+
+
+def _one_shot(url: str, runtime: Path, command: str, timeout: float) -> str:
+    session = launch(
+        url, runtime, capture_output=True, one_shot=True,
+        extra_args=[command, f"--virtual-time-budget={SETTLE_MILLISECONDS}"],
+    )
     try:
         stdout, stderr = session.communicate(timeout=timeout)
         if session.process.returncode != 0:
-            raise RuntimeError(f"browser DOM capture failed: {stderr[-500:]}")
+            raise RuntimeError(f"browser capture failed: {stderr[-500:]}")
         return stdout
     finally:
         session.close()
+
+
+def dump_dom(url: str, runtime: Path, *, timeout: float = 30) -> str:
+    """The page's HTML after its scripts have run."""
+    return _one_shot(url, runtime, "--dump-dom", timeout)
+
+
+def _devtools(runtime: Path, deadline: float) -> tuple[int, str]:
+    """The page target's debugging port and WebSocket path, from Chrome's own file."""
+    import http.client
+    active = Path(runtime) / "profile" / "DevToolsActivePort"
+    while time.monotonic() < deadline:
+        try:
+            port = int(active.read_text(encoding="utf-8").splitlines()[0])
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            connection.request("GET", "/json/list")
+            targets = json.loads(connection.getresponse().read())
+            connection.close()
+            page = next(item for item in targets if item.get("type") == "page")
+            return port, urlsplit(page["webSocketDebuggerUrl"]).path
+        except (OSError, ValueError, IndexError, StopIteration, KeyError):
+            time.sleep(0.1)
+    raise RuntimeError("the browser did not open its page in time")
+
+
+class _DevToolsSocket:
+    """The few WebSocket frames the Chrome DevTools protocol needs; stdlib only."""
+
+    def __init__(self, port: int, path: str, timeout: float) -> None:
+        import base64
+        import socket
+        self.socket = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.socket.sendall((
+            f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        ).encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.socket.recv(4096)
+            if not chunk:
+                raise RuntimeError("the browser refused the inspection connection")
+            head += chunk
+        if b" 101 " not in head.split(b"\r\n", 1)[0]:
+            raise RuntimeError("the browser refused the inspection connection")
+        self.buffer = head.split(b"\r\n\r\n", 1)[1]
+        self.next_id = 0
+
+    def _read(self, count: int) -> bytes:
+        while len(self.buffer) < count:
+            chunk = self.socket.recv(max(65536, count - len(self.buffer)))
+            if not chunk:
+                raise RuntimeError("the browser closed the inspection connection")
+            self.buffer += chunk
+        data, self.buffer = self.buffer[:count], self.buffer[count:]
+        return data
+
+    def _message(self) -> dict[str, Any]:
+        payload = b""
+        while True:
+            first, second = self._read(2)
+            length = second & 0x7F
+            if length == 126:
+                length = int.from_bytes(self._read(2), "big")
+            elif length == 127:
+                length = int.from_bytes(self._read(8), "big")
+            payload += self._read(length)
+            if first & 0x80:
+                return json.loads(payload)
+
+    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.next_id += 1
+        body = json.dumps({"id": self.next_id, "method": method, "params": params or {}}).encode()
+        mask = os.urandom(4)
+        size = len(body)
+        header = bytes([0x81]) + (
+            bytes([0x80 | size]) if size < 126
+            else bytes([0x80 | 126]) + size.to_bytes(2, "big") if size < 65536
+            else bytes([0x80 | 127]) + size.to_bytes(8, "big")
+        )
+        self.socket.sendall(header + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(body)))
+        while True:
+            message = self._message()
+            if message.get("id") == self.next_id:
+                if "error" in message:
+                    raise RuntimeError(f"browser inspection failed: {message['error']}")
+                return message.get("result") or {}
+
+    def evaluate(self, expression: str) -> Any:
+        result = self.call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        return (result.get("result") or {}).get("value")
+
+    def close(self) -> None:
+        try:
+            self.socket.close()
+        except OSError:
+            pass
+
+
+VISIBLE_TEXT_EXPRESSION = """(() => {
+  if (!document.body) return '';
+  for (const element of document.body.querySelectorAll('*')) {
+    const box = element.getBoundingClientRect();
+    // Size and position rules apply to leaf elements only: a 0x0 wrapper
+    // (display: contents) can still hold visible children.
+    const leaf = element.children.length === 0 && element.textContent.trim();
+    const unseen = getComputedStyle(element).opacity === '0'
+      || (leaf && ((box.width <= 1 && box.height <= 1) || box.right <= 0 || box.bottom <= 0));
+    if (unseen) element.style.setProperty('display', 'none', 'important');
+  }
+  return document.body.innerText;
+})()"""
+
+
+def render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, Any]:
+    """What a person sees: the body's rendered text, the HTML, and a PNG.
+
+    The text is the browser's own innerText of <body>, so hidden elements,
+    closed dialogs and the document title are not counted as on screen
+    (review 2026-09-29 r1). The page gets up to SETTLE_MILLISECONDS after it
+    loads for its scripts to finish; the capture is taken once the text has
+    stopped changing.
+    """
+    import base64
+    deadline = time.monotonic() + timeout
+    session = launch(url, runtime)
+    inspector = None
+    try:
+        port, path = _devtools(runtime, deadline)
+        inspector = _DevToolsSocket(port, path, timeout=max(1.0, deadline - time.monotonic()))
+        text_expression = "document.body ? document.body.innerText : ''"
+        settle_until = None
+        previous = None
+        stable_since = time.monotonic()
+        while time.monotonic() < deadline:
+            if inspector.evaluate("document.readyState") == "complete":
+                settle_until = settle_until or time.monotonic() + SETTLE_MILLISECONDS / 1000
+                text = inspector.evaluate(text_expression)
+                if text != previous:
+                    previous, stable_since = text, time.monotonic()
+                elif time.monotonic() - stable_since >= 1.0 or time.monotonic() >= settle_until:
+                    break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("the page did not finish loading in time")
+        png = base64.b64decode(inspector.call("Page.captureScreenshot", {"format": "png"})["data"])
+        html = str(inspector.evaluate("document.documentElement.outerHTML") or "")
+        # innerText still counts text nobody can see: fully transparent
+        # elements, 1px screen-reader-only labels, and text parked off-screen.
+        # With the screenshot and HTML already taken, those are removed from
+        # layout and the text is read once more.
+        seen = str(inspector.evaluate(VISIBLE_TEXT_EXPRESSION) or "")
+        return {"text": seen, "html": html, "png": png}
+    finally:
+        if inspector is not None:
+            inspector.close()
+        # Every process this launch owns is still ended. The machine-wide
+        # "no other app started" attribution is skipped: it proves test
+        # isolation, and on a live Mac a project's own agents start Chrome at
+        # any moment, which would fail a correct screen check in normal use.
+        session.close(validate=False)

@@ -34,6 +34,10 @@ DEFAULT_PREVIEW = {
     "command": "",
     "url_template": "http://127.0.0.1:{port}/",
     "startup_timeout_seconds": 45,
+    # 2026-09-28 backlog #12: the owner's own local settings a candidate needs
+    # to start like the owner's copy does. Copied (never linked) from the
+    # project folder into the clean checkout when the candidate lacks them.
+    "owner_files": [".env", "settings.json", ".workspace"],
 }
 
 
@@ -84,7 +88,17 @@ def _validated_preview(value: Any) -> dict[str, Any]:
         raise ValueError("the preview startup timeout must be a number of seconds") from error
     if not 5 <= timeout <= 300:
         raise ValueError("the preview startup timeout must be between 5 and 300 seconds")
-    return {"command": command, "url_template": url_template, "startup_timeout_seconds": timeout}
+    owner_files = section.get("owner_files", DEFAULT_PREVIEW["owner_files"])
+    if not isinstance(owner_files, list) or not all(isinstance(name, str) for name in owner_files):
+        raise ValueError("the preview owner files must be a list of names")
+    for name in owner_files:
+        relative = Path(name)
+        if not name or relative.is_absolute() or ".." in relative.parts or name.startswith("~"):
+            raise ValueError("each preview owner file must be a name inside the project folder")
+    return {
+        "command": command, "url_template": url_template, "startup_timeout_seconds": timeout,
+        "owner_files": list(owner_files),
+    }
 
 
 def _save(path: Path, value: dict[str, Any]) -> dict[str, Any]:

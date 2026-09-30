@@ -16,6 +16,7 @@ tail — never silently dropped.
 """
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -30,6 +31,7 @@ from typing import Any
 from urllib.request import urlopen
 
 from harness import board, git_process, workspace_settings
+from harness.project_context import project_context
 from harness import platform_support
 from harness import browser_acceptance
 
@@ -38,6 +40,14 @@ TICK_SECONDS = 5.0
 HEALTH_POLL_SECONDS = 0.5
 STOP_GRACE_SECONDS = 5.0
 LOG_TAIL_BYTES = 1200
+VIEW_APP = "view_app"
+# One wake for every supervisor in this process: a View app click starts the
+# candidate now instead of on the next tick.
+_WAKE = threading.Event()
+
+
+def wake() -> None:
+    _WAKE.set()
 
 
 def preview_root(root: Any) -> Path:
@@ -50,8 +60,7 @@ def _start_token(pid: int) -> str:
     An absent pid yields an empty token, as before. An environment that cannot
     run ``ps`` at all is a different thing entirely and says so by name.
     """
-    result = browser_acceptance._run_ps(["-p", str(pid), "-o", "lstart="], check=False)
-    return result.stdout.strip() if result.returncode == 0 else ""
+    return browser_acceptance._start_token(pid)
 
 
 def _free_port() -> int:
@@ -111,6 +120,73 @@ def suggest_command(workspace: str) -> dict[str, str]:
     return {}
 
 
+def detect_start(source: Path) -> dict[str, str]:
+    """How to start a candidate checkout, found from its own files (backlog #12).
+
+    Runs only when the owner clicks View app: that click is the owner's
+    decision to run this candidate. Every command receives its port in PORT.
+    """
+    for name in ("app.py", "server.py", "main.py"):
+        if (source / name).is_file():
+            return {"command": f"python3 {name}", "reason": f"{name} starts this project"}
+    package = source / "package.json"
+    if package.is_file():
+        try:
+            scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts") or {}
+        except (OSError, ValueError, AttributeError):
+            scripts = {}
+        if isinstance(scripts, dict) and scripts.get("start"):
+            return {"command": "npm start", "reason": "package.json has a start script"}
+    return suggest_command(str(source))
+
+
+def copy_owner_files(project: Path, source: Path, names: list[str]) -> list[str]:
+    """Copy the owner's local settings into a candidate checkout.
+
+    Copies, never links, so a candidate cannot change the owner's files; a
+    folder keeps the symlinks inside it as symlinks. A file the candidate
+    already has (tracked) is left alone.
+    """
+    copied = []
+    for name in names:
+        origin, target = project / name, source / name
+        if not (origin.exists() or origin.is_symlink()) or target.exists() or target.is_symlink():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if origin.is_dir() and not origin.is_symlink():
+            shutil.copytree(origin, target, symlinks=True)
+        else:
+            shutil.copy2(origin, target, follow_symlinks=True)
+        copied.append(name)
+    return copied
+
+
+def request_view(root: Any, task: str) -> dict[str, Any]:
+    """The owner clicked View app: open what runs, or start the candidate now."""
+    state = board.snapshot(root)
+    release = (state.get("releases") or {}).get(str(task or "")) or {}
+    if release.get("status") != "VISUAL_TEST_REQUIRED" or (state.get("release_decisions") or {}).get(task):
+        raise ValueError("this release is no longer waiting for your test")
+    preview = release.get("preview") or {}
+    if preview.get("status") == "ready" and preview.get("url"):
+        return {"status": "ready", "url": preview["url"]}
+    if preview.get("status") == "app_bundle":
+        return {"status": "opened", **open_app_bundle(root, task)}
+    if preview.get("status") == "starting" and preview.get("requested") == VIEW_APP:
+        return {"status": "starting"}
+    branch_record = (state.get("task_branches") or {}).get(task)
+    branch = (
+        str(branch_record.get("branch") or "") if isinstance(branch_record, dict) else str(branch_record or "")
+    ).removeprefix("refs/heads/")
+    board.record_release_preview(root, task, {
+        "status": "starting", "requested": VIEW_APP, "requested_at": board.now(),
+        "head_commit": str(release.get("head_commit") or ""),
+        "workspace": str((state.get("task_workspaces") or {}).get(task) or ""), "branch": branch,
+    })
+    wake()
+    return {"status": "starting"}
+
+
 def find_app_bundle(workspace: str) -> Path | None:
     """The newest built macOS app bundle in a candidate workspace, if any."""
     base = Path(workspace or "")
@@ -160,6 +236,7 @@ class Preview:
         self.port = 0
         self.url = ""
         self.command = ""
+        self.requested = ""
 
     @property
     def source(self) -> Path:
@@ -211,7 +288,11 @@ class ReleasePreviewSupervisor:
         self.thread.start()
 
     def _run(self) -> None:
-        while not self.stop_event.wait(self.tick_seconds):
+        while not self.stop_event.is_set():
+            _WAKE.wait(self.tick_seconds)
+            _WAKE.clear()
+            if self.stop_event.is_set():
+                return
             try:
                 self.tick()
             except Exception as error:  # noqa: BLE001 — a tick failure must never kill the worker
@@ -219,6 +300,7 @@ class ReleasePreviewSupervisor:
 
     def shutdown(self) -> None:
         self.stop_event.set()
+        _WAKE.set()
         if self.thread is not None:
             self.thread.join(timeout=max(1.0, self.tick_seconds + 0.5))
         with self.lock:
@@ -314,6 +396,20 @@ class ReleasePreviewSupervisor:
                 shutil.rmtree(preview.directory, ignore_errors=True)
             return
         if not command:
+            preview = self.previews.get(task)
+            if preview is not None and preview.requested == VIEW_APP and preview.alive():
+                if recorded.get("status") != "ready" or recorded.get("pid") != preview.process.pid:
+                    self._record(task, self._ready_value(preview, workspace, branch))
+                return
+            if recorded.get("requested") == VIEW_APP and recorded.get("status") == "starting":
+                if preview is not None:
+                    preview.stop()
+                    del self.previews[task]
+                self._launch(task, head_commit, "", settings, workspace, branch, requested=VIEW_APP)
+                return
+            if recorded.get("requested") == VIEW_APP and recorded.get("status") == "failed":
+                # One plain line stays on the card until the owner clicks again.
+                return
             preview = self.previews.pop(task, None)
             if preview is not None:
                 # The owner cleared the command while a preview served: stop
@@ -369,11 +465,13 @@ class ReleasePreviewSupervisor:
             # A recorded failure stays visible until the owner changes the
             # command or asks for a retry (which clears the record).
             return
-        self._launch(task, head_commit, command, settings, workspace, branch)
+        requested = VIEW_APP if recorded.get("requested") == VIEW_APP else ""
+        self._launch(task, head_commit, command, settings, workspace, branch, requested=requested)
 
     def _ready_value(self, preview: Preview, workspace: str, branch: str) -> dict[str, Any]:
         return {
             "status": "ready",
+            "requested": preview.requested or None,
             "url": preview.url,
             "command": preview.command,
             "pid": preview.process.pid,
@@ -386,13 +484,29 @@ class ReleasePreviewSupervisor:
 
     def _launch(
         self, task: str, head_commit: str, command: str, settings: dict[str, Any],
-        workspace: str, branch: str,
+        workspace: str, branch: str, *, requested: str = "",
     ) -> None:
         directory = preview_root(self.root) / task
         preview = Preview(task, head_commit, directory)
+        preview.requested = requested
+        environment = None
         failure = ""
+        run_yourself = ""
         try:
             self._materialize(preview, workspace)
+            detected = requested == VIEW_APP and not command
+            if detected:
+                copy_owner_files(
+                    project_context(self.root).code_root, preview.source,
+                    list(settings.get("owner_files") or workspace_settings.DEFAULT_PREVIEW["owner_files"]),
+                )
+                start = detect_start(preview.source)
+                if not start:
+                    raise ValueError(
+                        "there is nothing here we know how to start (no app.py, server.py, main.py, "
+                        "npm start script or index.html)"
+                    )
+                command = start["command"]
             preview.port = _free_port()
             url_template = str(settings.get("url_template") or "http://127.0.0.1:{port}/")
             preview.url = url_template.replace("{port}", str(preview.port))
@@ -403,12 +517,23 @@ class ReleasePreviewSupervisor:
             self._record(task, {
                 "status": "starting", "url": preview.url, "command": command,
                 "head_commit": head_commit, "workspace": workspace, "branch": branch,
+                "requested": requested or None,
             })
+            if detected:
+                # PORT is how the candidate learns its port; BROWSER=true stops a
+                # Python app from opening a second tab of its own.
+                environment = {**os.environ, "PORT": str(preview.port), "BROWSER": "true"}
+            # Owner, 2026-09-28 14:07: "if running the app crashes, let the
+            # mission control give the full command ... the user will run it in
+            # the shell." The clean checkout stays until the release closes.
+            run_yourself = f"cd {shlex.quote(str(preview.source))} && " + (
+                f"PORT={preview.port} {rendered}" if detected else rendered
+            )
             with preview.log_path.open("ab") as log:
                 log.write(f"\n=== preview launch {board.now()} | {rendered}\n".encode())
                 log.flush()
                 preview.process = subprocess.Popen(
-                    rendered, shell=True, cwd=preview.source,
+                    rendered, shell=True, cwd=preview.source, env=environment,
                     stdout=log, stderr=log, start_new_session=True,
                 )
             failure = self._await_health(preview, settings)
@@ -419,7 +544,8 @@ class ReleasePreviewSupervisor:
             self._record(task, {
                 "status": "failed", "command": command, "head_commit": head_commit,
                 "workspace": workspace, "branch": branch, "error": failure,
-                "log_tail": _log_tail(preview.log_path),
+                "log_tail": _log_tail(preview.log_path), "requested": requested or None,
+                "run_yourself": run_yourself or None,
             })
             return
         self.previews[task] = preview

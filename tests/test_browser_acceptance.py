@@ -34,6 +34,15 @@ def _running_as(platform_name: str):
     return mock.patch.object(platform_support.sys, "platform", platform_name)
 
 
+def _without_libproc():
+    """Deny the second route too: the refusal is owed only when BOTH fail (2026-09-28)."""
+    from harness.platform_support import defaults
+    return mock.patch.object(
+        defaults.LIBPROC, "_load",
+        side_effect=browser_acceptance.ProcessTableUnavailable("cannot read the process table: libproc denied"),
+    )
+
+
 class ProcessTableAvailabilityTests(unittest.TestCase):
     """A process table that cannot be read is a named refusal, not a raw OSError.
 
@@ -54,7 +63,7 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
         for error in (PermissionError(1, "Operation not permitted", "ps"),
                       FileNotFoundError(2, "No such file or directory", "ps")):
             with self.subTest(error=type(error).__name__):
-                with _running_as("darwin"), mock.patch.object(
+                with _running_as("darwin"), _without_libproc(), mock.patch.object(
                         browser_acceptance.subprocess, "run", side_effect=error):
                     with self.assertRaises(browser_acceptance.ProcessTableUnavailable) as caught:
                         browser_acceptance._process_table()
@@ -63,7 +72,7 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
 
     def test_denied_ps_never_reads_as_an_empty_process_table(self):
         """The dangerous failure: claiming nothing was running."""
-        with _running_as("darwin"), \
+        with _running_as("darwin"), _without_libproc(), \
                 mock.patch.object(browser_acceptance.subprocess, "run",
                                   side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
@@ -73,7 +82,7 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
     def test_start_token_refuses_when_ps_cannot_run(self):
         # Pinned to macOS: the refusal being asserted is about EXECUTING `ps`,
         # and only the macOS seam executes anything to obtain a start token.
-        with _running_as("darwin"), \
+        with _running_as("darwin"), _without_libproc(), \
                 mock.patch.object(browser_acceptance.subprocess, "run",
                                   side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
@@ -115,7 +124,7 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
 
     def test_release_preview_shares_the_same_refusal(self):
         from harness import release_preview
-        with _running_as("darwin"), \
+        with _running_as("darwin"), _without_libproc(), \
                 mock.patch.object(browser_acceptance.subprocess, "run",
                                   side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(browser_acceptance.ProcessTableUnavailable):
@@ -123,11 +132,92 @@ class ProcessTableAvailabilityTests(unittest.TestCase):
 
     def test_the_test_guard_skips_instead_of_failing(self):
         from tests import environment_support
-        with _running_as("darwin"), \
+        with _running_as("darwin"), _without_libproc(), \
                 mock.patch.object(browser_acceptance.subprocess, "run",
                                   side_effect=PermissionError(1, "Operation not permitted", "ps")):
             with self.assertRaises(unittest.SkipTest):
                 environment_support.require_process_table()
+
+
+@unittest.skipUnless(platform_support.sys.platform == "darwin", "libproc and Seatbelt are macOS")
+class ProcessTableWithoutPsTests(unittest.TestCase):
+    """2026-09-28: certified runs could not start the acceptance browser.
+
+    `/bin/ps` is setuid root and every Seatbelt sandbox refuses to execute a
+    setuid program, so inside an agent's sandbox the process table was
+    unreadable and the browser refused to launch. The table is now read
+    through libproc there, with the values `ps` itself reports.
+    """
+
+    DENIED = PermissionError(1, "Operation not permitted", "ps")
+
+    def test_denied_ps_reads_the_real_table_through_libproc(self):
+        with mock.patch.object(browser_acceptance.subprocess, "run", side_effect=self.DENIED):
+            table = browser_acceptance._process_table()
+            token = browser_acceptance._start_token(os.getpid())
+            gone = browser_acceptance._start_token(999999)
+        me = table[os.getpid()]
+        self.assertEqual(me["ppid"], os.getppid())
+        self.assertEqual(me["pgid"], os.getpgid(0))
+        self.assertEqual(me["start_token"], token)
+        self.assertTrue(token)
+        self.assertEqual(gone, "")
+
+    def test_libproc_agrees_with_ps_where_ps_can_run(self):
+        from tests import environment_support
+        from harness.platform_support import defaults
+        environment_support.require_process_table()
+        by_ps = _identity().process_table()
+        by_libproc = defaults.LIBPROC.process_table()
+        common = set(by_ps) & set(by_libproc)
+        self.assertGreater(len(common), 10)
+        for pid in common:
+            if pid not in by_ps or pid not in by_libproc:
+                continue
+            for field in ("ppid", "pgid", "start_token"):
+                self.assertEqual(by_ps[pid][field], by_libproc[pid][field], (pid, field))
+
+    def test_a_padded_single_digit_day_is_one_token_on_both_routes(self):
+        """ps writes "Thu Oct  1"; the table collapsed it and start_token did not.
+
+        On days 1-9 of every month close() compared the two and refused to
+        clean up with "browser PID identity changed before cleanup".
+        """
+        pid = os.getpid()
+        single = subprocess.CompletedProcess(["ps"], 0, "Thu Oct  1 09:05:03 2026\n", "")
+        table = subprocess.CompletedProcess(
+            ["ps"], 0, f"{pid} 1 {pid} Thu Oct  1 09:05:03 2026 /usr/bin/python3 x\n", "")
+        with _running_as("darwin"):
+            with mock.patch.object(_identity(), "run_ps", return_value=single):
+                token = browser_acceptance._start_token(pid)
+            with mock.patch.object(_identity(), "run_ps", return_value=table):
+                row = browser_acceptance._process_table()[pid]
+        self.assertEqual(token, row["start_token"])
+
+    def test_chrome_keeps_its_own_sandbox_unless_already_inside_one(self):
+        host = platform_support.browser_host()
+        self.assertFalse(host.inside_os_sandbox(), "the test runner itself is not sandboxed")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / "argv.txt"
+            browser = root / "headless-shell"
+            browser.write_text(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo TestBrowser; exit 0; fi\n"
+                "printf '%s\\n' \"$@\" > \"$CAPTURE\"\nsleep 20\n", encoding="utf-8")
+            browser.chmod(0o755)
+            for inside in (False, True):
+                with self.subTest(inside=inside), \
+                        mock.patch.dict(os.environ, {"HARNESS_BROWSER_BIN": str(browser), "CAPTURE": str(capture)}), \
+                        mock.patch.object(type(host), "inside_os_sandbox", return_value=inside):
+                    capture.unlink(missing_ok=True)
+                    session = browser_acceptance.launch("http://127.0.0.1:49199/", root / f"runtime-{inside}")
+                    deadline = time.monotonic() + 5
+                    while not capture.exists() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    session.close()
+                    argv = capture.read_text(encoding="utf-8").split()
+                    self.assertEqual("--no-sandbox" in argv, inside)
+                    self.assertEqual("--single-process" in argv, inside)
 
 
 class LinuxProcessTableTests(unittest.TestCase):

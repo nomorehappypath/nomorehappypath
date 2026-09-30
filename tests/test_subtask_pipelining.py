@@ -456,6 +456,70 @@ class SubtaskPipeliningTests(unittest.TestCase):
             passed["integrated_commit"],
         )
 
+    # ---- 2026-09-28: a re-certified subtask whose bytes are already on the head ----
+    def _recommit_head_with_new_id(self, task_workspace: Path) -> str:
+        """What resume did live: the same tree under a new commit id (7160ec3 → c3d4a336)."""
+        head = self._git("-C", str(task_workspace), "rev-parse", "HEAD")
+        tree = self._git("-C", str(task_workspace), "rev-parse", "HEAD^{tree}")
+        parent = self._git("-C", str(task_workspace), "rev-parse", "HEAD^1")
+        renamed = self._git(
+            "-C", str(task_workspace), "-c", "user.name=Resume", "-c", "user.email=r@r",
+            "commit-tree", tree, "-p", parent, "-m", "same tree, new commit id",
+        )
+        self.assertNotEqual(renamed, head)
+        branch = self._git("-C", str(task_workspace), "symbolic-ref", "HEAD")
+        self._git("-C", str(task_workspace), "update-ref", branch, renamed, head)
+        self._git("-C", str(task_workspace), "reset", "-q", "--hard", renamed)
+        return renamed
+
+    def test_a_recertified_subtask_already_on_the_head_records_its_pass(self):
+        self.declare()
+        reviewer = self.reviewer()
+        board.start_subtask(self.root, self.delivery["id"], "alpha")
+        self.commit("alpha", "alpha/result.txt")
+        request = self.request("alpha")
+        self.pass_request(reviewer, request, "alpha")
+        task_workspace = Path(board.snapshot(self.root)["task_workspaces"]["PIPELINE"])
+        renamed = self._recommit_head_with_new_id(task_workspace)
+        # The real resume reconciliation, as live: the saved PASS no longer
+        # matches the head's commit id and is invalidated; Delivery asks for a
+        # fresh review of the SAME candidate, and the Reviewer passes it.
+        reconciled = board.reconcile_evidence_reuse(self.root, "resume-recertify")
+        self.assertEqual([item["request_id"] for item in reconciled["invalidated"]], [request["id"]], reconciled)
+        again = board.request_review(
+            self.root, self.delivery["id"], self.ledger("delivery-alpha"),
+            "review alpha again", phase="subtask_acceptance", subtask="alpha",
+            test_command="python3 -m unittest test_smoke",
+            changes="identity re-certification after resume; bytes unchanged",
+        )
+
+        passed = self.pass_request(reviewer, again, "alpha-recertified")
+
+        state = board.snapshot(self.root)
+        request = again
+        self.assertEqual(state["qa_requests"][request["id"]]["status"], "passed")
+        self.assertEqual(state["delivery_plans"]["PIPELINE"]["subtasks"]["alpha"]["status"], "passed")
+        self.assertEqual(passed["integrated_commit"], renamed, "the head is unchanged: nothing to re-apply")
+        self.assertEqual(self._git("-C", str(task_workspace), "rev-parse", "HEAD"), renamed)
+        self.assertEqual(self._git("-C", str(task_workspace), "status", "--porcelain"), "")
+        journal = [
+            json.loads(line) for line in
+            (board.board_dir(self.root).parent / "broker-journal" / "transactions.jsonl").read_text().splitlines()
+        ]
+        self.assertTrue(any(row.get("already_applied") and row.get("request_id") == request["id"] for row in journal))
+
+    def test_a_head_that_differs_from_the_reviewed_bytes_is_still_folded_normally(self):
+        # Only an EXACT match is a no-op; a head that lacks the bytes gets the real fold.
+        self.declare()
+        reviewer = self.reviewer()
+        started = board.start_subtask(self.root, self.delivery["id"], "alpha")
+        candidate = self.commit("alpha", "alpha/result.txt")
+        passed = self.pass_request(reviewer, self.request("alpha"), "alpha")
+        self.assertNotEqual(passed["integrated_commit"], started["base_commit"])
+        task_workspace = Path(board.snapshot(self.root)["task_workspaces"]["PIPELINE"])
+        parents = self._git("-C", str(task_workspace), "show", "-s", "--format=%P", passed["integrated_commit"]).split()
+        self.assertEqual(parents, [started["base_commit"], candidate["commit"]])
+
     def test_fold_crash_after_intent_recovers_without_losing_the_verdict(self):
         self.assert_fold_crash_recovers("intent")
 

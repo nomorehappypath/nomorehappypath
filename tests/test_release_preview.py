@@ -246,6 +246,218 @@ class FailingPreviewTests(PreviewFixture):
         self.assertIn("workspace", preview["error"])
 
 
+STUDIO_APP = """import http.server, json, os
+from pathlib import Path
+here = Path(__file__).resolve().parent
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({
+            "version": (here / "version.txt").read_text(),
+            "settings": (here / "settings.json").read_text() if (here / "settings.json").exists() else None,
+            "env": (here / ".env").read_text() if (here / ".env").exists() else None,
+            "workspace": sorted(os.listdir(here / ".workspace")) if (here / ".workspace").is_dir() else None,
+            "browser": os.environ.get("BROWSER"),
+            "port": os.environ.get("PORT"),
+        }).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *_):
+        return
+http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler).serve_forever()
+"""
+
+
+class ViewAppTests(PreviewFixture):
+    """Backlog #12: the owner's View app click starts the reviewed candidate."""
+
+    def setUp(self):
+        require_loopback()
+        super().setUp()
+        (self.workspace / "app.py").write_text(STUDIO_APP)
+        (self.workspace / "version.txt").write_text("candidate-studio")
+        _git(self.workspace, "add", "app.py", "version.txt")
+        _git(self.workspace, "commit", "-qm", "studio candidate")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        # The owner's own local settings, which the repository never tracks.
+        (self.root / "settings.json").write_text('{"owner": "gerard"}')
+        (self.root / ".env").write_text("RELAY_TOKEN=owner-secret\n")
+        (self.root / ".workspace").mkdir()
+        (self.root / ".workspace" / "client-a").mkdir()
+
+    def start(self) -> dict:
+        self.seed_release()
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"})
+        self.supervisor.tick()
+        return self.release()["preview"]
+
+    def test_view_app_starts_the_reviewed_commit_with_the_owners_settings(self):
+        preview = self.start()
+        self.assertEqual(preview["status"], "ready", preview)
+        self.assertEqual(preview["command"], "python3 app.py")
+        with urlopen(preview["url"], timeout=5) as response:
+            served = json.loads(response.read())
+        self.assertEqual(served["version"], "candidate-studio")
+        self.assertEqual(served["settings"], '{"owner": "gerard"}')
+        self.assertEqual(served["env"], "RELAY_TOKEN=owner-secret\n")
+        self.assertEqual(served["workspace"], ["client-a"])
+        self.assertEqual(served["port"], preview["url"].rsplit(":", 1)[1].strip("/"))
+        self.assertEqual(served["browser"], "true", "the app must not open a second tab of its own")
+        source = release_preview.preview_root(self.root) / "TASK" / "source"
+        self.assertEqual(_git(source, "rev-parse", "HEAD"), self.commit)
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "ready", "url": preview["url"]})
+
+    def test_the_candidate_works_on_copies_of_the_owners_files(self):
+        preview = self.start()
+        self.assertEqual(preview["status"], "ready", preview)
+        source = release_preview.preview_root(self.root) / "TASK" / "source"
+        for name in ("settings.json", ".env", ".workspace"):
+            self.assertFalse((source / name).is_symlink(), name)
+        (source / "settings.json").unlink()
+        (source / ".env").write_text("changed by the candidate")
+        __import__("shutil").rmtree(source / ".workspace")
+        self.assertEqual((self.root / "settings.json").read_text(), '{"owner": "gerard"}')
+        self.assertEqual((self.root / ".env").read_text(), "RELAY_TOKEN=owner-secret\n")
+        self.assertTrue((self.root / ".workspace" / "client-a").is_dir())
+
+    def test_a_tracked_file_in_the_candidate_is_never_overwritten(self):
+        (self.workspace / "settings.json").write_text('{"candidate": true}')
+        _git(self.workspace, "add", "settings.json")
+        _git(self.workspace, "commit", "-qm", "tracked settings")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        preview = self.start()
+        with urlopen(preview["url"], timeout=5) as response:
+            self.assertEqual(json.loads(response.read())["settings"], '{"candidate": true}')
+
+    def test_a_failed_start_is_recorded_once_and_the_next_click_tries_again(self):
+        (self.workspace / "app.py").write_text("import sys\nprint('ImportError: no module named flask')\nsys.exit(1)\n")
+        _git(self.workspace, "commit", "-qam", "broken")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        preview = self.start()
+        self.assertEqual(preview["status"], "failed", preview)
+        self.assertEqual(preview["error"], "the preview command exited before serving its URL")
+        self.assertIn("no module named flask", preview["log_tail"])
+        recorded_at = preview["recorded_at"]
+        self.supervisor.tick()
+        self.assertEqual(self.release()["preview"]["recorded_at"], recorded_at, "no retry loop")
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"})
+        self.supervisor.tick()
+        self.assertEqual(self.release()["preview"]["status"], "failed")
+
+    def test_a_failed_studio_start_gives_the_owner_the_full_command_to_run_it(self):
+        (self.workspace / "app.py").write_text("import sys\nsys.exit(1)\n")
+        _git(self.workspace, "commit", "-qam", "broken")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        preview = self.start()
+        source = release_preview.preview_root(self.root) / "TASK" / "source"
+        self.assertRegex(preview["run_yourself"], r"^cd " + str(source).replace(".", r"\.") + r" && PORT=\d+ python3 app\.py$")
+        self.assertTrue((source / "settings.json").is_file(), "the command runs with the owner's settings copied in")
+
+    def test_nothing_to_start_says_so_in_one_plain_line(self):
+        _git(self.workspace, "rm", "-q", "app.py")
+        _git(self.workspace, "commit", "-qm", "files only")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        preview = self.start()
+        self.assertEqual(preview["status"], "failed")
+        self.assertIn("nothing here we know how to start", preview["error"])
+
+    def test_the_owners_decision_stops_the_running_candidate(self):
+        preview = self.start()
+        pid = preview["pid"]
+        with board.locked_state(self.root) as state:
+            state.setdefault("release_decisions", {})["TASK"] = {"decision": "not_accepted"}
+        self.supervisor.tick()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode == 0:
+            time.sleep(0.1)
+        self.assertNotEqual(subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode, 0)
+        with self.assertRaisesRegex(ValueError, "no longer waiting"):
+            release_preview.request_view(self.root, "TASK")
+
+    def test_a_stale_supervisor_pass_never_erases_the_owners_click(self):
+        self.seed_release()
+        release_preview.request_view(self.root, "TASK")
+        board.record_release_preview(self.root, "TASK", {"status": "unconfigured", "head_commit": self.commit})
+        preview = self.release()["preview"]
+        self.assertEqual((preview["status"], preview["requested"]), ("starting", "view_app"))
+
+    def test_the_click_wakes_the_supervisor_without_waiting_for_a_tick(self):
+        slow = release_preview.ReleasePreviewSupervisor(self.root, tick_seconds=3600)
+        self.addCleanup(slow.shutdown)
+        slow.start()
+        self.seed_release()
+        release_preview.request_view(self.root, "TASK")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and self.release()["preview"].get("status") != "ready":
+            time.sleep(0.2)
+        self.assertEqual(self.release()["preview"]["status"], "ready")
+
+    def test_view_app_endpoint_starts_and_refuses_while_paused(self):
+        from tests.test_release_preview import EndpointTests
+        self.seed_release()
+        base = EndpointTests.serve(self)
+        status, body = EndpointTests.post(self, base, "/api/releases/TASK/view-app", {})
+        self.assertEqual((status, body), (200, {"status": "starting"}))
+        board.begin_project_pause(self.root, drain_seconds=0)
+        board.finish_project_pause(self.root)
+        status, _body = EndpointTests.post(self, base, "/api/releases/TASK/view-app", {}, expect_error=True)
+        self.assertEqual(status, 409)
+
+
+class ViewAppConfiguredCommandTests(PreviewFixture):
+    """Review r1 B1: a project with a configured preview command, clicked via View app."""
+
+    def setUp(self):
+        require_loopback()
+        super().setUp()
+
+    def test_a_configured_command_click_reaches_ready_with_its_url(self):
+        self.seed_release()
+        self.configure_command()
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"})
+        self.supervisor.tick()
+        self.supervisor.tick()
+        preview = self.release()["preview"]
+        self.assertEqual(preview["status"], "ready", preview)
+        self.assertTrue(preview["url"])
+        with urlopen(preview["url"], timeout=5) as response:
+            self.assertEqual(response.read().decode(), "candidate-one")
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "ready", "url": preview["url"]})
+
+    def test_a_click_on_an_already_running_configured_preview_does_not_stick(self):
+        self.seed_release()
+        self.configure_command()
+        self.supervisor.tick()                      # the configured preview starts on its own
+        url = self.release()["preview"]["url"]
+        with board.locked_state(self.root) as state:  # a click that lands while it still reads "starting"
+            state["releases"]["TASK"]["preview"].update({"status": "starting", "requested": "view_app"})
+        self.supervisor.tick()
+        self.assertEqual((self.release()["preview"]["status"], self.release()["preview"]["url"]), ("ready", url))
+
+    def test_a_failed_configured_command_stays_visible_and_the_next_click_retries(self):
+        self.seed_release()
+        self.configure_command("python3 -c 'import sys; sys.exit(3)'")
+        self.supervisor.tick()
+        self.assertEqual(self.release()["preview"]["status"], "failed")
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"})
+        self.supervisor.tick()
+        preview = self.release()["preview"]
+        self.assertEqual(preview["status"], "failed", "a failed retry must not hide behind 'starting'")
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"}, "and it can be retried again")
+
+    def test_a_failed_start_gives_the_owner_the_full_command_to_run_it(self):
+        # Owner, 2026-09-28 14:07: "if running the app crashes, let the mission
+        # control give the full command like what you do".
+        self.seed_release()
+        self.configure_command("python3 -c 'import sys; sys.exit(3)' --port {port}")
+        self.supervisor.tick()
+        preview = self.release()["preview"]
+        source = release_preview.preview_root(self.root) / "TASK" / "source"
+        self.assertTrue(source.is_dir(), "the clean checkout stays for the owner to run")
+        self.assertRegex(
+            preview["run_yourself"],
+            r"^cd " + str(source).replace(".", r"\.") + r" && python3 -c 'import sys; sys.exit\(3\)' --port \d+$",
+        )
+
+
 class RecordGuardTests(PreviewFixture):
     def test_preview_requires_a_release_awaiting_the_owner(self):
         with self.assertRaisesRegex(ValueError, "awaiting the owner"):
@@ -517,9 +729,11 @@ class PageContentTests(PreviewFixture):
     def test_board_page_renders_the_candidate_preview_block(self):
         page = self.rendered()
         self.assertIn("releasePreviewHtml", page)
-        self.assertIn("Open the candidate preview", page)
-        self.assertIn("/api/settings/preview", page)
-        self.assertIn("preview-retry", page)
+        self.assertIn("/view-app", page)
+        # Backlog #12: no command or port box in the owner's view.
+        self.assertNotIn("/api/settings/preview", page)
+        self.assertNotIn("preview-command", page)
+        self.assertNotIn("savePreviewCommand", page)
 
     def test_manager_settings_page_selects_models_without_provider_access(self):
         from harness import project_manager_page
@@ -554,67 +768,71 @@ class ReleaseCardRenderTests(unittest.TestCase):
                 "runtime_verification_deferred_to_target_acceptance": True,
                 "owner_test_steps": ["Open the settings menu"], "preview": preview}
 
-    def test_ready_preview_renders_the_open_link(self):
-        html = self.render_card(self.release({"status": "ready", "url": "http://127.0.0.1:8977/"}))
-        self.assertIn('href="http://127.0.0.1:8977/"', html)
-        self.assertIn("Open the candidate preview", html)
-        self.assertIn("bb424e3055", html)
-        self.assertIn("Accepted", html)
+    def assert_one_view_app_button(self, html: str) -> None:
+        self.assertEqual(html.count('class="preview-link view-app'), 1, html)
+        self.assertIn("viewApp(", html)
+        for gone in ("preview-command", "<input", "{port}", "Run it for me", "No preview needed",
+                     "savePreviewCommand", "retryPreview", "openAppPreview"):
+            self.assertNotIn(gone, html)
 
-    def test_unconfigured_preview_renders_setup_with_candidate_location(self):
+    def test_every_preview_state_renders_one_view_app_button_and_no_command_box(self):
+        # Backlog #12 (owner): "just a button view app to verify".
+        states = {
+            "none": {},
+            "unconfigured": {"status": "unconfigured", "workspace": "/tmp/workspace",
+                             "branch": "harness/tasks/TASK/task", "suggested_command": "python3 -m http.server {port}"},
+            "skipped": {"status": "skipped", "workspace": "/tmp/workspace"},
+            "ready": {"status": "ready", "url": "http://127.0.0.1:8977/"},
+            "app_bundle": {"status": "app_bundle", "app_path": "/x/Weather.app", "app_name": "Weather"},
+            "failed": {"status": "failed", "error": "the preview command exited before serving its URL"},
+        }
+        for name, preview in states.items():
+            with self.subTest(state=name):
+                html = self.render_card(self.release(preview))
+                self.assert_one_view_app_button(html)
+                self.assertIn("View app", html)
+                self.assertIn("bb424e3055", html)
+                self.assertIn("Accepted", html)
+
+    def test_candidate_location_stays_visible(self):
         html = self.render_card(self.release({
-            "status": "unconfigured", "workspace": "/tmp/workspace",
-            "branch": "harness/tasks/TASK/task",
+            "status": "unconfigured", "workspace": "/tmp/workspace", "branch": "harness/tasks/TASK/task",
         }))
-        # Plain words for a non-engineer (owner feedback 2026-09-24): what it
-        # is asking, where the work is, and a way to say there is nothing to run.
-        self.assertIn("Do you want to see it running first?", html)
         self.assertIn("Where the delivered work is:", html)
         self.assertIn("harness/tasks/TASK/task", html)
         self.assertIn("/tmp/workspace", html)
-        self.assertIn("Run it for me", html)
-        self.assertIn("No preview needed", html)
-        self.assertIn("skipPreview(", html)
-        self.assertIn("savePreviewCommand()", html)
-        self.assertNotIn("Set up a candidate preview", html)
-        self.assertNotIn("Enter the command that starts this project", html)
-        main_text = html.split("<small>Advanced:")[0]
-        self.assertNotIn("{port}", main_text, "engineer placeholders stay out of the main text")
-        self.assertNotIn("{state_dir}", main_text)
 
-    def test_skipped_preview_renders_the_files_path_and_a_way_back(self):
+    def test_failed_start_is_one_plain_line_with_the_log_behind_it(self):
         html = self.render_card(self.release({
-            "status": "skipped", "workspace": "/tmp/workspace",
-            "branch": "harness/tasks/TASK/task", "skipped_at": "2026-09-24T01:00:00+00:00",
-        }))
-        self.assertIn("No preview", html)
-        self.assertIn("reviewing the delivered files", html)
-        self.assertIn("/tmp/workspace", html)
-        self.assertIn("I do want to run it", html)
-        self.assertIn("retryPreview(", html)
-        self.assertNotIn("preview-command", html)
-
-    def test_app_bundle_preview_renders_the_open_button(self):
-        html = self.render_card(self.release({
-            "status": "app_bundle", "app_path": "/x/Weather.app",
-            "app_name": "Weather", "built_at": "2026-08-21T11:10:22+00:00",
-        }))
-        self.assertIn("The app is built and ready to test", html)
-        self.assertIn("Open the app", html)
-        self.assertIn("openAppPreview", html)
-        self.assertIn("Weather", html)
-        self.assertNotIn("/x/Weather.app", html)
-        self.assertNotIn("Set up a candidate preview", html)
-
-    def test_failed_preview_renders_error_log_and_retry(self):
-        html = self.render_card(self.release({
-            "status": "failed", "error": "the preview command exited before serving its URL",
+            "status": "failed", "requested": "view_app",
+            "error": "the preview command exited before serving its URL",
             "log_tail": "ModuleNotFoundError: flask",
         }))
-        self.assertIn("could not start", html)
-        self.assertIn("exited before serving", html)
+        self.assertIn("The app could not start: the preview command exited before serving its URL", html)
+        self.assertIn("<summary>Show the log</summary>", html)
         self.assertIn("ModuleNotFoundError: flask", html)
-        self.assertIn("retryPreview", html)
+        self.assertIn(">View app</button>", html, "the next click tries again")
+
+    def test_a_failed_start_shows_the_command_to_paste_into_terminal(self):
+        html = self.render_card(self.release({
+            "status": "failed", "requested": "view_app", "error": "the preview command exited before serving its URL",
+            "run_yourself": "cd /tmp/candidate/source && PORT=8931 python3 app.py",
+        }))
+        self.assertIn("cd /tmp/candidate/source &amp;&amp; PORT=8931 python3 app.py", html)
+        self.assertIn("Paste it into Terminal and press Return.", html)
+        self.assertIn(">Copy</button>", html)
+
+    def test_a_requested_start_shows_a_spinner_and_elapsed_seconds(self):
+        html = self.render_card(self.release({
+            "status": "starting", "requested": "view_app", "requested_at": "2026-09-28T10:00:00+00:00",
+        }))
+        self.assertIn('class="spin"', html)
+        self.assertIn("disabled", html)
+        self.assertRegex(html, r"Starting the app… \d+ s")
+
+    def test_app_bundle_names_are_shown_but_never_their_path(self):
+        html = self.render_card(self.release({"status": "app_bundle", "app_path": "/x/Weather.app", "app_name": "Weather"}))
+        self.assertNotIn("/x/Weather.app", html)
 
 
 if __name__ == "__main__":

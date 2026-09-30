@@ -36,6 +36,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import attention, board, child_process, contract, control, conversation
 from harness import platform_support
+from harness.terminal_titles import TitlePrefix
 from harness.project_context import add_context_arguments, context_from_args
 
 
@@ -533,6 +534,7 @@ def run(
     owner_keys = _OwnerKeyClassifier()
     clock_before_unfinished = last_owner_key_at
     pending_owner_input = bytearray()
+    titles = TitlePrefix(session_id)
     child_output_seen = False
     stop_requested = False
 
@@ -586,7 +588,7 @@ def run(
                     data = b""
                 if data:
                     child_output_seen = True
-                    _write(stdout_fd, data)
+                    _write(stdout_fd, titles.feed(data))
                     transcript.agent_bytes(data)
                     if pending_owner_input:
                         _write(master, bytes(pending_owner_input))

@@ -405,6 +405,25 @@ class PassPreservationTests(unittest.TestCase):
             "passed",
         )
 
+    def test_repaired_final_pass_is_routed_although_an_old_release_exists(self):
+        # Backlog #13: the rejected release stays on the board until the
+        # repaired candidate is recorded; its Delivery must still be nudged.
+        session = control.create(self.root, "codex_delivery")
+        with board.locked_state(self.root) as state:
+            state["agents"]["delivery"] = AtomicRecoveryTests._agent(
+                "delivery", "engineering", "TASK", session["id"],
+            )
+            state["qa_requests"]["final-pass"]["reviewed_commit"] = "b" * 40
+            state["releases"]["TASK"] = {
+                "task": "TASK", "status": "VISUAL_TEST_REQUIRED", "head_commit": "a" * 40,
+                "cto_id": "cto", "recorded_at": board.now(),
+            }
+        self.assertEqual(len(control_plane._route_final_pass_completion(self.root)), 1)
+        with board.locked_state(self.root) as state:
+            state["releases"]["TASK"]["head_commit"] = "b" * 40
+            state["release_lifecycle"]["TASK"].pop("completion_route_last_at", None)
+        self.assertEqual(control_plane._route_final_pass_completion(self.root), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,38 @@ class ReleaseGatePrerequisiteTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (shim / "ps").chmod(0o755)
+            # 2026-09-28: `ps` is no longer the only route. Where it cannot run,
+            # the table is read through libproc, so denying `ps` alone left the
+            # table READABLE, the gate rightly passed, and the assembled tree's
+            # suite ran this test again, recursing. The condition under test is
+            # an unreadable table, so libproc is denied in the same place.
+            # The interpreter itself, not a launcher: a pyenv shim would look
+            # `python3` up on PATH again, find this shim, and loop.
+            found = shutil.which("python3", path=environment.get("PATH", ""))
+            real_python = subprocess.run(
+                [found, "-c", "import sys; print(sys.executable)"],
+                capture_output=True, text=True, env=environment,
+            ).stdout.strip() if found else ""
+            real_python = real_python or sys.executable
+            deny = shim / "deny-libproc"
+            deny.mkdir()
+            (deny / "sitecustomize.py").write_text(
+                "import ctypes\n"
+                "_load = ctypes.CDLL.__init__\n"
+                "def _denied(self, name, *args, **kwargs):\n"
+                "    if name and 'libproc' in str(name):\n"
+                "        raise OSError(1, 'Operation not permitted', str(name))\n"
+                "    _load(self, name, *args, **kwargs)\n"
+                "ctypes.CDLL.__init__ = _denied\n",
+                encoding="utf-8",
+            )
+            (shim / "python3").write_text(
+                "#!/bin/sh\n"
+                f'case "$PWD" in\n  {out}*) PYTHONPATH="{deny}${{PYTHONPATH:+:$PYTHONPATH}}"; export PYTHONPATH ;;\nesac\n'
+                f'exec "{real_python}" "$@"\n',
+                encoding="utf-8",
+            )
+            (shim / "python3").chmod(0o755)
             environment["PATH"] = f"{shim}:{environment.get('PATH', '')}"
             return environment
 

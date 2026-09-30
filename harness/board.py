@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,7 @@ from typing import Any, Iterator
 # ``python3 /path/to/dev_harness/harness/board.py ...``.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import accepted_bytes, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
+from harness import accepted_bytes, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -3921,6 +3922,68 @@ def record_owner_action(
         return dict(_record_owner_action(state, agent, title, command, why, task, kind, for_agent))
 
 
+SCREEN_CHECK_TIMEOUT_SECONDS = 60
+SCREEN_CHECK_TEXT_LIMIT = 20_000
+def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[str, Any]:
+    """Render the project's own local page in the harness browser for an agent.
+
+    Owner 2026-09-29 (option 1): agents' own browser tools refuse localhost
+    inside their sandbox, so the worker - which runs outside it - opens the
+    page with the harness browser, lets its scripts run, and saves the HTML,
+    visible text and a screenshot as board evidence the reviewer can check.
+    Only loopback http URLs, never a harness port (browser_acceptance rule).
+    """
+    url, expect = url.strip(), expect.strip()
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") not in DEVELOPER_ROLES | {"qa"} or not agent.get("active"):
+            raise ValueError("only an active Delivery or Reviewer agent can ask for a screen check")
+        task = str(agent.get("task") or "")
+    browser_acceptance.validate_url(url)
+    check_id = f"screen-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
+    directory = board_dir(root) / "evidence" / "screen-checks"
+    directory.mkdir(parents=True, exist_ok=True)
+    runtime = Path(tempfile.mkdtemp(prefix="harness-screen-check-"))
+    try:
+        try:
+            page = browser_acceptance.render_page(url, runtime, timeout=SCREEN_CHECK_TIMEOUT_SECONDS)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError(f"the harness browser could not render {url}: {str(error)[:300]}") from error
+    finally:
+        shutil.rmtree(runtime, ignore_errors=True)
+    # What a person sees: the browser's rendered body text, never markup that
+    # is hidden, closed, or only in the document head (review r1).
+    text = "\n".join(line.strip() for line in page["text"].splitlines() if line.strip())
+    picture = directory / f"{check_id}.png"
+    picture.write_bytes(page["png"])
+    (directory / f"{check_id}.html").write_text(page["html"], encoding="utf-8")
+    (directory / f"{check_id}.txt").write_text(text, encoding="utf-8")
+    evidence = {
+        kind: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for kind, path in (
+            ("html", directory / f"{check_id}.html"), ("text", directory / f"{check_id}.txt"), ("screenshot", picture),
+        )
+    }
+    result = {
+        "id": check_id, "task": task, "url": url, "blank": not text,
+        "expect": expect, "expect_found": bool(expect) and expect.casefold() in text.casefold(),
+        "visible_text": text[:SCREEN_CHECK_TEXT_LIMIT], "evidence": evidence,
+    }
+    outcome = (
+        "rendered a blank page" if not text
+        else f"expected text {'found' if result['expect_found'] else 'NOT found'}" if expect
+        else "rendered"
+    )
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        _event(state, "screen_check", agent, {
+            "task": task, "check_id": check_id, "url": url, "expect": expect,
+            "expect_found": result["expect_found"], "blank": result["blank"], "evidence": evidence,
+            "message": f"harness screen check of {url}: {outcome} (evidence {check_id})",
+        })
+    return result
+
+
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
     """The CTO records what happened; the card leaves Mission Control."""
     action_id, outcome = action_id.strip(), outcome.strip()
@@ -4769,7 +4832,50 @@ def _execute_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
     certification: dict[str, Any] | None = None,
 ) -> str:
-    """Run Delivery's declared test command outside the board lock."""
+    """Run Delivery's declared test command outside the board lock.
+
+    2026-09-28 (owner: "if running the app crashes, let the mission control
+    give the full command ... the user will run it in the shell"): a certified
+    check whose browser could not run inside the agent's sandbox still FAILS,
+    and Mission Control shows the owner a card with the exact command that
+    runs the same check outside the sandbox.
+    """
+    try:
+        return _run_internal_qa(command, root, measurement=measurement, certification=certification)
+    except ValueError as error:
+        if certification is None or browser_acceptance.SANDBOX_BLOCKED not in str(error):
+            raise
+        source = certification.get("rerun_source") or {}
+        if source.get("commit"):
+            # The reviewer's checkout was disposable; the command rebuilds it.
+            rerun = (
+                f'd="$(mktemp -d)" && git -C {shlex.quote(source["workspace"])} archive '
+                f'{shlex.quote(source["commit"])} | tar -x -C "$d" && cd "$d" && {command}'
+            )
+        else:
+            where = source.get("workspace") or str(project_context(root).code_root)
+            rerun = f"cd {shlex.quote(where)} && {command}"
+        with locked_state(certification["board_root"]) as state:
+            _record_owner_action(
+                state, {"id": "system", "role": "system"},
+                "Run a screen check yourself",
+                rerun,
+                "An agent's check needed a browser, and the browser cannot run inside the "
+                "agent's sandbox. Paste this into Terminal to run the same check on your Mac. "
+                "The check is not counted as passed until it runs.",
+                str(certification.get("task") or ""),
+            )
+        raise ValueError(
+            f"{error} | the screen check could not run inside the agent's sandbox; "
+            "Mission Control now shows the owner the command to run it outside"
+        ) from error
+
+
+def _run_internal_qa(
+    command: str, root: Path, *, measurement: dict[str, Any] | None = None,
+    certification: dict[str, Any] | None = None,
+) -> str:
+    """The command itself; see _execute_internal_qa for the owner-card rule."""
     if not command.strip():
         raise ValueError("an internal-QA --test-command is required")
     if contract.SHELL_CONTROL.search(command):
@@ -4804,7 +4910,14 @@ def _execute_internal_qa(
                 command, started_at, lifecycle.now(), exit_code=-1,
                 cache_decision="executed_no_cache_store",
             ))
-        raise ValueError(f"internal-QA test command timed out after 300 seconds: {error.cmd}") from error
+        # Each stream separately: a timeout can leave one None and the other bytes (review r4 B5).
+        partial = "".join(
+            value.decode("utf-8", "replace") if isinstance(value, bytes) else (value or "")
+            for value in (error.stdout, error.stderr)
+        )
+        raise ValueError(browser_acceptance.with_blocked_note(
+            f"internal-QA test command timed out after 300 seconds: {error.cmd}", partial,
+        )) from error
     if measurement is not None:
         measurement.update(lifecycle.command_measurement(
             command, started_at, lifecycle.now(), exit_code=completed.returncode,
@@ -4824,11 +4937,19 @@ def _execute_internal_qa(
     # cannot say why it refused is most of the way to a gate nobody trusts.
     ran_nothing = (counts and max(counts) == 0) or re.search(r"\bNO TESTS RAN\b", output, re.I)
     if ran_nothing:
-        raise ValueError("internal-QA test command reported zero executed tests")
+        raise ValueError(browser_acceptance.with_blocked_note(
+            "internal-QA test command reported zero executed tests", output,
+        ))
+    if completed.returncode == 0 and browser_acceptance.blocked_note(output):
+        raise ValueError(f"internal-QA test command could not run its screen check: {browser_acceptance.blocked_note(output)}")
     if completed.returncode != 0:
-        raise ValueError(f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}")
+        raise ValueError(browser_acceptance.with_blocked_note(
+            f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}", output,
+        ))
     if not counts:
-        raise ValueError("internal-QA output must report a positive executed-test count")
+        raise ValueError(browser_acceptance.with_blocked_note(
+            "internal-QA output must report a positive executed-test count", output,
+        ))
     return output
 
 
@@ -4979,13 +5100,8 @@ def _link_build_dependencies(workspace: Path, checkout: Path) -> list[str]:
     return linked
 
 
-@contextmanager
-def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[str, Any], source_path: Path) -> Iterator[tuple[Path, Path]]:
-    """Run independent scenarios against the immutable reviewed commit.
-
-    Reviewer ledgers remain durable authoring evidence under the board, so they
-    are copied into the disposable checkout without becoming candidate files.
-    """
+def _review_checkout_source(root: Path, state: dict[str, Any], request: dict[str, Any]) -> tuple[Path, str]:
+    """The workspace and commit a review's disposable checkout is made from."""
     code_root = project_context(root).code_root
     task = request.get("task", "")
     subtask = request.get("subtask", "")
@@ -4994,7 +5110,18 @@ def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[
         if subtask else ""
     ) or state.get("task_workspaces", {}).get(task, "")
     workspace = Path(workspace_value) if workspace_value and Path(workspace_value).is_dir() else code_root
-    commit = str(request.get("reviewed_commit", ""))
+    return workspace, str(request.get("reviewed_commit", ""))
+
+
+@contextmanager
+def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[str, Any], source_path: Path) -> Iterator[tuple[Path, Path]]:
+    """Run independent scenarios against the immutable reviewed commit.
+
+    Reviewer ledgers remain durable authoring evidence under the board, so they
+    are copied into the disposable checkout without becoming candidate files.
+    """
+    code_root = project_context(root).code_root
+    workspace, commit = _review_checkout_source(root, state, request)
     if not commit:
         if workspace != code_root and request.get("stage") == INDEPENDENT_REVIEW:
             expected_digest = str(request.get("reviewed_worktree_digest", ""))
@@ -5624,20 +5751,42 @@ def _evidence_reuse_checks(
     workspace = Path(workspace_value) if workspace_value and Path(workspace_value).is_dir() else code_root
     current_git = _git_review_artifact(workspace)
     candidate = identity.get("candidate", {})
-    checks = [
-        _reuse_check(
-            "commit hash", str(candidate.get("commit", "")),
-            str(current_git.get("base_commit", "")),
-        ),
-        _reuse_check(
-            "tree hash", str(candidate.get("tree_hash", "")),
-            str(current_git.get("tree_hash", "")),
-        ),
-        _reuse_check(
-            "working-tree hash", str(candidate.get("working_tree_digest", "")),
-            str(current_git.get("working_tree_digest", "")),
-        ),
-    ]
+    if request.get("integrated_commit") and isinstance(request.get("accepted_byte_manifest"), dict):
+        # 2026-09-28: a subtask PASS already folded into the task branch was
+        # compared with the task head, which never equals the subtask's own
+        # candidate, so every Resume threw the PASS away and the owner's
+        # Accept never came. What the review guarantees is that its exact
+        # accepted bytes are on the head, through the recorded integration.
+        head = str(current_git.get("base_commit", ""))
+        integrated = str(request["integrated_commit"])
+        contained = git_process.run(
+            ["git", "merge-base", "--is-ancestor", integrated, head],
+            cwd=workspace, capture_output=True, text=True,
+        ).returncode == 0 if head else False
+        try:
+            accepted_bytes.verify_entries(workspace, head, request["accepted_byte_manifest"])
+            bytes_present = "present"
+        except (ValueError, OSError, KeyError) as error:
+            bytes_present = f"differ: {str(error)[:120]}"
+        checks = [
+            _reuse_check("integrated commit in task history", integrated, integrated if contained else head),
+            _reuse_check("accepted bytes on the task head", "present", bytes_present),
+        ]
+    else:
+        checks = [
+            _reuse_check(
+                "commit hash", str(candidate.get("commit", "")),
+                str(current_git.get("base_commit", "")),
+            ),
+            _reuse_check(
+                "tree hash", str(candidate.get("tree_hash", "")),
+                str(current_git.get("tree_hash", "")),
+            ),
+            _reuse_check(
+                "working-tree hash", str(candidate.get("working_tree_digest", "")),
+                str(current_git.get("working_tree_digest", "")),
+            ),
+        ]
     if int(identity.get("version", 0)) >= 2:
         checks.append(_reuse_check(
             "review scope",
@@ -5755,6 +5904,30 @@ def reconcile_evidence_reuse(root: ProjectRoot, resume_id: str = "") -> dict[str
                 latest_by_scope[key] = request
         for request in latest_by_scope.values():
             if request.get("status") != "passed":
+                # 2026-09-28: a folded subtask PASS was thrown away by the old
+                # commit comparison (see _evidence_reuse_checks). Restore it
+                # when its accepted bytes are verifiably still on the head.
+                if (
+                    request.get("status") == "failed" and request.get("integrity_invalidated")
+                    and request.get("integrated_commit")
+                    and isinstance(request.get("accepted_byte_manifest"), dict)
+                ):
+                    checks = _evidence_reuse_checks(root, state, request)
+                    if all(item["matched"] for item in checks):
+                        request.update({
+                            "status": "passed", "result": "passed", "integrity_invalidated": False,
+                            "result_summary": "Saved PASS restored: its accepted bytes are on the task head",
+                            "evidence_reuse_validation": {
+                                "resume_id": resume_id, "checked_at": now(), "status": "reused", "checks": checks,
+                            },
+                        })
+                        _set_review_scope_status(state, request, "passed")
+                        event = _event(state, "qa_pass_restored", None, {
+                            "task": request.get("task", ""), "request_id": request.get("id", ""),
+                            "message": f"Saved PASS restored for {request.get('id', '')}: its accepted bytes are on the task head",
+                            "checks": checks,
+                        })
+                        reused.append({"request_id": request.get("id", ""), "status": "reused", "checks": checks, "event": event})
                 continue
             prior = request.get("evidence_reuse_validation", {})
             if resume_id and prior.get("resume_id") == resume_id:
@@ -7655,7 +7828,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         "environment_sha256": environment_identity["sha256"],
         "lockfile_digests": _execution_lockfile_digests(execution_root),
         "role": "delivery", "gate": f"{phase}:{subtask}:{chunk}",
-        "retry_reason": changes.strip(),
+        "retry_reason": changes.strip(), "task": task_name,
     }
     # Freeze and route the review before Delivery executes. The Reviewer may
     # author independent intentions against this exact candidate in parallel,
@@ -8435,6 +8608,8 @@ def _execute_challenge_locked(
                         "role": "reviewer",
                         "gate": f"{review_request.get('phase', '')}:{review_request.get('subtask', '')}:{review_request.get('chunk', '')}",
                         "retry_reason": retry_reason.strip(),
+                        "task": str(review_request.get("task") or ""),
+                        "rerun_source": dict(zip(("workspace", "commit"), map(str, _review_checkout_source(root, review_state, review_request)))),
                     },
                 )
                 duration = (datetime.now(timezone.utc) - started).total_seconds()
@@ -8733,8 +8908,14 @@ def qa_result(
             if _effective_subtask_pipeline_status(state, request["task"], name, value)
             == "in_progress"
         ]
+        # 2026-09-28: a PASS recorded after Delivery completed (a re-certified
+        # subtask) set it back to "independent_review_passed"; Delivery had
+        # already ended, so nothing set "done" again and the owner never got
+        # Accept. A passing review never undoes a completion; a failing one
+        # still reopens the work.
+        keeps_completion = result == "passed" and developer.get("status") == "done"
         developer.update({
-            "status": "implementing_subtask" if active_pipeline else (
+            "status": "done" if keeps_completion else "implementing_subtask" if active_pipeline else (
                 passed_state if result == "passed" else failed_state
             ),
             "status_note": (
@@ -8994,6 +9175,34 @@ BROKER_RELEASE_REQUIRED_CHECKS = {
 }
 
 
+def unreleased_final_passes(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Each task's NEWEST final review, when it passed and no release carries its commit.
+
+    2026-09-28 backlog #13: a task the owner rejected and Delivery repaired
+    kept its old release record, and "the task already has a release" hid the
+    repaired PASS for ever, so the owner never got an Accept button. A release
+    now covers only the commit it was recorded for. Only the newest final
+    review counts, so the rejected candidate's old PASS never comes back.
+    """
+    newest: dict[str, dict[str, Any]] = {}
+    for request in (state.get("qa_requests") or {}).values():
+        task = str(request.get("task") or "")
+        if not task or request.get("phase") != "final_acceptance":
+            continue
+        order = (int(request.get("cycle") or 0), str(request.get("requested_at") or ""))
+        held = newest.get(task)
+        if held is None or order > (int(held.get("cycle") or 0), str(held.get("requested_at") or "")):
+            newest[task] = request
+    releases = state.get("releases") or {}
+    return [
+        (task, request) for task, request in newest.items()
+        if request.get("status") == "passed" and (
+            task not in releases
+            or str(releases[task].get("head_commit") or "") != str(request.get("reviewed_commit") or "")
+        )
+    ]
+
+
 def _task_finished(state: dict[str, Any], task: str) -> bool:
     """Released to the owner or accepted: no more review work of its own."""
     return bool(
@@ -9131,12 +9340,23 @@ def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> di
         head_commit = str(preview.get("head_commit") or "")
         if head_commit and str(release.get("head_commit") or "") != head_commit:
             raise ValueError("the preview does not match the current release candidate")
-        previous_status = str((release.get("preview") or {}).get("status") or "")
+        previous = release.get("preview") or {}
+        previous_status = str(previous.get("status") or "")
+        if (
+            previous.get("requested") == "view_app" and previous_status == "starting"
+            and status in {"unconfigured", "app_bundle", "skipped"}
+        ):
+            # 2026-09-28 backlog #12: a supervisor pass that read the board
+            # before the owner's View app click must not erase that click. Only
+            # those stale statuses are refused: a launch's own starting, ready
+            # or failed always lands (review r1 B1).
+            return dict(previous)
         value = {
             key: preview[key] for key in (
                 "status", "url", "command", "pid", "start_token", "head_commit",
                 "workspace", "branch", "started_at", "error", "log_tail",
                 "app_path", "app_name", "built_at", "skipped_at",
+                "requested", "requested_at", "run_yourself",
             ) if preview.get(key) is not None
         }
         value["recorded_at"] = now()
@@ -10307,6 +10527,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate-integrity")
     sub.add_parser("recover-git")
     p = sub.add_parser("reintegrate-main"); p.add_argument("--agent", required=True); p.add_argument("--finish", action="store_true")
+    p = sub.add_parser("screen-check"); p.add_argument("--agent", required=True); p.add_argument("--url", required=True); p.add_argument("--expect", default="")
     p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", dest="owner_command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default=""); p.add_argument("--kind", default="", choices=["", *OWNER_ACTION_KINDS]); p.add_argument("--for-agent", default="")
     p = sub.add_parser("owner-action-done"); p.add_argument("--agent", required=True); p.add_argument("--id", required=True); p.add_argument("--outcome", required=True)
     p = sub.add_parser("reopen-integrity"); p.add_argument("--request", action="append", required=True); p.add_argument("--reason", required=True)
@@ -10405,6 +10626,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "migrate-integrity": out = migrate_integrity(root)
         elif args.command == "recover-git": out = recover_git_transactions(root)
         elif args.command == "reintegrate-main": out = broker_reintegrate_main(root, args.agent, args.finish)
+        elif args.command == "screen-check": out = screen_check(root, args.agent, args.url, args.expect)
         elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.owner_command, args.why, args.task, args.kind, args.for_agent)
         elif args.command == "owner-action-done": out = clear_owner_action(root, args.agent, args.id, args.outcome)
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)

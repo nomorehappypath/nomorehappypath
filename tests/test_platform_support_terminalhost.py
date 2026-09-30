@@ -50,7 +50,7 @@ class GoldenAppleScriptTests(unittest.TestCase):
     all: unpinned, these reported the machine and not the behaviour.
     """
 
-    def test_every_role_colour_renders_exactly_what_it_rendered_before(self):
+    def test_every_role_colour_and_title_script_matches_the_golden(self):
         self.assertEqual(sorted(GOLDEN), sorted(control.SESSION_COLORS),
                          "a role colour was added or removed; recapture the golden")
         with macos_selected() as host:
@@ -62,6 +62,31 @@ class GoldenAppleScriptTests(unittest.TestCase):
     def test_the_colour_scale_still_rounds_the_way_it_did(self):
         with macos_selected() as host:
             self.assertEqual(host._colour_literal((0, 128, 255)), "{0, 32896, 65535}")
+
+
+class RoleTitleTests(unittest.TestCase):
+    def test_role_titles_preserve_command_colors_and_identity(self):
+        import shlex
+        argv = ["/bin/echo", "a path with spaces", "$(do not execute)"]
+        with macos_selected() as host:
+            for kind, title in (("codex_delivery", "Developer"),
+                                ("claude_reviewer", "Reviewer"),
+                                ("claude_cto", "CTO"), ("unknown", "")):
+                with self.subTest(kind=kind), mock.patch.object(subprocess, "run") as run:
+                    session_id = kind + "-0123456789"
+                    surface = host.open_session(session_id, argv, color_rgb=(0, 128, 255))
+                    call = run.call_args
+                    self.assertEqual(call.args[0][-1], "exec " + shlex.join(argv))
+                    self.assertEqual(len(call.args[0]), 4)
+                    self.assertIn(f'set custom title to "{title}"', call.args[0][2])
+                    self.assertIn("set background color to {0, 32896, 65535}", call.args[0][2])
+                    self.assertEqual(surface.session_id, session_id)
+                    self.assertEqual(argv, ["/bin/echo", "a path with spaces", "$(do not execute)"])
+
+    def test_native_title_assignment_is_best_effort(self):
+        with macos_selected() as host:
+            self.assertIn('try\n   if "" is not "" then set custom title to ""\n  end try',
+                          host._open_script((0, 0, 0)))
 
 
 class LauncherDifferenceTests(unittest.TestCase):

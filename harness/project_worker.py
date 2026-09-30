@@ -611,6 +611,7 @@ def serve(
                 worker_health=watchdog.status,
             ),
         )
+        gateway.served_ports.add(int(server.server_address[1]))
         address["endpoint"] = f"http://127.0.0.1:{server.server_address[1]}"
         bootstrap_server = make_bootstrap_server(
             str(bootstrap_path), authority, lambda: address["endpoint"],
