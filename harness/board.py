@@ -3729,6 +3729,9 @@ _OWNER_ACTION_TASK_EVENTS = {
     "owner_release_decision_recorded": "Resolved: task accepted",
     "visual_test_required": "Resolved: task released",
     "task_cancelled": "Resolved: task cancelled",
+    # A2 follow-up: a task closed as released (shipped outside the board).
+    "task_closed_administratively": "Resolved: task closed as released",
+    "administrative_close_residue_cleared": "Resolved: task closed as released",
 }
 _OWNER_ACTION_AGENT_EVENTS = {
     "agent_offline": "Resolved: agent stopped",
@@ -6745,6 +6748,77 @@ def supersede_subtask(
         return json.loads(json.dumps(item))
 
 
+ADMINISTRATIVE_CLOSE_OPEN_FINDINGS = frozenset({"in_scope", "fix_requested", "fix_in_progress"})
+
+
+def _retire_closed_task_residue(
+    state: dict[str, Any], task: str, released: str, reason: str, by: dict[str, str],
+) -> dict[str, Any]:
+    """Finish what complete() + Accept would have finished for a hand-shipped task (A2 follow-up).
+
+    Its Delivery agents end done with the reason (the end state complete()
+    leaves), its open current-task findings are resolved as superseded by the
+    release (recorded, never deleted), and the closing event clears its owner
+    cards through the normal settle rule. Triage-pending and owner-decision
+    findings, and everything belonging to other tasks, are left alone.
+    """
+    at = now()
+    note = f"Task closed as released at {released[:12]} (shipped outside the board): {reason}"
+    retired, sessions = [], []
+    for agent in state.get("agents", {}).values():
+        if agent.get("task") != task or agent.get("role") not in DEVELOPER_ROLES or not agent.get("active"):
+            continue
+        agent.update({
+            "active": False, "write_authority": False, "status": "done",
+            "status_note": note, "last_status_at": at,
+        })
+        retired.append(agent["id"])
+        if agent.get("session_id"):
+            sessions.append(str(agent["session_id"]))
+    superseded = []
+    for finding_id, finding in sorted((state.get("deferred_findings") or {}).items()):
+        if finding.get("task") != task or finding.get("status") not in ADMINISTRATIVE_CLOSE_OPEN_FINDINGS:
+            continue
+        finding.update({
+            "status": "resolved", "resolved_at": at,
+            "superseded_by_release": released,
+            "resolution_evidence": f"Superseded: {note}",
+            "next_action": "Closed with the task, which was shipped and recorded as released outside the board.",
+        })
+        superseded.append(finding_id)
+    residue = {"retired_agents": retired, "superseded_findings": superseded}
+    if retired or superseded or any(
+        action.get("status") == "open" and action.get("task") == task
+        for action in (state.get("owner_actions") or {}).values()
+    ):
+        _event(state, "administrative_close_residue_cleared", None, {
+            "task": task, "commit": released, **residue, "by_role": by["role"],
+            "message": (
+                f"{task} is finished everywhere: {len(retired)} Delivery agent(s) done, "
+                f"{len(superseded)} open finding(s) superseded by the release at {released[:12]}"
+            ),
+        })
+    residue["sessions"] = sessions
+    return residue
+
+
+def _tell_retired_sessions(root: ProjectRoot, task: str, sessions: list[str]) -> None:
+    """One plain line to each retired Delivery terminal, so it stops working the task."""
+    if not sessions:
+        return
+    from harness import control
+    for session_id in sessions:
+        try:
+            control.enqueue_instruction(
+                root, session_id,
+                f"TASK CLOSED: {task} was shipped and recorded as released; your work on it is done. "
+                "Do not poll, commit or request reviews for it. Stand by. USER ACTION: None.",
+                source="administrative-close",
+            )
+        except (ValueError, OSError):
+            pass
+
+
 def close_released_administratively(
     root: ProjectRoot, agent_id: str, task: str, commit: str, reason: str,
 ) -> dict[str, Any]:
@@ -6773,70 +6847,81 @@ def close_released_administratively(
         if task in (state.get("cancelled_tasks") or {}):
             raise ValueError(f"{task} was cancelled; there is nothing to release")
         if _task_finished(state, task):
-            raise ValueError(f"{task} is already released or accepted")
-        repository = str((state.get("task_repositories") or {}).get(task) or "")
-        branch = str(((state.get("task_branches") or {}).get(task) or {}).get("branch") or "")
-        if not repository or not branch:
-            raise ValueError(f"{task} has no governed repository and task branch to check against")
-        if not Path(repository).is_dir():
-            raise ValueError(f"the project repository for {task} is not reachable at {repository}")
+            # A2 follow-up: re-running the owner's same command on a task
+            # already closed this way finishes its residue and nothing else.
+            closed = ((state.get("releases") or {}).get(task) or {}).get("administrative_close") or {}
+            closed_commit = str(closed.get("released_commit") or "")
+            if not closed_commit or not closed_commit.startswith(commit.lower()):
+                raise ValueError(f"{task} is already released or accepted")
+            residue = _retire_closed_task_residue(state, task, closed_commit, str(closed.get("reason") or reason), by)
+            result = {"task": task, **closed, "already_closed": True, **residue}
+        else:
+            repository = str((state.get("task_repositories") or {}).get(task) or "")
+            branch = str(((state.get("task_branches") or {}).get(task) or {}).get("branch") or "")
+            if not repository or not branch:
+                raise ValueError(f"{task} has no governed repository and task branch to check against")
+            if not Path(repository).is_dir():
+                raise ValueError(f"the project repository for {task} is not reachable at {repository}")
 
-        def resolve(reference: str) -> str:
-            probe = git_process.run(
-                ["git", "rev-parse", "--verify", "--quiet", reference + "^{commit}"],
-                cwd=repository, capture_output=True, text=True, timeout=30,
-            )
-            return probe.stdout.strip() if probe.returncode == 0 else ""
+            def resolve(reference: str) -> str:
+                probe = git_process.run(
+                    ["git", "rev-parse", "--verify", "--quiet", reference + "^{commit}"],
+                    cwd=repository, capture_output=True, text=True, timeout=30,
+                )
+                return probe.stdout.strip() if probe.returncode == 0 else ""
 
-        def contains(ancestor: str, descendant: str) -> bool:
-            return git_process.run(
-                ["git", "merge-base", "--is-ancestor", ancestor, descendant],
-                cwd=repository, capture_output=True, text=True, timeout=30,
-            ).returncode == 0
+            def contains(ancestor: str, descendant: str) -> bool:
+                return git_process.run(
+                    ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+                    cwd=repository, capture_output=True, text=True, timeout=30,
+                ).returncode == 0
 
-        released = resolve(commit)
-        main = resolve("refs/heads/main")
-        head = resolve(branch)
-        if not released:
-            raise ValueError(f"commit {commit} does not exist in the project repository")
-        if not main or not contains(released, main):
-            raise ValueError(f"commit {released[:12]} is not on main; only work already in main can be closed this way")
-        if not head or not contains(head, released):
-            raise ValueError(
-                f"commit {released[:12]} does not contain the task's own work (task head {head[:12] or 'unknown'}); "
-                "nothing proves this task shipped"
-            )
-        closed_at = now()
-        record = {
-            "reason": reason, "by_role": by["role"], "by_agent": by["agent"], "at": closed_at,
-            "released_commit": released, "task_head": head, "main_commit": main,
-        }
-        # The same shape a CTO-recorded release has, so every reader of
-        # releases (board view, history, Mission Control) works unchanged.
-        release = state.setdefault("releases", {}).setdefault(task, {
-            "task": task, "git_broker_governed": False, "acceptance_base_commit": "",
-            "acceptance_manifest": [], "runtime_verification_deferred_to_target_acceptance": False,
-            "checks": {}, "owner_test_steps": [], "lifecycle": {},
-        })
-        release.update({
-            "status": RELEASE_ACCEPTED, "head_commit": released, "accepted_at": closed_at,
-            "cto_id": by["agent"] or "owner", "recorded_at": release.get("recorded_at") or closed_at,
-            "administrative_close": record,
-        })
-        state.setdefault("release_decisions", {})[task] = {
-            "task": task, "decision": "accepted", "reason": reason, "attachments": [],
-            "recorded_at": closed_at, "administrative": True,
-        }
-        state.setdefault("git_acceptances", {})[task] = {
-            "commit": released, "accepted_at": closed_at, "administrative": True,
-        }
-        returned = _return_reviewers_to_queue(state, task, "accepted")
-        who = "The CTO" if by["role"] == "cto" else "The owner"
-        _event(state, "task_closed_administratively", agent, {
-            "task": task, "commit": released, "reason": reason, "returned_reviewers": returned,
-            "message": f"{who} recorded {task} as released and accepted at {released[:12]} (shipped outside the board): {reason}",
-        })
-        return {"task": task, **record}
+            released = resolve(commit)
+            main = resolve("refs/heads/main")
+            head = resolve(branch)
+            if not released:
+                raise ValueError(f"commit {commit} does not exist in the project repository")
+            if not main or not contains(released, main):
+                raise ValueError(f"commit {released[:12]} is not on main; only work already in main can be closed this way")
+            if not head or not contains(head, released):
+                raise ValueError(
+                    f"commit {released[:12]} does not contain the task's own work (task head {head[:12] or 'unknown'}); "
+                    "nothing proves this task shipped"
+                )
+            closed_at = now()
+            record = {
+                "reason": reason, "by_role": by["role"], "by_agent": by["agent"], "at": closed_at,
+                "released_commit": released, "task_head": head, "main_commit": main,
+            }
+            # The same shape a CTO-recorded release has, so every reader of
+            # releases (board view, history, Mission Control) works unchanged.
+            release = state.setdefault("releases", {}).setdefault(task, {
+                "task": task, "git_broker_governed": False, "acceptance_base_commit": "",
+                "acceptance_manifest": [], "runtime_verification_deferred_to_target_acceptance": False,
+                "checks": {}, "owner_test_steps": [], "lifecycle": {},
+            })
+            release.update({
+                "status": RELEASE_ACCEPTED, "head_commit": released, "accepted_at": closed_at,
+                "cto_id": by["agent"] or "owner", "recorded_at": release.get("recorded_at") or closed_at,
+                "administrative_close": record,
+            })
+            state.setdefault("release_decisions", {})[task] = {
+                "task": task, "decision": "accepted", "reason": reason, "attachments": [],
+                "recorded_at": closed_at, "administrative": True,
+            }
+            state.setdefault("git_acceptances", {})[task] = {
+                "commit": released, "accepted_at": closed_at, "administrative": True,
+            }
+            returned = _return_reviewers_to_queue(state, task, "accepted")
+            who = "The CTO" if by["role"] == "cto" else "The owner"
+            _event(state, "task_closed_administratively", agent, {
+                "task": task, "commit": released, "reason": reason, "returned_reviewers": returned,
+                "message": f"{who} recorded {task} as released and accepted at {released[:12]} (shipped outside the board): {reason}",
+            })
+            residue = _retire_closed_task_residue(state, task, released, reason, by)
+            result = {"task": task, **record, **residue}
+    _tell_retired_sessions(root, task, result.pop("sessions"))
+    return result
 
 
 def start_subtask(root: ProjectRoot, agent_id: str, subtask: str) -> dict[str, Any]:

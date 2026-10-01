@@ -447,21 +447,39 @@ def _schedule_terminal_close(stdin_fd: int) -> None:
     platform_support.terminal_host().dismiss_current_session(stdin_fd)
 
 
-def _stop_child_group(child: subprocess.Popen, grace_seconds: float = 1.0) -> None:
-    """Stop an interactive CLI even when it ignores a normal termination."""
+# 2026-10-01: after SIGKILL a Claude CLI sat in macOS state "?Es" (stuck in
+# kernel exit) and an unbounded wait() held Stop all forever.
+STOP_KILL_WAIT_SECONDS = 5.0
+STUCK_EXIT_CODE = 137
+
+
+def _stop_child_group(
+    child: subprocess.Popen, grace_seconds: float = 1.0, kill_wait_seconds: float = STOP_KILL_WAIT_SECONDS,
+) -> bool:
+    """Stop an interactive CLI even when it ignores a normal termination.
+
+    True once the child has exited; False when even SIGKILL left it unreaped
+    after ``kill_wait_seconds`` (the OS finishes that on its own). The caller
+    then carries on shutting down instead of waiting for ever.
+    """
     if child.poll() is not None:
-        return
+        return True
     # Through the ONE guard, not a copy of it: it refuses when the process has
     # exited and when the pid no longer leads its own group. Signalling a group
     # by a number whose owner has changed is what killed the test runner.
     identity = platform_support.process_identity()
     if not identity.terminate_group(child, signal.SIGTERM):
-        return
+        return child.poll() is not None
     try:
         child.wait(timeout=grace_seconds)
+        return True
     except subprocess.TimeoutExpired:
         identity.terminate_group(child, signal.SIGKILL)
-        child.wait()
+    try:
+        child.wait(timeout=kill_wait_seconds)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def run(
@@ -578,7 +596,11 @@ def run(
         print("HARNESS | interactive supervisor ready; terminal input remains yours and is visible.", flush=True)
         while child.poll() is None:
             if stop_requested:
-                _stop_child_group(child)
+                if not _stop_child_group(child):
+                    transcript.note(
+                        "the agent's process did not finish exiting after it was stopped; "
+                        "the operating system will clear it. The terminal is closing anyway."
+                    )
                 break
             readable, _, _ = select.select([master, stdin_fd], [], [], .1)
             if master in readable:
@@ -646,7 +668,10 @@ def run(
                 transcript.note(f"controller message ({item['source']}): {item['text']}")
                 _submit_controller_message(master, item["source"], item["text"])
                 control.acknowledge_instruction(root, session_id, item["id"])
-        return child.wait()
+        exited = child.poll()
+        if exited is None and stop_requested:
+            return STUCK_EXIT_CODE
+        return child.wait() if exited is None else exited
     finally:
         if child.poll() is None:
             _stop_child_group(child)
