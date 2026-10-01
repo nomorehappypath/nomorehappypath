@@ -116,6 +116,17 @@ def human_date(value: Any) -> str:
     return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}"
 
 
+def human_time(value: Any) -> str:
+    """'2026-09-30T03:41:00+00:00' -> '10:41 PM CDT on Sep 29, 2026' in the machine's local time."""
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return text
+    hour = parsed.strftime("%I").lstrip("0")
+    return f"{hour}:{parsed.strftime('%M %p %Z').rstrip()} on {human_date(parsed.isoformat())}"
+
+
 class ChatError(RuntimeError):
     """A safe operational chat error, distinct from absent project facts."""
 
@@ -142,10 +153,6 @@ class ProviderMalformedOutput(ChatError):
 
 class AnswerValidationError(ChatError):
     code = "answer_validation_failed"
-
-
-class StaleSnapshotError(ChatError):
-    code = "stale_snapshot"
 
 
 class ChatCancelled(ChatError):
@@ -1387,6 +1394,23 @@ def render_claims(package: dict[str, Any], fact_ids: list[str]) -> dict[str, Any
     }
 
 
+def cited_facts_changed(
+    root: ProjectRoot, question: str, project_id: str,
+    package: dict[str, Any], cited: set[str],
+) -> bool:
+    """True when a fact the answer cites reads differently on the board now.
+
+    Compared fact by fact, not by board sequence: housekeeping moves the
+    sequence without changing a fact, and a direct write can change a fact
+    without moving it.
+    """
+    current = build_fact_package(root, question, project_id=project_id, analyst=True)["facts"]
+    return any(
+        (current.get(fact_id) or {}).get("value") != (package["facts"].get(fact_id) or {}).get("value")
+        for fact_id in cited
+    )
+
+
 def answer_question(
     root: ProjectRoot, question: str, *, settings_home: Path,
     project_id: str = "", provider: Callable[[str, dict[str, Any]], str | dict[str, Any]] | None = None,
@@ -1466,9 +1490,6 @@ def answer_question(
         provider_ms = (time.monotonic() - provider_started) * 1_000
         if before_validation:
             before_validation()
-        current_sequence = _board_sequence(board.snapshot(root))
-        if current_sequence != analyst_package["snapshot"]["board_sequence"]:
-            raise StaleSnapshotError("Project facts changed while the answer was being prepared; retry")
         validation_started = time.monotonic()
         verdict = validate_provider_output(raw, analyst_package)
         validation_ms = (time.monotonic() - validation_started) * 1_000
@@ -1489,6 +1510,20 @@ def answer_question(
         if composed:
             result["answer"] = verdict["answer"]
         result["composed"] = composed
+        # The answer is rendered only from the snapshot the provider saw, so it
+        # is consistent however busy the board is. Agent housekeeping moves the
+        # board every few seconds; only a change to a cited fact matters, and
+        # then the answer still stands, dated to its snapshot.
+        cited = {claim["fact_id"] for claim in result["claims"]} | set(verdict["fact_ids"])
+        moved_on = result["answer"] != UNKNOWN_ANSWER and cited_facts_changed(
+            root, question, project_id, analyst_package, cited,
+        )
+        if moved_on:
+            result["answer"] += (
+                f"\n\nAs of {human_time(analyst_package['snapshot']['at'])}. "
+                "The project has moved on since; ask again for the latest."
+            )
+        result["moved_on"] = moved_on
         lifecycle_metrics.record_chat_measurement(
             root, outcome="unknown" if result["answer"] == UNKNOWN_ANSWER else "answered",
             selection_ms=selection_ms, provider_ms=provider_ms,

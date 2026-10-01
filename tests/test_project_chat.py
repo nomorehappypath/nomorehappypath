@@ -452,14 +452,96 @@ class ProjectChatTests(unittest.TestCase):
         self.assertNotIn("Unapproved idea", answer)
         self.assertIn("Approved repair", answer)
 
-    def test_board_mutation_during_inference_returns_stale_operational_error(self):
-        _session, agent = self.active_task()
-        with self.assertRaises(project_chat.StaleSnapshotError):
-            project_chat.answer_question(
-                self.root, "Why has everything been quiet lately?", settings_home=self.settings_home,
-                provider=echo_provider,
-                before_validation=lambda: board.status(self.root, agent["id"], "State changed."),
-            )
+    def _finished_task(self, task="TASK-DONE"):
+        self.active_task(task)
+        with board.locked_state(self.root) as state:
+            state.setdefault("release_decisions", {})[task] = {
+                "task": task, "decision": "accepted",
+                "recorded_at": "2026-09-30T15:40:00+00:00",
+            }
+
+    def _busy_provider(self, agent, picks=("project:completed_work",), polls=6):
+        """A selector that, like a real provider call, takes long enough for agents to poll."""
+        def provider(_question, package):
+            for _ in range(polls):
+                board.poll(self.root, agent["id"])
+            return {"in_scope": True, "action_oriented": False, "claims": list(picks)}
+        return provider
+
+    def test_routine_agent_activity_during_inference_still_answers(self):
+        # Owner bug 2026-09-30: every open question on a running project failed with
+        # "Project facts changed while the answer was being prepared; retry".
+        self._finished_task()
+        _session, agent = self.active_task("TASK-NOW")
+        before = project_chat._board_sequence(board.snapshot(self.root))
+        result = project_chat.answer_question(
+            self.root, "What has already been done?", settings_home=self.settings_home,
+            provider=self._busy_provider(agent),
+        )
+        self.assertGreater(project_chat._board_sequence(board.snapshot(self.root)), before)
+        self.assertFalse(result["unknown"])
+        self.assertIn("1 of 2 recorded tasks are accepted (finished)", result["answer"])
+        self.assertIn("• TASK DONE — accepted", result["answer"])
+        self.assertNotIn("As of", result["answer"], "housekeeping changed no cited fact")
+        self.assertFalse(result["moved_on"])
+
+    def test_busy_answer_matches_the_quiet_board_answer(self):
+        self._finished_task()
+        _session, agent = self.active_task("TASK-NOW")
+        quiet = project_chat.answer_question(
+            self.root, "What has already been done?", settings_home=self.settings_home,
+            provider=self._busy_provider(agent, polls=0),
+        )
+        busy = project_chat.answer_question(
+            self.root, "What has already been done?", settings_home=self.settings_home,
+            provider=self._busy_provider(agent, polls=8),
+        )
+        self.assertEqual(busy["answer"], quiet["answer"])
+
+    def test_cited_fact_changed_without_any_board_event_is_still_dated(self):
+        self._finished_task()
+        self.active_task("TASK-NOW")
+
+        def accept_without_event():
+            with board.locked_state(self.root) as state:
+                state["release_decisions"]["TASK-NOW"] = {
+                    "task": "TASK-NOW", "decision": "accepted",
+                    "recorded_at": "2026-09-30T16:00:00+00:00",
+                }
+
+        before = project_chat._board_sequence(board.snapshot(self.root))
+        result = project_chat.answer_question(
+            self.root, "What has already been done?", settings_home=self.settings_home,
+            provider=lambda *_: {"in_scope": True, "action_oriented": False, "claims": ["project:completed_work"]},
+            before_validation=accept_without_event,
+        )
+        self.assertEqual(project_chat._board_sequence(board.snapshot(self.root)), before)
+        self.assertTrue(result["moved_on"])
+        self.assertIn("The project has moved on since", result["answer"])
+
+    def test_changed_cited_fact_answers_as_of_the_snapshot_not_an_error(self):
+        self._finished_task()
+        _session, agent = self.active_task("TASK-NOW")
+
+        def accept_now():
+            with board.locked_state(self.root) as state:
+                state["release_decisions"]["TASK-NOW"] = {
+                    "task": "TASK-NOW", "decision": "accepted",
+                    "recorded_at": "2026-09-30T16:00:00+00:00",
+                }
+
+        result = project_chat.answer_question(
+            self.root, "What has already been done?", settings_home=self.settings_home,
+            provider=self._busy_provider(agent), before_validation=accept_now,
+        )
+        self.assertTrue(result["moved_on"])
+        # The answer stays the one consistent snapshot the provider saw ...
+        self.assertIn("1 of 2 recorded tasks are accepted (finished)", result["answer"])
+        # ... and says plainly when that was.
+        stamp = project_chat.human_time(result["snapshot"]["at"])
+        self.assertTrue(result["answer"].endswith(
+            f"As of {stamp}. The project has moved on since; ask again for the latest."
+        ), result["answer"])
 
     def test_provider_failure_is_not_disguised_as_unknown(self):
         self.active_task()

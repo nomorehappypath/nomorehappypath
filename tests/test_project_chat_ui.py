@@ -71,8 +71,9 @@ def post_managed_chat(origin, token, request_id, question):
 
 
 class FakeOpenAI:
-    def __init__(self, *, delay=0.0):
+    def __init__(self, *, delay=0.0, prefer=("project_about", "current_status", "task_list")):
         self.delay = delay
+        self.prefer = prefer
         self.requests = []
         owner = self
 
@@ -90,10 +91,7 @@ class FakeOpenAI:
                 package = prompt["fact_package"]
                 question = str(prompt.get("question", "")).casefold()
                 off_topic = any(marker in question for marker in ("france", "capital", "weather"))
-                preferred = [
-                    fact_id for fact_id in ("project_about", "current_status", "task_list")
-                    if fact_id in package["facts"]
-                ]
+                preferred = [fact_id for fact_id in owner.prefer if fact_id in package["facts"]]
                 answer = json.dumps({
                     "in_scope": not off_topic,
                     "action_oriented": False,
@@ -470,7 +468,7 @@ class ProjectChatBrowserTests(unittest.TestCase):
         self.chat = ServedChat(self.context, self.settings_home, answerer, token="browser-token")
         self.addCleanup(self.chat.close)
 
-    def render(self, width, height):
+    def render(self, width, height, question="What is this project about?\nWhat is left?"):
         sink = {}
         origin = self.chat.origin
         script = r"""
@@ -478,16 +476,16 @@ class ProjectChatBrowserTests(unittest.TestCase):
 (async()=>{
   const pause=delay=>new Promise(resolve=>setTimeout(resolve,delay));
   for(let attempt=0;attempt<80&&!document.querySelector('#project-chat');attempt++)await pause(50);
-  const input=document.querySelector('#project-chat-input');input.value='What is this project about?\nWhat is left?';
+  const input=document.querySelector('#project-chat-input');input.value=QUESTION;
   document.querySelector('#project-chat-form').requestSubmit();
-  for(let attempt=0;attempt<100&&!document.querySelector('.chat-answer');attempt++)await pause(50);
+  for(let attempt=0;attempt<300&&!document.querySelector('.chat-answer')&&!document.querySelector('.project-chat-error');attempt++)await pause(50);
   const chat=document.querySelector('#project-chat').getBoundingClientRect(),progress=document.querySelector('.delivery-progress-panel').getBoundingClientRect(),doc=document.scrollingElement;
   const answer=document.querySelector('.chat-answer')?.textContent||'',status=document.querySelector('#project-chat-status').textContent;
   document.querySelector('#project-chat-clear').click();
   await fetch('/__layout_result__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer,status,chatBottom:chat.bottom,progressTop:progress.top,scrollWidth:doc.scrollWidth,clientWidth:doc.clientWidth,historyAfterClear:document.querySelectorAll('.chat-turn').length,inputFocused:document.activeElement===input,storedChatKeys:Object.keys(localStorage).filter(key=>key.includes('chat'))})});
 })();
 </script>
-"""
+""".replace("QUESTION", json.dumps(question))
 
         class Proxy(BaseHTTPRequestHandler):
             def log_message(self, *_): return
@@ -550,6 +548,87 @@ class ProjectChatBrowserTests(unittest.TestCase):
             "What is this project about?\nWhat is left?",
             "What is this project about?\nWhat is left?",
         ])
+
+
+class ProjectChatBusyBoardBrowserTests(unittest.TestCase):
+    """Owner bug 2026-09-30: on a running project every open question failed with
+    "Project facts changed while the answer was being prepared; retry"."""
+
+    def setUp(self):
+        require_loopback()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        base = Path(self._tmp.name)
+        code = base / "code"; code.mkdir()
+        self.context = ProjectContext(code, base / "data", base / "workspaces")
+        control.initialize(self.context)
+        project_memory.initialize(self.context, project_name="Busy project", description="Busy facts.")
+        self.settings_home = base / "manager"; global_settings.initialize(self.settings_home)
+        configure_verified_key(self.settings_home)
+        agents = []
+        for task in ("TASK-SHIPPED", "TASK-NOW"):
+            session = control.create(self.context, "codex_delivery")
+            agent = board.register(
+                self.context, "development", board.AWAITING_OWNER_DIRECTION,
+                vendor="OpenAI", session_id=session["id"],
+            )
+            board.record_owner_direction(self.context, session["id"], f"Build {task}.")
+            board.begin_task(self.context, agent["id"], task)
+            agents.append(agent)
+        with board.locked_state(self.context) as state:
+            state.setdefault("release_decisions", {})["TASK-SHIPPED"] = {
+                "task": "TASK-SHIPPED", "decision": "accepted",
+                "recorded_at": "2026-09-30T15:40:00+00:00",
+            }
+        self.agent = agents[1]
+        self.api = FakeOpenAI(delay=1.5, prefer=("project:completed_work",))
+        self.addCleanup(self.api.close)
+        environment = patch.dict(os.environ, self.api.environment())
+        environment.start(); self.addCleanup(environment.stop)
+        self.chat = ServedChat(
+            self.context, self.settings_home, project_chat.answer_question, token="busy-token",
+        )
+        self.addCleanup(self.chat.close)
+
+    def test_real_browser_asks_what_was_done_while_agents_keep_polling(self):
+        polling = threading.Event()
+        polls = []
+
+        def keep_polling():
+            while not polling.wait(0.1):
+                board.poll(self.context, self.agent["id"])
+                polls.append(1)
+
+        poller = threading.Thread(target=keep_polling, daemon=True)
+        poller.start()
+        try:
+            value = ProjectChatBrowserTests.render(self, 1000, 700, question="What has already been done?")
+        finally:
+            polling.set(); poller.join(timeout=3)
+        self.assertEqual(len(self.api.requests), 1, "the open question must go to the provider")
+        self.assertGreater(len(polls), 5, "the board must have moved during the provider call")
+        self.assertIn("1 of 2 recorded tasks are accepted (finished)", value["answer"])
+        self.assertIn("TASK SHIPPED — accepted", value["answer"])
+        self.assertEqual(value["status"], "Answered from the current project snapshot.")
+
+    def test_real_browser_dates_the_answer_when_a_cited_fact_changes(self):
+        def accept_mid_answer():
+            deadline = time.monotonic() + 30
+            while not self.api.requests and time.monotonic() < deadline:
+                time.sleep(0.05)
+            with board.locked_state(self.context) as state:
+                state["release_decisions"]["TASK-NOW"] = {
+                    "task": "TASK-NOW", "decision": "accepted",
+                    "recorded_at": "2026-09-30T16:00:00+00:00",
+                }
+
+        threading.Thread(target=accept_mid_answer, daemon=True).start()
+        value = ProjectChatBrowserTests.render(self, 1000, 700, question="What has already been done?")
+        self.assertIn("1 of 2 recorded tasks are accepted (finished)", value["answer"])
+        self.assertIn("The project has moved on since; ask again for the latest.", value["answer"])
+        self.assertEqual(
+            value["status"], "Answered from the project as it was when you asked; it has changed since.",
+        )
 
 
 class ProjectChatManagedLifecycleTests(unittest.TestCase):
