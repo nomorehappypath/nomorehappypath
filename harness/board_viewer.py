@@ -1441,7 +1441,7 @@ async function sendChat(event){
     const data=await response.json();
     if(!response.ok)throw Error(data.error||'Project chat failed.');
     chatTurns.push({question,answer:String(data.answer||'')});while(chatTurns.length>20)chatTurns.shift();
-    input.value='';renderChat();status.textContent=data.unknown?'No supported project fact was available.':'Answered from the current project snapshot.';
+    input.value='';renderChat();status.textContent=data.unknown?'No supported project fact was available.':data.moved_on?'Answered from the project as it was when you asked; it has changed since.':'Answered from the current project snapshot.';
   }catch(error){
     status.className='project-chat-status project-chat-error';
     status.textContent=error.name==='AbortError'?'Request cancelled.':`Chat error: ${error.message}`;

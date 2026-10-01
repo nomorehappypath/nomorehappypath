@@ -129,6 +129,7 @@ class ProjectChatService:
                     for key in ("at", "board_sequence", "digest")
                 },
                 "unknown": bool(result.get("unknown")),
+                "moved_on": bool(result.get("moved_on")),
                 "duplicate": False,
             }
             if len(json.dumps(response, separators=(",", ":")).encode("utf-8")) > CHAT_RESPONSE_LIMIT:
@@ -441,7 +442,7 @@ def make_handler(
                     self.send_json(429, {"error": str(error), "code": "busy"})
                 except project_chat.ProviderTimeout as error:
                     self.send_json(504, {"error": str(error), "code": error.code})
-                except (project_chat.StaleSnapshotError, project_chat.ChatCancelled) as error:
+                except project_chat.ChatCancelled as error:
                     self.send_json(409, {"error": str(error), "code": error.code})
                 except project_chat.ChatError as error:
                     self.send_json(502, {"error": str(error), "code": error.code})
