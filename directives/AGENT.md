@@ -171,7 +171,11 @@ delivery plan or implement until the confirmation is recorded.
      ownership is global and therefore serializes. A large subtask may have
      optional chunks; a small subtask must remain whole. Edit and test only in
      the subtask workspace returned by the board, never in another subtask's
-     worktree or the shared repository.
+     worktree or the shared repository. When the owner drops or replaces a
+     subtask that was never built, retire it with `supersede-subtask --task
+     <task> --subtask <id> --reason "<owner's reason>" [--replaced-by <id>]`
+     instead of leaving it open; live, failing, or still-needed work cannot be
+     retired, and every live subtask must still pass.
    Record the classification and a concise rationale with `define-plan`. Never
    create a chunk merely to satisfy process.
 5. Implement the current atomic task, chunk, or product subtask. Run its narrow

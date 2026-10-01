@@ -80,6 +80,21 @@ def _safe(value: str) -> str:
     return SAFE_COMPONENT.sub("-", str(value)).strip("-.") or "task"
 
 
+def _porcelain_paths(output: str) -> list[str]:
+    """Paths named by ``git status --porcelain=v1 -z`` (a rename's origin included)."""
+    entries = [entry for entry in output.split("\0") if entry]
+    paths: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        paths.append(entry[3:])
+        if entry[:1] in {"R", "C"} and index + 1 < len(entries):
+            index += 1
+            paths.append(entries[index])
+        index += 1
+    return sorted(set(paths))
+
+
 def _is_within(path: Path, root: Path) -> bool:
     path, root = path.resolve(strict=False), root.resolve(strict=False)
     return path == root or root in path.parents
@@ -666,10 +681,21 @@ class GitBroker:
             if committed.returncode != 0:
                 raise BrokerError("Git commit failed: " + (committed.stderr.strip() or committed.stdout.strip()))
             identity = self._identity(workspace)
-            status = self._run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=workspace, writable=[workspace, repository])
-            if status.returncode != 0 or status.stdout.strip():
-                raise RecoveryHoldError("post-commit task worktree is not clean")
-            return {"task": task, "subtask": subtask, "commit": identity.commit, "tree": identity.tree, "manifest": staged_paths}
+            status = self._run_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=workspace, writable=[workspace, repository])
+            if status.returncode != 0:
+                raise RecoveryHoldError("post-commit task worktree status could not be read")
+            # Batch 2 item D: other changed files are simply not part of this
+            # commit; the commit stands and they are reported. Only a path that
+            # was just committed and is changed again was rewritten during the
+            # commit, which stays a hold.
+            leftover = _porcelain_paths(status.stdout)
+            rewritten = sorted(set(leftover) & set(staged_paths))
+            if rewritten:
+                raise RecoveryHoldError("post-commit task worktree changed committed paths: " + ", ".join(rewritten))
+            return {
+                "task": task, "subtask": subtask, "commit": identity.commit, "tree": identity.tree,
+                "manifest": staged_paths, "left_uncommitted": leftover,
+            }
 
     def reintegrate_main(self, agent_id: str, nonce: int, *, finish: bool = False) -> dict[str, Any]:
         """Merge ``refs/heads/main`` into the task branch, inside the task worktree.

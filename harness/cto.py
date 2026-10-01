@@ -544,7 +544,7 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     latest_review = max(final_reviews, key=lambda request: int(request["cycle"]), default=None)
     broker_governed = bool(latest_review and latest_review.get("mirror_ref") and state.get("task_repositories", {}).get(task))
     delivery_mode = task_plan.get("mode") or ("chunked" if task_chunks else "atomic")
-    subtasks = task_plan.get("subtasks", {}) if delivery_mode == "application" else {}
+    subtasks = board._live_subtasks(task_plan) if delivery_mode == "application" else {}
     chunks_complete = bool(task_chunks) and all(chunk.get("status") == "passed" for chunk in task_chunks.values())
     subtasks_complete = bool(subtasks) and all(subtask.get("status") == "passed" for subtask in subtasks.values())
     nested_chunks_complete = all(

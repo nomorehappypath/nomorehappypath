@@ -87,6 +87,7 @@ PAGE = r"""<!doctype html>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
+<section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
 <section id="decision-banner" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
@@ -337,7 +338,9 @@ function taskFacts(state,contracts,name){
   const chunks=Object.values((state.task_chunks||{})[name]||{});
   const plan=(state.delivery_plans||{})[name]||{};
   const mode=plan.mode||(chunks.length?'chunked':'atomic');
-  const subtasks=Object.values(plan.subtasks||{});
+  // A retired (superseded) subtask is shown but never counted: progress is live work only.
+  const allSubtasks=Object.values(plan.subtasks||{});
+  const subtasks=allSubtasks.filter(item=>item.status!=='superseded');
   const reviews=Object.values(state.qa_requests||{}).filter(item=>item.task===name);
   const agents=Object.values(state.agents||{});
   const agent=agents.find(item=>item.task===name&&['engineering','development'].includes(item.role))||agents.find(item=>item.task===name);
@@ -352,7 +355,7 @@ function taskFacts(state,contracts,name){
   const total=mode==='application'?subtasks.length:chunks.length;
   const nestedChunks=subtasks.flatMap(item=>Object.values(item.chunks||{}));
   const progressText=mode==='application'?`${passedSubtasks} product ${passedSubtasks===1?'subtask':'subtasks'} independently accepted · ${Math.max(0,total-passedSubtasks)} remaining`:mode==='atomic'?'One cohesive task · final independent acceptance still controls release':`${done} ${done===1?'change':'changes'} independently passed · ${Math.max(0,total-done)} remaining`;
-  return{mode,plan,subtasks,chunks,reviews,agent,done,total,nestedChunks,progressText,contract:(contracts||{})[name]||{}};
+  return{mode,plan,subtasks,allSubtasks,chunks,reviews,agent,done,total,nestedChunks,progressText,contract:(contracts||{})[name]||{}};
 }
 
 // 2026-09-28 backlog #12: one View app button per release card. No command or
@@ -506,8 +509,8 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const scopeNotice=blockers.length?`<div class="next" style="border-left-color:var(--red);background:var(--red-soft);color:#7a271a"><strong>Required before this task can finish:</strong> ${esc(blockers.map(finding=>finding.title).join('; '))}. Delivery is fixing and re-testing this as part of the current task.</div>`:'';
   const structureLabel=facts.mode==='application'?'Full application with product subtasks':facts.mode==='chunked'?'One task split into logical chunks':'One cohesive task with no artificial chunks';
   const structureChanges=Array.isArray(facts.plan.structure_changes)?facts.plan.structure_changes.slice(-3):[];
-  const changeHistory=structureChanges.map(change=>`<div class="scope-change"><strong>Work added after planning</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc((change.added||[]).join(', '))}</small></div>`).join('');
-  const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${facts.subtasks.map(item=>`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
+  const changeHistory=structureChanges.map(change=>{const retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}</small></div>`;}).join('');
+  const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
   const proposal=(state.requirement_proposals||{})[name]||{};
   const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?`<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small><div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">Go ahead — this is the contract</button><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div><p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
@@ -542,6 +545,21 @@ async function confirmCancelTask(task){
     await refresh();
     return true;
   }catch(error){el('#notice').textContent='Could not cancel the task: '+error.message;return false;}
+}
+
+// Batch 2 item C (2026-09-30): a review waiting on a signed-out reviewer stops
+// all progress. Say so at the very top, with the one thing to do.
+function renderSignInBanner(state){
+  const section=el('#sign-in-banner');if(!section)return;
+  const needed=state.reviewer_needed||{};
+  if(!needed.sign_in){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  section.hidden=false;
+  const since=needed.sign_in_since?` A review has been waiting since ${esc(historyTimestamp(needed.sign_in_since))}.`:'';
+  const html=`<h2>Reviewer needs sign-in: nothing will progress</h2><p>Open the Reviewer's terminal and run <strong>/login</strong>.${since} Work continues by itself once it is signed in.</p>`;
+  const signature=_cardSignature(html);
+  if(section.dataset.signature===signature)return;
+  section.dataset.signature=signature;
+  section.innerHTML=html;
 }
 
 // Backlog #4 (2026-09-27): a requirements proposal waiting for the owner is
@@ -1241,6 +1259,7 @@ function render(data,managed){
   else if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
   else el('#attention').innerHTML='<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
   tasks(state,contracts,data.owner_directions||{},data.live_tasks,data.in_scope_findings||[],data.requirement_confirmations||{});
+  renderSignInBanner(state);
   renderDecisionBanner(state);
   currentHistoryVersion=String(data.history_version||'');
   if(historyLoaded&&historyLoadedAtVersion!==currentHistoryVersion)loadHistory(true);
@@ -2365,7 +2384,7 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
             "chunks_total": len(chunks),
             "delivery_mode": plan.get("mode") or ("chunked" if chunks else "atomic"),
             "subtasks_passed": sum(value.get("status") == "passed" for value in subtasks.values()),
-            "subtasks_total": len(subtasks),
+            "subtasks_total": sum(value.get("status") != "superseded" for value in subtasks.values()),
             "review_passes": sum(request.get("status") == "passed" for request in requests),
             "release_status": release.get("status", ""),
             "owner_decision": decision.get("decision", ""),

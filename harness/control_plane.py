@@ -78,12 +78,13 @@ def tick(root: Path, stale_after: int = board.AGENT_STALE_SECONDS) -> dict[str, 
         return {
             "status": "paused", "recovered": [], "recovery_wakes": [],
             "final_pass_routes": [], "review_routes": [],
-            "release_outcomes": [], "stalled": [],
+            "release_outcomes": [], "stalled": [], "owner_alerts": [],
         }
     recovered = board.recover_interrupted_executions(root)
     recovery_wakes = _wake_recovered(root, recovered)
     final_pass_routes = _route_final_pass_completion(root)
     review_routes = board.route_open_reviews(root)
+    owner_alerts = board.due_owner_alerts(root)
     release_outcomes = release_coordinator.coordinate(root)
     stalled = board.mark_stalled(root, stale_after)
     return {
@@ -91,4 +92,5 @@ def tick(root: Path, stale_after: int = board.AGENT_STALE_SECONDS) -> dict[str, 
         "recovery_wakes": recovery_wakes, "final_pass_routes": final_pass_routes,
         "review_routes": review_routes,
         "release_outcomes": release_outcomes, "stalled": stalled,
+        "owner_alerts": owner_alerts,
     }
