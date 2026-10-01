@@ -175,7 +175,9 @@ delivery plan or implement until the confirmation is recorded.
      subtask that was never built, retire it with `supersede-subtask --task
      <task> --subtask <id> --reason "<owner's reason>" [--replaced-by <id>]`
      instead of leaving it open; live, failing, or still-needed work cannot be
-     retired, and every live subtask must still pass.
+     retired, and every live subtask must still pass. Owning source under
+     `<app>/src` also owns its rebuilt `<app>/dist`; commit both together. A
+     tracked file under an ignored folder is committed by naming it explicitly.
    Record the classification and a concise rationale with `define-plan`. Never
    create a chunk merely to satisfy process.
 5. Implement the current atomic task, chunk, or product subtask. Run its narrow
@@ -407,6 +409,34 @@ owner will not meet in normal use), test housekeeping, wording and style are
 NON-BLOCKING notes in the verdict summary, never a reason for another repair
 round. When in doubt, PASS with notes. This is the verdict-level twin of the
 material-rows-only rule for the Challenge Ledger below.
+
+**End-to-end result rule (owner, 2026-09-30).** The reviewer's job is to test
+the product end to end and check the result the owner actually receives, not
+only the code or the pieces. When a Studio feature produces something the owner
+sees or uses (a logo, image, deck, document, film, file, or screen), never pass
+it on unit checks, synthetic fixtures, stubs, or code reading alone.
+
+Before any PASS that affects such an outcome, and always at final acceptance:
+
+1. Inspect a REAL run's output exactly as the owner receives it:
+   - the files in the owner's Deliverables folder;
+   - the task page payload (result, artifacts and download links);
+   - whether the promised artifact actually exists, opens, and shows what was
+     asked for. Open the image, deck, or file and look at it.
+2. Trace the owner's path. Start the service the way the owner would, follow
+   each choice or click, and confirm the finished task shows the result on the
+   page and in Deliverables.
+3. If no real run exists, FAIL for missing owner-visible proof, or ask Delivery
+   for a real run before deciding. The same applies when the proof relies on
+   placeholders, stubbed verification, or fixtures built to match the code's
+   assumptions.
+
+Code-level and fixture checks may supplement this check but never replace it.
+
+The material-only rule limits what blocks; it never limits how thoroughly the
+owner-visible result is checked. A missing or unusable promised result is always
+material.
+
 The Challenge Ledger admits material rows only: every row names the
 acceptance criterion it challenges, the procedural classes named in the
 Delivery quality bar are not written, and the ledger stays within the row cap

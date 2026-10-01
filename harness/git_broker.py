@@ -16,7 +16,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
@@ -93,6 +93,24 @@ def _porcelain_paths(output: str) -> list[str]:
             paths.append(entries[index])
         index += 1
     return sorted(set(paths))
+
+
+# A subtask that owns source under ``<app>/src`` also owns that app's rebuilt
+# output ``<app>/dist`` (batch 2 item B): rebuilding the bundle is a mechanical
+# consequence of the source change, not new scope.
+BUILD_OUTPUT_DIRECTORIES = {"src": ("dist",)}
+
+
+def effective_owned_paths(owned_paths: Sequence[str]) -> list[str]:
+    """Declared ownership plus the build output each owned source tree rebuilds."""
+    scopes = [str(scope) for scope in owned_paths or ["*"]]
+    derived = []
+    for scope in scopes:
+        parts = PurePosixPath(scope).parts
+        for index, part in enumerate(parts):
+            for output in BUILD_OUTPUT_DIRECTORIES.get(part, ()):
+                derived.append(str(PurePosixPath(*parts[:index], output)))
+    return sorted(set(scopes) | set(derived))
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -664,9 +682,23 @@ class GitBroker:
             repository = self._repository_for(state, task)
             prepared = self._validate_paths(workspace, paths)
             self._refuse_required_filters(workspace, repository, prepared)
-            staged = self._run_git(["add", "--", *prepared], cwd=workspace, writable=[workspace, repository])
-            if staged.returncode != 0:
-                raise BrokerError("Git staging failed: " + (staged.stderr.strip() or staged.stdout.strip()))
+            # A file the agent names explicitly is committed even when it sits
+            # under an ignored folder (batch 2 item B: packaging/build.sh). Only
+            # the named paths are forced; nothing ignored is ever swept in.
+            ignored = self._run_git(
+                ["check-ignore", "-z", "--stdin", "--no-index"], cwd=workspace,
+                writable=[workspace, repository], input="\0".join(prepared) + "\0",
+            )
+            if ignored.returncode not in {0, 1}:
+                raise BrokerError("could not inspect ignore rules safely")
+            forced = sorted(set(ignored.stdout.split("\0")) & set(prepared))
+            regular = [path for path in prepared if path not in forced]
+            for group, arguments in ((regular, ["add", "--"]), (forced, ["add", "-f", "--"])):
+                if not group:
+                    continue
+                staged = self._run_git([*arguments, *group], cwd=workspace, writable=[workspace, repository])
+                if staged.returncode != 0:
+                    raise BrokerError("Git staging failed: " + (staged.stderr.strip() or staged.stdout.strip()))
             manifest = self._run_git(accepted_bytes.name_only_arguments(cached=True), cwd=workspace, writable=[workspace, repository])
             staged_paths = sorted(line for line in manifest.stdout.splitlines() if line)
             if manifest.returncode != 0 or not staged_paths:
@@ -990,7 +1022,7 @@ class GitBroker:
         reviewed_manifest = sorted(set(str(path) for path in request.get("reviewed_files", [])))
         if manifest_result.returncode != 0 or not manifest or manifest != reviewed_manifest:
             raise RecoveryHoldError("subtask fold manifest differs from the independently reviewed candidate")
-        owned_paths = list(item.get("owned_paths") or ["*"])
+        owned_paths = effective_owned_paths(item.get("owned_paths") or ["*"])
         outside = [path for path in manifest if not self._path_is_owned(path, owned_paths)]
         if outside:
             raise AuthorizationError(

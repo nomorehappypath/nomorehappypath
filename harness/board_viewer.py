@@ -889,7 +889,16 @@ function agentStatusSummary(agent,state,contracts){
 let decisionTask='';
 let pushTask='';
 
+// Batch 2 item F (owner, 2026-10-01): accepting closes the release, and the
+// preview supervisor then stops its test copy (View app), along with any task
+// the owner started in it. Say so first, plainly.
+function testCopyRunning(state,task){
+  const status=((state.releases||{})[task]?.preview||{}).status;
+  return status==='ready'||status==='starting';
+}
+
 async function submitAccepted(task){
+  if(testCopyRunning(lastBoard?.state||{},task)&&!window.confirm('The test copy of this release is still running on this computer (View app).\n\nIf a task is still running in the test copy, Accept will stop it: accepting closes the test copy.\n\nAccept anyway?'))return;
   try{
     await call('/api/releases/'+encodeURIComponent(task)+'/decision',{decision:'accepted'});
     el('#notice').textContent='Your response was saved with this release.';

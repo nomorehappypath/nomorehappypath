@@ -6472,7 +6472,7 @@ def _base_carried_accepted_paths(
     instead was rejected: a manifest means the bytes this subtask's own
     commits changed, and every consumer relies on that.)
     """
-    owned = list(item.get("owned_paths") or ["*"])
+    owned = git_broker.effective_owned_paths(item.get("owned_paths") or ["*"])
     carried: list[dict[str, Any]] = []
     for request in _task_requests(state, task):
         if request.get("phase") != "subtask_acceptance" or request.get("status") != "passed":
@@ -6501,8 +6501,9 @@ def _base_carried_accepted_paths(
 
 
 def _subtask_ownership_overlaps(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    left_paths = left.get("owned_paths") or ["*"]
-    right_paths = right.get("owned_paths") or ["*"]
+    # Effective scopes: two subtasks editing one app's src both rebuild its dist.
+    left_paths = git_broker.effective_owned_paths(left.get("owned_paths") or ["*"])
+    right_paths = git_broker.effective_owned_paths(right.get("owned_paths") or ["*"])
     if any(_path_scopes_overlap(a, b) for a in left_paths for b in right_paths):
         return True
     left_surfaces = set(left.get("owned_surfaces") or [])
@@ -6542,7 +6543,7 @@ def _path_is_owned(path: str, owned_paths: list[str]) -> bool:
 
 
 def _require_owned_files(item: dict[str, Any], paths: list[str], label: str) -> None:
-    owned_paths = list(item.get("owned_paths") or ["*"])
+    owned_paths = git_broker.effective_owned_paths(item.get("owned_paths") or ["*"])
     outside = sorted(path for path in paths if not _path_is_owned(path, owned_paths))
     if outside:
         # An ownership refusal is a broker-class refusal (still a ValueError
@@ -6742,6 +6743,100 @@ def supersede_subtask(
             + (f" (replaced by {', '.join(replaced_by)})" if replaced_by else "") + f": {reason}",
         })
         return json.loads(json.dumps(item))
+
+
+def close_released_administratively(
+    root: ProjectRoot, agent_id: str, task: str, commit: str, reason: str,
+) -> dict[str, Any]:
+    """Record a task the owner shipped by hand as released and accepted (batch 2 item A2).
+
+    2026-10-01: the owner merged headless-browser-maya-mac into main himself
+    (0c48126 contains the task head d88fa78), so Owner Accept, which needs an
+    unchanged main and a final review, can never run. The CTO (an agent id)
+    or the owner (the local CLI, no agent) records the close with a reason,
+    and only after git proves the commit is on main and contains the task's
+    own branch head. Owner Accept and every other gate are unchanged.
+    """
+    task, commit, reason = str(task or "").strip(), str(commit or "").strip(), str(reason or "").strip()
+    if not task or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
+        raise ValueError("close-released requires --task and a commit id")
+    if len(reason) < 8:
+        raise ValueError("close-released requires the owner's plain-language reason")
+    with locked_state(root) as state:
+        if agent_id:
+            agent = _require_writable_agent(state, agent_id)
+            if agent.get("role") != "cto" or not agent.get("active"):
+                raise ValueError("only the CTO or the owner may close a task administratively")
+            by = {"role": "cto", "agent": agent["id"]}
+        else:
+            agent, by = None, {"role": "owner", "agent": ""}
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError(f"{task} was cancelled; there is nothing to release")
+        if _task_finished(state, task):
+            raise ValueError(f"{task} is already released or accepted")
+        repository = str((state.get("task_repositories") or {}).get(task) or "")
+        branch = str(((state.get("task_branches") or {}).get(task) or {}).get("branch") or "")
+        if not repository or not branch:
+            raise ValueError(f"{task} has no governed repository and task branch to check against")
+        if not Path(repository).is_dir():
+            raise ValueError(f"the project repository for {task} is not reachable at {repository}")
+
+        def resolve(reference: str) -> str:
+            probe = git_process.run(
+                ["git", "rev-parse", "--verify", "--quiet", reference + "^{commit}"],
+                cwd=repository, capture_output=True, text=True, timeout=30,
+            )
+            return probe.stdout.strip() if probe.returncode == 0 else ""
+
+        def contains(ancestor: str, descendant: str) -> bool:
+            return git_process.run(
+                ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+                cwd=repository, capture_output=True, text=True, timeout=30,
+            ).returncode == 0
+
+        released = resolve(commit)
+        main = resolve("refs/heads/main")
+        head = resolve(branch)
+        if not released:
+            raise ValueError(f"commit {commit} does not exist in the project repository")
+        if not main or not contains(released, main):
+            raise ValueError(f"commit {released[:12]} is not on main; only work already in main can be closed this way")
+        if not head or not contains(head, released):
+            raise ValueError(
+                f"commit {released[:12]} does not contain the task's own work (task head {head[:12] or 'unknown'}); "
+                "nothing proves this task shipped"
+            )
+        closed_at = now()
+        record = {
+            "reason": reason, "by_role": by["role"], "by_agent": by["agent"], "at": closed_at,
+            "released_commit": released, "task_head": head, "main_commit": main,
+        }
+        # The same shape a CTO-recorded release has, so every reader of
+        # releases (board view, history, Mission Control) works unchanged.
+        release = state.setdefault("releases", {}).setdefault(task, {
+            "task": task, "git_broker_governed": False, "acceptance_base_commit": "",
+            "acceptance_manifest": [], "runtime_verification_deferred_to_target_acceptance": False,
+            "checks": {}, "owner_test_steps": [], "lifecycle": {},
+        })
+        release.update({
+            "status": RELEASE_ACCEPTED, "head_commit": released, "accepted_at": closed_at,
+            "cto_id": by["agent"] or "owner", "recorded_at": release.get("recorded_at") or closed_at,
+            "administrative_close": record,
+        })
+        state.setdefault("release_decisions", {})[task] = {
+            "task": task, "decision": "accepted", "reason": reason, "attachments": [],
+            "recorded_at": closed_at, "administrative": True,
+        }
+        state.setdefault("git_acceptances", {})[task] = {
+            "commit": released, "accepted_at": closed_at, "administrative": True,
+        }
+        returned = _return_reviewers_to_queue(state, task, "accepted")
+        who = "The CTO" if by["role"] == "cto" else "The owner"
+        _event(state, "task_closed_administratively", agent, {
+            "task": task, "commit": released, "reason": reason, "returned_reviewers": returned,
+            "message": f"{who} recorded {task} as released and accepted at {released[:12]} (shipped outside the board): {reason}",
+        })
+        return {"task": task, **record}
 
 
 def start_subtask(root: ProjectRoot, agent_id: str, subtask: str) -> dict[str, Any]:
@@ -7547,6 +7642,26 @@ def _application_finalization_diff(
                 return later
         return None
 
+    def _restoring_acceptance(accepted: dict[str, Any], path: str) -> dict[str, Any] | None:
+        # Backlog #16: a path deleted by one acceptance and put back exactly
+        # as another acceptance's own manifest certified it. The final bytes
+        # are byte-identical to independently reviewed ones, so that
+        # acceptance covers them; no new subtask has to re-certify them.
+        final_identity = _present_identity(accepted_bytes.tree_entry(workspace, final_commit, path))
+        if not final_identity:
+            return None
+        for other in sorted(passed_acceptances, key=_acceptance_order):
+            if other.get("id") == accepted.get("id"):
+                continue
+            manifest = other["accepted_byte_manifest"]
+            if path not in (manifest.get("paths") or []):
+                continue
+            accepted_bytes.verify_manifest(workspace, manifest)
+            entry = next((item for item in manifest.get("entries", []) if item.get("path") == path), None)
+            if _present_identity(entry) == final_identity:
+                return other
+        return None
+
     for subtask, item in sorted(_live_subtasks(plan).items()):
         candidates = [
             request for request in task_requests
@@ -7572,16 +7687,21 @@ def _application_finalization_diff(
             if accepted_bytes.tree_entry(workspace, final_commit, entry["path"]) == entry:
                 continue
             later = _superseding_acceptance(accepted, entry["path"])
-            if later is None:
+            restored = None if later is not None else _restoring_acceptance(accepted, entry["path"])
+            if later is None and restored is None:
                 raise ValueError(
                     "integrated tree does not contain every exact accepted entry: " + entry["path"]
                 )
-            superseded.append({
-                "path": entry["path"], "superseded_by": later.get("id", ""),
-                "in_superseding_manifest": entry["path"] in later["accepted_byte_manifest"].get("paths", []),
-                "superseding_subtask": later.get("subtask", ""),
-                "reviewed_commit": later["accepted_byte_manifest"].get("reviewed_commit", ""),
-            })
+            cover = later or restored
+            record = {
+                "path": entry["path"], "superseded_by": cover.get("id", ""),
+                "in_superseding_manifest": entry["path"] in cover["accepted_byte_manifest"].get("paths", []),
+                "superseding_subtask": cover.get("subtask", ""),
+                "reviewed_commit": cover["accepted_byte_manifest"].get("reviewed_commit", ""),
+            }
+            if restored is not None:
+                record["restored_identical"] = True
+            superseded.append(record)
         verification = {
             "status": "verified", "revision": final_commit,
             "tree": accepted_bytes.tree_delta(workspace, final_commit, final_commit)["reviewed_tree"],
@@ -7615,7 +7735,19 @@ def _application_finalization_diff(
                 accepted_paths[path] = {**json.loads(json.dumps(certified_entry)), "superseded_by": record["superseded_by"]}
                 continue
             if path in accepted_paths:
-                raise ValueError(f"accepted-byte manifests overlap at {path}")
+                # Backlog #16: two acceptances certifying the SAME final bytes
+                # (a file restored exactly as an earlier review accepted it)
+                # are one certification, not a conflict. Any difference in
+                # bytes, or bytes the final tree does not carry, still refuses.
+                final_identity = _present_identity(accepted_bytes.tree_entry(workspace, final_commit, path))
+                if not (
+                    final_identity
+                    and _present_identity(accepted_paths[path]) == final_identity
+                    and _present_identity(entry) == final_identity
+                ):
+                    raise ValueError(f"accepted-byte manifests overlap at {path}")
+                verification.setdefault("identical_recertified_paths", []).append(path)
+                continue
             accepted_paths[path] = json.loads(json.dumps(entry))
         accepted_manifests.append({
             "subtask": subtask,
@@ -10668,6 +10800,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("define-plan"); p.add_argument("--agent", required=True); p.add_argument("--mode", required=True, choices=sorted(DELIVERY_MODES)); p.add_argument("--rationale", required=True)
     p = sub.add_parser("declare-subtasks"); p.add_argument("--agent", required=True); p.add_argument("--subtask", action="append", required=True, metavar="ID|TITLE|ACCEPTANCE_PROOF|DEPENDENCIES|OWNED_PATHS|OWNED_SURFACES"); p.add_argument("--reason", default="")
     p = sub.add_parser("start-subtask"); p.add_argument("--agent", required=True); p.add_argument("--subtask", required=True)
+    p = sub.add_parser("close-released"); p.add_argument("--agent", default=""); p.add_argument("--task", required=True); p.add_argument("--commit", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("supersede-subtask"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--subtask", required=True); p.add_argument("--reason", required=True); p.add_argument("--replaced-by", action="append", default=[])
     p = sub.add_parser("declare-subtask-chunks"); p.add_argument("--agent", required=True); p.add_argument("--subtask", required=True); p.add_argument("--chunk", action="append", required=True, metavar="NAME:DESCRIPTION"); p.add_argument("--reason", default="")
     p = sub.add_parser("git-commit"); p.add_argument("--agent", required=True); p.add_argument("--path", action="append", required=True); p.add_argument("--message", required=True); p.add_argument("--subtask", default="")
@@ -10746,6 +10879,7 @@ def main(argv: list[str] | None = None) -> int:
                 })
             out = declare_subtasks(root, args.agent, subtasks, args.reason)
         elif args.command == "start-subtask": out = start_subtask(root, args.agent, args.subtask)
+        elif args.command == "close-released": out = close_released_administratively(root, args.agent, args.task, args.commit, args.reason)
         elif args.command == "supersede-subtask": out = supersede_subtask(root, args.agent, args.task, args.subtask, args.reason, args.replaced_by)
         elif args.command == "declare-subtask-chunks":
             chunks = [tuple(raw.split(":", 1)) if ":" in raw else ("", "") for raw in args.chunk]

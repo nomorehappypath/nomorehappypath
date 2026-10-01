@@ -195,6 +195,74 @@ class FinalizationDiffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exact accepted entry"):
             board._application_finalization_diff(self.root, state, self.root, "TASK", deleted)
 
+    def _deleted_then_restored(self, restored_text="accepted\n"):
+        """Backlog #16: certified present by `product`, deleted by a later `cleanup` acceptance, then put back."""
+        self.git("rm", "-q", "accepted.txt"); self.git("commit", "-qm", "cleanup deletes the old file")
+        cleanup = self.git("rev-parse", "HEAD")
+        state = self.state()
+        state["delivery_plans"]["TASK"]["subtasks"]["cleanup"] = {"status": "passed", "integrated_commit": cleanup}
+        state["qa_requests"]["cleanup-pass"] = {
+            "id": "cleanup-pass", "task": "TASK", "cycle": 1,
+            "phase": "subtask_acceptance", "subtask": "cleanup",
+            "status": "passed", "completed_at": "2026-08-18T02:00:00+00:00",
+            "integrated_commit": cleanup,
+            "accepted_byte_manifest": accepted_bytes.build_manifest(self.root, self.final, cleanup),
+        }
+        (self.root / "accepted.txt").write_text(restored_text, encoding="utf-8")
+        self.git("add", "accepted.txt"); self.git("commit", "-qm", "restore the old file")
+        return state, self.git("rev-parse", "HEAD")
+
+    def test_a_file_restored_to_identical_certified_bytes_needs_no_new_subtask(self):
+        state, restored = self._deleted_then_restored()
+        result = board._application_finalization_diff(self.root, state, self.root, "TASK", restored)
+        self.assertEqual(result["accepted_paths"], ["accepted.txt"], "accepted once, via the certifying manifest")
+        self.assertEqual(result["paths"], ["finalization.txt"])
+        cleanup = next(item for item in result["accepted_manifests"] if item["subtask"] == "cleanup")
+        record = cleanup["verification"]["superseded_paths"][0]
+        self.assertEqual((record["path"], record["superseded_by"], record["superseding_subtask"]),
+                         ("accepted.txt", "subtask-pass", "product"))
+        self.assertTrue(record["restored_identical"])
+        self.assertTrue(record["in_superseding_manifest"])
+
+    def test_a_file_restored_with_different_bytes_still_fails_closed(self):
+        state, restored = self._deleted_then_restored("accepted, but not quite\n")
+        with self.assertRaisesRegex(ValueError, "exact accepted entry: accepted.txt"):
+            board._application_finalization_diff(self.root, state, self.root, "TASK", restored)
+
+    def _restored_by_a_later_review(self, restored_text="accepted\n"):
+        """#16 as it happened: certified by `product`, deleted by `cleanup`, restored by a later reviewed `restore`."""
+        state, restored = self._deleted_then_restored(restored_text)
+        cleanup = state["qa_requests"]["cleanup-pass"]["integrated_commit"]
+        state["delivery_plans"]["TASK"]["subtasks"]["restore"] = {"status": "passed", "integrated_commit": restored}
+        state["qa_requests"]["restore-pass"] = {
+            "id": "restore-pass", "task": "TASK", "cycle": 1,
+            "phase": "subtask_acceptance", "subtask": "restore",
+            "status": "passed", "completed_at": "2026-08-18T03:00:00+00:00",
+            "integrated_commit": restored,
+            "accepted_byte_manifest": accepted_bytes.build_manifest(self.root, cleanup, restored),
+        }
+        return state, restored
+
+    def test_identical_bytes_certified_by_an_earlier_and_a_later_review_are_one_certification(self):
+        state, restored = self._restored_by_a_later_review()
+        result = board._application_finalization_diff(self.root, state, self.root, "TASK", restored)
+        self.assertEqual(result["accepted_paths"], ["accepted.txt"])
+        self.assertEqual(result["paths"], ["finalization.txt"])
+        by_subtask = {item["subtask"]: item["verification"] for item in result["accepted_manifests"]}
+        self.assertEqual(by_subtask["cleanup"]["superseded_paths"][0]["superseded_by"], "restore-pass")
+        self.assertEqual(
+            by_subtask["restore"].get("identical_recertified_paths", []) + by_subtask["product"].get("identical_recertified_paths", []),
+            ["accepted.txt"], "attributed once; the second identical certification is recorded, not an overlap",
+        )
+
+    def test_bytes_changed_after_the_restoring_review_still_fail_closed(self):
+        state, _restored = self._restored_by_a_later_review()
+        (self.root / "accepted.txt").write_text("changed after every review\n", encoding="utf-8")
+        self.git("add", "accepted.txt"); self.git("commit", "-qm", "unreviewed change")
+        changed = self.git("rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "exact accepted entry: accepted.txt"):
+            board._application_finalization_diff(self.root, state, self.root, "TASK", changed)
+
     def test_reevaluate_finalization_clears_a_stale_hold_under_the_current_rule_and_names_the_finding(self):
         """Directive TASK F PART 3: governed recovery for a task stuck like the 2026-09-23 one."""
         state, later = self._later_integration_state()
