@@ -63,6 +63,7 @@ ALL_BOARD_OPERATIONS = {
     "owner-action", "owner-action-done",
     "screen-check",
     "supersede-subtask",
+    "close-released",
 }
 COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
@@ -103,6 +104,8 @@ CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "owner-action", "owner-action-done",
     # Backlog #17: the CTO retires an obsolete subtask, reason recorded.
     "supersede-subtask",
+    # Batch 2 A2: the CTO records a task the owner shipped by hand.
+    "close-released",
 }
 AUTHORIZATION_MATRIX = {
     operation: frozenset(
@@ -139,7 +142,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
-    "supersede-subtask",
+    "supersede-subtask", "close-released",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",
