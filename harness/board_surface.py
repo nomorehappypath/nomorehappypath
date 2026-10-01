@@ -26,7 +26,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 from urllib.parse import urlparse
 
 from harness import control
@@ -62,6 +62,7 @@ ALL_BOARD_OPERATIONS = {
     "reintegrate-main",
     "owner-action", "owner-action-done",
     "screen-check",
+    "supersede-subtask",
 }
 COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
@@ -73,6 +74,8 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "repin-final-review",
     # Defect #19: Delivery merges main into its own task branch through the broker.
     "reintegrate-main",
+    # Backlog #17: Product Management retires an obsolete subtask of its own task.
+    "supersede-subtask",
     # Owner 2026-09-29 (option 1): the harness renders the project's own local
     # page outside the agent sandbox; the agent never gets a browser.
     "screen-check",
@@ -98,6 +101,8 @@ CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     # Defects #9/#22: what the owner must do is pinned in Mission Control, not
     # typed into a scrolling terminal.
     "owner-action", "owner-action-done",
+    # Backlog #17: the CTO retires an obsolete subtask, reason recorded.
+    "supersede-subtask",
 }
 AUTHORIZATION_MATRIX = {
     operation: frozenset(
@@ -122,7 +127,7 @@ UPLOAD_ARGUMENTS = {
 RAW_PATH_OPERATIONS = {"attach-workspace", "bind-repository"}
 IDENTITY_AGENT_ARGUMENT = "--agent"
 IDENTITY_SESSION_ARGUMENT = "--session-id"
-CURRENT_TASK_OPERATIONS = {"record-finding", "claim-release-repair", "repin-final-review"}
+CURRENT_TASK_OPERATIONS = {"record-finding", "claim-release-repair", "repin-final-review", "supersede-subtask"}
 AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
@@ -134,6 +139,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
+    "supersede-subtask",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",
@@ -158,6 +164,8 @@ CONCURRENT_BOARD_OPERATIONS = {
 # reported ready). They skip only the gateway's coarse serialization; the
 # board's own file lock still orders every state access.
 SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view"}
+# A refused read changes nothing, so it never opens a hold (backlog #15).
+READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view"}
 
 
 # Reserved legacy frame sentinel (pre-1.0 wire format); kept for compatibility.
@@ -549,6 +557,31 @@ def _without_client_environment() -> Iterator[None]:
         os.environ.update(saved)
 
 
+def _refusal_task(state: dict[str, Any], agent: dict[str, Any], operation: str, arguments: Sequence[str]) -> str:
+    """The task a repeatedly refused command is about, or "" for no hold (backlog #15).
+
+    Never a guess: the CTO's own task is GLOBAL_MONITOR, and falling back to
+    the project's first task put holds on long-finished, unrelated tasks. A
+    read-only command, or a task already released or accepted, gets no hold.
+    """
+    from harness import board
+    if operation in READ_ONLY_BOARD_OPERATIONS:
+        return ""
+    try:
+        task = _argument_value(list(arguments), "--task") or ""
+        finding = _argument_value(list(arguments), "--finding") or ""
+    except SurfaceProtocolError:
+        return ""
+    if not task:
+        task = str(((state.get("deferred_findings") or {}).get(finding) or {}).get("task") or "") if finding else ""
+    if not task:
+        own = str(agent.get("task") or "")
+        task = "" if own in {"AWAITING_OWNER_DIRECTION", "GLOBAL_MONITOR", "REVIEW_QUEUE"} else own
+    if not task or board._task_finished(state, task):
+        return ""
+    return task
+
+
 class CommandGateway:
     """Authenticate, authorize, serialize, and execute board CLI commands."""
 
@@ -569,7 +602,7 @@ class CommandGateway:
         self._refusals: dict[tuple[str, str], list[float]] = {}
         self._refusal_holds: set[tuple[str, str]] = set()
 
-    def _track_refusal(self, identity, operation: str, error: str) -> None:
+    def _track_refusal(self, identity, operation: str, error: str, arguments: Sequence[str] = ()) -> None:
         """Repeated identical refusals are a wedge, not agent noise.
 
         The 2026-08-21 run repeated one refusal for four hours while the
@@ -592,9 +625,7 @@ class CommandGateway:
                 value for value in (state.get("agents") or {}).values()
                 if value.get("session_id") == identity.session_id
             ), None)
-            task = str((agent or {}).get("task") or "")
-            if not task or task in {"AWAITING_OWNER_DIRECTION", "GLOBAL_MONITOR", "REVIEW_QUEUE"}:
-                task = next(iter(state.get("task_owner_directions") or {}), "")
+            task = _refusal_task(state, agent or {}, operation, arguments)
             if not task:
                 return
             board.record_control_plane_hold(
@@ -700,7 +731,7 @@ class CommandGateway:
             claimed_task = _argument_value(arguments, "--task")
             if claimed_task is not None and claimed_task != identity.task:
                 raise SurfaceAuthorizationError("caller task does not match the authenticated session")
-            if operation in {"record-finding", "claim-release-repair", "repin-final-review"}:
+            if operation in {"record-finding", "claim-release-repair", "repin-final-review", "supersede-subtask"}:
                 arguments = _canonical_argument(arguments, "--task", identity.task)
         if operation == "screen-check":
             from urllib.parse import urlsplit
@@ -907,7 +938,7 @@ class CommandGateway:
                             finally:
                                 fcntl.flock(execution_lock.fileno(), fcntl.LOCK_UN)
             except SurfaceProtocolError as refusal:
-                self._track_refusal(identity, operation, str(refusal))
+                self._track_refusal(identity, operation, str(refusal), arguments)
                 raise
             board_succeeded = True
             return {

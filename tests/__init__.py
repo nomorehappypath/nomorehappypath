@@ -95,6 +95,8 @@ def _pin_run_root() -> Path:
     codex_home = run_root / CODEX_HOME_NAME
     codex_home.mkdir(mode=0o700, exist_ok=True)
     os.environ["CODEX_HOME"] = str(codex_home)
+    # No test may post a notification on the owner's desktop.
+    os.environ["HARNESS_DESKTOP_NOTIFICATIONS"] = "off"
     atexit.register(shutil.rmtree, run_root, True)
     return run_root
 

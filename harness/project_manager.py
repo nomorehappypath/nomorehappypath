@@ -329,6 +329,13 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                     "Your decision needed: the requirements are ready. Open Mission Control and "
                     "press Go ahead, or Modify to ask for changes."
                 )
+            # Batch 2 item C: a review waiting on a signed-out reviewer stops all
+            # progress; the card says so before anything else.
+            needed = state.get("reviewer_needed") or {}
+            if isinstance(needed, dict) and needed.get("sign_in"):
+                latest_progress = (
+                    f"{board.REVIEWER_SIGN_IN_HEADLINE}. Open the Reviewer's terminal and run /login."
+                )
             event_times = [str(event.get("at", "")) for event in events if event.get("at")]
             if event_times:
                 last_board_activity = max(event_times)

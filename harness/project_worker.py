@@ -17,6 +17,7 @@ import re
 import secrets
 import signal
 import shlex
+import shutil
 import socket
 import socketserver
 import subprocess
@@ -53,6 +54,32 @@ CHAT_RECEIPT_LIMIT = 24
 CHAT_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 MANAGER_PROXY_HEADER = "X-Harness-Manager-Proxy"
 MANAGER_PROXY_TOKEN_ENV = "HARNESS_MANAGER_PROXY_TOKEN"
+# "off" silences desktop notifications (the test suite pins it).
+DESKTOP_NOTIFICATIONS_ENV = "HARNESS_DESKTOP_NOTIFICATIONS"
+DESKTOP_NOTIFY_TIMEOUT_SECONDS = 10
+
+
+def desktop_notify(title: str, message: str, project_name: str = "") -> bool:
+    """Show one desktop notification to the owner (batch 2 item C).
+
+    No shell: the texts travel as arguments, so nothing in them is executed.
+    """
+    if os.environ.get(DESKTOP_NOTIFICATIONS_ENV, "").strip().lower() == "off":
+        return False
+    heading = f"NoMoreHappyPath — {project_name}" if project_name else "NoMoreHappyPath"
+    if sys.platform == "darwin":
+        command = [
+            "/usr/bin/osascript", "-e", "on run argv",
+            "-e", "display notification (item 3 of argv) with title (item 1 of argv) subtitle (item 2 of argv)",
+            "-e", "end run", heading, title, message,
+        ]
+    else:
+        sender = shutil.which("notify-send")
+        if not sender:
+            return False
+        command = [sender, heading, f"{title}. {message}"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=DESKTOP_NOTIFY_TIMEOUT_SECONDS, check=False)
+    return result.returncode == 0
 
 
 class ChatBusy(ValueError):
@@ -205,6 +232,7 @@ class ProjectWatchdog:
         self.thread: threading.Thread | None = None
         self.last_report: dict = {}
         self.self_heal = None  # set by serve_worker once terminals can be opened
+        self.notify = None  # set by serve_worker: sends one owner alert outside the page
 
     def tick(self) -> list[dict]:
         self.last_report = control_plane.tick(self.root, self.stale_after)
@@ -212,6 +240,13 @@ class ProjectWatchdog:
             # Backlog #7: the harness restarts stuck agents itself. It runs
             # here, in the worker, because only the worker may open terminals.
             self.last_report["self_heal"] = self.self_heal()
+        for alert in self.last_report.get("owner_alerts", []):
+            if self.notify is None:
+                continue
+            try:
+                self.notify(alert)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                print(f"HARNESS PROJECT WATCHDOG | owner notification failed: {str(error)[:300]}", flush=True)
         return list(self.last_report.get("stalled", []))
 
     def _run(self) -> None:
@@ -633,6 +668,7 @@ def serve(
                 raise RuntimeError(str(error)) from error
 
         watchdog.self_heal = lambda: self_heal.run_once(root, self_heal_launch, create=self_heal_create)
+        watchdog.notify = lambda alert: desktop_notify(alert["title"], alert["message"], project_name)
         watchdog.start()
         preview_supervisor.start()
         print(f"Live Harness Project Worker: {address['endpoint']}/", flush=True)

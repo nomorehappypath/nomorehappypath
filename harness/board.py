@@ -49,6 +49,9 @@ AWAITING_OWNER_DIRECTION = "AWAITING_OWNER_DIRECTION"
 REVIEW_EXECUTION_STALE_SECONDS = 90
 REVIEW_EXECUTION_HEARTBEAT_SECONDS = 5
 REVIEW_ROUTE_RETRY_SECONDS = 90
+# Batch 2 item C: a review waiting on a signed-out reviewer this long alerts the owner once.
+REVIEWER_SIGN_IN_ALERT_SECONDS = 600
+REVIEWER_SIGN_IN_HEADLINE = "Reviewer needs sign-in: nothing will progress"
 REVIEW_RESERVATION_SECONDS = 600
 # Normal LLM turns and focused test runs on the observed board regularly take
 # 93-99 seconds. Four minutes keeps those healthy turns green. Only durable board
@@ -1271,6 +1274,22 @@ def record_finding(
         return dict(finding)
 
 
+FINDING_NEXT_STEP = {
+    "needs_triage": "the CTO rules on it with finding-triage (repeat, distinct or cleared)",
+    "in_scope": "use finding-resolved once the fix is re-tested",
+    "fix_requested": "use finding-resolved once the fix is re-tested",
+    "fix_in_progress": "use finding-resolved once the fix is re-tested",
+    "deferred": "it waits for the owner's finding-decision (fix or do_not_fix)",
+}
+
+
+def _finding_refusal(finding_id: str, finding: dict[str, Any], rule: str) -> ValueError:
+    """A refusal that names the finding's status and the command that applies (backlog #15)."""
+    status = str(finding.get("status") or "unknown")
+    step = FINDING_NEXT_STEP.get(status, "it is closed; no finding command applies")
+    return ValueError(f"{rule}: finding {finding_id} is {status}; {step}")
+
+
 def triage_finding(
     root: Path,
     finding_id: str,
@@ -1309,7 +1328,7 @@ def triage_finding(
         if not finding:
             raise ValueError(f"unknown finding: {finding_id}")
         if finding.get("status") != "needs_triage":
-            raise ValueError("only a needs_triage finding can be triaged")
+            raise _finding_refusal(finding_id, finding, "only a needs_triage finding can be triaged")
         triaged_at = now()
         if verdict == "cleared":
             if not note:
@@ -1404,9 +1423,9 @@ def record_finding_decision(root: Path, finding_id: str, decision: str) -> dict[
         if not finding:
             raise ValueError(f"unknown finding: {finding_id}")
         if finding.get("status") == "needs_triage":
-            raise ValueError("this finding has not been triaged yet: CTO must rule repeat or distinct first")
+            raise _finding_refusal(finding_id, finding, "this finding has not been triaged yet")
         if finding.get("status") != "deferred":
-            raise ValueError("this finding already has an owner decision")
+            raise _finding_refusal(finding_id, finding, "this finding already has an owner decision")
         decided_at = now()
         queue_position = None
         if decision == "fix":
@@ -1514,7 +1533,7 @@ def resolve_finding(root: Path, finding_id: str, evidence: str = "") -> dict[str
         if not finding:
             raise ValueError(f"unknown finding: {finding_id}")
         if finding.get("status") not in {"in_scope", "fix_requested", "fix_in_progress"}:
-            raise ValueError("only an in-scope or owner-approved finding can be resolved")
+            raise _finding_refusal(finding_id, finding, "only an in-scope or owner-approved finding can be resolved")
         finding.update({"status": "resolved", "resolved_at": now(), "resolution_evidence": evidence, "next_action": "Resolved and included in the current task evidence."})
         _event(state, "finding_resolved", None, {"task": finding.get("task", ""), "finding_id": finding_id, "message": finding["next_action"]})
         return dict(finding)
@@ -4555,6 +4574,31 @@ def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIE
     return released
 
 
+def due_owner_alerts(
+    root: Path, after_seconds: int = REVIEWER_SIGN_IN_ALERT_SECONDS,
+) -> list[dict[str, str]]:
+    """Owner alerts that fell due this pass; each incident alerts once (batch 2 item C).
+
+    2026-10-01: a review waited 2h19m on a signed-out reviewer while the only
+    signal sat inside the project page. Once the sign-in wait passes
+    ``after_seconds`` the owner is told outside the page, one time.
+    """
+    current = datetime.now(timezone.utc)
+    with locked_state(root) as state:
+        needed = state.get("reviewer_needed") or {}
+        since = needed.get("sign_in_since") if needed.get("sign_in") else ""
+        if not since or needed.get("alerted_at"):
+            return []
+        if (current - datetime.fromisoformat(since)).total_seconds() < after_seconds:
+            return []
+        needed["alerted_at"] = now()
+        message = "Open the Reviewer's terminal and run /login. A review is waiting and nothing will progress until then."
+        _event(state, "owner_alerted", None, {
+            "request_id": needed.get("request_id", ""), "message": f"{REVIEWER_SIGN_IN_HEADLINE}. {message}",
+        })
+        return [{"title": REVIEWER_SIGN_IN_HEADLINE, "message": message}]
+
+
 def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECONDS) -> list[dict[str, Any]]:
     """Wake exactly one eligible managed reviewer for each open request.
 
@@ -4670,6 +4714,10 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                             "request_id": request.get("id", ""),
                             "message": reason,
                             "sign_in": waiting_for_sign_in,
+                            # The sign-in clock starts when the wait becomes a sign-in wait.
+                            "sign_in_since": (
+                                (needed.get("sign_in_since") if needed.get("sign_in") else "") or now()
+                            ) if waiting_for_sign_in else "",
                         }
                         _event(state, "reviewer_needed", None, {
                             "task": request.get("task", ""),
@@ -6593,6 +6641,109 @@ def declare_subtasks(
         return json.loads(json.dumps(existing))
 
 
+SUPERSEDED = "superseded"
+
+
+def _live_subtasks(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Subtasks still in the completion gate: every one except a governed supersede."""
+    return {
+        name: item for name, item in (plan.get("subtasks") or {}).items()
+        if item.get("status") != SUPERSEDED
+    }
+
+
+def supersede_subtask(
+    root: ProjectRoot, agent_id: str, task: str, subtask: str, reason: str,
+    replaced_by: list[str] | None = None,
+) -> dict[str, Any]:
+    """Retire an obsolete product subtask from the completion gate (backlog #17).
+
+    Product Management (the task's Delivery Agent) or the CTO may retire a
+    subtask the owner dropped or replaced, with a recorded reason. It only
+    removes that one subtask: every live subtask still has to pass, and the
+    finalization byte diff still has to cover every changed path. Live work
+    is never retired: a subtask in progress, under review, with an
+    unrepaired failing review, already passed, or still needed by an
+    unfinished live subtask is refused, and so is the last live subtask.
+    """
+    task, subtask, reason = str(task or "").strip(), str(subtask or "").strip(), str(reason or "").strip()
+    replaced_by = sorted({str(name).strip() for name in replaced_by or [] if str(name).strip()})
+    if not task or not subtask:
+        raise ValueError("supersede-subtask requires --task and --subtask")
+    if len(reason) < 8:
+        raise ValueError("supersede-subtask requires a plain-language reason")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        role = agent.get("role")
+        if not agent.get("active") or role not in DEVELOPER_ROLES | {"cto"}:
+            raise ValueError("only Product Management (the task's Delivery Agent) or the CTO may supersede a subtask")
+        if role in DEVELOPER_ROLES and agent.get("task") != task:
+            raise ValueError("a Delivery Agent may supersede subtasks only in its own task")
+        plan = state.get("delivery_plans", {}).get(task, {})
+        item = (plan.get("subtasks") or {}).get(subtask)
+        if plan.get("mode") != "application" or not item:
+            raise ValueError(f"{task} has no declared product subtask {subtask}")
+        if item.get("status") == SUPERSEDED:
+            return json.loads(json.dumps(item))
+        if item.get("status") == "passed":
+            raise ValueError(f"subtask {subtask} already passed review; a passed subtask is not retired")
+        current = _effective_subtask_pipeline_status(state, task, subtask, item)
+        if current in {"in_progress", "in_review"}:
+            raise ValueError(
+                f"subtask {subtask} is {current.replace('_', ' ')}; live work cannot be retired — "
+                "let it finish or fail review first"
+            )
+        reviews = sorted(
+            (request for request in state.get("qa_requests", {}).values()
+             if request.get("task") == task and request.get("subtask") == subtask),
+            key=lambda request: (int(request.get("cycle", 0)), str(request.get("completed_at") or "")),
+        )
+        if reviews and reviews[-1].get("status") == "failed":
+            raise ValueError(
+                f"subtask {subtask} has a failing review ({reviews[-1].get('id', '')}); "
+                "a failing subtask is repaired, never retired"
+            )
+        live = _live_subtasks(plan)
+        dependents = sorted(
+            name for name, value in live.items()
+            if subtask in (value.get("dependencies") or []) and value.get("status") != "passed"
+        )
+        if dependents:
+            raise ValueError(
+                f"subtask {subtask} is still needed by unfinished live subtasks: " + ", ".join(dependents)
+            )
+        if set(live) == {subtask}:
+            raise ValueError(f"subtask {subtask} is the last live subtask; a task cannot retire all of its work")
+        unknown = [name for name in replaced_by if name == subtask or name not in live]
+        if unknown:
+            raise ValueError("replacements must be other live subtasks of this task: " + ", ".join(unknown))
+        changed_at = now()
+        record = {
+            "reason": reason, "by_role": role, "by_agent": agent["id"],
+            "at": changed_at, "replaced_by": replaced_by,
+            "previous_status": item.get("status", ""),
+            "previous_pipeline_status": item.get("pipeline_status", ""),
+        }
+        item.update({
+            "status": SUPERSEDED, "pipeline_status": SUPERSEDED,
+            "superseded": record, "pipeline_updated_at": changed_at,
+        })
+        plan["updated_at"] = changed_at
+        # Not a new structure revision: retiring unbuilt work never clears a
+        # finalization hold or re-dates an earlier final review.
+        plan.setdefault("structure_changes", []).append({
+            "revision": int(plan.get("structure_revision", 1)), "kind": "product subtask superseded",
+            "superseded": [subtask], "replaced_by": replaced_by, "reason": reason, "at": changed_at,
+        })
+        who = "The CTO" if role == "cto" else "Product Management"
+        _event(state, "subtask_superseded", agent, {
+            "task": task, "subtask": subtask, "reason": reason, "replaced_by": replaced_by,
+            "message": f"{who} retired subtask {subtask}"
+            + (f" (replaced by {', '.join(replaced_by)})" if replaced_by else "") + f": {reason}",
+        })
+        return json.loads(json.dumps(item))
+
+
 def start_subtask(root: ProjectRoot, agent_id: str, subtask: str) -> dict[str, Any]:
     """Atomically admit one application subtask into the active pipeline."""
     subtask = str(subtask or "").strip()
@@ -6607,6 +6758,12 @@ def start_subtask(root: ProjectRoot, agent_id: str, subtask: str) -> dict[str, A
         item = plan.get("subtasks", {}).get(subtask)
         if plan.get("mode") != "application" or not item:
             raise ValueError("start-subtask requires a declared application subtask")
+        if item.get("status") == SUPERSEDED:
+            record = item.get("superseded") or {}
+            raise ValueError(
+                f"subtask {subtask} was retired on {record.get('at', '')}: {record.get('reason', '')}; "
+                "there is nothing to start — work on the live subtasks"
+            )
         current = _effective_subtask_pipeline_status(state, task, subtask, item)
         if current == "in_progress":
             return json.loads(json.dumps(item))
@@ -7022,7 +7179,7 @@ def broker_stage_commit(
             _require_owned_files(item, paths, "governed commit manifest")
         elif plan.get("mode") == "application" and any(
             value.get("status") != "passed"
-            for value in plan.get("subtasks", {}).values()
+            for value in _live_subtasks(plan).values()
         ):
             raise ValueError("integrated application commits require every subtask acceptance to pass")
         broker = _broker_for_state(root, state, task)
@@ -7036,13 +7193,22 @@ def broker_stage_commit(
         _clear_broker_refusal(state, developer)
         if item:
             _require_owned_files(item, list(result.get("manifest") or []), "broker commit result")
+        leftover = list(result.get("left_uncommitted") or [])
+        if leftover:
+            shown = ", ".join(leftover[:8]) + (f" and {len(leftover) - 8} more" if len(leftover) > 8 else "")
+            count = len(result["manifest"])
+            result["note"] = (
+                f"Committed {count} {'file' if count == 1 else 'files'}. Still changed and not in this commit: "
+                f"{shown} — commit them or remove them."
+            )
         _event(state, "broker_commit_created", developer, {
             "task": task,
             "subtask": subtask,
             "commit": result["commit"],
             "tree": result["tree"],
             "manifest": result["manifest"],
-            "message": "trusted Git broker committed the explicit reviewed manifest",
+            "left_uncommitted": leftover,
+            "message": result.get("note") or "trusted Git broker committed the explicit reviewed manifest",
         })
         return result
 
@@ -7278,7 +7444,7 @@ def _validate_review_scope(state: dict[str, Any], task: str, phase: str, subtask
                 raise ValueError(
                     "finalization classification was rejected; declare and independently accept the new product scope before retrying final acceptance"
                 )
-            pending = [name for name, value in subtasks.items() if value.get("status") != "passed"]
+            pending = [name for name, value in _live_subtasks(plan).items() if value.get("status") != "passed"]
             if pending:
                 raise ValueError("application final acceptance requires every subtask acceptance to pass first: " + ", ".join(pending))
     return mode, subtask, chunk
@@ -7381,7 +7547,7 @@ def _application_finalization_diff(
                 return later
         return None
 
-    for subtask, item in sorted((plan.get("subtasks") or {}).items()):
+    for subtask, item in sorted(_live_subtasks(plan).items()):
         candidates = [
             request for request in task_requests
             if request.get("phase") == "subtask_acceptance"
@@ -10502,6 +10668,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("define-plan"); p.add_argument("--agent", required=True); p.add_argument("--mode", required=True, choices=sorted(DELIVERY_MODES)); p.add_argument("--rationale", required=True)
     p = sub.add_parser("declare-subtasks"); p.add_argument("--agent", required=True); p.add_argument("--subtask", action="append", required=True, metavar="ID|TITLE|ACCEPTANCE_PROOF|DEPENDENCIES|OWNED_PATHS|OWNED_SURFACES"); p.add_argument("--reason", default="")
     p = sub.add_parser("start-subtask"); p.add_argument("--agent", required=True); p.add_argument("--subtask", required=True)
+    p = sub.add_parser("supersede-subtask"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--subtask", required=True); p.add_argument("--reason", required=True); p.add_argument("--replaced-by", action="append", default=[])
     p = sub.add_parser("declare-subtask-chunks"); p.add_argument("--agent", required=True); p.add_argument("--subtask", required=True); p.add_argument("--chunk", action="append", required=True, metavar="NAME:DESCRIPTION"); p.add_argument("--reason", default="")
     p = sub.add_parser("git-commit"); p.add_argument("--agent", required=True); p.add_argument("--path", action="append", required=True); p.add_argument("--message", required=True); p.add_argument("--subtask", default="")
     p = sub.add_parser("reopen-candidate-scope"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True)
@@ -10579,6 +10746,7 @@ def main(argv: list[str] | None = None) -> int:
                 })
             out = declare_subtasks(root, args.agent, subtasks, args.reason)
         elif args.command == "start-subtask": out = start_subtask(root, args.agent, args.subtask)
+        elif args.command == "supersede-subtask": out = supersede_subtask(root, args.agent, args.task, args.subtask, args.reason, args.replaced_by)
         elif args.command == "declare-subtask-chunks":
             chunks = [tuple(raw.split(":", 1)) if ":" in raw else ("", "") for raw in args.chunk]
             out = declare_subtask_chunks(root, args.agent, args.subtask, chunks, args.reason)
