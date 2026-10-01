@@ -371,12 +371,46 @@ def _sweep_session_descendants(session_id: str) -> list[int]:
     return pids
 
 
+# 2026-10-01: a supervisor blocked on a CLI stuck in kernel exit kept its
+# session "stopping" for ever after Stop all. A stop or pause requested longer
+# ago than this is recorded as done; the OS clears the stuck process itself.
+STOP_RECONCILE_SECONDS = 30.0
+STUCK_STOP_REASON = (
+    "stopped from control panel; the agent's process did not finish exiting, "
+    "and the operating system will clear it"
+)
+STUCK_PAUSE_REASON = (
+    "terminal intentionally paused with its saved session pointer; the agent's process did not "
+    "finish exiting, and the operating system will clear it"
+)
+
+
+def _stop_overdue(session: dict[str, Any]) -> bool:
+    requested = session.get("pause_requested_at") or session.get("stop_requested_at")
+    if session["status"] not in {"stopping", "pausing"} or not requested:
+        return False
+    try:
+        waited = (datetime.now(timezone.utc) - datetime.fromisoformat(str(requested))).total_seconds()
+    except ValueError:
+        return False
+    return waited >= STOP_RECONCILE_SECONDS
+
+
 def _reconcile(state: dict[str, Any]) -> None:
     for session in state["sessions"].values():
         if session["status"] not in ACTIVE_STATUSES:
             continue
         if session["pid"]:
-            if _pid_is_alive(session["pid"]):
+            alive = _pid_is_alive(session["pid"])
+            if alive and _stop_overdue(session):
+                paused = bool(session.get("pause_requested_at"))
+                session.update({
+                    "status": "paused" if paused else "stopped", "ended_at": now(),
+                    "reason": STUCK_PAUSE_REASON if paused else STUCK_STOP_REASON,
+                    "exit_unconfirmed": True,
+                })
+                continue
+            if alive:
                 continue
             swept = _sweep_session_descendants(str(session["id"]))
             if swept:
