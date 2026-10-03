@@ -809,6 +809,18 @@ def main(argv: list[str] | None = None) -> int:
     gate.add_argument("--record-ready", action="store_true", help="record VISUAL_TEST_REQUIRED when every release check passes")
     gate.add_argument("--agent", default="", help="registered CTO agent ID required with --record-ready")
     args = parser.parse_args(argv)
+    from harness import board_client
+    if args.command in {"board-cleanup", "board-watch"} or (args.command == "release-check" and args.record_ready):
+        if board_client.environment_state() == "active":
+            # F-1 follow-up: inside an agent session the board's storage is the
+            # harness's, not the agent's - this command would write it directly
+            # and the sandbox refuses. Name the remedy instead of failing on a lock.
+            remedy = ("record the release through the board: `board.py ... record-release --task <task>` "
+                      "(add --health-command only when no certified suite exists)"
+                      if args.command == "release-check" else
+                      "this maintenance command is the harness's, not an agent's")
+            print(f"error: {args.command} writes harness-owned board storage; {remedy}", file=sys.stderr)
+            return 2
     root = context_from_args(args)
     if args.command == "board-watch":
         out = {"updates_due": board.watch(root)}

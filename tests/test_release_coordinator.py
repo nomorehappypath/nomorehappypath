@@ -96,7 +96,10 @@ class ReleaseCoordinatorTests(unittest.TestCase):
             ))
             self.assertEqual(enqueue.call_count, 1)
             instruction = enqueue.call_args.args[2]
-            self.assertIn("omit --health-command", instruction)
+            self.assertIn("no --health-command", instruction)
+            # F-1 follow-up: the CTO records through the board, never by writing it.
+            self.assertIn("`record-release --task TASK-ROUTE`", instruction)
+            self.assertNotIn("Call release-check", instruction)
             self.assertIn("Do not rerun certified product tests", instruction)
 
             state["agents"]["cto"]["session_id"] = "cto-session-b"

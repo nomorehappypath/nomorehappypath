@@ -31,6 +31,7 @@ UPLOAD_ARGUMENTS = {
     "attach-challenge-ledger": ("--challenge-ledger", "challenge_ledger", True),
     "claim-qa": ("--challenge-ledger", "challenge_ledger", False),
     "qa-result": ("--evidence", "evidence", True),
+    "contract-evidence": ("--evidence", "evidence", True),
 }
 
 
@@ -262,6 +263,40 @@ def _loopback_endpoint(value: str) -> str:
     return value.rstrip("/")
 
 
+def call(arguments: list[str], *, timeout: float, uploads: bool = False) -> dict:
+    """One authenticated board call, returning its result; raises on any failure.
+
+    For harness-owned callers inside an agent's process (the Stage 1 hook gate)
+    that need a hard deadline and a value, not a printed CLI response.
+    """
+    if environment_state() != "active":
+        raise WorkerTransportError("authenticated board environment is incomplete")
+    token = os.environ[TOKEN_ENV]
+    endpoint = _loopback_endpoint(os.environ[ENDPOINT_ENV])
+    protocol = os.environ[PROTOCOL_ENV]
+    if protocol != PROTOCOL_VERSION:
+        raise ValueError("board protocol version is incompatible")
+    artifacts: dict = {}
+    if uploads:
+        # Same client-side file ingestion as the CLI: the agent's file bytes,
+        # never its path, reach the worker (board_surface ingestion rules).
+        arguments, artifacts = _prepare_artifacts(arguments[0], list(arguments))
+    payload = json.dumps({"protocol": protocol, "nonce": _nonce(token), "operation": arguments[0],
+                          "arguments": list(arguments), "artifacts": artifacts}, separators=(",", ":")).encode("utf-8")
+    request = Request(endpoint + "/api/board/command", data=payload, method="POST",
+                      headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read())
+    except HTTPError:
+        raise
+    except (OSError, URLError) as error:
+        raise WorkerTransportError(str(error)) from error
+    if not isinstance(value, dict) or "result" not in value:
+        raise ValueError("worker returned an invalid board response")
+    return value["result"]
+
+
 def invoke(argv: list[str]) -> int:
     state = environment_state()
     if state != "active":
@@ -278,7 +313,7 @@ def invoke(argv: list[str]) -> int:
         if protocol != PROTOCOL_VERSION:
             raise ValueError("board protocol version is incompatible")
         arguments, artifacts = _prepare_artifacts(arguments[0], arguments)
-        timeout = 360 if arguments[0] in {"request-review", "execute-challenge"} else 30
+        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release"} else 30
         attempts = POLL_TRANSPORT_ATTEMPTS if arguments[0] == "poll" else 1
         value = None
         for attempt in range(attempts):

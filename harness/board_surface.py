@@ -48,6 +48,7 @@ AUTHORIZED_SESSION_STATES = {"launching", "running", "stopping", "pausing"}
 ALL_BOARD_OPERATIONS = {
     "register", "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
+    "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
     "owner-direction", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved",
@@ -65,9 +66,13 @@ ALL_BOARD_OPERATIONS = {
     "supersede-subtask",
     "close-released",
 }
-COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline"}
+# hook-event: every agent's own CLI reports its lifecycle and asks for tool
+# decisions (plumbing Stage 1); identity is the session's, never the caller's.
+COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline", "hook-event"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "task-brief", "migrate-contract-scope", "expand-contract", "begin-task",
+    # F-1: the contract is harness-owned storage; Delivery writes it through the board.
+    "create-contract", "contract-evidence",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
@@ -106,6 +111,8 @@ CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "supersede-subtask",
     # Batch 2 A2: the CTO records a task the owner shipped by hand.
     "close-released",
+    # F-1 follow-up: the release is recorded by the board, not written by the CTO.
+    "record-release",
 }
 AUTHORIZATION_MATRIX = {
     operation: frozenset(
@@ -126,6 +133,7 @@ UPLOAD_ARGUMENTS = {
     "attach-challenge-ledger": ("--challenge-ledger", "challenge_ledger", True),
     "claim-qa": ("--challenge-ledger", "challenge_ledger", False),
     "qa-result": ("--evidence", "evidence", True),
+    "contract-evidence": ("--evidence", "evidence", True),
 }
 RAW_PATH_OPERATIONS = {"attach-workspace", "bind-repository"}
 IDENTITY_AGENT_ARGUMENT = "--agent"
@@ -133,7 +141,7 @@ IDENTITY_SESSION_ARGUMENT = "--session-id"
 CURRENT_TASK_OPERATIONS = {"record-finding", "claim-release-repair", "repin-final-review", "supersede-subtask"}
 AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
-    "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
+    "migrate-contract-scope", "expand-contract", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
     "confirm-requirements", "propose-requirements", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
@@ -724,8 +732,11 @@ class CommandGateway:
         if operation in AGENT_ARGUMENT_OPERATIONS:
             if not identity.agent_id:
                 raise SurfaceAuthorizationError("the authenticated session has no board agent")
+            # A CLI hook (plumbing Stage 1) does not know its board agent id;
+            # the session's own is filled in. A different id is still refused.
             arguments = _canonical_argument(
                 arguments, IDENTITY_AGENT_ARGUMENT, identity.agent_id,
+                required=operation != "hook-event",
             )
         claimed_session = _argument_value(arguments, IDENTITY_SESSION_ARGUMENT)
         if claimed_session is not None:

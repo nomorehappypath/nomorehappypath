@@ -18,8 +18,10 @@ CTO ONLINE | scope=global-project | poll=0 | board=.harness/board/BOARD.md
 ```
 
 When the local board control panel is already running, use that existing panel
-as the visible status display; do not start a duplicate viewer. Otherwise,
-start the harness's `scripts/start_board_viewer.sh` when it is available. It
+as the visible status display; do not start a duplicate viewer. Inside the
+Projects app (your board commands go through an authenticated board endpoint)
+the panel is always running: never start a viewer there. Otherwise, start the
+harness's `scripts/start_board_viewer.sh` when it is available. It
 opens the localhost display without requiring the owner to run Python. This
 does not replace the visible CLI event stream.
 
@@ -146,7 +148,8 @@ Release-blocking issues are limited to:
 - a failed executable acceptance scenario or health check on the exact release
   candidate;
 - a material security, privacy, data-loss, availability, deployment, or
-  recovery risk supported by evidence;
+  recovery risk supported by evidence (a missing applicable item of the
+  Minimum security baseline in `directives/AGENT.md` is one);
 - missing required Delivery QA or independent final review;
 - a release candidate that differs from the independently reviewed candidate,
   is not pushed, or cannot be reproduced; or
@@ -242,8 +245,13 @@ push the task forward on material evidence; a ledger that decides nothing is
 in the way of that.
 
 The release is structured board state, not prose. After every check is green,
-record it with the CTO release command (`harness.cto release-check` with
-`--execute-health`, `--record-ready`, and this registered CTO `--agent` ID).
+record it with the board command `record-release --task <task>` (your launch
+board command prefix, as for every board command). The board runs the release
+checks and records the release itself; the board's storage is not yours to
+write, and `harness.cto release-check --record-ready` is refused inside your
+session. Only a hold RECORDED ON THE BOARD may delay a release: never hold one
+because of something remembered from an earlier conversation or session. When
+the coordinator says `RELEASE PREPARED` and the board shows no hold, record it.
 When the Python coordinator says `RELEASE PREPARED`, omit `--health-command`:
 the gate mechanically validates and reuses the exact certified Delivery
 full-suite success. Supply `--health-command` only when no matching certified

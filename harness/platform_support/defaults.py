@@ -838,12 +838,17 @@ class _AgentConfinement:
         # breaks `security find-generic-password` (proven live 2026-09-26).
         return self.login_file_paths(home, claude_config_dir)
 
-    def profile(self, writable: list[str], protected_reads: list[str] | None = None) -> str:
+    def profile(self, writable: list[str], protected_reads: list[str] | None = None,
+                protected_writes: list[str] | None = None) -> str:
         """Seatbelt: allow default, deny file-write*, allow file-write* only inside the grant;
-        deny file-read* on the owner's login material.
+        deny file-read* on the owner's login material; deny file-write* again on
+        harness-owned storage inside the grant (F-1).
 
         Files the CLI writes NEXT TO its config (`~/.claude.json.backup`,
-        `.lock` …) are matched by prefix.
+        `.lock` …) are matched by prefix. Seatbelt applies the LAST matching
+        rule, so the protected-write denies come after every allow (proven
+        live 2026-10-01: write, mkdir and rename inside the denied subpath of
+        a granted root all refused).
         """
         lines = ["(version 1)", "(allow default)", "(deny file-write*)"]
         for path in protected_reads or []:
@@ -856,13 +861,16 @@ class _AgentConfinement:
             else:
                 lines.append(f'(allow file-write* (subpath "{self._quote(real)}"))')
         lines.append('(allow file-write* (subpath "/dev"))')
+        for path in protected_writes or []:
+            lines.append(f'(deny file-write* (subpath "{self._quote(self._real(path))}"))')
         return "\n".join(lines) + "\n"
 
-    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None) -> list[str]:
+    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
+             protected_writes: list[str] | None = None) -> list[str]:
         """The command to run so that `argv` can write only inside `writable` and never reads the protected paths."""
         if not self.available():
             raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to launch the agent unconfined")
-        profile = self.profile(writable, protected_reads)
+        profile = self.profile(writable, protected_reads, protected_writes)
         store = Path(store)
         store.mkdir(parents=True, exist_ok=True)
         path = store / f"agent-sandbox-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"

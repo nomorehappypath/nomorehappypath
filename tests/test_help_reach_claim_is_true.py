@@ -63,9 +63,18 @@ class ClaimTruthTests(unittest.TestCase):
         codex_lines = [line for line in RUNNER.splitlines() if "HARNESS_CODEX_BIN" in line and "launch_visible_cli" in line]
         self.assertEqual(len(codex_lines), 2, "a fresh launch and a resume launch")
         for line in codex_lines:
-            self.assertIn("sandbox_workspace_write.network_access=true", line, line)
-            self.assertIn("sandbox_mode=workspace-write", line, line)
-            self.assertIn("sandbox_workspace_write.writable_roots=${writable_roots_json}", line, line)
+            # Both lines take the access flags from ONE array, so they cannot drift.
+            self.assertIn('"${codex_access[@]}"', line, line)
+        access = [line.strip() for line in RUNNER.splitlines() if line.strip().startswith("codex_access=(")]
+        self.assertEqual(len(access), 2, "workspace-write by default; a permission profile when the board store sits inside the grant (F-1)")
+        default, profile = access
+        self.assertIn("sandbox_workspace_write.network_access=true", default)
+        self.assertIn("sandbox_mode=workspace-write", default)
+        self.assertIn("sandbox_workspace_write.writable_roots=${writable_roots_json}", default)
+        # The profile form confines writes too, and keeps network on.
+        self.assertIn('default_permissions="harness_agent"', profile)
+        self.assertIn("permissions.harness_agent.filesystem=${codex_profile_table}", profile)
+        self.assertIn("permissions.harness_agent.network.enabled=true", profile)
 
     def test_help_claims_write_confinement_only_because_it_is_enforced(self):
         text = help_text().lower()

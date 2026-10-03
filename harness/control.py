@@ -619,21 +619,33 @@ def _cli_memory_fields() -> dict[str, Any]:
     }
 
 
+def _read_state(root: Path) -> dict[str, Any]:
+    """A read-only snapshot of the control document, without the write lock.
+
+    Every write replaces the file atomically (`locked_state`: temp file then
+    `os.replace`), so a reader always sees one whole version. A managed agent
+    may read here but may not take the lock: the control directory is
+    harness-owned storage it cannot write (F-1), and opening `.lock` for
+    append is a write.
+    """
+    path = _state_path(root)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else _initial_state()
+
+
 def cli_session(root: Path, session_id: str) -> dict[str, Any]:
-    with locked_state(root) as state:
-        session = state.get("sessions", {}).get(session_id)
-        if not session:
-            raise ValueError(f"unknown managed session: {session_id}")
-        return {
-            "session_id": session_id,
-            "cli_session_id": session.get("cli_session_id"),
-            "cli_session_provider": session.get("cli_session_provider"),
-            "cli_launches": int(session.get("cli_launches") or 0),
-            "cli_last_launch_at": session.get("cli_last_launch_at"),
-            "cli_last_launch_resumed": bool(session.get("cli_last_launch_resumed")),
-            "continues_session": session.get("continues_session"),
-            "resumed_after_pause_at": session.get("resumed_after_pause_at"),
-        }
+    session = _read_state(root).get("sessions", {}).get(session_id)
+    if not session:
+        raise ValueError(f"unknown managed session: {session_id}")
+    return {
+        "session_id": session_id,
+        "cli_session_id": session.get("cli_session_id"),
+        "cli_session_provider": session.get("cli_session_provider"),
+        "cli_launches": int(session.get("cli_launches") or 0),
+        "cli_last_launch_at": session.get("cli_last_launch_at"),
+        "cli_last_launch_resumed": bool(session.get("cli_last_launch_resumed")),
+        "continues_session": session.get("continues_session"),
+        "resumed_after_pause_at": session.get("resumed_after_pause_at"),
+    }
 
 
 def record_cli_session(root: Path, session_id: str, cli_session_id: str, provider: str) -> dict[str, Any]:
@@ -741,6 +753,27 @@ def record_output(root: Path, session_id: str, byte_count: int) -> dict[str, Any
         session["last_output_at"] = now()
         session["output_bytes"] = int(session.get("output_bytes", 0)) + byte_count
         return {"session_id": session_id, "last_output_at": session["last_output_at"], "output_bytes": session["output_bytes"]}
+
+
+TURN_STATES = {"session_started", "working", "idle_at_prompt", "session_ended"}
+
+
+def record_turn_state(root: Path, session_id: str, turn_state: str) -> dict[str, Any]:
+    """The CLI's own lifecycle signal, delivered by its hooks (plumbing Stage 1).
+
+    `idle_at_prompt` means the CLI reported the turn finished; `working` that a
+    prompt was submitted. Unlike byte activity, this is never a guess.
+    """
+    if turn_state not in TURN_STATES:
+        raise ValueError(f"unknown turn state: {turn_state}")
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not session:
+            raise ValueError("unknown managed session")
+        session["turn_state"] = turn_state
+        session["turn_state_at"] = now()
+        return {"session_id": session_id, "turn_state": turn_state, "turn_state_at": session["turn_state_at"]}
 
 
 def record_attention(root: Path, session_id: str, reason: str) -> dict[str, Any]:

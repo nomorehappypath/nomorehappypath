@@ -24,9 +24,13 @@ Create all internal artifacts yourself.
 
 Locate this harness's `harness/board.py` beside the directive source or by
 searching the available workspace. Use it with `--root <target-project-root>`.
-If it is unavailable, create the same `.harness/board/BOARD.md` and
-`.harness/board/events.jsonl` protocol yourself and report the unavailable tool
-as a technical blocker to the CTO—not to the owner.
+When your session also has `harness_board` tools, they are the same board
+commands with typed inputs (and the same identity and gates); use whichever
+you prefer.
+If it is unavailable, report the unavailable tool as a technical blocker to the
+CTO—not to the owner. Never write the board's files yourself: the harness's own
+storage (board, contracts, reviews, control records, evidence) is not yours to
+write, and your sandbox refuses it.
 
 ## The owner's logins are never yours to read or copy
 
@@ -137,8 +141,11 @@ delivery plan or implement until the confirmation is recorded.
    Never continue against the harness repository merely because the managed CLI
    was launched from its parent workspace.
    For an external product repository, keep Scenario/Challenge Ledger authoring
-   files and harness evidence under the board root's ignored `.harness`
-   directories and pass their absolute paths. Do not add governance artifacts
+   files and harness evidence in a temporary directory you create (or an
+   ignored scratch folder of your task workspace) and pass their absolute
+   paths; the board uploads them. Never write inside the harness's own storage
+   (a scaffolded project's `.harness` folder, or the project's data folder):
+   it is harness-owned and your sandbox refuses it. Do not add governance artifacts
    to the product commit unless the owner explicitly included them in scope.
    `begin-task` automatically records the Git state that already existed at
    task start. Treat those files as an inherited baseline: inspect relevant
@@ -148,7 +155,12 @@ delivery plan or implement until the confirmation is recorded.
    CTO and Independent Review with `USER ACTION: None`.
 3. Turn that internally designed task into a Completion Contract. You create it:
    exact objective, deliverables, executable proof, approved exclusions, status,
-   and remaining work.
+   and remaining work. Create it with `board.py ... create-contract --objective
+   "<exact objective>" --deliverable "<deliverable>"` (repeat `--deliverable`),
+   and attach each deliverable's proof with `board.py ... contract-evidence
+   --deliverable "<deliverable>" --evidence <file>` (one file per call; the board
+   uploads and keeps it). The contract is harness-owned storage: never write it
+   with `contract.py` or by hand — your sandbox refuses that.
    Immediately publish a two-line human-facing task brief with `board.py
    ... task-brief`: (a) in one or two plain sentences, what you will do; and
    (b) a short current update naming the next milestone. This is for Mission
@@ -258,7 +270,9 @@ review.
   clean work blocked for no actionable reason; defective work auto-published
   to deliverables or to a team; a repair pass losing a requirement, or a split
   dropping requested scope; the owner's real files altered; the existing suite
-  regressing. Procedural, and never admitted unless the owner asked for it by
+  regressing; an applicable item of the Minimum security baseline below
+  missing or broken (the owner never sees security, but always receives it).
+  Procedural, and never admitted unless the owner asked for it by
   name: git-tree and commit-identity bookkeeping; chunk-boundary and
   delivery-plan challenges; source-structure assertions (is this helper
   shared, is it called from N places); dead code, and formatting tolerance on
@@ -272,8 +286,8 @@ review.
 - **A user-facing change is proven on the rendered surface.** When a scenario
   covers something a person sees or operates, its `Simulation command` must
   drive the running surface and capture what was actually rendered, using the
-  project's own UI test tooling or a headless driver you add under `.harness`
-  when it has none. Reading served markup, template source, or a build log is
+  project's own UI test tooling or a headless driver you add in your task
+  workspace or a temporary directory when it has none. Reading served markup, template source, or a build log is
   not seeing the page; an empty or error render is a FAIL row, not a pass.
   When your own browser cannot open the page (a sandbox or browser-tool
   policy refuses localhost), ask the harness instead: the board command
@@ -342,11 +356,48 @@ review.
   differ, assert BOTH behaviours explicitly; never widen an assertion until
   every platform passes, and never skip to make a suite green.
 - **Nothing you run touches the owner's real files.** Every test and
-  simulation runs against the task workspace, the board root's `.harness`
-  directories, or a temporary directory you create — never the owner's home
+  simulation runs against the task workspace or a temporary directory you
+  create — never the owner's home
   configuration, global tool settings, or another project. When a change goes
   near provider or tool configuration, hash the affected file before and after
   the run and record both hashes as evidence.
+
+### Minimum security baseline
+
+Every app you build gets the security a professional applies by default:
+proportionate, not exaggerated. These are not top-secret systems, so no threat
+models, penetration-test rituals or compliance frameworks. **Apply an item only
+if the app has that feature.** An item that applies is material and always in
+scope.
+
+- **Secrets.** No API keys, passwords or tokens in code, tests, logs or the
+  repository. Read them from the environment, and keep `.env` files out of git.
+- **Input.** Validate and bound every input on the server (type, length,
+  size). Never build SQL, shell commands, file paths or HTML from raw input:
+  use parameterised queries, argument lists instead of a shell string, and the
+  framework's output escaping.
+- **Logins.** Hash passwords with a standard slow algorithm (bcrypt, scrypt or
+  Argon2). Slow down or briefly lock repeated failed attempts. Session cookies
+  are `HttpOnly`, `SameSite`, and `Secure` over HTTPS; state-changing requests
+  carry CSRF protection. The server checks that the signed-in user may act on
+  the record they ask for.
+- **Costly public endpoints.** Rate-limit any public endpoint that spends
+  money, calls a paid API, or sends email or messages.
+- **Errors.** Users get a plain message. Stack traces and internal errors
+  stay in the server log, never in a response; secrets reach neither.
+- **Dependencies.** Use mainstream, maintained libraries. Run the ecosystem's
+  standard audit once before delivery (`npm audit`, `pip-audit`, ...); upgrade
+  past a high or critical finding, or name it with its reason in the review
+  summary.
+- **Uploads and delivered settings.** Limit uploads by type and size, and never
+  serve them as executable pages. Debug mode, sample accounts and default
+  passwords are off in what is delivered.
+
+Prove the applicable items with a few decisive Delivery Scenario Ledger rows
+(for example: repeated wrong passwords are slowed; input carrying quotes or
+markup is stored and shown inert; a secret scan of the commit finds nothing;
+the audit output). Not a row per item: the material-rows rule and row cap
+still hold.
 
 ### Scope control for newly discovered findings
 
@@ -443,6 +494,14 @@ Delivery quality bar are not written, and the ledger stays within the row cap
 in the reviewer directive — at most two rows per criterion and never more
 than twelve for a chunk or subtask. Ten minutes is enough for a ledger within
 the cap; running out of time means you are writing procedural rows.
+
+**Security baseline (owner, 2026-10-02).** Check the Minimum security baseline
+only where the app has that feature, with one or two decisive Challenge Ledger
+rows. A missing or broken applicable item is material: FAIL on it. Never
+demand an item for a feature the app does not have, and never fail an app for
+lacking enterprise-grade controls (threat models, penetration tests,
+compliance work, multi-factor login nobody asked for).
+
 For a repair review, read the board-generated `repair_authoring` section from
 `review-brief` before writing the Challenge Ledger. When it identifies you as
 the same Reviewer, reuse your own prior scenario wording and command structure,
@@ -451,7 +510,8 @@ Reviewer may use only the mechanical command prefill and must author independent
 scenario meaning. In both cases rerun every retained command against the new
 candidate, run the complete suite for final acceptance, and form a fresh
 semantic verdict. This reuse saves authoring time; it never reuses a PASS.
-Create your own Challenge Ledger under `.harness/reviews/`, execute real checks,
+Create your own Challenge Ledger in a temporary directory you create (the board
+uploads it; the harness's `.harness` storage is not writable), execute real checks,
 and write PASS/FAIL plus evidence back to the same board item. For the declared
 Challenge Ledger commands, "execute" means call `execute-challenge` exactly
 once, then read the returned certified evidence file before forming your

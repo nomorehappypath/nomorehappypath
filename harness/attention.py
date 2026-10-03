@@ -33,11 +33,22 @@ _INCOMPLETE_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*)?$")
 
 # Each pattern is matched against the visible screen text.
 # The label is what the owner reads on the banner.
+TRUST_REASON = ("is asking whether you trust this project folder (open its terminal and choose "
+                "'Yes, I trust this folder')")
+PERMISSION_REASON = "is asking permission to continue ('Do you want to proceed?')"
+
 PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # F-8 (2026-10-02): Claude Code asks this the first time it opens a folder
+    # it does not trust - after an agent's `git init`, every new project. The
+    # default is "No, exit": a harness message typed into it, with its Enter,
+    # closed the terminal. The trust question is the OWNER's; it is never typed.
+    (re.compile(r"Yes,\s*I\s*trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created\s*or\s*one\s*you\s*trust|"
+                r"Do you trust the (?:files|contents) (?:in|of) this", re.IGNORECASE),
+     TRUST_REASON),
     (re.compile(r"Do you want to (?:proceed|make this edit|create|run|allow)", re.IGNORECASE),
-     "is asking permission to continue ('Do you want to proceed?')"),
+     PERMISSION_REASON),
     (re.compile(r"switch to auto mode", re.IGNORECASE),
-     "is asking permission to continue ('Do you want to proceed?')"),
+     PERMISSION_REASON),
     (re.compile(r"USER ACTION:\s*Needed", re.IGNORECASE),
      "says it needs you to act ('USER ACTION: Needed')"),
     # 2026-09-25 defect #15: an expired login stalled the CTO for three hours
@@ -52,6 +63,19 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 LOGIN_REASON = "is logged out and needs you to sign in again (open its terminal and run /login)"
+
+
+def holds_harness_input(reason: str | None) -> bool:
+    """Whether the screen shows a menu the owner must answer, so the harness types nothing.
+
+    A sign-in prompt, a folder-trust question, a permission menu: Enter picks
+    an option in each, so a harness message and its Enter would answer FOR the
+    owner (F-8: the trust menu's default "No, exit" closed the terminal). An
+    agent that merely prints "USER ACTION: Needed" is at its own prompt and
+    keeps receiving messages.
+    """
+    reason = str(reason or "")
+    return "/login" in reason or reason in {TRUST_REASON, PERMISSION_REASON}
 
 
 def needs_sign_in(session: dict | None) -> bool:

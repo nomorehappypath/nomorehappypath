@@ -537,7 +537,7 @@ function cancelTaskHtml(state,name){
 }
 
 async function confirmCancelTask(task){
-  const approved=window.confirm(`Cancel the task “${objectiveSummary(task)}”?\n\nThis abandons the task for good. Its board records and its workspace will be removed, and any agent working on it will be stopped.\n\nTo only close an agent and keep the task, use Stop instead.`);
+  const approved=window.confirm(`Cancel the task “${objectiveSummary(task)}” (${task})?\n\nThis abandons the task for good. Its board records and its workspace will be removed, and any agent working on it will be stopped.\n\nTo only close an agent and keep the task, use Stop instead.`);
   if(!approved)return false;
   try{
     await call('/api/tasks/'+encodeURIComponent(task)+'/cancel',{});
@@ -780,6 +780,10 @@ function reviewExecutionActive(agent){
 }
 
 function recentOutputActive(agent){
+  // A real turn signal from the CLI's hooks (plumbing Stage 1) wins over the
+  // byte-activity guess: a finished turn is idle even if it printed recently.
+  if(agent?.turn_state==='idle_at_prompt'||agent?.turn_state==='session_ended')return false;
+  if(agent?.turn_state==='working')return true;
   if(!agent?.recent_output_at)return false;
   const output=Date.parse(agent.recent_output_at);
   return Number.isFinite(output)&&Date.now()-output<240000;
@@ -2630,6 +2634,10 @@ def dashboard_payload(
             # offline transition; a GET must not mutate board state.
             data["state"]["agents"].pop(agent_id, None)
             continue
+        if session and session.get("turn_state"):
+            # Plumbing Stage 1: the CLI's own hook said whether a turn is running.
+            agent["turn_state"] = session["turn_state"]
+            agent["turn_state_at"] = session.get("turn_state_at")
         if not session or not session.get("last_output_at"):
             continue
         agent["recent_output_at"] = session["last_output_at"]
@@ -2795,6 +2803,30 @@ def _attach_hint(surface: Any) -> str:
     """
     hint = getattr(surface, "attach_hint", "")
     return hint if isinstance(hint, str) else ""
+
+
+def notify_cto_of_cancel(root, task: str) -> list[str]:
+    """Tell every running CTO that the owner cancelled `task`.
+
+    The task's own agents are stopped by the cancel; the CTO serves the whole
+    project and keeps running, so it is told directly instead of finding out on
+    its next poll (owner, 2026-10-02: "the CTO did not receive the cancel").
+    """
+    told = []
+    for session in control.snapshot(root).get("sessions", []):
+        if session.get("kind") != "claude_cto" or session.get("status") not in control.ACTIVE_STATUSES:
+            continue
+        try:
+            control.enqueue_instruction(
+                root, session["id"],
+                f"TASK CANCELLED BY THE OWNER: {task}. Its board records and workspace are removed and its "
+                "agents are stopped. Do not route, review, hold or release it. USER ACTION: None.",
+                source="owner-cancel",
+            )
+            told.append(session["id"])
+        except ValueError:
+            continue
+    return told
 
 
 def launch_terminal(root: Path, session: dict, *, manager_home=None) -> platform_support.SessionSurface:
@@ -3245,8 +3277,10 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 if path.startswith(task_prefix) and path.endswith(cancel_suffix):
                     # Backlog #10: the owner's explicit Cancel task, the only
                     # action that cancels a task; Stop keeps it.
-                    cleanup = board.cancel_task(root, unquote(path[len(task_prefix):-len(cancel_suffix)]))
+                    cancelled_task = unquote(path[len(task_prefix):-len(cancel_suffix)])
+                    cleanup = board.cancel_task(root, cancelled_task)
                     stopped = [control.stop(root, value) for value in cleanup.get("related_session_ids", [])]
+                    notify_cto_of_cancel(root, cancelled_task)
                     self.send_json(200, {**cleanup, "stopped_sessions": stopped}); return
                 agent_prefix, recovery_suffix = "/api/agents/", "/recover"
                 if path.startswith(agent_prefix) and path.endswith(recovery_suffix):
