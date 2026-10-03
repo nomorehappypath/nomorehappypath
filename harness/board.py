@@ -1916,10 +1916,24 @@ def review_execution_lease(root: Path, agent_id: str, request_id: str, command: 
         review_execution_finish(root, agent_id, request_id)
 
 
+CONTRACT_CREATE_GUIDANCE = (
+    "create it through the board: `board.py ... create-contract --objective \"<exact objective>\" "
+    "--deliverable \"<deliverable>\"` (repeat --deliverable). The contract is harness-owned storage; "
+    "contract.py cannot write it from an agent sandbox"
+)
+CONTRACT_EVIDENCE_GUIDANCE = (
+    "attach each deliverable's proof through the board: `board.py ... contract-evidence "
+    "--deliverable \"<deliverable>\" --evidence <file>` (one file per call)"
+)
+
+
 def _require_contract_preflight(root: Path, task: str) -> None:
     valid, problems = contract.contract_preflight(root, task)
     if not valid:
-        raise ValueError("delivery work requires a valid Completion Contract: " + "; ".join(problems))
+        # The refusal names the remedy: an agent resumed on an older directive
+        # (its rules were loaded before this command existed) learns it here.
+        remedy = f"; {CONTRACT_CREATE_GUIDANCE}" if "Completion Contract missing" in problems else ""
+        raise ValueError("delivery work requires a valid Completion Contract: " + "; ".join(problems) + remedy)
 
 
 def _broker_journal_nonce(broker: git_broker.GitBroker, identity: str) -> int:
@@ -4104,6 +4118,102 @@ def task_brief(root: Path, agent_id: str, plan: str, update: str) -> dict[str, A
         state.setdefault("task_briefs", {})[developer["task"]] = value
         _event(state, "task_brief_updated", developer, {"task": developer["task"], "message": update})
         return json.loads(json.dumps(value))
+
+
+HOOK_TURN_STATES = {"SessionStart": "session_started", "UserPromptSubmit": "working",
+                    "Stop": "idle_at_prompt", "SessionEnd": "session_ended"}
+HOOK_EVENTS = {"PreToolUse", *HOOK_TURN_STATES}
+HOOK_PAYLOAD_MAX_BYTES = 64 * 1024
+
+
+def hook_event(root: Path, agent_id: str, event: str, payload_text: str) -> dict[str, Any]:
+    """One lifecycle hook from an agent's own CLI (plumbing Stage 1).
+
+    PreToolUse returns the decision for that one tool call: the mechanical form
+    of the directive rules in `hook_rules`. A denial is also a board event, so
+    the CTO sees it. The other events only REPORT: they record the CLI's real
+    turn state on the session and can never change a gate, a review or a
+    verdict - an agent that calls this itself gains nothing.
+    """
+    if event not in HOOK_EVENTS:
+        raise ValueError(f"unknown hook event: {event}")
+    if len(payload_text.encode("utf-8")) > HOOK_PAYLOAD_MAX_BYTES:
+        raise ValueError("hook payload is too large")
+    try:
+        payload = json.loads(payload_text or "{}")
+    except json.JSONDecodeError as error:
+        raise ValueError("hook payload is not JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("hook payload must be an object")
+    with locked_state(root) as state:
+        agent = dict(state.get("agents", {}).get(agent_id) or {})
+    if not agent:
+        raise ValueError(f"unknown agent: {agent_id}")
+    if event != "PreToolUse":
+        if agent.get("session_id"):
+            from harness import control  # local, as everywhere in this module (import cycle)
+            control.record_turn_state(root, agent["session_id"], HOOK_TURN_STATES[event])
+        return {"decision": "allow", "event": event}
+    from harness import hook_rules
+    context = project_context(root)
+    rule, reason = hook_rules.evaluate(
+        str(agent.get("role", "")), str(payload.get("tool_name", "")), payload.get("tool_input") or {},
+        project_roots=hook_rules.project_roots_for(context.code_root, context.workspace_root),
+    )
+    if not rule:
+        return {"decision": "allow", "event": event}
+    with locked_state(root) as state:
+        live = state.get("agents", {}).get(agent_id) or agent
+        _event(state, "agent_action_denied", live, {
+            "task": live.get("task", ""), "rule": rule, "tool": str(payload.get("tool_name", ""))[:40],
+            "message": f"blocked by the harness ({rule}): {reason}",
+        })
+    return {"decision": "deny", "rule": rule, "reason": reason, "event": event}
+
+
+def create_contract(root: Path, agent_id: str, objective: str, deliverables: list[str]) -> dict[str, Any]:
+    """Create the active Delivery task's Completion Contract, written by the board.
+
+    F-1 (2026-10-01): the contract lives in harness-owned storage the agent may
+    not write, so Delivery creates it through the authenticated board instead
+    of `contract.py create`. Same validation as that CLI (one contract per
+    task, an objective and at least one deliverable), plus a board audit.
+    """
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION:
+            raise ValueError("only an active Delivery Agent may create its Completion Contract")
+        task = agent["task"]
+    value = contract.create_contract(root, task, objective, deliverables)
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        event = _event(state, "completion_contract_created", agent, {
+            "task": task, "message": f"Completion Contract created with {len(value['deliverables'])} deliverables",
+            "deliverables": [item["name"] for item in value["deliverables"]],
+        })
+        return {"contract": value, "audit_event": event}
+
+
+def attach_contract_evidence(root: Path, agent_id: str, deliverable: str, evidence: str) -> dict[str, Any]:
+    """Attach one evidence file to a deliverable of the active Delivery task's contract.
+
+    Through the authenticated surface the file is the agent's own, uploaded and
+    stored by the worker (the same ingestion `qa-result --evidence` uses), so
+    the contract records a copy the agent cannot later change.
+    """
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION:
+            raise ValueError("only an active Delivery Agent may attach Completion Contract evidence")
+        task = agent["task"]
+    value = contract.add_evidence(root, task, deliverable, [evidence])
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        event = _event(state, "completion_contract_evidence", agent, {
+            "task": task, "message": f"evidence attached to Completion Contract deliverable: {deliverable}",
+            "deliverable": deliverable,
+        })
+        return {"contract": value, "audit_event": event}
 
 
 def expand_contract(root: Path, agent_id: str, additions: list[tuple[str, str]]) -> dict[str, Any]:
@@ -8018,7 +8128,9 @@ def _completion_gate_problems(
     problems: list[str] = []
     complete_contract, contract_problems, contract_value = contract.contract_complete(root, task)
     if not complete_contract:
-        problems.append("Completion Contract is incomplete: " + "; ".join(contract_problems))
+        remedy = (f" — {CONTRACT_EVIDENCE_GUIDANCE}"
+                  if any("evidence" in problem or "remaining work" in problem for problem in contract_problems) else "")
+        problems.append("Completion Contract is incomplete: " + "; ".join(contract_problems) + remedy)
     owner_direction = owner_direction_for_task(state, developer_id, task)
     if not owner_direction:
         problems.append("recorded owner direction is missing")
@@ -9627,6 +9739,36 @@ def _return_reviewers_to_queue(state: dict[str, Any], task: str, how: str) -> li
     return returned
 
 
+def record_release(root: Path, agent_id: str, task: str, health_command: str = "") -> dict[str, Any]:
+    """The CTO's release step, carried out by the board (plumbing follow-up to F-1).
+
+    Before F-1 the CTO ran `harness.cto release-check --record-ready` inside its
+    own sandbox, which wrote the board state itself. With harness storage
+    protected that write is refused, so every finished task stalled at
+    "Final release checks". The same check and the same recording now run in
+    the worker: the newest passed final review's ledger and task workspace come
+    from the board, never from the caller, and every gate in
+    `record_release_ready` still decides.
+    """
+    from harness import cto  # local: cto imports this module
+    with locked_state(root) as state:
+        agent = _require_agent(state, agent_id)
+        if agent["role"] != "cto":
+            raise ValueError("only the CTO may record a release")
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError("this task was cancelled; there is nothing to release")
+        passes = dict(unreleased_final_passes(state))
+    request = passes.get(task)
+    if not request:
+        raise ValueError(f"no passed final review awaits release for {task}")
+    ledger = str(request.get("ledger") or "")
+    checks = cto.release_check(root, task, Path(ledger) if ledger else project_context(root).code_root / "MISSING-LEDGER",
+                               task_workspace(root, task), None, True, health_command)
+    release = record_release_ready(root, agent_id, task, checks)
+    return {"task": task, "release_record": release,
+            "checks": {key: value for key, value in checks.items() if isinstance(value, (bool, str, int))}}
+
+
 def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str, Any]) -> dict[str, Any]:
     """Record the only state that Mission Control may present as complete."""
     with locked_state(root) as state:
@@ -10842,15 +10984,9 @@ def _root(value: str) -> Path:
     return Path(value).resolve()
 
 
-def main(argv: list[str] | None = None) -> int:
-    from harness import board_client
-    client_state = board_client.environment_state()
-    requested = list(sys.argv[1:] if argv is None else argv)
-    # Help is answered locally, never sent to the worker: a managed agent that
-    # asked `--help` used to get "response is invalid or incompatible" back
-    # and spent a minute deciding whether the board was broken (2026-09-23).
-    if client_state != "legacy" and not any(item in {"-h", "--help"} for item in requested):
-        return board_client.invoke(requested)
+def build_parser() -> argparse.ArgumentParser:
+    """The board's command line - also the single source the MCP tool schemas
+    are derived from (plumbing Stage 2), so the two can never drift apart."""
     parser = argparse.ArgumentParser(
         description="Dev Harness durable agent board", allow_abbrev=False,
     )
@@ -10863,6 +10999,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("offline"); p.add_argument("--agent", required=True); p.add_argument("--note", default="managed CLI session ended")
     p = sub.add_parser("task-brief"); p.add_argument("--agent", required=True); p.add_argument("--plan", required=True); p.add_argument("--update", required=True)
     p = sub.add_parser("migrate-contract-scope"); p.add_argument("--agent", required=True)
+    p = sub.add_parser("record-release"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--health-command", default="")
+    p = sub.add_parser("hook-event"); p.add_argument("--agent", required=True); p.add_argument("--event", required=True); p.add_argument("--payload", default="{}")
+    p = sub.add_parser("create-contract"); p.add_argument("--agent", required=True); p.add_argument("--objective", required=True); p.add_argument("--deliverable", action="append", required=True)
+    p = sub.add_parser("contract-evidence"); p.add_argument("--agent", required=True); p.add_argument("--deliverable", required=True); p.add_argument("--evidence", required=True)
     p = sub.add_parser("expand-contract"); p.add_argument("--agent", required=True); p.add_argument("--deliverable", action="append", required=True, metavar="NAME|ACCEPTANCE_PROOF")
     p = sub.add_parser("begin-task"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True)
     p = sub.add_parser("resume-task"); p.add_argument("--agent", required=True); p.add_argument("--source-agent", required=True); p.add_argument("--task", required=True)
@@ -10920,6 +11060,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("watch"); p.add_argument("--status-interval", type=int, default=300); p.add_argument("--stale-after", type=int, default=900)
     for command_parser in sub.choices.values():
         command_parser.allow_abbrev = False
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    from harness import board_client
+    client_state = board_client.environment_state()
+    requested = list(sys.argv[1:] if argv is None else argv)
+    # Help is answered locally, never sent to the worker: a managed agent that
+    # asked `--help` used to get "response is invalid or incompatible" back
+    # and spent a minute deciding whether the board was broken (2026-09-23).
+    if client_state != "legacy" and not any(item in {"-h", "--help"} for item in requested):
+        return board_client.invoke(requested)
+    parser = build_parser()
     args = parser.parse_args(argv)
     root = context_from_args(args)
     try:
@@ -10930,6 +11083,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "offline": out = offline(root, args.agent, args.note)
         elif args.command == "task-brief": out = task_brief(root, args.agent, args.plan, args.update)
         elif args.command == "migrate-contract-scope": out = migrate_contract_scope(root, args.agent)
+        elif args.command == "record-release": out = record_release(root, args.agent, args.task, args.health_command)
+        elif args.command == "hook-event": out = hook_event(root, args.agent, args.event, args.payload)
+        elif args.command == "create-contract": out = create_contract(root, args.agent, args.objective, args.deliverable)
+        elif args.command == "contract-evidence": out = attach_contract_evidence(root, args.agent, args.deliverable, args.evidence)
         elif args.command == "expand-contract": out = expand_contract(root, args.agent, [tuple(raw.split("|", 1)) if "|" in raw else ("", "") for raw in args.deliverable])
         elif args.command == "begin-task": out = begin_task(root, args.agent, args.task)
         elif args.command == "resume-task": out = resume_task(root, args.agent, args.source_agent, args.task)

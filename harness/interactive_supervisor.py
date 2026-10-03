@@ -502,16 +502,18 @@ def run(
     # and the session record carries it, so Mission Control can shout.
     watch = attention.PromptWatch(height=_terminal_rows(stdin_fd))
 
-    sign_in_needed = False
+    input_held = False
     controller_queue: list[dict] = []
 
     def note_attention(change: tuple[str, str | None] | None) -> None:
-        nonlocal sign_in_needed
+        nonlocal input_held
         if not change:
             return
         kind, reason = change
-        sign_in_needed = kind == "waiting" and attention.needs_sign_in({"attention_reason": reason or ""})
-        if sign_in_needed and controller_queue:
+        # Any menu the owner must answer holds harness input (sign-in since
+        # backlog #8; folder trust and permission menus since F-8).
+        input_held = kind == "waiting" and attention.holds_harness_input(reason)
+        if input_held and controller_queue:
             # Backlog #8, review round 1: give back what was taken but not
             # typed, so the board can withdraw it if the work moves elsewhere.
             try:
@@ -637,9 +639,10 @@ def run(
                 elif time.time() - launched_at > 120:
                     transcript.note("codex session id not found within 120s; a relaunch will start fresh")
                     codex_id_pending = False
-            if not sign_in_needed:
-                # A terminal that needs sign-in takes nothing: its messages stay
-                # queued where the board can still withdraw them (backlog #8).
+            if not input_held:
+                # A terminal showing a menu the owner must answer (sign-in,
+                # folder trust, permission) takes nothing: its messages stay
+                # queued where the board can still withdraw them (backlog #8, F-8).
                 controller_queue.extend(control.take_instructions(root, session_id))
             # A supervisor-ready banner only proves the wrapper started. Wait
             # for the child CLI's first output so a slow-starting CLI cannot
@@ -651,7 +654,7 @@ def run(
                 # by definite keys only, since these may yet prove a report.
                 clock_before_unfinished = last_owner_key_at
                 last_owner_key_at = max(last_owner_key_at, unfinished_at)
-            if child_output_seen and controller_queue and not sign_in_needed:
+            if child_output_seen and controller_queue and not input_held:
                 # Last look at the keyboard before typing: owner bytes that
                 # arrived after this tick's select are read and counted first,
                 # so a message never lands on keys already waiting (backlog #2
@@ -661,7 +664,7 @@ def run(
                     if not data:
                         break
                     owner_input(data)
-            if child_output_seen and controller_queue and not sign_in_needed and not owner_keys.undecided and _controller_delivery_allowed(
+            if child_output_seen and controller_queue and not input_held and not owner_keys.undecided and _controller_delivery_allowed(
                 bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at,
             ):
                 item = controller_queue.pop(0)

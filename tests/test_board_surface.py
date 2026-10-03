@@ -649,6 +649,7 @@ class BoardSurfaceCommandTests(unittest.TestCase):
                 reviewer[1], reviewer[3], reviewer[4], "--challenge-ledger", "challenge_ledger",
             ),
             "qa-result": (reviewer[1], reviewer[3], reviewer[4], "--evidence", "evidence"),
+            "contract-evidence": (agent, token, gateway, "--evidence", "evidence"),
         }
         required_operations = {
             operation for operation, (_option, _field, required) in UPLOAD_ARGUMENTS.items()

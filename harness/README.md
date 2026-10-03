@@ -11,13 +11,15 @@ makes `PARTIAL` non-terminal: the harness keeps work moving until a CTO-verified
 explicit owner pause/cancel.
 
 `contract.py` persists Completion Contracts, hashes evidence, and rejects a
-premature final handoff. Use it before the board workflow:
+premature final handoff. A managed agent creates and evidences its contract
+through the authenticated board, because the contract is harness-owned
+storage its sandbox cannot write:
 
 ```bash
-python3 -m harness.contract create --task TASK-42 --objective "Exact requested outcome" \
-  --deliverable "backend behavior" --deliverable "user-visible UI"
-python3 -m harness.contract evidence --task TASK-42 --deliverable "backend behavior" \
-  --file evidence/backend-test.txt
+python3 harness/board.py --root . create-contract --agent <agent-id> \
+  --objective "Exact requested outcome" --deliverable "backend behavior" --deliverable "user-visible UI"
+python3 harness/board.py --root . contract-evidence --agent <agent-id> \
+  --deliverable "backend behavior" --evidence evidence/backend-test.txt
 python3 -m harness.contract lint --task TASK-42 --file evidence/final-handoff.txt
 ```
 

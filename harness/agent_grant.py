@@ -88,7 +88,7 @@ def _default_storage(project_root: Path) -> tuple[Path, Path] | None:
 
 
 def agent_writable_roots(execution_root, data_root, workspace_root,
-                         project_root=None, home=None) -> list[str]:
+                         project_root=None, home=None, *, board_surface: bool = False) -> list[str]:
     """The paths a managed agent may write, or a refusal naming the reason.
 
     A requested root is granted only when it IS the storage this project was
@@ -139,6 +139,34 @@ def agent_writable_roots(execution_root, data_root, workspace_root,
                 f"it is not the storage assigned to the project at {project}"
                 + (f" ({assigned[0]}, {assigned[1]})" if assigned else "")
             )
+        if label == "data root" and board_surface:
+            # F-1 (2026-10-01): with the authenticated board surface, every
+            # write to the project's harness data is made by the worker, the
+            # supervisor or the runner - never by the agent. Validated above
+            # (an unassigned data root still refuses), but NOT granted.
+            continue
         if resolved not in granted:
             granted.append(resolved)
     return [str(path) for path in granted]
+
+
+def agent_protected_roots(project_root, data_root, workspace_root) -> list[str]:
+    """Harness-owned storage no managed agent may write, even where a grant covers it.
+
+    The board state, Completion Contracts, reviews, control records (session
+    token verifiers, the confinement profile itself) and evidence all live
+    under the data root; board backups live beside it. Their gates run
+    server-side, but their INPUTS were files any agent could edit (spec
+    PLUMBING_MODERNIZATION.md finding F-1). For an adopted project the data
+    root is outside every grant once `board_surface` drops it; for a
+    scaffolded or legacy project it sits INSIDE the project checkout, which
+    is always granted, so the confinement must deny it explicitly. Returned
+    resolved, so a symlinked name cannot slip past the deny.
+    """
+    from harness import project_memory  # local: project_memory imports the board, which this module must not
+
+    context = context_module.context_from_roots(project_root, data_root, workspace_root)
+    roots = [_resolved(context.data_root), _resolved(context.board_backup_root),
+             _resolved(project_memory.external_backup_root(context))]
+    return [str(path) for path in dict.fromkeys(roots)]
+

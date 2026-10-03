@@ -91,8 +91,13 @@ def writable_paths(writable_roots: list[str], *, home: str | Path, claude_config
 
 
 def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str | Path,
-         claude_config_dir: str | None = None, implementation=None) -> list[str]:
+         claude_config_dir: str | None = None, implementation=None,
+         protected_writes: list[str] | None = None) -> list[str]:
     """The command to run so that `argv` can write only inside the grant.
+
+    `protected_writes` are harness-owned paths (`agent_grant.agent_protected_roots`)
+    denied even where a granted root contains them: the deny is applied AFTER
+    the grant, so it wins.
 
     Refuses on a platform without the primitive: a managed agent never runs
     with an open boundary because a package is missing.
@@ -107,7 +112,8 @@ def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str |
         Path(root).mkdir(parents=True, exist_ok=True)
     protected = getattr(implementation, "protected_read_paths", None)
     protected_reads = protected(home, claude_config_dir) if protected else []
-    return implementation.wrap(list(argv), writable, store=Path(store), protected_reads=protected_reads)
+    return implementation.wrap(list(argv), writable, store=Path(store), protected_reads=protected_reads,
+                               protected_writes=list(protected_writes or []))
 
 
 def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_dir: str | None = None,
@@ -129,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Print the confined launch command for a managed Claude terminal as JSON")
     parser.add_argument("--store", required=True, help="where a generated profile is kept (the project's control dir)")
     parser.add_argument("--writable-roots", required=True, help="JSON list of the granted roots")
+    parser.add_argument("--protected-writes", default="[]", help="JSON list of harness-owned paths denied inside the grant")
     parser.add_argument("--home", default=os.path.expanduser("~"))
     parser.add_argument("--claude-config-dir", default=os.environ.get("CLAUDE_CONFIG_DIR") or None)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="the CLI command (after --)")
@@ -136,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     try:
         wrapped = wrap(command, json.loads(args.writable_roots), store=Path(args.store), home=args.home,
-                       claude_config_dir=args.claude_config_dir)
+                       claude_config_dir=args.claude_config_dir, protected_writes=json.loads(args.protected_writes))
     except ConfinementUnavailable as error:
         print(str(error), file=sys.stderr)
         return 3

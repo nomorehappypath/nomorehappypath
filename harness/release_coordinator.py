@@ -167,11 +167,11 @@ def _route_prepared(
             root, session_id,
             f"RELEASE PREPARED by the Python coordinator for {task} at {commit[:12]}. "
             f"Every mechanical check is recorded at {checks_path}. Poll once, perform "
-            "the remaining semantic claim-scope decision, and record release-ready. "
-            "Call release-check with --execute-health and --record-ready but omit "
-            "--health-command: the gate will mechanically validate and reuse the exact "
-            "certified full-suite success. Do not rerun certified product tests. "
-            "USER ACTION: None.",
+            "the remaining semantic claim-scope decision, and record release-ready "
+            f"with the board command `record-release --task {task}` (no --health-command: "
+            "the board mechanically validates and reuses the exact certified full-suite "
+            "success). Do not rerun certified product tests, and do not hold this release "
+            "unless a hold is recorded on the board. USER ACTION: None.",
             source="release-coordinator",
         )
     except (ValueError, OSError):

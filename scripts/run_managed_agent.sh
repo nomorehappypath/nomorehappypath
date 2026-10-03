@@ -280,19 +280,110 @@ ${codex_marker}"
   # roots (sandbox below); Claude is told the same roots with --add-dir so a
   # read or write inside them never stops the agent to ask. Computed once,
   # before the vendor branch, so the two can never drift apart.
+  #
+  # THE BOARD STORE IS NOT THE AGENT'S (F-1, 2026-10-01). With the
+  # authenticated board surface (--board-bootstrap), every write to the
+  # project's harness data - board state, contracts, reviews, control records,
+  # evidence, backups - is made by the worker, this runner or the supervisor,
+  # none of which runs inside the agent's confinement. So the data root is not
+  # granted, and because a scaffolded or legacy project keeps it INSIDE the
+  # checkout (which is granted), it is also denied explicitly for both vendors.
+  # A legacy launch without the surface still runs board commands inside the
+  # agent and keeps the old grant; it is not the product's launch path.
+  board_surface=""
+  [[ -n "$board_bootstrap" ]] && board_surface="1"
   if ! writable_roots_json="$("$python_bin" -E -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
 from harness.agent_grant import agent_writable_roots, GrantTooBroad
 try:
-  print(json.dumps(agent_writable_roots(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] or None)))
+  print(json.dumps(agent_writable_roots(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] or None,
+                                        board_surface=bool(sys.argv[7]))))
 except GrantTooBroad as error:
   print(error, file=sys.stderr)
   raise SystemExit(3)
-' "$harness_root" "$execution_root" "$data_root" "$workspace_root" "$target_root" "$manager_home")"; then
+' "$harness_root" "$execution_root" "$data_root" "$workspace_root" "$target_root" "$manager_home" "$board_surface")"; then
     echo "REFUSED: this project's storage layout would grant the agent more than it needs." >&2
     echo "         Fix the project's data or workspace root, then relaunch." >&2
     exit 3
+  fi
+  protected_writes_json="[]"
+  if [[ -n "$board_surface" ]]; then
+    protected_writes_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness.agent_grant import agent_protected_roots
+print(json.dumps(agent_protected_roots(sys.argv[2], sys.argv[3], sys.argv[4])))
+' "$harness_root" "$target_root" "$data_root" "$workspace_root")"
+  fi
+  # Codex's workspace-write sandbox cannot deny a subpath of a writable root.
+  # When a protected path lies inside the grant (scaffolded/legacy layout), the
+  # same grant is expressed as a Codex permission profile instead: the whole
+  # disk readable, the granted roots and temp space writable, the protected
+  # paths read-only, network on. Proven live with `codex sandbox` (0.159.3):
+  # workspace write OK, data-root write/mkdir refused, loopback HTTP 200, /tmp
+  # writable, .git still protected as under workspace-write. Otherwise the
+  # launch flags are exactly today's, minus the data root.
+  codex_access=(-c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true")
+  if [[ "$provider" == "codex" ]]; then
+    codex_profile_table="$("$python_bin" -E -c '
+import json, sys
+writable = json.loads(sys.argv[1]); protected = json.loads(sys.argv[2])
+def inside(path, root):
+    return path == root or path.startswith(root.rstrip("/") + "/")
+if any(inside(p, w) for p in protected for w in writable):
+    entries = {":root": "read", ":slash_tmp": "write", ":tmpdir": "write"}
+    entries.update({root: "write" for root in writable})
+    entries.update({path: "read" for path in protected})
+    print("{" + ", ".join(json.dumps(k) + " = " + json.dumps(v) for k, v in entries.items()) + "}")
+' "$writable_roots_json" "$protected_writes_json")"
+    if [[ -n "$codex_profile_table" ]]; then
+      codex_access=(-c 'default_permissions="harness_agent"' -c "permissions.harness_agent.filesystem=${codex_profile_table}" -c "permissions.harness_agent.network.enabled=true")
+    fi
+  fi
+  # PLUMBING STAGE 2 (docs/specs/PLUMBING_MODERNIZATION.md): the board as
+  # typed MCP tools, started by the CLI itself, alongside the board CLI. A
+  # client like board_client - same token, same gates. Inline config only; the
+  # token reaches a Codex MCP server by NAME (env_vars), never as a value on
+  # the command line where another agent could read it.
+  board_mcp_args=()
+  mcp_role=""
+  case "$kind" in
+    codex_delivery) mcp_role="engineering" ;;
+    claude_reviewer) mcp_role="qa" ;;
+    claude_cto) mcp_role="cto" ;;
+  esac
+  if [[ -n "$board_surface" && -n "$manager_home" && -n "$mcp_role" ]]; then
+    while IFS= read -r -d '' part; do board_mcp_args+=("$part"); done < <("$python_bin" -E -c '
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import cli_capabilities
+harness_root, home, provider, role, python, writable, agent = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], json.loads(sys.argv[6]), sys.argv[7]
+status = cli_capabilities.stage_status(home, "stage2_board_mcp", provider)
+real = os.path.realpath(harness_root)
+if status["enabled"] and any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in writable):
+    status = {"enabled": False, "reason": "PLUMBING FALLBACK stage2_board_mcp harness install is inside an agent write grant"}
+if not status["enabled"]:
+    if status["reason"].startswith("PLUMBING FALLBACK"):
+        print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", status["reason"], file=sys.stderr)
+    raise SystemExit(0)
+server = os.path.join(harness_root, "harness", "board_mcp.py")
+if provider == "claude":
+    args = ["--mcp-config", json.dumps({"mcpServers": {"harness_board": {"type": "stdio", "command": python,
+            "args": ["-E", server, "--role", role, "--agent", agent]}}}, separators=(",", ":"))]
+else:
+    args = ["-c", "mcp_servers.harness_board.command=" + json.dumps(python),
+            "-c", "mcp_servers.harness_board.args=" + json.dumps(["-E", server, "--role", role, "--agent", agent]),
+            "-c", "mcp_servers.harness_board.env_vars=" + json.dumps(["HARNESS_BOARD_TOKEN", "HARNESS_BOARD_ENDPOINT", "HARNESS_BOARD_PROTOCOL"]),
+            # approval_policy=never refuses MCP calls that need approval (found
+            # live: "MCP tool call requires approval, but approval policy is
+            # never"). This server is harness code behind the same gates as
+            # the board CLI, which needs no approval either.
+            "-c", "mcp_servers.harness_board.default_tools_approval_mode=\"approve\""]
+sys.stdout.write("\0".join(args) + "\0")
+' "$harness_root" "$manager_home" "$provider" "$mcp_role" "$python_bin" "$writable_roots_json" "${agent_id:-}" 2>>"${transcript_path:-/dev/null}")
   fi
   if [[ "$provider" == "codex" ]]; then
     # Approval and sandbox scope are supplied PER LAUNCH, bound to this
@@ -341,9 +432,9 @@ except GrantTooBroad as error:
     if [[ "$launch_mode" == "resume" ]]; then
       # `codex resume` takes the same -c settings; it has no --cd, and the
       # runner already runs from the execution root.
-      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true" "$cli_session_id" "$prompt"
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"} "$cli_session_id" "$prompt"
     else
-      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" -c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true" "$prompt"
+      launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"} "$prompt"
     fi
   else
     # NO PERMISSION PROMPTS, AND A REAL BOUNDARY. A managed Claude terminal
@@ -362,6 +453,50 @@ except GrantTooBroad as error:
     # The granted roots are also added as working directories so the CLI's
     # own path checks never stop it either.
     claude_access=(--permission-mode bypassPermissions)
+    claude_access+=(${board_mcp_args[@]+"${board_mcp_args[@]}"})
+    # PLUMBING STAGE 1 (docs/specs/PLUMBING_MODERNIZATION.md): session-scoped
+    # hooks, passed INLINE so no file exists for any agent to alter. Only when
+    # the owner's switch is on, the authenticated board surface is in use, the
+    # CLI's capabilities are proven, and the harness install is outside every
+    # agent's write grant (an agent must not be able to edit the gate it is
+    # checked by). Otherwise the launch line is exactly as before; a switch
+    # that is on but refused says why in the session log.
+    hook_settings_json=""
+    if [[ -n "$board_surface" && -n "$manager_home" ]]; then
+      hook_settings_json="$("$python_bin" -E -c '
+import json, os, shlex, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import cli_capabilities, global_settings
+harness_root, home, writable, python = sys.argv[1], Path(sys.argv[2]), json.loads(sys.argv[3]), sys.argv[4]
+status = cli_capabilities.stage_status(home, "stage1_hooks", "claude")
+if status["enabled"]:
+    real = os.path.realpath(harness_root)
+    if any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in writable):
+        status = {"enabled": False, "reason": "PLUMBING FALLBACK stage1_hooks harness install is inside an agent write grant"}
+if not status["enabled"]:
+    if status["reason"].startswith("PLUMBING FALLBACK"):
+        from datetime import datetime, timezone
+        print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", status["reason"], file=sys.stderr)
+    raise SystemExit(0)
+timeout = global_settings.load(home)["plumbing"]["hook_gate_timeout_seconds"]
+gate = " ".join(shlex.quote(part) for part in (python, "-E", os.path.join(harness_root, "harness", "hook_gate.py"), "claude"))
+def hook(event, matcher=None):
+    entry = {"hooks": [{"type": "command", "command": f"{gate} {event}", "timeout": timeout + 5}]}
+    if matcher:
+        entry["matcher"] = matcher
+    return [entry]
+print(json.dumps({"hooks": {
+    "PreToolUse": hook("PreToolUse", "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|NotebookRead|Grep|Glob"),
+    "SessionStart": hook("SessionStart"), "UserPromptSubmit": hook("UserPromptSubmit"),
+    "Stop": hook("Stop"), "SessionEnd": hook("SessionEnd"),
+}}, separators=(",", ":")))
+' "$harness_root" "$manager_home" "$writable_roots_json" "$python_bin" 2>>"${transcript_path:-/dev/null}")"
+      if [[ -n "$hook_settings_json" ]]; then
+        claude_access+=(--settings "$hook_settings_json")
+        export HARNESS_HOOK_GATE_TIMEOUT="$("$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from harness import global_settings; print(global_settings.load(Path(sys.argv[2]))["plumbing"]["hook_gate_timeout_seconds"])' "$harness_root" "$manager_home")"
+      fi
+    fi
     execution_root_real="$(cd "$execution_root" && pwd -P)"
     while IFS= read -r granted_root; do
       # The grant lists resolved paths; the execution root is already the
@@ -376,12 +511,13 @@ sys.path.insert(0, sys.argv[1])
 from harness import agent_confinement
 try:
     wrapped = agent_confinement.wrap([], json.loads(sys.argv[2]), store=sys.argv[3], home=os.path.expanduser("~"),
-                                     claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None)
+                                     claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None,
+                                     protected_writes=json.loads(sys.argv[4]))
 except agent_confinement.ConfinementUnavailable as error:
     print(error, file=sys.stderr)
     raise SystemExit(3)
 sys.stdout.write("\0".join(wrapped) + "\0")
-' "$harness_root" "$writable_roots_json" "$data_root/control"
+' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json"
     )
     if [[ ${#claude_confined[@]} -eq 0 ]]; then
       echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2

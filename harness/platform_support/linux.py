@@ -410,7 +410,8 @@ class _BwrapAgentConfinement(_AgentConfinement):
                 command += ["--ro-bind", "/dev/null", str(Path(path))]
         return command + ["--", *list(argv)]
 
-    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None) -> list[str]:
+    def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
+             protected_writes: list[str] | None = None) -> list[str]:
         bwrap = self.binary()
         if not bwrap:
             raise AgentConfinementUnavailable(
@@ -429,6 +430,14 @@ class _BwrapAgentConfinement(_AgentConfinement):
                 else:
                     real.mkdir(parents=True, exist_ok=True)
             command += ["--bind", str(real), str(real)]
+        # F-1: harness-owned storage inside the grant is re-bound read-only.
+        # bwrap applies binds in order, so this later bind wins. A path that
+        # does not exist yet is created first: otherwise the agent could
+        # create it inside the writable parent.
+        for path in protected_writes or []:
+            real = Path(self._real(path))
+            real.mkdir(parents=True, exist_ok=True)
+            command += ["--ro-bind", str(real), str(real)]
         return command + ["--", *list(argv)]
 
 

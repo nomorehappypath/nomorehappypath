@@ -129,12 +129,15 @@ class WorkspaceSettingsTests(unittest.TestCase):
         # The scope is now the project plus the harness's OWN paths - the task
         # workspace is a SIBLING of the project, so workspace-write alone would
         # block legitimate work.
-        self.assertIn('-c "sandbox_mode=workspace-write"', launch)
-        self.assertIn("sandbox_workspace_write.writable_roots", launch)
+        self.assertIn('"${codex_access[@]}"', launch)
+        default = next(line.strip() for line in script.splitlines() if line.strip().startswith("codex_access=("))
+        self.assertIn('-c "sandbox_mode=workspace-write"', default)
+        self.assertIn("sandbox_workspace_write.writable_roots", default)
         # The VALIDATED list, not the raw owner-supplied roots: an adopted
         # project can name a broad ancestor, or a symlink resolving to one.
-        self.assertIn("${writable_roots_json}", launch)
+        self.assertIn("${writable_roots_json}", default)
         self.assertNotIn("${data_root}", launch)
+        self.assertNotIn("${data_root}", default)
         self.assertNotIn("full-access", launch,
                          "the sandbox is switched off again; the Help text now "
                          "claims protection that does not exist")

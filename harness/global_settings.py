@@ -66,11 +66,79 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Agent plumbing modernization (docs/specs/PLUMBING_MODERNIZATION.md §8). Every
+# stage is OFF by default; with all of them off, behaviour is today's exactly.
+PLUMBING_STAGES = (
+    "stage1_hooks", "stage2_board_mcp", "stage3_codex_app_server",
+    "stage3_claude_socket_delivery", "stage4_system_layer_directives", "stage5_structured_verdicts",
+)
+# A stage needs these stages on as well (spec §5, enforced, never advisory).
+PLUMBING_DEPENDENCIES = {
+    "stage3_codex_app_server": ("stage1_hooks",),
+    "stage3_claude_socket_delivery": ("stage1_hooks",),
+    "stage5_structured_verdicts": ("stage2_board_mcp",),
+}
+PLUMBING_LIMITS = {
+    "hook_gate_timeout_seconds": (5, 1, 60),
+    "hook_gate_latency_budget_ms": (250, 10, 5000),
+    "app_server_start_timeout_seconds": (20, 1, 300),
+    "delivery_receipt_timeout_seconds": (30, 1, 600),
+}
+
+
+def default_plumbing() -> dict[str, Any]:
+    value: dict[str, Any] = {f"{stage}_enabled": False for stage in PLUMBING_STAGES}
+    value.update({name: default for name, (default, _low, _high) in PLUMBING_LIMITS.items()})
+    return value
+
+
+def _validated_plumbing(value: Any) -> dict[str, Any]:
+    if value is None:
+        return default_plumbing()
+    if not isinstance(value, dict):
+        raise ValueError("plumbing settings must be an object")
+    unknown = set(value) - set(default_plumbing())
+    if unknown:
+        raise ValueError(f"unknown plumbing settings: {', '.join(sorted(unknown))}")
+    result = default_plumbing()
+    for stage in PLUMBING_STAGES:
+        flag = value.get(f"{stage}_enabled", False)
+        if not isinstance(flag, bool):
+            raise ValueError(f"plumbing {stage}_enabled must be true or false")
+        result[f"{stage}_enabled"] = flag
+    for name, (default, low, high) in PLUMBING_LIMITS.items():
+        number = value.get(name, default)
+        if isinstance(number, bool) or not isinstance(number, int) or not low <= number <= high:
+            raise ValueError(f"plumbing {name} must be a whole number from {low} to {high}")
+        result[name] = number
+    return result
+
+
+def plumbing_status(home: Path, *, settings: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Each stage's switch after its dependencies: on only when it AND what it needs are on.
+
+    A refused switch behaves as off and carries the plain reason the Settings
+    page and the session log show. Capabilities are checked separately
+    (`cli_capabilities.stage_status`), per CLI.
+    """
+    plumbing = _validated_plumbing((settings if settings is not None else load(home)).get("plumbing"))
+    status: dict[str, dict[str, Any]] = {}
+    for stage in PLUMBING_STAGES:
+        if not plumbing[f"{stage}_enabled"]:
+            status[stage] = {"enabled": False, "reason": f"{stage} is switched off"}
+            continue
+        off = [needed for needed in PLUMBING_DEPENDENCIES.get(stage, ()) if not plumbing[f"{needed}_enabled"]]
+        status[stage] = ({"enabled": False, "reason": f"{stage} needs {', '.join(off)} switched on first"}
+                         if off else {"enabled": True, "reason": ""})
+    return status
+
+
 def _default() -> dict[str, Any]:
     return {
         "version": SETTINGS_VERSION,
         "agent_settings": control.default_agent_settings(),
         "connectivity": {},
+        "plumbing": default_plumbing(),
     }
 
 
@@ -84,6 +152,7 @@ def _validate_document(value: Any) -> dict[str, Any]:
         "version": SETTINGS_VERSION,
         "agent_settings": control._validated_agent_settings(value.get("agent_settings")),
         "connectivity": connectivity,
+        "plumbing": _validated_plumbing(value.get("plumbing")),
     }
 
 
