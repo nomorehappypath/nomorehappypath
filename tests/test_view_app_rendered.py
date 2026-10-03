@@ -47,7 +47,7 @@ PROBE = r"""
   button()?.click();
   const seen = [];
   const failedLine = () => (document.querySelector('.release-preview .preview-hint')?.textContent || '').startsWith('The app could not start');
-  for (let attempt = 0; attempt < 900 && !sentTo && !(tab.closed && failedLine()); attempt++) {
+  for (let attempt = 0; attempt < 900 && !sentTo && !failedLine(); attempt++) {
     await new Promise(r => setTimeout(r, 100));
     const hint = (document.querySelector('.release-preview .preview-hint')?.textContent || '').trim();
     if (hint && !seen.includes(hint)) seen.push(hint);
@@ -56,6 +56,7 @@ PROBE = r"""
   const after = {sentTo, seen, spinnerWhileStarting: seen.some(line => /Starting the app… \d+ s/.test(line)),
                  hint: (document.querySelector('.release-preview .preview-hint')?.textContent || '').trim(),
                  runYourself: (document.querySelector('.release-preview .preview-run')?.textContent || '').trim(),
+                 tab: {closed: tab.closed, title: tab.document.title, body: String(tab.document.body.innerHTML || '')},
                  retryButton: again ? {text: again.textContent.trim(), disabled: again.disabled, visible: visible(again)} : null};
   await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({before, after})});
 })();
@@ -169,6 +170,29 @@ class RenderedViewAppTests(unittest.TestCase):
         self.assertTrue(after["hint"].startswith("The app could not start: "), after)
         self.assertRegex(after["runYourself"], r"^cd .+/source && python3 -c 'import sys; sys\.exit\(3\)' --port \d+$")
         self.assertEqual(after["retryButton"], {"text": "View app", "disabled": False, "visible": True})
+        # Owner, 2026-10-02: the tab never opens empty and vanishes; it says why.
+        self.assertFalse(after["tab"]["closed"], after)
+        self.assertEqual(after["tab"]["title"], "The app could not start")
+        self.assertIn("The preview command exited before serving its URL", after["tab"]["body"])
+        self.assertIn("a command to run it yourself", after["tab"]["body"])
+
+    def test_an_app_that_ignores_port_opens_where_it_really_listens(self):
+        # The owner's failing app (project temp, zip-temperature-web) read its own
+        # port variable with a fixed default; the click showed a blank tab that vanished.
+        import os
+        from unittest import mock
+        from tests.test_release_preview import OWN_PORT_APP, _free_loopback_port
+        own_port = _free_loopback_port()
+        (self.workspace / "app.py").write_text(OWN_PORT_APP)
+        _git(self.workspace, "commit", "-qam", "app with its own port")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+        with board.locked_state(self.root) as state:
+            state["releases"]["TASK"]["head_commit"] = self.commit
+        with mock.patch.dict(os.environ, {"OWN_APP_PORT": str(own_port)}):
+            after = self.click_view_app()["after"]
+        self.assertEqual(after["sentTo"], f"http://127.0.0.1:{own_port}/", after)
+        with urlopen(after["sentTo"], timeout=5) as response:
+            self.assertEqual(response.read(), b"zip temperature")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from harness.platform_support.defaults import (  # noqa: F401  (re-exported seam
     CONFINEMENT,
     _Discovery,
     _ProcessIdentity,
+    _loopback_url,
     Confined,
     Grant,
     FOLDER_CHOOSER,
@@ -210,6 +211,45 @@ class _ProcProcessIdentity(_ProcessIdentity):
                 f"{self.PROC} lists no processes; the process table is unreadable here"
             )
         return table
+
+    def listening_urls(self, pids: list[int]) -> list[str]:
+        """The /proc twin of the lsof scan: socket inodes held by these pids
+        matched against the kernel's LISTEN table (state 0A)."""
+        listeners: dict[str, str] = {}
+        for table, loopback, wildcard in (
+            ("tcp", ("0100007F",), ("00000000",)),
+            ("tcp6", ("00000000000000000000000001000000",), ("00000000000000000000000000000000",)),
+        ):
+            try:
+                rows = (self.PROC / "net" / table).read_text().splitlines()[1:]
+            except OSError:
+                continue
+            for row in rows:
+                fields = row.split()
+                if len(fields) < 10 or fields[3] != "0A":
+                    continue
+                address, _, port_hex = fields[1].partition(":")
+                host = "127.0.0.1" if address in loopback + wildcard else ""
+                if table == "tcp6" and address in loopback:
+                    host = "[::1]"
+                if host:
+                    listeners[fields[9]] = _loopback_url(host, str(int(port_hex, 16)))
+        urls: list[str] = []
+        for pid in pids:
+            try:
+                descriptors = list((self.PROC / str(pid) / "fd").iterdir())
+            except OSError:
+                continue
+            for descriptor in descriptors:
+                try:
+                    target = os.readlink(descriptor)
+                except OSError:
+                    continue
+                if target.startswith("socket:["):
+                    url = listeners.get(target[len("socket:["):-1], "")
+                    if url and url not in urls:
+                        urls.append(url)
+        return urls
 
     def parent_process_id(self, pid: int, *, timeout_seconds: float = 2.0) -> int:
         """No subprocess and no timeout to honour: /proc answers immediately."""

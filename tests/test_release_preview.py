@@ -6,11 +6,13 @@ Run: PYTHONPATH=. python3 -m unittest tests.test_release_preview -v
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.request import urlopen
 
 from harness import board, release_preview, workspace_settings
@@ -400,6 +402,140 @@ class ViewAppTests(PreviewFixture):
         board.finish_project_pause(self.root)
         status, _body = EndpointTests.post(self, base, "/api/releases/TASK/view-app", {}, expect_error=True)
         self.assertEqual(status, 409)
+
+
+# The owner's real failing app (2026-10-02, project temp, zip-temperature-web)
+# read its port from its own variable with a fixed default and ignored PORT.
+OWN_PORT_APP = """import http.server, os
+port = int(os.environ.get("OWN_APP_PORT", "8765"))
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"zip temperature"
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *_):
+        return
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+print(f"listening on http://127.0.0.1:{port}", flush=True)
+server.serve_forever()
+"""
+
+NEVER_SERVES_APP = """import subprocess, sys, time
+subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "view-app-orphan-probe"])
+print("computing", flush=True)
+time.sleep(120)
+"""
+
+
+def _free_loopback_port() -> int:
+    import socket
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+class ViewAppOwnPortTests(PreviewFixture):
+    """Owner, 2026-10-02: "so view app crashes" - the app ignored PORT."""
+
+    def setUp(self):
+        require_loopback()
+        super().setUp()
+        self.own_port = _free_loopback_port()
+        patcher = mock.patch.dict(os.environ, {"OWN_APP_PORT": str(self.own_port)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def commit_app(self, source: str) -> None:
+        (self.workspace / "app.py").write_text(source)
+        _git(self.workspace, "add", "app.py")
+        _git(self.workspace, "commit", "-qm", "candidate app")
+        self.commit = _git(self.workspace, "rev-parse", "HEAD")
+
+    def start(self) -> dict:
+        self.seed_release()
+        self.assertEqual(release_preview.request_view(self.root, "TASK"), {"status": "starting"})
+        self.supervisor.tick()
+        return self.release()["preview"]
+
+    def test_an_app_that_ignores_port_is_found_where_it_really_listens(self):
+        self.commit_app(OWN_PORT_APP)
+        started = time.monotonic()
+        preview = self.start()
+        self.assertEqual(preview["status"], "ready", preview)
+        self.assertEqual(preview["url"], f"http://127.0.0.1:{self.own_port}/")
+        self.assertLess(time.monotonic() - started, 30, "found without waiting out the startup timeout")
+        with urlopen(preview["url"], timeout=5) as response:
+            self.assertEqual(response.read(), b"zip temperature")
+
+    def test_a_port_held_by_another_program_says_so_plainly(self):
+        self.commit_app(OWN_PORT_APP)
+        import socket
+        holder = socket.socket()
+        self.addCleanup(holder.close)
+        holder.bind(("127.0.0.1", self.own_port))
+        holder.listen()
+        preview = self.start()
+        self.assertEqual(preview["status"], "failed", preview)
+        self.assertIn("already being used by another program", preview["error"])
+        self.assertIn("a copy of this app you started yourself", preview["error"])
+        self.assertIn("press View app again", preview["error"])
+
+    def test_an_app_that_never_serves_says_what_to_fix_and_leaves_nothing_behind(self):
+        workspace_settings.update_preview(self.root, {"command": "", "startup_timeout_seconds": 5})
+        self.commit_app(NEVER_SERVES_APP)
+        preview = self.start()
+        self.assertEqual(preview["status"], "failed", preview)
+        self.assertIn("never opened a web page", preview["error"])
+        self.assertIn("PORT", preview["error"])
+        self.assertTrue(preview["run_yourself"], "the run-it-yourself command stays")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _probe_processes():
+            time.sleep(0.2)
+        self.assertEqual(_probe_processes(), [], "the failed attempt left a process behind")
+
+
+class ListeningUrlTests(unittest.TestCase):
+    """The port scan View app uses, on both platforms' code paths."""
+
+    def test_the_proc_scan_finds_loopback_listeners_of_the_given_pids_only(self):
+        from harness.platform_support import linux
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            (proc / "net").mkdir()
+            header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            (proc / "net" / "tcp").write_text(header + "".join([
+                "   0: 0100007F:223D 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1111 1\n",  # 127.0.0.1:8765 LISTEN
+                "   1: 0A00000A:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 2222 1\n",  # 10.0.0.10:8080, not loopback
+                "   2: 0100007F:1F91 0100007F:9999 01 00000000:00000000 00:00000000 00000000  1000 0 3333 1\n",  # established, not LISTEN
+                "   3: 00000000:1F92 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 4444 1\n",  # wildcard, other pid
+            ]))
+            (proc / "net" / "tcp6").write_text(header)
+            fd = proc / "42" / "fd"
+            fd.mkdir(parents=True)
+            for number, inode in enumerate(("1111", "2222", "3333")):
+                os.symlink(f"socket:[{inode}]", fd / str(number))
+            os.symlink("/dev/null", fd / "9")
+            identity = linux._ProcProcessIdentity()
+            with mock.patch.object(linux._ProcProcessIdentity, "PROC", proc):
+                self.assertEqual(identity.listening_urls([42]), ["http://127.0.0.1:8765/"])
+                self.assertEqual(identity.listening_urls([]), [])
+
+    def test_the_lsof_scan_reads_loopback_and_wildcard_listeners(self):
+        from harness.platform_support import defaults
+        output = "p42\nf5\nn127.0.0.1:8765\nf6\nn*:9000\nf7\nn192.168.1.5:7000\nf8\nn[::1]:9100\n"
+        completed = subprocess.CompletedProcess([], 0, stdout=output, stderr="")
+        with mock.patch.object(defaults.subprocess, "run", return_value=completed):
+            self.assertEqual(defaults._ProcessIdentity().listening_urls([42]), [
+                "http://127.0.0.1:8765/", "http://127.0.0.1:9000/", "http://[::1]:9100/",
+            ])
+        with mock.patch.object(defaults.subprocess, "run", side_effect=OSError("no lsof")):
+            self.assertEqual(defaults._ProcessIdentity().listening_urls([42]), [])
+
+
+def _probe_processes() -> list[str]:
+    listing = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
+    return [line for line in listing.splitlines() if "view-app-orphan-probe" in line and "ps -axo" not in line]
 
 
 class ViewAppConfiguredCommandTests(PreviewFixture):
