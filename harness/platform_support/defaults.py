@@ -338,6 +338,33 @@ class _ProcessIdentity:
                 found.append(int(parts[0]))
         return found
 
+    def listening_urls(self, pids: list[int]) -> list[str]:
+        """Loopback http URLs the given processes listen on (TCP), best effort.
+
+        View app asks this when a started app ignores the port it was given:
+        the app is opened where it really listens. Only loopback and wildcard
+        listeners count - an address on another interface is never a preview.
+        An `lsof` that cannot run answers "none found", not an error.
+        """
+        if not pids:
+            return []
+        try:
+            result = subprocess.run(
+                ["lsof", "-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-p", ",".join(str(pid) for pid in pids), "-Fn"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        urls: list[str] = []
+        for line in result.stdout.splitlines():
+            if not line.startswith("n") or ":" not in line:
+                continue
+            host, _, port = line[1:].rpartition(":")
+            url = _loopback_url(host, port)
+            if url and url not in urls:
+                urls.append(url)
+        return urls
+
     def terminate_group(self, process: "subprocess.Popen", sig: int) -> bool:
         """Signal a live child's OWN process group, or refuse.
 
@@ -880,3 +907,14 @@ class _AgentConfinement:
 
 
 AGENT_CONFINEMENT = _AgentConfinement()
+
+
+def _loopback_url(host: str, port: str) -> str:
+    """The URL a loopback or wildcard listener answers on; "" for anything else."""
+    if not port.isdigit():
+        return ""
+    if host in ("127.0.0.1", "localhost", "*", "0.0.0.0", "[::]", "::"):
+        return f"http://127.0.0.1:{int(port)}/"
+    if host in ("[::1]", "::1"):
+        return f"http://[::1]:{int(port)}/"
+    return ""

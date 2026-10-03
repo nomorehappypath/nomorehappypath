@@ -39,6 +39,17 @@ from harness import browser_acceptance
 TICK_SECONDS = 5.0
 HEALTH_POLL_SECONDS = 0.5
 STOP_GRACE_SECONDS = 5.0
+# Owner, 2026-10-02 ("so view app crashes"): failures say what happened and
+# what to do, in words the owner can act on.
+PORT_IN_USE = (
+    "the app's port is already being used by another program, most likely a copy of this app "
+    "you started yourself. Close that copy (press Control-C in its Terminal window), then press "
+    "View app again."
+)
+NEVER_SERVED = (
+    "the app is running but never opened a web page. A web app must serve on the port the "
+    "harness gives it in PORT; ask Delivery to fix that, or run it yourself with the command below."
+)
 LOG_TAIL_BYTES = 1200
 VIEW_APP = "view_app"
 # One wake for every supervisor in this process: a View app click starts the
@@ -536,7 +547,7 @@ class ReleasePreviewSupervisor:
                     rendered, shell=True, cwd=preview.source, env=environment,
                     stdout=log, stderr=log, start_new_session=True,
                 )
-            failure = self._await_health(preview, settings)
+            failure = self._await_health(preview, settings, find_listener=detected)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             failure = str(error)[:300]
         if failure:
@@ -574,17 +585,55 @@ class ReleasePreviewSupervisor:
             raise ValueError(f"could not clone the reviewed workspace: {result.stderr.strip()[:300]}")
         _git(source, "checkout", "--detach", preview.head_commit)
 
-    def _await_health(self, preview: Preview, settings: dict[str, Any]) -> str:
+    def _await_health(self, preview: Preview, settings: dict[str, Any], *, find_listener: bool = False) -> str:
         timeout = float(settings.get("startup_timeout_seconds") or 45)
         deadline = time.monotonic() + max(5.0, min(300.0, timeout))
         while time.monotonic() < deadline:
             if not preview.alive():
-                return "the preview command exited before serving its URL"
-            try:
-                with urlopen(preview.url, timeout=3) as response:
-                    if response.status < 500:
+                return PORT_IN_USE if _port_in_use(preview.log_path) else \
+                    "the preview command exited before serving its URL"
+            if _answers(preview.url):
+                return ""
+            if find_listener:
+                # A started app that ignores PORT is opened where it really
+                # listens: a loopback port held by its own process group.
+                for url in _group_listening_urls(preview.process):
+                    if url != preview.url and _answers(url):
+                        preview.url = url
+                        preview.port = int(url.rstrip("/").rpartition(":")[2])
                         return ""
-            except OSError:
-                pass
             time.sleep(HEALTH_POLL_SECONDS)
+        if find_listener and not _group_listening_urls(preview.process):
+            return NEVER_SERVED
         return f"the preview did not answer at {preview.url} within {int(timeout)}s"
+
+
+def _answers(url: str) -> bool:
+    try:
+        with urlopen(url, timeout=3) as response:
+            return response.status < 500
+    except OSError:
+        return False
+
+
+def _group_listening_urls(process: subprocess.Popen | None) -> list[str]:
+    """Loopback URLs served by the started command's own process group."""
+    if process is None or process.poll() is not None:
+        return []
+    identity = platform_support.process_identity()
+    try:
+        table = identity.process_table()
+    except OSError:
+        return []
+    pids = [pid for pid, row in table.items() if row.get("pgid") == process.pid]
+    return identity.listening_urls(pids)
+
+
+def _port_in_use(log_path: Path) -> bool:
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+    except OSError:
+        return False
+    # Only the latest launch counts; earlier attempts stay in the same log.
+    tail = tail.rpartition("=== preview launch")[2]
+    return any(marker in tail for marker in ("Address already in use", "EADDRINUSE", "address already in use"))

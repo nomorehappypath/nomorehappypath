@@ -417,7 +417,15 @@ async function viewApp(task){
   delete viewAppRuns[task];
   if(outcome.status==='ready'){
     if(tab&&!tab.closed)tab.location.href=outcome.url;else window.open(outcome.url,'_blank');
-  }else if(tab&&!tab.closed){tab.close();}
+  }else if(outcome.status==='opened'){if(tab&&!tab.closed)tab.close();}
+  else if(tab&&!tab.closed){
+    // Owner, 2026-10-02: never a window that opens empty and vanishes - it says why.
+    let reason=outcome.error||'';
+    if(outcome.status==='failed'){try{reason=(await releasePreviewNow(task)).error||'';}catch(error){}}
+    const title=outcome.status==='starting'?'The app is still starting':'The app could not start';
+    const detail=outcome.status==='starting'?'Click View app again in a moment.':(reason?reason.charAt(0).toUpperCase()+reason.slice(1):'The reason is shown in Mission Control.');
+    try{tab.document.title=title;tab.document.body.innerHTML=`<div style="font:16px -apple-system,system-ui,sans-serif;padding:32px;max-width:640px;line-height:1.5"><h1 style="font-size:22px">${esc(title)}</h1><p>${esc(detail)}</p><p>Mission Control shows the details and a command to run it yourself. You can close this tab.</p></div>`;}catch(error){}
+  }
   await refresh();
   const node=hint();
   if(!node)return;

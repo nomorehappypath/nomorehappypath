@@ -306,6 +306,10 @@ review.
   states are handled, and it matches the existing product's idiom. The
   rendered proof shows it working; the UX Designer hat is responsible for it
   being good.
+- **A web app the owner can open serves on the port in `PORT`.** Mission
+  Control's View app starts the delivered app with a free port in the `PORT`
+  environment variable. When `PORT` is set, serve on it, bound to
+  127.0.0.1; keep your own default port only for when it is absent.
 - **A defect fix carries a regression scenario you watched fail first.**
   Capture the failing output on the unfixed code before you fix it and record
   it as distinct evidence alongside the unit-test output; the ledger row then
