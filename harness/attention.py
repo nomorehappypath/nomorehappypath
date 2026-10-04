@@ -36,6 +36,11 @@ _INCOMPLETE_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*)?$")
 TRUST_REASON = ("is asking whether you trust this project folder (open its terminal and choose "
                 "'Yes, I trust this folder')")
 PERMISSION_REASON = "is asking permission to continue ('Do you want to proceed?')"
+# Codex 0.160's own folder question (measured on the real `--remote` TUI,
+# 2026-10-03): "Folder access ... Trust this folder? Codex can read, edit, and
+# run files here ... › 1. Trust and continue  2. Back to Agent Command Center".
+CODEX_TRUST_REASON = ("is asking whether you trust this project folder (open its terminal and choose "
+                      "'Trust and continue')")
 
 PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
     # F-8 (2026-10-02): Claude Code asks this the first time it opens a folder
@@ -45,6 +50,8 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"Yes,\s*I\s*trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created\s*or\s*one\s*you\s*trust|"
                 r"Do you trust the (?:files|contents) (?:in|of) this", re.IGNORECASE),
      TRUST_REASON),
+    (re.compile(r"Trust\s*this\s*folder\?|Trust\s*and\s*continue", re.IGNORECASE),
+     CODEX_TRUST_REASON),
     (re.compile(r"Do you want to (?:proceed|make this edit|create|run|allow)", re.IGNORECASE),
      PERMISSION_REASON),
     (re.compile(r"switch to auto mode", re.IGNORECASE),
@@ -55,8 +62,13 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
     # and only the event log knew. The login prompt is its own cause.
     # 2026-09-27 backlog #8: "Login expired" and the bare 401 "access token has
     # been revoked" line (no "/login" on screen) went unrecognised.
+    # 2026-10-03: NOT the harness's own board errors. An agent's board call
+    # that failed authentication around a pause showed "error: session
+    # authentication failed" (board_surface) and the agent's words "board
+    # authentication error"; both were read as the CLI being logged out, and
+    # the alarm flapped as the line scrolled in and out of view.
     (re.compile(r"(?:run|use|type|try)\s+/login|not logged in|please log ?in|login required|login expired|"
-                r"authentication (?:failed|expired|required|error)|session expired|token expired|"
+                r"(?<!session )(?<!board )authentication (?:failed|expired|required|error)|session expired|token expired|"
                 r"access token has been revoked|OAuth (?:access )?token (?:has expired|is invalid)|API Error:\s*401",
                 re.IGNORECASE),
      "is logged out and needs you to sign in again (open its terminal and run /login)"),
@@ -75,7 +87,7 @@ def holds_harness_input(reason: str | None) -> bool:
     keeps receiving messages.
     """
     reason = str(reason or "")
-    return "/login" in reason or reason in {TRUST_REASON, PERMISSION_REASON}
+    return "/login" in reason or reason in {TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON}
 
 
 def needs_sign_in(session: dict | None) -> bool:

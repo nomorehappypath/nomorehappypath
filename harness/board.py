@@ -462,9 +462,19 @@ def _extract_cold_state(root: Path, state: dict[str, Any]) -> None:
             state.get("qa_requests", {}).pop(request["id"], None)
     state["archive"] = []
 
+    # 2026-10-03 (owner: "it should say task accepted, terminating agent or
+    # something"): an accepted task's Delivery agent was archived while its
+    # terminal still ran, and that terminal's card fell back to "starting".
+    # An agent whose terminal is still running stays until the terminal ends.
+    from harness import control  # local, as everywhere in this module (import cycle)
+    try:
+        running_terminals = control.live_session_ids(root)
+    except (OSError, ValueError):
+        running_terminals = set()
     inactive = [
         agent for agent in state.get("agents", {}).values()
-        if not agent.get("active") and agent.get("status") != "paused" and (
+        if not agent.get("active") and agent.get("status") != "paused"
+        and not (agent.get("role") in DEVELOPER_ROLES and agent.get("session_id") in running_terminals) and (
             agent.get("role") not in DEVELOPER_ROLES
             or agent.get("task") in accepted
             or (
@@ -4169,6 +4179,25 @@ def hook_event(root: Path, agent_id: str, event: str, payload_text: str) -> dict
             "message": f"blocked by the harness ({rule}): {reason}",
         })
     return {"decision": "deny", "rule": rule, "reason": reason, "event": event}
+
+
+PLUMBING_EVENT_KINDS = ("plumbing_channel_refused", "plumbing_fallback", "plumbing_policy_mismatch",
+                        "plumbing_receipt_missing")
+
+
+def record_plumbing_event(root: Path, agent_id: str, kind: str, message: str) -> dict[str, Any]:
+    """A plumbing channel refused a connection or fell back to typing (Stage 3).
+
+    Written by the session's supervisor, which runs outside the agent's
+    confinement. A board event, so the CTO sees it exactly like a denied action.
+    """
+    if kind not in PLUMBING_EVENT_KINDS:
+        raise ValueError(f"unknown plumbing event: {kind}")
+    with locked_state(root) as state:
+        agent = state.get("agents", {}).get(agent_id)
+        if not agent:
+            raise ValueError(f"unknown agent: {agent_id}")
+        return _event(state, kind, agent, {"task": agent.get("task", ""), "message": str(message)[:500]})
 
 
 def create_contract(root: Path, agent_id: str, objective: str, deliverables: list[str]) -> dict[str, Any]:
@@ -10078,7 +10107,42 @@ def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, An
         return recorded_response
     with locked_state(root) as state:
         state["release_decisions"][task].pop("git_acceptance", None)
+    stopped = stop_accepted_delivery_terminals(root, task)
+    if stopped:
+        recorded_response["delivery_stopped"] = stopped
     return recorded_response
+
+
+def stop_accepted_delivery_terminals(root: Path, task: str) -> list[str]:
+    """The task is in main: its still-running Delivery terminals stop, and say why.
+
+    The same two steps as the owner's Stop button, so the card reads
+    ACCEPTED_STOP_MESSAGE ("Task accepted, Dev agent stopped."). A failure
+    here is noted and never undoes or fails the Accept.
+    """
+    from harness import control  # local, as everywhere in this module (import cycle)
+    try:
+        running = control.live_session_ids(root)
+    except (OSError, ValueError):
+        return []
+    with locked_state(root) as state:
+        sessions = sorted({
+            str(agent.get("session_id")) for agent in state.get("agents", {}).values()
+            if agent.get("role") in DEVELOPER_ROLES and agent.get("task") == task
+            and agent.get("session_id") in running
+        })
+    stopped: list[str] = []
+    for session_id in sessions:
+        try:
+            stop_session(root, session_id)
+            control.stop(root, session_id)
+            stopped.append(session_id)
+        except (OSError, ValueError) as error:
+            with locked_state(root) as state:
+                _event(state, "delivery_stop_after_acceptance_failed", None, {
+                    "task": task, "message": f"Task accepted; its Delivery terminal could not be stopped: {error}"[:300],
+                })
+    return stopped
 
 
 def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:

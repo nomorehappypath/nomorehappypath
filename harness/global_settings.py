@@ -83,11 +83,22 @@ PLUMBING_LIMITS = {
     "hook_gate_latency_budget_ms": (250, 10, 5000),
     "app_server_start_timeout_seconds": (20, 1, 300),
     "delivery_receipt_timeout_seconds": (30, 1, 600),
+    # How long a message the CLI has queued may wait while the session is busy
+    # (Claude reads its inbox between tool calls and at the end of a turn).
+    "delivery_busy_wait_seconds": (900, 30, 7200),
 }
+
+
+# Proving mode (the owner's test copy only): a switched-on stage may run while
+# its LIVE capabilities are still UNPROVEN, so the visible run that proves them
+# can happen at all. A capability proven false, and every static one, still
+# blocks; the session log says "PLUMBING PROVING" and names what is unproven.
+PROVING_FLAG = "prove_live_items"
 
 
 def default_plumbing() -> dict[str, Any]:
     value: dict[str, Any] = {f"{stage}_enabled": False for stage in PLUMBING_STAGES}
+    value[PROVING_FLAG] = False
     value.update({name: default for name, (default, _low, _high) in PLUMBING_LIMITS.items()})
     return value
 
@@ -106,6 +117,10 @@ def _validated_plumbing(value: Any) -> dict[str, Any]:
         if not isinstance(flag, bool):
             raise ValueError(f"plumbing {stage}_enabled must be true or false")
         result[f"{stage}_enabled"] = flag
+    proving = value.get(PROVING_FLAG, False)
+    if not isinstance(proving, bool):
+        raise ValueError(f"plumbing {PROVING_FLAG} must be true or false")
+    result[PROVING_FLAG] = proving
     for name, (default, low, high) in PLUMBING_LIMITS.items():
         number = value.get(name, default)
         if isinstance(number, bool) or not isinstance(number, int) or not low <= number <= high:

@@ -902,7 +902,7 @@ class ProjectManager:
                     "[SYSTEM CONTROL — project-pause] Project pause requested. "
                     "Finish the current board write and preserve your saved next action; "
                     "the terminal will stop after the bounded drain window.",
-                    source="project-pause",
+                    source=control.PAUSE_NOTICE_SOURCE,
                 )
                 signalled.append(session_id)
             except ValueError:

@@ -19,6 +19,8 @@ transcript_path=""
 launch_reason=""
 codex_marker=""
 predecessor_session=""
+stage3_supervisor_args=()
+claude_system_layer=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -155,6 +157,7 @@ launch_visible_cli() {
     if [[ "$close_terminal_on_exit" == "1" ]]; then
       supervisor_args+=(--close-terminal-on-exit)
     fi
+    supervisor_args+=(${stage3_supervisor_args[@]+"${stage3_supervisor_args[@]}"})
     exec "$python_bin" -E "$harness_root/harness/interactive_supervisor.py" "${supervisor_args[@]}" -- "$@"
   fi
   exec "$@"
@@ -248,8 +251,37 @@ PY
 }
 
 launch_agent_cli() {
-  local prompt="$1"
+  local directive_text="$1" kickoff_text="$2" prompt
   plan_cli_launch
+  # PLUMBING STAGE 4 (docs/specs/PLUMBING_MODERNIZATION.md): the rules move to
+  # the system layer (Claude --append-system-prompt, Codex
+  # developer_instructions) on EVERY launch, fresh or resume, so compaction or
+  # a resume can no longer drop them; the visible first message is the short
+  # role kickoff. Off, the prompt is exactly today's: directive, blank line,
+  # kickoff.
+  system_directive=""
+  if [[ -n "$board_bootstrap" && -n "$manager_home" ]]; then
+    if [[ -n "$("$python_bin" -E -c '
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import cli_capabilities
+status = cli_capabilities.stage_status(Path(sys.argv[2]), "stage4_system_layer_directives", sys.argv[3])
+if status["reason"].startswith(("PLUMBING FALLBACK", "PLUMBING PROVING")):
+    print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", status["reason"], file=sys.stderr)
+print("1" if status["enabled"] else "")
+' "$harness_root" "$manager_home" "$provider" 2>>"${transcript_path:-/dev/null}")" ]]; then
+      system_directive="$directive_text"
+    fi
+  fi
+  if [[ -n "$system_directive" ]]; then
+    prompt="$kickoff_text"
+  else
+    prompt="${directive_text}
+
+${kickoff_text}"
+  fi
   if [[ "$launch_mode" == "resume" ]]; then
     prompt="$(recovery_prompt)"
   else
@@ -341,6 +373,12 @@ if any(inside(p, w) for p in protected for w in writable):
       codex_access=(-c 'default_permissions="harness_agent"' -c "permissions.harness_agent.filesystem=${codex_profile_table}" -c "permissions.harness_agent.network.enabled=true")
     fi
   fi
+  if [[ "$provider" == "codex" && -n "$system_directive" ]]; then
+    # Stage 4, Codex: the rules as developer instructions, on every launch.
+    # Also on the Stage 3 app-server below, which shares these flags (the
+    # TUI, not the harness, creates the thread).
+    codex_access+=(-c "developer_instructions=$("$python_bin" -E -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$system_directive")")
+  fi
   # PLUMBING STAGE 2 (docs/specs/PLUMBING_MODERNIZATION.md): the board as
   # typed MCP tools, started by the CLI itself, alongside the board CLI. A
   # client like board_client - same token, same gates. Inline config only; the
@@ -384,6 +422,58 @@ else:
             "-c", "mcp_servers.harness_board.default_tools_approval_mode=\"approve\""]
 sys.stdout.write("\0".join(args) + "\0")
 ' "$harness_root" "$manager_home" "$provider" "$mcp_role" "$python_bin" "$writable_roots_json" "${agent_id:-}" 2>>"${transcript_path:-/dev/null}")
+  fi
+  # PLUMBING STAGE 3, Codex (docs/specs/PLUMBING_MODERNIZATION.md): harness
+  # messages without typing. The supervisor runs this session's `codex
+  # app-server` on stdio with EXACTLY today's -c flags and attaches the TUI to
+  # it through a private socket in the harness runtime directory, which must
+  # lie outside every write grant (temp space included). Any missing piece -
+  # switch, capability, runtime directory - means today's launch, and a switch
+  # that is on but refused says why in the session log.
+  if [[ "$provider" == "codex" && -n "$board_surface" && -n "$manager_home" ]]; then
+    while IFS= read -r -d '' part; do stage3_supervisor_args+=("$part"); done < <("$python_bin" -E -c '
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement, cli_capabilities, global_settings, runtime_dir
+harness_root, home, session, project, writable, codex = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], json.loads(sys.argv[5]), sys.argv[6]
+flags = json.loads(sys.argv[7])
+transcript = sys.argv[8]
+def refuse(reason):
+    if reason.startswith("PLUMBING FALLBACK"):
+        print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", reason, file=sys.stderr)
+    raise SystemExit(0)
+if transcript and os.path.exists(os.path.join(os.path.dirname(transcript), session + ".stage3-refused")):
+    refuse("PLUMBING FALLBACK stage3_codex_app_server the sandbox of this session could not be confirmed on an earlier launch")
+status = cli_capabilities.stage_status(home, "stage3_codex_app_server", "codex")
+if not status["enabled"]:
+    refuse(status["reason"])
+if status["reason"]:
+    print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", status["reason"], file=sys.stderr)
+directory = runtime_dir.session_directory(home, project, session)
+try:
+    grant = agent_confinement.writable_paths(writable, home=os.path.expanduser("~"))
+    runtime_dir.validate(directory, grant)
+except (runtime_dir.RuntimeDirectoryRefused, agent_confinement.ConfinementUnavailable) as error:
+    refuse(f"PLUMBING FALLBACK stage3_codex_app_server {error}")
+plumbing = global_settings.load(home)["plumbing"]
+argv = [codex, "app-server", "--listen", "stdio://", *flags]
+# What the thread must report (checked by the multiplexer): the policy of today.
+values = dict(flag.split("=", 1) for flag in flags if "=" in flag)
+expected = {"approvalPolicy": "never"}
+if values.get("default_permissions") == "\"harness_agent\"":
+    expected["profile"] = "harness_agent"
+else:
+    expected["writableRoots"] = json.loads(values.get("sandbox_workspace_write.writable_roots", "[]"))
+    expected["networkAccess"] = values.get("sandbox_workspace_write.network_access") == "true"
+sys.stdout.write("\0".join(["--codex-app-server-json", json.dumps(argv), "--codex-expected-policy", json.dumps(expected),
+                            "--runtime-dir", str(directory),
+                            "--receipt-timeout", str(plumbing["delivery_receipt_timeout_seconds"]),
+                            "--app-server-timeout", str(plumbing["app_server_start_timeout_seconds"])]) + "\0")
+' "$harness_root" "$manager_home" "$session_id" "$data_root" "$writable_roots_json" "${HARNESS_CODEX_BIN:-codex}" \
+      "$("$python_bin" -E -c 'import json,sys; print(json.dumps(sys.argv[1:]))' -c "model=\"${model}\"" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"})" "${transcript_path:-}" \
+      2>>"${transcript_path:-/dev/null}")
   fi
   if [[ "$provider" == "codex" ]]; then
     # Approval and sandbox scope are supplied PER LAUNCH, bound to this
@@ -492,7 +582,49 @@ print(json.dumps({"hooks": {
     "Stop": hook("Stop"), "SessionEnd": hook("SessionEnd"),
 }}, separators=(",", ":")))
 ' "$harness_root" "$manager_home" "$writable_roots_json" "$python_bin" 2>>"${transcript_path:-/dev/null}")"
+      # PLUMBING STAGE 3, Claude (spec §4.3, amended by measurement): harness
+      # messages through the session's own inbox. Needs Stage 1's hooks (the
+      # SessionStart hook starts the relay). Adds: the supervisor's handover
+      # socket in the harness runtime directory, the authority note in the
+      # system layer, and a deny on the inter-agent tools (agents talk only
+      # through the board). Any missing piece: today's launch, reason logged.
       if [[ -n "$hook_settings_json" ]]; then
+        stage3_claude=()
+        while IFS= read -r -d '' part; do stage3_claude+=("$part"); done < <("$python_bin" -E -c '
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement, claude_inbox, cli_capabilities, global_settings, runtime_dir
+harness_root, home, session, project, writable, settings = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], json.loads(sys.argv[5]), json.loads(sys.argv[6])
+def refuse(reason):
+    if reason.startswith("PLUMBING FALLBACK"):
+        print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", reason, file=sys.stderr)
+    raise SystemExit(0)
+status = cli_capabilities.stage_status(home, "stage3_claude_socket_delivery", "claude")
+if not status["enabled"]:
+    refuse(status["reason"])
+if status["reason"]:
+    print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"), "--", status["reason"], file=sys.stderr)
+directory = runtime_dir.session_directory(home, project, session)
+try:
+    grant = agent_confinement.writable_paths(writable, home=os.path.expanduser("~"), claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None)
+    runtime_dir.validate(directory, grant)
+except (runtime_dir.RuntimeDirectoryRefused, agent_confinement.ConfinementUnavailable) as error:
+    refuse(f"PLUMBING FALLBACK stage3_claude_socket_delivery {error}")
+plumbing = global_settings.load(home)["plumbing"]
+settings.setdefault("permissions", {}).setdefault("deny", []).extend(claude_inbox.DENIED_TOOLS)
+sys.stdout.write("\0".join([json.dumps(settings, separators=(",", ":")), claude_inbox.AUTHORITY_NOTE,
+                            "--claude-inbox", "--runtime-dir", str(directory),
+                            "--busy-wait", str(plumbing["delivery_busy_wait_seconds"]),
+                            "--receipt-timeout", str(plumbing["delivery_receipt_timeout_seconds"]),
+                            "--app-server-timeout", str(plumbing["app_server_start_timeout_seconds"])]) + "\0")
+' "$harness_root" "$manager_home" "$session_id" "$data_root" "$writable_roots_json" "$hook_settings_json" 2>>"${transcript_path:-/dev/null}")
+        if [[ ${#stage3_claude[@]} -gt 2 ]]; then
+          hook_settings_json="${stage3_claude[0]}"
+          claude_system_layer="${stage3_claude[1]}"
+          stage3_supervisor_args=("${stage3_claude[@]:2}")
+        fi
         claude_access+=(--settings "$hook_settings_json")
         export HARNESS_HOOK_GATE_TIMEOUT="$("$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from harness import global_settings; print(global_settings.load(Path(sys.argv[2]))["plumbing"]["hook_gate_timeout_seconds"])' "$harness_root" "$manager_home")"
       fi
@@ -523,6 +655,31 @@ sys.stdout.write("\0".join(wrapped) + "\0")
       echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2
       exit 3
     fi
+    # Folder trust (owner's order 2026-10-03: no human at any time). Opening a
+    # project in the app is the owner's trust decision; Codex gets it as the
+    # project's trust entry on every open. Claude's own check stops at the git
+    # root, so after an agent's `git init` every new project asked again and
+    # the agent waited for a person. Claude Code treats a session it is told
+    # runs sandboxed as trusted - and this one is: it was just wrapped in the
+    # write confinement above, or refused. Measured on 2.1.288: without it a
+    # fresh git project asks "Yes, I trust this folder"; with it, the prompt.
+    export CLAUDE_CODE_SANDBOXED=1
+    if [[ -n "$system_directive" ]]; then
+      # Stage 4, Claude: the rules in the system layer, with Stage 3's
+      # authority note (when on) folded into the same text.
+      if [[ -n "$claude_system_layer" ]]; then
+        claude_system_layer="${system_directive}
+
+${claude_system_layer}"
+      else
+        claude_system_layer="$system_directive"
+      fi
+    fi
+    if [[ -n "$claude_system_layer" ]]; then
+      # Every launch, fresh or resume: the system layer is never recorded once
+      # and replayed stale (spec Stage 4: snapshot off).
+      claude_access+=(--append-system-prompt "$claude_system_layer" --system-prompt-snapshot off)
+    fi
     if [[ "$launch_mode" == "resume" ]]; then
       launch_visible_cli "${claude_confined[@]}" "${HARNESS_CLAUDE_BIN:-claude}" --model "$model" --effort "$effort" "${claude_access[@]}" --resume "$cli_session_id" "$prompt"
     else
@@ -535,9 +692,7 @@ case "$kind" in
   codex_delivery)
     agent_id="$(register_agent engineering AWAITING_OWNER_DIRECTION 'Delivery Agent' "$vendor")"
     directive="$(<"$harness_root/directives/AGENT.md")"
-    prompt="${directive}
-
-MODE: Delivery Agent.
+    kickoff="MODE: Delivery Agent.
 Start from ${execution_root}, which supplies the established CLI permissions.
     The target project is ${target_root}; perform all task work and board actions there.
     You are already registered by the visible supervisor as agent ${agent_id}; use that ID for every board command and do not register a second agent.
@@ -556,31 +711,27 @@ plan or begin implementation until that confirmation is recorded.
 If this agent ID is already attached to a recovered task by the board, poll
 immediately and resume that preserved task and next action; do not return to
 standby or ask the owner to repeat the direction."
-    launch_agent_cli "$prompt"
+    launch_agent_cli "$directive" "$kickoff"
     ;;
   claude_reviewer)
     agent_id="$(register_agent qa REVIEW_QUEUE 'Independent Reviewer' "$vendor")"
     directive="$(<"$harness_root/directives/AGENT.md")"
-    prompt="${directive}
-
-MODE: Independent Reviewer.
+    kickoff="MODE: Independent Reviewer.
 There is no implementation task for you. Start from ${execution_root}, which
 supplies the established CLI permissions. The target project and visible board
     are ${target_root}; you are already registered by the visible supervisor as agent ${agent_id}; use that ID for every board command and do not register a second agent. Continuously poll that board, claim eligible review
 requests, and execute independent QA there.
 For every board command, start with: ${board_command_prefix}"
-    launch_agent_cli "$prompt"
+    launch_agent_cli "$directive" "$kickoff"
     ;;
   claude_cto)
     agent_id="$(register_agent cto GLOBAL_MONITOR CTO "$vendor")"
     directive="$(<"$harness_root/directives/CTO.md")"
-    prompt="${directive}
-
-Start from ${execution_root}, which supplies the established CLI permissions.
+    kickoff="Start from ${execution_root}, which supplies the established CLI permissions.
     You are the global CTO for the target project ${target_root}. You are already registered by the visible supervisor as agent ${agent_id}; use that ID for every board command and do not register a second agent. Start visible
 monitoring of that project's board now.
 For every board command, start with: ${board_command_prefix}"
-    launch_agent_cli "$prompt"
+    launch_agent_cli "$directive" "$kickoff"
     ;;
   *) echo "Unknown managed session kind: $kind" >&2; exit 2 ;;
 esac

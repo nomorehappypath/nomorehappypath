@@ -543,6 +543,33 @@ def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any]) -> None:
     session["cli_session_provider"] = predecessor.get("cli_session_provider")
     session["cli_launches"] = max(int(predecessor.get("cli_launches") or 1), 1)
     session["continues_session"] = predecessor["id"]
+    # Plumbing Stage 3: messages the predecessor's channel POSTED into its CLI
+    # but never saw arrive go to the session that continues it, under the SAME
+    # id. Its channel checks the conversation for that id before posting, so a
+    # message the old CLI did consume is acknowledged, not sent twice; one it
+    # did not is delivered exactly once (review r2 design check).
+    # Every message the ended session had not DELIVERED - still queued, taken
+    # but unsent, or posted but unseen - moves to the successor (review r2 audit:
+    # a supervisor that ended with messages taken or in flight left them
+    # "taken" for ever). `carried_from` makes the successor check the
+    # conversation before sending, so nothing arrives twice.
+    texts = {entry.get("id"): entry for entry in state.get("inbox", {}).pop(predecessor["id"], [])}
+    carried: list[dict[str, Any]] = []
+    for receipt in state.get("instruction_receipts", {}).values():
+        if receipt.get("session_id") != predecessor["id"] or receipt.get("status") not in {"queued", "taken", "posted"}:
+            continue
+        original = texts.get(receipt.get("id"), {})
+        text = receipt.get("text") or original.get("text")
+        if not text:
+            continue
+        receipt.update({"session_id": session["id"], "status": "queued", "carried_from": predecessor["id"],
+                        "taken_at": None})
+        carried.append({"id": receipt["id"], "session_id": session["id"], "text": text,
+                        "source": receipt.get("source") or original.get("source") or "controller",
+                        "queued_at": receipt.get("queued_at") or original.get("queued_at") or now(),
+                        "carried_from": predecessor["id"]})
+    if carried:
+        state.setdefault("inbox", {}).setdefault(session["id"], [])[:0] = carried
 
 
 def restore_missing_resume_session(
@@ -630,6 +657,22 @@ def _read_state(root: Path) -> dict[str, Any]:
     """
     path = _state_path(root)
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else _initial_state()
+
+
+def live_session_ids(root: Path) -> set[str]:
+    """Sessions whose terminal process is still running - read WITHOUT the lock.
+
+    The board calls this while holding ITS lock (cold-state cleanup), so it
+    must not take this module's lock: a lock-order inversion with a control
+    writer that touches the board would deadlock. A stale "running" record
+    whose process has gone is not live.
+    """
+    live: set[str] = set()
+    for session_id, session in (_read_state(root).get("sessions") or {}).items():
+        pid = session.get("pid")
+        if session.get("status") in ACTIVE_STATUSES and pid and _pid_is_alive(pid):
+            live.add(session_id)
+    return live
 
 
 def cli_session(root: Path, session_id: str) -> dict[str, Any]:
@@ -727,10 +770,13 @@ def enqueue_instruction(root: Path, session_id: str, text: str, source: str = "c
             "source": source[:80],
             "queued_at": now(),
         }
+        # The receipt keeps the message, so a continuing session can be given
+        # exactly this message under exactly this id.
         state.setdefault("inbox", {}).setdefault(session_id, []).append(entry)
         state.setdefault("instruction_receipts", {})[entry["id"]] = {
             "id": entry["id"],
             "session_id": session_id,
+            "text": entry["text"],
             "source": entry["source"],
             "status": "queued",
             "queued_at": entry["queued_at"],
@@ -840,6 +886,7 @@ def request_status_update(root: Path, session_id: str) -> dict[str, Any] | None:
         state.setdefault("instruction_receipts", {})[entry["id"]] = {
             "id": entry["id"],
             "session_id": session_id,
+            "text": entry["text"],
             "source": entry["source"],
             "status": "queued",
             "queued_at": entry["queued_at"],
@@ -916,6 +963,56 @@ def withdraw_instruction(root: Path, instruction_id: str) -> dict[str, Any]:
         return dict(receipt)
 
 
+def reclaim_stranded(root: Path, session_id: str) -> int:
+    """A relaunched terminal takes back what its previous run left in flight.
+
+    Stage 3 review r3b (2026-10-03): a pause force-stops a terminal after its
+    bounded wait, and a killed supervisor never runs its own clean-up - the
+    owner's direction, the Go ahead and the pause notice stayed "taken" for
+    ever. A terminal starts with nothing in hand, so anything of THIS session
+    still "taken" or "posted" belongs to a run that ended. It goes back to the
+    head of the queue under the same id, marked `carried_from`, so it is
+    checked against the conversation before it is sent (it may have arrived).
+    """
+    with locked_state(root) as state:
+        receipts = state.setdefault("instruction_receipts", {})
+        inbox = state.setdefault("inbox", {}).setdefault(session_id, [])
+        waiting = {entry.get("id") for entry in inbox}
+        reclaimed = []
+        for receipt in sorted(receipts.values(), key=lambda value: value.get("queued_at") or ""):
+            if receipt.get("session_id") != session_id or receipt.get("status") not in {"taken", "posted"}:
+                continue
+            if receipt.get("id") in waiting or not receipt.get("text"):
+                continue
+            receipt.update({"status": "queued", "taken_at": None, "carried_from": session_id})
+            reclaimed.append({"id": receipt["id"], "session_id": session_id, "text": receipt["text"],
+                              "source": receipt.get("source") or "controller",
+                              "queued_at": receipt.get("queued_at") or now(), "carried_from": session_id})
+        inbox[:0] = reclaimed
+        return len(reclaimed)
+
+
+def mark_posted(root: Path, session_id: str, instruction_id: str, entry: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Plumbing Stage 3: the message is in the CLI's own queue, its arrival not yet seen.
+
+    Never typed or posted again by this session; acknowledged when its
+    receipt appears; carried to a continuing session if this one ends first.
+    """
+    with locked_state(root) as state:
+        receipt = state.setdefault("instruction_receipts", {}).get(instruction_id)
+        if not receipt:
+            raise ValueError("unknown instruction receipt")
+        if receipt.get("session_id") != session_id:
+            raise ValueError("instruction receipt belongs to another managed session")
+        if receipt.get("status") == "taken":
+            # The message itself is kept with it, so a continuing session can be
+            # given exactly this message under exactly this id.
+            receipt.update({"status": "posted", "posted_at": now(),
+                            "text": str((entry or {}).get("text") or receipt.get("text") or ""),
+                            "source": str((entry or {}).get("source") or receipt.get("source") or "controller")})
+        return dict(receipt)
+
+
 def acknowledge_instruction(root: Path, session_id: str, instruction_id: str) -> dict[str, Any]:
     """Record that the supervisor submitted one queued message to the child PTY."""
     with locked_state(root) as state:
@@ -926,7 +1023,7 @@ def acknowledge_instruction(root: Path, session_id: str, instruction_id: str) ->
             raise ValueError("instruction receipt belongs to another managed session")
         if receipt.get("status") == "delivered":
             return dict(receipt)
-        if receipt.get("status") != "taken":
+        if receipt.get("status") not in {"taken", "posted"}:
             raise ValueError("instruction must be taken by its supervisor before delivery is acknowledged")
         receipt.update({"status": "delivered", "delivered_at": now()})
         _prune_instruction_receipts(state)
@@ -1082,6 +1179,31 @@ def pause_sessions(
         return [dict(state["sessions"][session_id]) for session_id in unique]
 
 
+PAUSE_NOTICE_SOURCE = "project-pause"
+
+
+def _withdraw_pause_notices(state: dict[str, Any], session_id: str) -> None:
+    """A resumed terminal is never told the project is pausing.
+
+    Stage 3 review r4 audit: the pause notice is often still in flight when the
+    pause stops the terminal, and the relaunch takes back what its previous run
+    held - so the resumed agent was told "Project pause requested ... the
+    terminal will stop" after the owner had resumed. Undelivered pause notices
+    end with the pause.
+    """
+    inbox = state.setdefault("inbox", {})
+    withdrawn = set()
+    for receipt in state.setdefault("instruction_receipts", {}).values():
+        if (receipt.get("session_id") == session_id and receipt.get("source") == PAUSE_NOTICE_SOURCE
+                and receipt.get("status") in {"queued", "taken", "posted"}):
+            receipt.update({"status": "withdrawn", "withdrawn_at": now(), "reason": "the project was resumed"})
+            withdrawn.add(receipt.get("id"))
+    if withdrawn and session_id in inbox:
+        inbox[session_id] = [entry for entry in inbox[session_id] if entry.get("id") not in withdrawn]
+        if not inbox[session_id]:
+            inbox.pop(session_id, None)
+
+
 def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str, Any]]:
     """Re-adopt surviving PIDs and stage each dead terminal for one relaunch."""
     unique = list(dict.fromkeys(str(value) for value in session_ids if str(value)))
@@ -1093,6 +1215,7 @@ def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str
             if not session:
                 prepared.append({"id": session_id, "action": "missing"})
                 continue
+            _withdraw_pause_notices(state, session_id)
             pid = session.get("pid")
             if pid and _pid_is_alive(pid):
                 session.pop("resume_offer", None)

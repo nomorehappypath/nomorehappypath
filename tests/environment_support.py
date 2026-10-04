@@ -58,3 +58,30 @@ def require_process_table() -> None:
         browser_acceptance._process_table()
     except browser_acceptance.ProcessTableUnavailable as error:
         raise unittest.SkipTest(str(error)) from error
+
+
+def home_outside_temp_space(case: unittest.TestCase, prefix: str) -> "Path":
+    """A manager home OUTSIDE every agent's temp grant and OUTSIDE this tree.
+
+    Stage 3's runtime directory is refused inside an agent's write grant, and
+    temp space is in every agent's grant, so a test home must live elsewhere.
+    Not inside the tree either: the release gate assembles `tests/` and
+    refuses any personal path it finds there (it did, 2026-10-03). Beside the
+    checkout is used; where the checkout itself sits in temp space (the
+    release gate's own assembled tree) no such place exists, and the test is
+    skipped with that reason rather than weakened.
+    """
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from harness import platform_support
+    parent = Path(os.path.realpath(Path(__file__).resolve().parents[2]))
+    temp = [os.path.realpath(path) for path in platform_support.agent_confinement().temp_paths()]
+    if os.environ.get("TMPDIR"):
+        temp.append(os.path.realpath(os.environ["TMPDIR"]))
+    if any(str(parent) == root or str(parent).startswith(root.rstrip("/") + "/") for root in temp):
+        raise unittest.SkipTest("this checkout lives in temp space; a runtime directory there is refused by design")
+    home = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    case.addCleanup(shutil.rmtree, home, True)
+    return home
