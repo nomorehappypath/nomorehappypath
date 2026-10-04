@@ -41,7 +41,7 @@ if __package__ in {None, ""}:
 from harness import board, board_surface, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
 from harness import workspace_settings
-from harness import platform_support
+from harness import platform_support, web_guard
 from harness.project_manager_page import PAGE
 
 MANAGER_PORT = 8740
@@ -1084,6 +1084,21 @@ def make_handler(manager: ProjectManager):
         def log_message(self, *args):  # quiet server
             return
 
+        def end_headers(self):
+            # Never shown inside another site's frame (security scan 2026-10-04, finding 4).
+            for name, value in web_guard.FRAME_HEADERS:
+                self.send_header(name, value)
+            super().end_headers()
+
+        def refused(self) -> bool:
+            """Loopback host only; a browser mutation must be same-origin (finding 3)."""
+            reason = web_guard.request_refusal(self.command, self.headers, str(self.server.server_address[0]))
+            if reason == "requests must send JSON" and urlparse(self.path).path.endswith("/close"):
+                reason = ""           # the owner's own "Close project" form posts form-encoded, with its token
+            if reason:
+                self._send(403, {"error": reason})
+            return bool(reason)
+
         def _send(self, code: int, value: Any, content_type="application/json"):
             body = (value if isinstance(value, (bytes, str)) else json.dumps(value))
             if isinstance(body, str):
@@ -1183,6 +1198,8 @@ def make_handler(manager: ProjectManager):
             return self._send(status, response_body, content_type)
 
         def do_GET(self):
+            if self.refused():
+                return
             request_path = urlparse(self.path).path
             if request_path == PROJECT_ROUTE.rstrip("/") or request_path.startswith(PROJECT_ROUTE):
                 return self._proxy_project()
@@ -1217,6 +1234,8 @@ def make_handler(manager: ProjectManager):
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
+            if self.refused():
+                return
             try:
                 if urlparse(self.path).path.startswith(PROJECT_ROUTE):
                     return self._proxy_project()
@@ -1347,6 +1366,8 @@ def make_handler(manager: ProjectManager):
                 return self._send(400, {"error": str(error)})
 
         def do_DELETE(self):
+            if self.refused():
+                return
             if urlparse(self.path).path.startswith(PROJECT_ROUTE):
                 return self._proxy_project()
             parts = self.path.strip("/").split("/")
