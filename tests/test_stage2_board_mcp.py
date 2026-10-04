@@ -177,7 +177,7 @@ class RunnerTests(unittest.TestCase):
         identity = cli_capabilities.binary_identity(provider, source_environment={**os.environ, **environment})
         path = cli_capabilities.cache_path(self.home, identity)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"identity": identity, "probed_at": "test",
+        path.write_text(json.dumps({"identity": identity, "probed_at": "test", "probe_version": cli_capabilities.PROBE_VERSION,
                                     "static": {f"{provider}.mcp_config" if provider == "claude" else "codex.mcp_command": True}}),
                         encoding="utf-8")
         cli_capabilities.record_live(self.home, provider, {f"{provider}.mcp_reaches_board": True}, auth_mode="test",

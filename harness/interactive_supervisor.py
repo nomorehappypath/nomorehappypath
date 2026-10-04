@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import array
 import fcntl
+import json
 import os
 import pty
 import re
@@ -482,9 +483,214 @@ def _stop_child_group(
         return False
 
 
+def _descends_from(pid: int, ancestor: int, hops: int = 32) -> bool:
+    """True when `pid` is `ancestor` or one of its descendants (bounded walk)."""
+    if pid <= 0 or ancestor <= 0:
+        return False
+    try:
+        table = platform_support.process_identity().process_table()
+    except OSError:
+        return False
+    for _ in range(hops):
+        if pid == ancestor:
+            return True
+        row = table.get(pid)
+        if not row or row.get("ppid") in (None, 0, 1, pid):
+            return False
+        pid = int(row["ppid"])
+    return False
+
+
+def _stage3_tick(root: Path, session_id: str, agent_id: str, stage3: dict, controller_queue: list, transcript) -> bool:
+    """One pass over Stage 3's events and delivery outcomes. Returns False once the
+    Codex thread id is known (the rollout-file scan is then unnecessary)."""
+    keep_scanning = True
+    with stage3["event_lock"]:
+        events, stage3["events"] = stage3["events"], []
+    for kind, detail in events:
+        if kind == "thread" and detail:
+            try:
+                control.record_cli_session(root, session_id, detail, "codex")
+            except ValueError:
+                pass
+            transcript.note(f"codex session id recorded from the app-server: {detail}")
+            keep_scanning = False
+        elif kind == "refused":
+            transcript.note(f"plumbing stage 3: {detail}")
+            _plumbing_event(root, agent_id, "plumbing_channel_refused", detail)
+        elif kind == "policy_mismatch":
+            # The thread's sandbox is not this session's: the session stops
+            # (its terminal never got the thread), says why, and the next
+            # launch runs the way it always has.
+            message = f"the Codex session's sandbox could not be confirmed ({detail}); it stops and relaunches without stage 3"
+            transcript.note(f"PLUMBING FALLBACK stage3_codex_app_server {message}")
+            _plumbing_event(root, agent_id, "plumbing_policy_mismatch", message)
+            try:
+                marker = stage3_refused_marker(root, session_id)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(detail + "\n", encoding="utf-8")
+            except OSError:
+                pass
+            stage3["fallback"] = True
+            stage3["stop_requested"] = True
+        elif kind == "relay":
+            transcript.note(f"plumbing stage 3: {detail}")
+        elif kind == "ended":
+            transcript.note(f"plumbing stage 3: {detail}")
+    mux = stage3["mux"]
+    if not stage3["fallback"] and not mux.alive():
+        # The channel went away: the session types, as today, from now on.
+        stage3["fallback"] = True
+        transcript.note(f"PLUMBING FALLBACK {stage3['stage']} the delivery channel closed; this session goes back to typing")
+        _plumbing_event(root, agent_id, "plumbing_fallback", "the delivery channel closed")
+    late = not mux.up() and time.monotonic() > stage3["ready_deadline"]
+    if late and not stage3["late_noted"]:
+        # Not up yet (no relay, no thread - a trust dialog can hold startup):
+        # messages are typed meanwhile, never held for ever; once the channel
+        # comes up it is used again.
+        stage3["late_noted"] = True
+        transcript.note(f"PLUMBING FALLBACK {stage3['stage']} the delivery channel is not up yet; typing meanwhile")
+    stage3["typing_meanwhile"] = late
+    outcome = stage3["worker"].take_outcome()
+    if outcome is not None:
+        item, result = outcome
+        channel = "app-server" if stage3["stage"] == "stage3_codex_app_server" else "inbox"
+        if result == "delivered":
+            stage3["failures"] = 0
+            control.acknowledge_instruction(root, session_id, item["id"])
+            transcript.note(f"controller message {item['id']} delivered ({channel} receipt)")
+        elif result == "posted":
+            # In the CLI's own queue - never posted or typed again by this
+            # session. "posted", not "delivered", until its receipt appears; if
+            # the session ends first, the session that continues it takes it
+            # over under the same id (control._inherit_cli_memory).
+            control.mark_posted(root, session_id, item["id"], item)
+            stage3.setdefault("posted", {})[item["id"]] = item
+            if channel == "app-server":
+                transcript.note(f"controller message {item['id']} joined the agent's running turn; it is used when the model next reads, never sent twice")
+            else:
+                transcript.note(f"controller message {item['id']} posted to the {channel}; its receipt is awaited, it is never posted again")
+        elif result == "dropped":
+            # Steered into a turn that ended before the model read it (an
+            # interrupt drops pending steered input): provably unused, so it
+            # waits again, first in line - checked once more before sending.
+            item["_stage3_retry"] = True
+            controller_queue.insert(0, item)
+            transcript.note(f"controller message {item['id']} was not used before the agent's turn ended; it is sent again")
+        else:
+            # Never marked delivered without its receipt: it waits again, first in line.
+            item["_stage3_retry"] = result == "unconfirmed"
+            controller_queue.insert(0, item)
+            if result != "not_ready":
+                stage3["failures"] += 1
+                transcript.note(f"controller message {item['id']} not confirmed ({result}); queued again")
+            if stage3["failures"] >= STAGE3_FAILURES_BEFORE_FALLBACK and not stage3["fallback"]:
+                stage3["fallback"] = True
+                message = "two deliveries in a row had no receipt; this session goes back to typing"
+                transcript.note(f"PLUMBING FALLBACK {stage3['stage']} receipt: {message}")
+                _plumbing_event(root, agent_id, "plumbing_fallback", message)
+    take_receipts = getattr(stage3["mux"], "take_receipts", None)
+    if take_receipts is not None:
+        seen, overdue = take_receipts()
+        for client_id in seen:
+            stage3["failures"] = 0
+            instruction = client_id.removeprefix("harness-")
+            stage3.get("posted", {}).pop(instruction, None)
+            try:
+                control.acknowledge_instruction(root, session_id, instruction)
+            except ValueError:
+                pass
+            transcript.note(f"controller message {instruction} receipt seen in the session transcript")
+        for client_id in overdue:
+            # Posted, never seen: an event the CTO sees. It is NOT posted again;
+            # repeated misses send NEW messages back to typing.
+            stage3["failures"] += 1
+            instruction = client_id.removeprefix("harness-")
+            message = f"message {instruction} was posted to the inbox but no receipt appeared in the session transcript"
+            transcript.note(f"plumbing stage 3: {message}")
+            _plumbing_event(root, agent_id, "plumbing_receipt_missing", message)
+            try:
+                # The live CLI holds it (most likely consumed): acknowledged so
+                # it is never sent again; the event says it was not confirmed.
+                control.acknowledge_instruction(root, session_id, instruction)
+            except ValueError:
+                pass
+            if stage3["failures"] >= STAGE3_FAILURES_BEFORE_FALLBACK and not stage3["fallback"]:
+                stage3["fallback"] = True
+                transcript.note(f"PLUMBING FALLBACK {stage3['stage']} receipt: two posted messages had no receipt; new messages are typed")
+                _plumbing_event(root, agent_id, "plumbing_fallback", "two posted messages had no receipt; new messages are typed")
+    take_dropped = getattr(stage3["mux"], "take_dropped", None)
+    if take_dropped is not None:
+        for client_id in take_dropped():
+            # Steered, then the turn ended before the model read it: it never
+            # arrived. The same message, same id, waits again first in line.
+            instruction = client_id.removeprefix("harness-")
+            item = stage3.get("posted", {}).pop(instruction, None)
+            if item is not None:
+                item["_stage3_retry"] = True
+                controller_queue.insert(0, item)
+                transcript.note(f"controller message {instruction} was not used before the agent's turn ended; it is sent again")
+    return keep_scanning
+
+
+def _turn_state(root: Path, session_id: str) -> tuple[str, float]:
+    """The CLI's own last turn signal (Stage 1 hooks): state and when, read without the lock."""
+    from datetime import datetime
+    try:
+        session = (control._read_state(root).get("sessions") or {}).get(session_id) or {}
+        state, at = str(session.get("turn_state") or ""), str(session.get("turn_state_at") or "")
+        return state, (datetime.fromisoformat(at).timestamp() if at else 0.0)
+    except (OSError, ValueError):
+        return "", 0.0
+
+
+def _plumbing_event(root: Path, agent_id: str, kind: str, message: str) -> None:
+    try:
+        board.record_plumbing_event(root, agent_id, kind, message)
+    except (ValueError, OSError):
+        pass
+
+
+def _remote_tui_command(command: list[str], socket_path: str) -> list[str]:
+    """Today's Codex launch line, attached to the session's private app-server.
+
+    `codex [OPTIONS] [PROMPT]` and `codex resume [OPTIONS] [SESSION] [PROMPT]`
+    both take `--remote <ADDR>`; it goes right after the subcommand. Every
+    `-c` override and `--model` is REMOVED: a remote TUI refuses permission
+    overrides (measured, codex-cli 0.160.0 - the owner's first Stage 3 launch
+    died on it), and all of them are on the app-server's own command line.
+    """
+    position = 2 if len(command) > 1 and command[1] == "resume" else 1
+    kept: list[str] = []
+    index = position
+    while index < len(command):
+        if command[index] in ("-c", "--config", "--model", "-m") and index + 1 < len(command):
+            index += 2
+            continue
+        kept.append(command[index])
+        index += 1
+    return command[:position] + ["--remote", f"unix://{socket_path}"] + kept
+
+
+def stage3_refused_marker(root: Path, session_id: str) -> Path:
+    """Beside the session's transcript (harness storage, not agent-writable):
+    the next launch of this session runs without Stage 3."""
+    return conversation.transcript_path(root, session_id).parent / f"{session_id}.stage3-refused"
+
+
+# Plumbing Stage 3 (spec PLUMBING_MODERNIZATION.md): after this many deliveries
+# in a row without a receipt, the session goes back to typing, and says so.
+STAGE3_FAILURES_BEFORE_FALLBACK = 2
+# The longest a Stage 3 channel's teardown may hold a closing session.
+STAGE3_TEARDOWN_SECONDS = 10.0
+
+
 def run(
     root: Path, session_id: str, agent_id: str, command: list[str],
     *, close_terminal_on_exit: bool = False, provider: str = "", execution_root: str = "",
+    codex_app_server: list[str] | None = None, runtime_directory: str = "", claude_inbox: bool = False,
+    codex_expected_policy: dict | None = None, busy_wait: float = 900.0,
+    receipt_timeout: float = 30.0, response_timeout: float = 20.0,
 ) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive supervisor requires a real Terminal")
@@ -494,6 +700,13 @@ def run(
     # the CLI's memory is gone. See harness/conversation.py.
     transcript = conversation.Transcript(conversation.transcript_path(root, session_id))
     transcript.note(f"supervisor started for {session_id} (agent {agent_id}, provider {provider or 'unknown'}): {' '.join(command[:1])}")
+    try:
+        reclaimed = control.reclaim_stranded(root, session_id)
+    except (OSError, ValueError):
+        reclaimed = 0
+    if reclaimed:
+        transcript.note(f"{reclaimed} controller message(s) the previous run of this terminal left in flight are queued again; "
+                        "each is checked against the conversation before it is sent")
     launched_at = time.time()
     codex_id_pending, codex_marker = conversation.codex_discovery_state(root, session_id, provider)
     next_codex_probe = launched_at + 2.0
@@ -532,6 +745,81 @@ def run(
             pass
     master, slave = pty.openpty()
     _copy_terminal_size(stdin_fd, slave)
+    child_environment = child_process.environment(git=True, shell=True)
+    # PLUMBING STAGE 3, Codex: the session's app-server runs on stdio as this
+    # supervisor's child, and the TUI in the window attaches through a private
+    # multiplexer. Started BEFORE the TUI, which connects at once.
+    stage3: dict = {"mux": None, "worker": None, "child_pid": 0, "failures": 0, "fallback": False,
+                    "events": [], "policy_checked": False, "stage": "", "late_noted": False,
+                    "typing_meanwhile": False, "ready_deadline": time.monotonic() + response_timeout}
+    if codex_app_server and runtime_directory:
+        from harness import codex_app_server as _codex_app_server, runtime_dir
+        import threading as _threading
+        event_lock = _threading.Lock()
+
+        def stage3_event(kind: str, detail: str) -> None:
+            with event_lock:
+                stage3["events"].append((kind, detail))
+
+        stage3["stage"] = "stage3_codex_app_server"
+        try:
+            runtime_dir.create(Path(runtime_directory))
+            mux = _codex_app_server.CodexMultiplexer(
+                os.path.join(runtime_directory, "t.sock"), codex_app_server,
+                environment=child_environment, cwd=execution_root or None,
+                admit=lambda pid: _descends_from(pid, stage3["child_pid"]),
+                peer_pid=platform_support.process_identity().peer_process_id,
+                on_event=stage3_event, expected_policy=codex_expected_policy,
+            )
+            mux.start()
+            stage3["mux"] = mux
+            stage3["worker"] = _codex_app_server.DeliveryWorker(
+                mux, response_timeout=response_timeout, receipt_timeout=receipt_timeout)
+            stage3["event_lock"] = event_lock
+            # Today's exact launch line, attached to the private app-server.
+            command = _remote_tui_command(command, mux.socket_path)
+            transcript.note("plumbing stage 3: harness messages reach Codex through its app-server, not by typing")
+        except (OSError, ValueError) as error:
+            transcript.note(f"PLUMBING FALLBACK stage3_codex_app_server could not start the app-server: {error}")
+            stage3["fallback"] = True
+    elif claude_inbox and runtime_directory:
+        # PLUMBING STAGE 3, Claude: the session's own-child relay (started by
+        # its SessionStart hook) connects here and posts each message to the
+        # CLI's inbox; the supervisor never posts itself (it is the CLI's
+        # parent, and the CLI holds a parent's message for approval).
+        from harness import claude_inbox as _claude_inbox, codex_app_server as _codex_app_server, runtime_dir
+        import threading as _threading
+        event_lock = _threading.Lock()
+        stage3["stage"] = "stage3_claude_socket_delivery"
+
+        def stage3_event(kind: str, detail: str) -> None:
+            with event_lock:
+                stage3["events"].append((kind, detail))
+
+        def command_of(pid: int) -> str:
+            try:
+                return str((platform_support.process_identity().process_table().get(pid) or {}).get("command", ""))
+            except OSError:
+                return ""
+
+        try:
+            runtime_dir.create(Path(runtime_directory))
+            inbox = _claude_inbox.ClaudeInbox(
+                os.path.join(runtime_directory, "h.sock"), session_id=session_id,
+                cli_pid=lambda: stage3["child_pid"], is_cli=lambda pid: _descends_from(pid, stage3["child_pid"]),
+                peer_pid=platform_support.process_identity().peer_process_id, command_of=command_of,
+                on_event=stage3_event, turn_state=lambda: _turn_state(root, session_id), busy_wait=busy_wait,
+            )
+            inbox.start()
+            child_environment["HARNESS_INBOX_HANDOVER"] = inbox.socket_path
+            stage3["mux"] = inbox
+            stage3["worker"] = _codex_app_server.DeliveryWorker(
+                inbox, response_timeout=response_timeout, receipt_timeout=receipt_timeout)
+            stage3["event_lock"] = event_lock
+            transcript.note("plumbing stage 3: harness messages reach Claude through its own inbox, not by typing")
+        except (OSError, ValueError) as error:
+            transcript.note(f"PLUMBING FALLBACK stage3_claude_socket_delivery could not start the inbox handover: {error}")
+            stage3["fallback"] = True
     child = subprocess.Popen(
         command,
         stdin=slave,
@@ -539,8 +827,9 @@ def run(
         stderr=slave,
         close_fds=True,
         preexec_fn=_make_controlling_terminal,
-        env=child_process.environment(git=True, shell=True),
+        env=child_environment,
     )
+    stage3["child_pid"] = child.pid
     os.close(slave)
     original = termios.tcgetattr(stdin_fd)
     typed = bytearray()
@@ -643,7 +932,13 @@ def run(
                 # A terminal showing a menu the owner must answer (sign-in,
                 # folder trust, permission) takes nothing: its messages stay
                 # queued where the board can still withdraw them (backlog #8, F-8).
-                controller_queue.extend(control.take_instructions(root, session_id))
+                taken = control.take_instructions(root, session_id)
+                for entry in taken:
+                    if entry.get("carried_from"):
+                        # From a session that ended: it may have arrived there
+                        # already, so the conversation is checked before sending.
+                        entry["_stage3_retry"] = True
+                controller_queue.extend(taken)
             # A supervisor-ready banner only proves the wrapper started. Wait
             # for the child CLI's first output so a slow-starting CLI cannot
             # receive controller input before it has configured its terminal.
@@ -664,13 +959,36 @@ def run(
                     if not data:
                         break
                     owner_input(data)
-            if child_output_seen and controller_queue and not input_held and not owner_keys.undecided and _controller_delivery_allowed(
+            if stage3["mux"] is not None:
+                codex_id_pending = _stage3_tick(root, session_id, agent_id, stage3, controller_queue, transcript) and codex_id_pending
+                if stage3.get("stop_requested"):
+                    stop_requested = True
+            stage3_delivers = stage3["mux"] is not None and not stage3["fallback"] and not stage3["typing_meanwhile"]
+            if stage3_delivers and stage3["worker"].busy():
+                pass                              # one delivery in flight at a time
+            elif child_output_seen and controller_queue and not input_held and not owner_keys.undecided and _controller_delivery_allowed(
                 bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at,
             ):
-                item = controller_queue.pop(0)
-                transcript.note(f"controller message ({item['source']}): {item['text']}")
-                _submit_controller_message(master, item["source"], item["text"])
-                control.acknowledge_instruction(root, session_id, item["id"])
+                if stage3_delivers:
+                    if stage3["mux"].ready():
+                        # Stage 3: a turn on the app-server, acknowledged by the
+                        # server - never typed. Its outcome is read next tick.
+                        item = controller_queue.pop(0)
+                        retry = bool(item.pop("_stage3_retry", False))
+                        channel = "app-server" if stage3["stage"] == "stage3_codex_app_server" else "inbox"
+                        transcript.note(f"controller message ({item['source']}) via {channel}: {item['text']}")
+                        stage3["worker"].submit(item, f"[SYSTEM CONTROL — {item['source']}] {item['text']}", retry=retry)
+                else:
+                    item = controller_queue.pop(0)
+                    if item.pop("_stage3_retry", False) and stage3["mux"] is not None and \
+                            stage3["mux"].already_delivered(f"harness-{item['id']}", 3.0):
+                        # Its receipt was only late: typing it now would send it twice.
+                        control.acknowledge_instruction(root, session_id, item["id"])
+                        transcript.note(f"controller message {item['id']} had already arrived; not typed again")
+                        continue
+                    transcript.note(f"controller message ({item['source']}): {item['text']}")
+                    _submit_controller_message(master, item["source"], item["text"])
+                    control.acknowledge_instruction(root, session_id, item["id"])
         exited = child.poll()
         if exited is None and stop_requested:
             return STUCK_EXIT_CODE
@@ -678,6 +996,33 @@ def run(
     finally:
         if child.poll() is None:
             _stop_child_group(child)
+        # Review r2 audit: nothing taken may stay "taken" for ever when the
+        # session ends. Unsent messages go back to the queue; one in flight on
+        # a Stage 3 channel counts as posted (it may have arrived). Both move
+        # to the session that continues this one, checked before sending.
+        try:
+            unsent = [item for item in controller_queue]
+            if unsent:
+                control.return_instructions(root, session_id, unsent)
+            in_flight = stage3["worker"].current if stage3.get("worker") is not None else None
+            if in_flight:
+                control.mark_posted(root, session_id, in_flight["id"], in_flight)
+        except (ValueError, OSError):
+            pass
+        if stage3["mux"] is not None:
+            # Bounded: a channel's teardown must never hold the supervisor open
+            # (review r2: Stop all left supervisors and relays alive for minutes).
+            import threading as _threading
+            stopper = _threading.Thread(target=stage3["mux"].stop, daemon=True)
+            stopper.start()
+            stopper.join(timeout=STAGE3_TEARDOWN_SECONDS)
+            if stopper.is_alive():
+                transcript.note("plumbing stage 3: the delivery channel did not close within its bound; the terminal closes anyway")
+        if runtime_directory and (codex_app_server or claude_inbox):
+            # Always, even when the channel never started (review r1: a stale
+            # runtime directory outlived its session).
+            from harness import runtime_dir
+            runtime_dir.remove(Path(runtime_directory))
         # Do not wait for a dead child process to drain a PTY while restoring
         # the owner terminal after a safety stop.
         termios.tcsetattr(stdin_fd, termios.TCSANOW, original)
@@ -706,6 +1051,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--close-terminal-on-exit", action="store_true")
     parser.add_argument("--provider", default="")
     parser.add_argument("--execution-root", default="")
+    # Plumbing Stage 3, Codex: the app-server command line (JSON array) and the
+    # session's runtime directory. Absent, the session runs exactly as before.
+    parser.add_argument("--codex-app-server-json", default="")
+    parser.add_argument("--runtime-dir", default="")
+    parser.add_argument("--claude-inbox", action="store_true")
+    parser.add_argument("--codex-expected-policy", default="")
+    parser.add_argument("--busy-wait", type=float, default=900.0)
+    parser.add_argument("--receipt-timeout", type=float, default=30.0)
+    parser.add_argument("--app-server-timeout", type=float, default=20.0)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -717,6 +1071,11 @@ def main(argv: list[str] | None = None) -> int:
         context_from_args(args), args.session_id, args.agent_id, command,
         close_terminal_on_exit=args.close_terminal_on_exit,
         provider=args.provider, execution_root=args.execution_root,
+        codex_app_server=json.loads(args.codex_app_server_json) if args.codex_app_server_json else None,
+        runtime_directory=args.runtime_dir, claude_inbox=args.claude_inbox, receipt_timeout=args.receipt_timeout,
+        codex_expected_policy=json.loads(args.codex_expected_policy) if args.codex_expected_policy else None,
+        busy_wait=args.busy_wait,
+        response_timeout=args.app_server_timeout,
     )
 
 

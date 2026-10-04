@@ -807,7 +807,14 @@ function humanTask(agent,state={}){
   return objectiveSummary(agent.task||'Current task');
 }
 
+function deliveryTaskAccepted(agent,state){
+  // Owner, 2026-10-03: after Accept the Delivery card said the task was still
+  // being clarified. An accepted task's Delivery agent says so, and only that.
+  // An accepted task is no longer live: the page gets it as accepted_tasks.
+  return ['engineering','development'].includes(agent.role)&&((state.accepted_tasks||[]).includes(agent.task)||(state.release_decisions||{})[agent.task]?.decision==='accepted');
+}
 function humanStage(agent,state,contracts){
+  if(deliveryTaskAccepted(agent,state))return'TASK ACCEPTED';
   if(agent.status==='paused')return'PAUSED';
   if(agent.liveness==='needs_sign_in')return'NEEDS SIGN-IN';
   if(agent.role==='cto'){
@@ -865,6 +872,7 @@ function ctoTaskRowsHtml(state,contracts){
 }
 
 function agentStatusSummary(agent,state,contracts){
+  if(deliveryTaskAccepted(agent,state))return{summary:agent.status==='stopped'?'Task accepted, Dev agent stopped.':'Task accepted. The work is in main; this Delivery terminal is closing.',next:'Nothing to do: the task is finished.'};
   if(agent.status==='paused')return{summary:'This agent and its exact next action are intentionally paused. The terminal is stopped and the board is read-only.',next:'Resume the project to continue from the saved gate. No work has been reset or re-queued.'};
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
@@ -1048,7 +1056,7 @@ function openAgents(state,contracts,sessionItems=[]){
     if(agent.role==='engineering'||agent.role==='development'){
       const waiting=agent.task==='AWAITING_OWNER_DIRECTION', directionSent=Boolean((state.owner_directions||{})[agent.session_id]?.text);
       const releaseReady=(state.releases||{})[agent.task]?.status==='VISUAL_TEST_REQUIRED',decision=(state.release_decisions||{})[agent.task];
-      if(decision?.decision!=='accepted'){
+      if(decision?.decision!=='accepted'&&!deliveryTaskAccepted(agent,state)){
         const ownerButton=document.createElement('button');ownerButton.className='secondary';ownerButton.type='button';ownerButton.disabled=false;
         if(releaseReady&&!decision){
           ownerButton.textContent='Send feedback';ownerButton.title='Tell Delivery what must change before you accept this task.';ownerButton.onclick=()=>openDecisionDialog(agent.task);

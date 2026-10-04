@@ -166,7 +166,7 @@ class RunnerTests(unittest.TestCase):
         identity = cli_capabilities.binary_identity("claude", source_environment={**os.environ, **self.environment})
         path = cli_capabilities.cache_path(self.home, identity)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"identity": identity, "probed_at": "test", "static": {
+        path.write_text(json.dumps({"identity": identity, "probed_at": "test", "probe_version": cli_capabilities.PROBE_VERSION, "static": {
             "claude.settings_flag": True, "claude.inline_settings_hooks": capable}}), encoding="utf-8")
 
     def launch(self) -> tuple[subprocess.CompletedProcess, list[str]]:

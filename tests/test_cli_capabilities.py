@@ -115,6 +115,23 @@ class StageGateTests(unittest.TestCase):
             probe.assert_not_called()
             self.assertEqual(status["reason"], "stage1_hooks is switched off")
 
+    def test_a_cache_from_an_older_harness_missing_a_static_item_is_probed_again(self):
+        identity = {"provider": "claude", "path": "/x/claude", "version": "1", "sha256": "ab"}
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(cli_capabilities, "binary_identity", return_value=identity):
+            home = Path(tmp)
+            path = cli_capabilities.cache_path(home, identity)
+            path.parent.mkdir(parents=True)
+            old = {name: True for name in cli_capabilities.STATIC_ITEMS["claude"] if name != "claude.inbox_relay_admission"}
+            path.write_text(json.dumps({"identity": identity, "static": old, "probed_at": "old"}))
+            fresh = {name: True for name in cli_capabilities.STATIC_ITEMS["claude"]}
+            with mock.patch.dict(cli_capabilities.PROBES, {"claude": lambda executable, scratch: fresh}):
+                record = cli_capabilities.capabilities(home, "claude")
+                self.assertEqual(record["static"], fresh, "a missing item is probed, not read as unproven")
+                self.assertNotEqual(record["probed_at"], "old")
+                again = cli_capabilities.capabilities(home, "claude")
+                self.assertEqual(again["probed_at"], record["probed_at"], "a complete cache is used as is")
+
     def test_live_results_accept_only_true_false_or_unproven(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
                 cli_capabilities, "binary_identity",

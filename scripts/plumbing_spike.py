@@ -207,7 +207,6 @@ DEFERRED = {
         "codex.developer_instructions_on_resume": NEEDS_AUTH,
     },
     "claude": {
-        "claude.inbox_token_admission": NEEDS_AUTH,
         "claude.inbox_receipt": NEEDS_AUTH,
         "claude.socket_authority_parity": NEEDS_AUTH,
         "claude.append_prompt_on_resume": NEEDS_AUTH,
@@ -225,8 +224,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--guard-file", action="append", default=None,
                         help="an owner file that must be byte-identical after the spike (repeatable; "
                              "default: ~/.codex/config.toml and ~/.claude/settings.json)")
+    parser.add_argument("--record", action="append", default=[], metavar="NAME=true|false",
+                        help="record one live result proven by a visible run (repeatable; needs --evidence)")
+    parser.add_argument("--evidence", default="", help="where the proof of --record is (a transcript, a board event)")
     args = parser.parse_args(argv)
     home = Path(args.home)
+    if args.record:
+        for item in args.record:
+            name, _, value = item.partition("=")
+            provider = "claude" if name.startswith("claude.") else "codex"
+            if value not in ("true", "false"):
+                parser.error(f"--record {item}: the value must be true or false")
+            for target in (("codex", "claude") if "." not in name else (provider,)):
+                cli_capabilities.record_live_item(home, target, name, value == "true", args.evidence)
+        print(json.dumps({"recorded": args.record, "evidence": args.evidence}))
+        return 0
     guarded = [Path(item).expanduser() for item in args.guard_file] if args.guard_file else list(OWNER_FILES)
     before = {str(path): _hash(path) for path in guarded}
     report: dict[str, dict[str, dict[str, object]]] = {"codex": {}, "claude": {}}
@@ -253,8 +265,13 @@ def main(argv: list[str] | None = None) -> int:
             report[provider].setdefault(name, {"value": UNPROVEN, "note": note})
         report[provider].setdefault("confined_socket_bind", {"value": UNPROVEN, "note": "probed for the Claude CLI only"})
         if identities[provider]["path"]:
-            cli_capabilities.record_live(home, provider, {name: item["value"] for name, item in report[provider].items()},
-                                         auth_mode="none")
+            # A result a visible run proved, with its evidence, is never
+            # overwritten by this spike's "unproven".
+            proven = cli_capabilities.capabilities(home, provider).get("live", {})
+            results = {name: item["value"] for name, item in report[provider].items()}
+            results.update({name: value for name, value in proven.items()
+                            if value in (True, False) and results.get(name) == UNPROVEN})
+            cli_capabilities.record_live(home, provider, results, auth_mode="none")
     after = {str(path): _hash(path) for path in guarded}
     print(json.dumps({"identities": identities, "results": report,
                       "owner_files_sha256": {"before": before, "after": after}}, indent=2, sort_keys=True))

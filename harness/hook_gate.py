@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board_client  # noqa: E402
 
 DEADLINE_ENV = "HARNESS_HOOK_GATE_TIMEOUT"
+HANDOVER_ENV = "HARNESS_INBOX_HANDOVER"
 UNREACHABLE = "harness gate unreachable - retry"
 INPUT_LIMIT = 48 * 1024
 
@@ -55,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
+        if event == "SessionStart" and os.environ.get(HANDOVER_ENV):
+            # Plumbing Stage 3 (Claude): this session's own-child inbox relay.
+            # Fails open like every observation hook: no relay means the
+            # supervisor keeps typing, as today.
+            try:
+                from harness import inbox_relay
+                inbox_relay.start_detached(os.environ[HANDOVER_ENV], str(payload.get("transcript_path") or ""))
+            except Exception:  # noqa: BLE001
+                pass
         deadline = float(os.environ.get(DEADLINE_ENV, "5"))
         arguments = ["hook-event", "--event", event, "--payload", _compact(payload) if guard else "{}"]
         result = board_client.call(arguments, timeout=deadline)
