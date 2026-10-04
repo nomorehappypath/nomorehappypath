@@ -54,13 +54,26 @@ def _peer_pid(connection: socket.socket) -> int:
         return 0
 
 
-def _post(inbox: str, token: str, text: str) -> int:
-    """Post one message; returns the pid listening on the inbox socket."""
+class ListenerRefused(OSError):
+    """The process listening on the inbox is not the one the supervisor verified."""
+
+
+def _post(inbox: str, token: str, text: str, expected_listener: int) -> int:
+    """Post one message to the CLI the supervisor verified; returns the pid that was listening.
+
+    Security review 2026-10-04 (P4): the peer of the CONNECTED socket is checked
+    BEFORE a single byte is written. An agent may replace the inbox file in
+    /tmp/cc-socks; an impostor listening there gets no authentication frame and
+    no message. The check is on the connection itself, so a path swapped after
+    the check cannot redirect it.
+    """
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(10)
     connection.connect(inbox)
     try:
         listener = _peer_pid(connection)
+        if not listener or listener != expected_listener:
+            raise ListenerRefused(f"the inbox is served by pid {listener or 'unknown'}, not the verified CLI {expected_listener}")
         lines = []
         if token:
             lines.append(json.dumps({"type": "auth", "token": token}))
@@ -71,11 +84,27 @@ def _post(inbox: str, token: str, text: str) -> int:
     return listener
 
 
+def _is_ancestor(candidate: int, pid: int, hops: int = 32) -> bool:
+    """True when `candidate` is a strict ancestor of `pid` (bounded walk over the process table)."""
+    if candidate <= 1 or pid <= 1:
+        return False
+    from harness import platform_support
+    try:
+        table = platform_support.process_identity().process_table()
+    except OSError:
+        return False
+    for _ in range(hops):
+        row = table.get(pid)
+        parent = int((row or {}).get("ppid") or 0)
+        if parent <= 1:
+            return False
+        if parent == candidate:
+            return True
+        pid = parent
+    return False
+
+
 def serve(handover: str, inbox: str, token: str, transcript: str) -> int:
-    supervisor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    supervisor.settimeout(10)
-    supervisor.connect(handover)
-    supervisor.settimeout(None)
     probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         probe.settimeout(5)
@@ -85,6 +114,18 @@ def serve(handover: str, inbox: str, token: str, transcript: str) -> int:
         listener = 0
     finally:
         probe.close()
+    supervisor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    supervisor.settimeout(10)
+    supervisor.connect(handover)
+    # Security review 2026-10-04, same class as P4: this relay takes orders
+    # only from its session's supervisor - the process that started the CLI,
+    # i.e. an ANCESTOR of the process serving the inbox. Checked on the
+    # connected socket before a single byte is sent; anything else gets
+    # nothing and gives nothing.
+    if not _is_ancestor(_peer_pid(supervisor), listener):
+        supervisor.close()
+        return 2
+    supervisor.settimeout(None)
     hello = {"type": "hello", "session": os.environ.get("HARNESS_MANAGED_SESSION", ""),
              "inbox": inbox, "inbox_listener_pid": listener, "transcript": transcript}
     supervisor.sendall((json.dumps(hello) + "\n").encode("utf-8"))
@@ -109,8 +150,14 @@ def serve(handover: str, inbox: str, token: str, transcript: str) -> int:
                 continue
             reply: dict = {"id": request.get("id")}
             try:
-                reply["listener_pid"] = _post(inbox, token, str(request.get("text", "")))
+                # The CLI the supervisor verified when it admitted this relay
+                # (it re-checked the listener itself); never anyone else.
+                expected = int(request.get("expect_listener") or listener or 0)
+                reply["listener_pid"] = _post(inbox, token, str(request.get("text", "")), expected)
                 reply["posted"] = True
+            except ListenerRefused as error:
+                reply["posted"] = False
+                reply["refused"] = str(error)[:200]
             except OSError as error:
                 reply["posted"] = False
                 reply["error"] = str(error)[:200]

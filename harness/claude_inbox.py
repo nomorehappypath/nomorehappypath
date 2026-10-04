@@ -130,6 +130,7 @@ class ClaudeInbox:
         self.stopped = False
         self.policy: dict[str, Any] = {}
         self.awaiting: dict[str, tuple[str, float]] = {}   # posted, receipt not yet seen
+        self.cli_listener = 0                                # the CLI pid verified at admission; posts go nowhere else
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
@@ -173,16 +174,18 @@ class ClaudeInbox:
         self.on_event("refused", detail)
         _close(connection, reader)
 
-    def _listener_is_cli(self, inbox: str) -> bool:
+    def _cli_listener(self, inbox: str) -> int:
+        """The pid serving `inbox` when it is this session's CLI, else 0 (checked by the supervisor itself)."""
         if not inbox:
-            return False
+            return 0
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             probe.settimeout(5)
             probe.connect(inbox)
-            return self.is_cli(self.peer_pid(probe))
+            pid = self.peer_pid(probe)
+            return pid if pid and self.is_cli(pid) else 0
         except OSError:
-            return False
+            return 0
         finally:
             probe.close()
 
@@ -209,13 +212,15 @@ class ClaudeInbox:
             if hello.get("type") != "hello" or hello.get("session") != self.session_id:
                 self._refuse(connection, f"inbox relay pid {pid} refused: it does not belong to this session", reader)
                 continue
-            if not self._listener_is_cli(inbox):
+            cli_listener = self._cli_listener(inbox)
+            if not cli_listener:
                 self._refuse(connection, f"inbox relay pid {pid} refused: the inbox socket it names is not this session's CLI", reader)
                 continue
             connection.settimeout(None)
             with self.lock:
                 previous, previous_reader = self.relay, self.relay_reader
                 self.relay, self.relay_reader = connection, reader
+                self.cli_listener = cli_listener
                 self.transcript = str(hello.get("transcript") or "")
                 self.lock.notify_all()
             if previous is not None:
@@ -263,9 +268,9 @@ class ClaudeInbox:
             # Already in this conversation (a message carried from a session
             # that ended after posting it): never sent twice.
             return "delivered"
-        request = {"id": client_id, "text": f"{text}\n\n{marker}"}
         with self.lock:
-            relay = self.relay
+            relay, expected = self.relay, self.cli_listener
+        request = {"id": client_id, "text": f"{text}\n\n{marker}", "expect_listener": expected}
         try:
             relay.sendall((json.dumps(request) + "\n").encode("utf-8"))
         except OSError:
@@ -278,6 +283,12 @@ class ClaudeInbox:
                     return "unconfirmed"
                 self.lock.wait(min(remaining, 0.5))
             reply = self.replies.pop(client_id)
+        if reply.get("refused"):
+            # Something other than the verified CLI was listening; the relay
+            # sent it nothing. The channel ends now: this session types.
+            self.on_event("refused", f"the inbox socket is not this session's CLI; nothing was sent to it ({reply['refused']})")
+            self.stop()
+            return "refused"
         if not reply.get("posted"):
             return "refused"
         if not self.is_cli(int(reply.get("listener_pid") or 0)):

@@ -58,7 +58,19 @@ os.write(1, b"CLAUDE_READY\r\n")
 typed = b""
 pending = []
 sockets = [0] + ([inbox] if inbox else [])
+replaced = False
 while True:
+    if mode == "replaced" and not replaced and os.path.exists(os.path.join(base, "replace-now")):
+        # Security review 2026-10-04 (P4): AFTER the relay was admitted, a
+        # process outside this CLI's tree takes over the inbox path and keeps
+        # every byte it is sent.
+        replaced = True
+        subprocess.Popen([sys.executable, "-c",
+            "import os,socket,sys,time\nos.unlink(sys.argv[1]); s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)\n"
+            "open(sys.argv[2],'wb').close(); s.settimeout(30)\n"
+            "while True:\n c,_=s.accept(); c.settimeout(1)\n try:\n  d=c.recv(65536)\n except OSError:\n  d=b''\n"
+            " open(sys.argv[2],'ab').write(b'CONNECTED:'+d+b'\\n'); c.close()",
+            inbox_path, os.path.join(base, "impostor.log")], start_new_session=True)
     for due, content in [item for item in pending if item[0] <= time.time()]:
         pending.remove((due, content))
         with open(transcript, "a") as handle:
@@ -288,7 +300,32 @@ class Stage3ClaudeTests(unittest.TestCase):
         self.wait_for(lambda: control.instruction_receipt(self.root, queued["id"])["status"] == "delivered")
         refused = [event for event in board.snapshot(self.root)["events"] if event["kind"] == "plumbing_channel_refused"]
         self.assertTrue(refused, "the refusal is a board event the CTO sees")
-        self.assertIn("not this session's CLI", refused[0]["message"])
+        # Since 2026-10-04 the relay itself will not say hello to a supervisor
+        # when the inbox is not served by that supervisor's CLI; either way the
+        # impostor is refused before anything is sent.
+        self.assertTrue(any("not this session's CLI" in event["message"] or "does not belong to this session" in event["message"]
+                            for event in refused), refused)
+
+    def test_an_inbox_replaced_after_admission_receives_no_byte_and_the_session_types(self):
+        # Security review 2026-10-04 (P4, live): the relay wrote the auth frame and
+        # the message BEFORE checking who was listening; the refusal came after.
+        process, master = self.launch("replaced")
+        self.wait_for(lambda: bool(self.relays()))
+        first = control.enqueue_instruction(self.root, self.session["id"], "Before the swap.", "test-controller")
+        self.read_until(master, b"INBOX:[SYSTEM CONTROL")
+        self.wait_for(lambda: control.instruction_receipt(self.root, first["id"])["status"] == "delivered")
+        (self.base / "replace-now").write_text("1")
+        self.wait_for(lambda: (self.base / "impostor.log").exists())
+        self.addCleanup(lambda: subprocess.run(["pkill", "-f", str(self.base / "impostor.log")], capture_output=True))
+        queued = control.enqueue_instruction(self.root, self.session["id"], "IMPOSTOR_MUST_NOT_SEE_THIS", "test-controller")
+        self.read_until(master, b"TYPED:")
+        self.wait_for(lambda: control.instruction_receipt(self.root, queued["id"])["status"] == "delivered")
+        seen = (self.base / "impostor.log").read_bytes()
+        self.assertNotIn(b"tok-123", seen, "no authentication frame reaches the impostor")
+        self.assertNotIn(b"IMPOSTOR_MUST_NOT_SEE_THIS", seen, "no message reaches the impostor")
+        self.assertNotIn(b'"type"', seen, "not a single frame")
+        refused = [event for event in board.snapshot(self.root)["events"] if event["kind"] == "plumbing_channel_refused"]
+        self.assertTrue(any("nothing was sent" in event["message"] for event in refused), refused)
 
     def test_stop_ends_the_session_and_its_relay_even_when_the_cli_lingers(self):
         process, master = self.launch("lingering")
