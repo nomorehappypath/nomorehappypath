@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -429,7 +430,59 @@ def capabilities(home: Path, provider: str, *, refresh: bool = False,
         live = json.loads(live_path.read_text(encoding="utf-8")).get("results", {}) if live_path.is_file() else {}
     except (OSError, ValueError):
         live = {}
-    return {**record, "live": live}
+    live, carried = _with_carried_live(home, identity, live)
+    return {**record, "live": live, **({"carried": carried} if carried else {})}
+
+
+def _version_tuple(version: str) -> tuple[int, ...] | None:
+    parts = re.findall(r"\d+", str(version or ""))
+    return tuple(int(part) for part in parts[:3]) if parts else None
+
+
+def _with_carried_live(home: Path, identity: dict[str, str], live: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Owner's policy (2026-10-04): what passed on one version of a CLI stays passed on its later versions.
+
+    "once something has passed on one version of Codex or Claude, we move on.
+    We don't re-review it every time a CLI updates." The CLIs update almost
+    daily; a record keyed only to the exact binary would switch a proven stage
+    off on every update. So a live item proven TRUE for an earlier version of
+    the same CLI (same major version) counts for this one - unless this exact
+    binary has its own answer: an explicit `false` here always wins, and the
+    product's own static probe still runs for every new binary (a changed
+    flag or missing feature turns the stage off by itself). The newest earlier
+    proof is used; the record says which version each carried item came from.
+    """
+    current = _version_tuple(identity.get("version", ""))
+    if current is None:
+        return live, {}
+    directory = Path(home) / CACHE_DIRECTORY
+    candidates: list[tuple[tuple[int, ...], dict[str, Any], str]] = []
+    for path in directory.glob(f"{identity['provider']}-*.live.json") if directory.is_dir() else []:
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        other = stored.get("identity") or {}
+        version = _version_tuple(other.get("version", ""))
+        same_binary = all(other.get(field) == identity.get(field) for field in ("provider", "path", "version", "sha256"))
+        # Only THIS exact binary is skipped (its own record is `live` already). A
+        # wrapper CLI (Codex: codex.js) can update its backend and version while
+        # the launcher it is identified by stays byte-identical (review r1).
+        if (other.get("provider") != identity["provider"] or version is None or version[0] != current[0]
+                or version > current or same_binary):
+            continue
+        candidates.append((version, stored.get("results") or {}, str(other.get("version", ""))))
+    merged, carried = dict(live), {}
+    decided: set[str] = set()                   # the newest explicit answer per item decides (true OR false)
+    for _, results, version in sorted(candidates, key=lambda item: item[0], reverse=True):
+        for name, value in results.items():
+            if name in decided or value not in (True, False):
+                continue
+            decided.add(name)
+            if value is True and merged.get(name, UNPROVEN) == UNPROVEN:
+                merged[name] = True
+                carried[name] = version
+    return merged, carried
 
 
 def record_live(home: Path, provider: str, results: dict[str, Any], *, auth_mode: str,
