@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
-from harness import platform_support
+from harness import platform_support, web_guard
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -398,7 +398,7 @@ async function viewApp(task){
   const hint=()=>el('#preview-hint-'+CSS.escape(task));
   const run=viewAppRuns[task]={started:Date.now()};
   // Opened inside the click so the browser allows it; pointed at the app once it answers.
-  const tab=window.open('about:blank','_blank');
+  const tab=window.open('about:blank','_blank');if(tab){try{tab.opener=null;}catch(error){}}
   try{if(tab){tab.document.title='Starting the app…';tab.document.body.innerHTML='<p style="font:16px -apple-system,system-ui,sans-serif;padding:32px">Starting the app you are reviewing…</p>';}}catch(error){}
   const timer=setInterval(()=>{const node=hint();if(node)node.textContent=viewAppStartingText(run.started);},1000);
   await refresh();
@@ -416,7 +416,7 @@ async function viewApp(task){
   clearInterval(timer);
   delete viewAppRuns[task];
   if(outcome.status==='ready'){
-    if(tab&&!tab.closed)tab.location.href=outcome.url;else window.open(outcome.url,'_blank');
+    if(tab&&!tab.closed)tab.location.href=outcome.url;else window.open(outcome.url,'_blank','noopener');
   }else if(outcome.status==='opened'){if(tab&&!tab.closed)tab.close();}
   else if(tab&&!tab.closed){
     // Owner, 2026-10-02: never a window that opens empty and vanishes - it says why.
@@ -2965,6 +2965,18 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                  api_prefix: str = "", worker_health=None):
     runtime = runtime or runtime_identity.PROCESS
     class Handler(BaseHTTPRequestHandler):
+        def end_headers(self):
+            # Never shown inside another site's frame (finding 4).
+            for name, value in web_guard.FRAME_HEADERS:
+                self.send_header(name, value)
+            super().end_headers()
+
+        def refused(self) -> bool:
+            reason = web_guard.request_refusal(self.command, self.headers, str(self.server.server_address[0]))
+            if reason:
+                self.send_json(403, {"error": reason})
+            return bool(reason)
+
         def send_json(self, status: int, value: dict):
             body = json.dumps(value).encode("utf-8")
             self.send_response(status)
@@ -2975,6 +2987,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.refused():
+                return
             path = urlparse(self.path).path
             if path == "/api/ready":
                 ready = {
@@ -3075,6 +3089,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
             self.wfile.write(body)
 
         def do_POST(self):
+            if self.refused():
+                return
             path = urlparse(self.path).path
             try:
                 open_app_suffix = "/open-app"
