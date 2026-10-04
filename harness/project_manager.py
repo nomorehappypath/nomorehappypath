@@ -802,7 +802,7 @@ class ProjectManager:
         except (OSError, ValueError, KeyError):
             return True
 
-    def apply_update(self) -> dict[str, Any]:
+    def apply_update(self, expected_version: str = "", expected_commit: str = "") -> dict[str, Any]:
         if getattr(self, "_update_in_progress", False):
             raise ValueError("An update is already being applied; the app is restarting.")
         if self._open_project_blocks_update():
@@ -812,7 +812,7 @@ class ProjectManager:
             )
         self._update_in_progress = True
         try:
-            result = update_check.apply_update(self.installation_root)
+            result = update_check.apply_update(self.installation_root, expected_version, expected_commit)
         except Exception:
             self._update_in_progress = False
             raise
@@ -1277,7 +1277,12 @@ def make_handler(manager: ProjectManager):
                 if self.path == "/api/update/check":
                     return self._send(200, update_check.check(manager.installation_root))
                 if self.path == "/api/update/apply":
-                    return self._send(200, manager.apply_update())
+                    approved = self._body()
+                    version, commit = str(approved.get("version", "")), str(approved.get("commit", ""))
+                    if not version or not commit:
+                        # Only exactly what the owner was shown is installed (scan finding 6, review r1).
+                        raise ValueError("Check for updates first: the update installs only the release you were shown.")
+                    return self._send(200, manager.apply_update(version, commit))
                 if self.path == "/api/settings/openai-key":
                     return self._send(200, manager.save_openai_api_key(self._body().get("key", "")))
                 if self.path == "/api/settings/openai-key/test":

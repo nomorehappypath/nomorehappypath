@@ -849,7 +849,7 @@ PAGE = r'''<!doctype html>
       q('#update-apply').disabled = true;
       status.textContent = 'Updating and restarting\u2026 this page reloads when the app is back.';
       try {
-        await api('/api/update/apply', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        await api('/api/update/apply', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({version: pendingUpdate.latest, commit: pendingUpdate.latest_commit})});
         const poll = setInterval(async () => {
           try { await api('/api/version'); clearInterval(poll); window.location.reload(); } catch (error) {}
         }, 1500);

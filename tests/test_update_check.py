@@ -97,6 +97,37 @@ class UpdateCheckTests(unittest.TestCase):
             update_check.apply_update(clone)
         self.assertIn("git pull --ff-only", str(raised.exception))
 
+    def test_apply_installs_exactly_the_release_not_whatever_main_is_now(self):
+        # Security scan 2026-10-04, finding 6: apply pulled the moving main.
+        origin, clone = build_origin_and_clone(self.base)
+        released = subprocess.run(["git", "-C", str(origin), "rev-parse", "v0.1.6"], capture_output=True, text=True).stdout.strip()
+        (origin / "unreleased.txt").write_text("not part of any release\n", encoding="utf-8")
+        run(origin, "add", "unreleased.txt")
+        run(origin, "commit", "-qm", "work after the release")
+        self.assertEqual(update_check.check(clone)["latest_commit"], released)
+        result = update_check.apply_update(clone, "v0.1.6")
+        head = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(head, released, "the clone is at the release's commit")
+        self.assertFalse((clone / "unreleased.txt").exists(), "nothing past the release came along")
+        self.assertEqual((result["updated_to"], result["commit"]), ("v0.1.6", released))
+        self.assertEqual(update_check.installed_version(clone), "v0.1.6")
+
+    def test_apply_refuses_when_the_release_changed_since_the_owner_checked(self):
+        origin, clone = build_origin_and_clone(self.base)
+        before = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        with self.assertRaises(ValueError) as raised:
+            update_check.apply_update(clone, "v0.1.5")
+        self.assertIn("Check again", str(raised.exception))
+        after = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(before, after, "nothing was changed")
+
+    def test_an_annotated_release_tag_resolves_to_its_commit(self):
+        origin, clone = build_origin_and_clone(self.base)
+        run(origin, "tag", "-a", "v0.2.0", "-m", "annotated release")
+        commit = subprocess.run(["git", "-C", str(origin), "rev-parse", "v0.2.0^{commit}"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(update_check.latest_remote_release(clone), ("v0.2.0", commit))
+        self.assertEqual(update_check.apply_update(clone, "v0.2.0")["commit"], commit)
+
 
 class UpdateEndpointTests(unittest.TestCase):
     def setUp(self):
@@ -125,13 +156,43 @@ class UpdateEndpointTests(unittest.TestCase):
         except HTTPError as error:
             return error.code, json.loads(error.read() or b"{}")
 
+    def approved(self) -> dict:
+        """What the page sends: exactly the release its check showed the owner."""
+        status, payload = self.request("/api/update/check", "POST")
+        self.assertEqual(status, 200, payload)
+        return {"version": payload["latest"], "commit": payload["latest_commit"]}
+
+    def head(self) -> str:
+        return subprocess.run(["git", "-C", str(self.clone), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    def test_the_same_version_moved_to_other_code_after_the_check_is_refused(self):
+        # Review r1 (Group B): a re-pointed tag installed code the owner never checked.
+        shown = self.approved()
+        before = self.head()
+        (self.origin / "swapped.txt").write_text("not what the owner checked\n", encoding="utf-8")
+        run(self.origin, "add", "swapped.txt")
+        run(self.origin, "commit", "-qm", "different code")
+        run(self.origin, "tag", "-f", "v0.1.6")
+        status, payload = self.request("/api/update/apply", "POST", shown)
+        self.assertEqual(status, 400, payload)
+        self.assertIn("changed since you checked", payload["error"])
+        self.assertEqual(self.head(), before, "nothing was installed")
+        self.assertFalse((self.clone / "swapped.txt").exists())
+        self.assertEqual(self.restarts, [], "no restart")
+
+    def test_an_update_without_the_checked_release_is_refused(self):
+        status, payload = self.request("/api/update/apply", "POST", {})
+        self.assertEqual(status, 400)
+        self.assertIn("Check for updates first", payload["error"])
+        self.assertEqual(self.restarts, [])
+
     def test_version_check_and_consented_apply(self):
         status, payload = self.request("/api/version")
         self.assertEqual((status, payload["version"]), (200, "v0.1.0"))
         status, payload = self.request("/api/update/check", "POST")
         self.assertEqual(status, 200)
         self.assertTrue(payload["update_available"])
-        status, payload = self.request("/api/update/apply", "POST")
+        status, payload = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 200)
         self.assertEqual(payload["updated_to"], "v0.1.6")
         self.assertEqual(self.restarts, [True], "the restart seam must fire exactly once")
@@ -142,7 +203,7 @@ class UpdateEndpointTests(unittest.TestCase):
         class RunningWorker:
             def poll(self): return None
         self.manager.worker = RunningWorker()
-        status, payload = self.request("/api/update/apply", "POST")
+        status, payload = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 400)
         self.assertIn("Close or pause", payload["error"])
         self.assertEqual(self.restarts, [])
@@ -170,14 +231,14 @@ class UpdateGateSemanticsTests(UpdateEndpointTests):
         self.manager.worker_project = entry["id"]
 
         # live and unpaused: blocked
-        status, payload = self.request("/api/update/apply", "POST")
+        status, payload = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 400)
         self.assertIn("Close or pause", payload["error"])
         # really paused: allowed
         board.begin_project_pause(context, drain_seconds=0.0)
         board.finish_project_pause(context)
         self.assertEqual(board.pause_state(context).get("status"), "paused")
-        status, payload = self.request("/api/update/apply", "POST")
+        status, payload = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 200, payload)
         self.assertEqual(self.restarts, [True])
 
@@ -186,15 +247,15 @@ class UpdateGateSemanticsTests(UpdateEndpointTests):
             def poll(self): return None
         self.manager.worker = RunningWorker()
         self.manager.worker_project = "missing-entry"
-        status, _ = self.request("/api/update/apply", "POST")
+        status, _ = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 400)
         self.assertEqual(self.restarts, [])
 
     def test_apply_is_idempotent_one_restart_only(self):
         # r2: a second apply after success must refuse, not restart twice.
-        status, _ = self.request("/api/update/apply", "POST")
+        status, _ = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 200)
-        status, payload = self.request("/api/update/apply", "POST")
+        status, payload = self.request("/api/update/apply", "POST", self.approved())
         self.assertEqual(status, 400)
         self.assertIn("already being applied", payload["error"])
         self.assertEqual(self.restarts, [True], "restart must fire exactly once")
