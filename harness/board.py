@@ -33,7 +33,7 @@ from typing import Any, Iterator
 # ``python3 /path/to/dev_harness/harness/board.py ...``.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import accepted_bytes, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
+from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -5093,7 +5093,10 @@ def _run_internal_qa(
         return str(result["output"])
     started_at = lifecycle.now()
     try:
-        completed = subprocess.run(command, cwd=execution_root, shell=True, capture_output=True, text=True, timeout=300, env=execution_env)
+        # Security scan finding 2: the agent's command runs inside the agent's own limits.
+        completed = subprocess.run(agent_confinement.confine_agent_command(["/bin/sh", "-c", command], root,
+                                   claude_config_dir=execution_env.get("CLAUDE_CONFIG_DIR") or None),
+                                   cwd=execution_root, capture_output=True, text=True, timeout=300, env=execution_env)
     except subprocess.TimeoutExpired as error:
         if measurement is not None:
             measurement.update(lifecycle.command_measurement(

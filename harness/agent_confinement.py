@@ -131,6 +131,41 @@ def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_
     return implementation.read_guard(list(argv), protected, store=Path(store))
 
 
+def confine_agent_command(argv: list[str], project_root, *, home: str | Path | None = None,
+                          claude_config_dir: str | None = None, implementation=None) -> list[str]:
+    """Run a command an AGENT wrote inside the same write limits as the agent itself.
+
+    Security scan 2026-10-04, finding 2 (spec docs/specs/AGENT_ISOLATION.md
+    §2.2, reviewed): internal-QA test commands, reviewer challenge commands and
+    CTO health checks ran in the board worker with the owner's full write
+    authority, guarded only from reading the Claude login. Now:
+    - The write grant comes from the project's own TRUSTED context (its
+      registered code root and task workspace, plus the CLI temp and state
+      paths `wrap` adds), never from the command, its environment or its
+      ledger. The harness's own storage (`agent_grant.agent_protected_roots`)
+      is denied even where a granted root contains it, and the profile is
+      written under the project's control store, outside the grant.
+    - A process already inside an agent's OS sandbox runs the command there:
+      it is confined by that sandbox, and macOS cannot nest a second one.
+    - A platform without the primitive REFUSES (`ConfinementUnavailable`):
+      an agent's command is never run open instead.
+    - `claude_config_dir` is the HARNESS's own CLAUDE_CONFIG_DIR (the worker's
+      execution environment, never the command's): a relocated login there is
+      unreadable too, as under the read guard this replaces.
+    """
+    from harness import agent_grant
+    from harness.project_context import project_context
+    if platform_support.browser_host().inside_os_sandbox():
+        return list(argv)
+    context = project_context(project_root)
+    writable = [str(Path(context.code_root).resolve()), str(Path(context.workspace_root).resolve())]
+    protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root)
+    store = Path(context.storage_path("control"))
+    store.mkdir(parents=True, exist_ok=True)
+    return wrap(list(argv), writable, store=store, home=home or Path.home(), claude_config_dir=claude_config_dir or None,
+                implementation=implementation, protected_writes=protected)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Print the confined launch command for a managed Claude terminal as JSON")
     parser.add_argument("--store", required=True, help="where a generated profile is kept (the project's control dir)")
