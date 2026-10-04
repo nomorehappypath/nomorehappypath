@@ -101,14 +101,14 @@ def _run_observed(
     baseline_apps = browser_acceptance._app_processes(baseline)
     baseline_prompts = _protected_prompt_processes(baseline)
     baseline_handlers = browser_acceptance._default_handlers_digest()
-    # The command runs with every read and write it had before, except the
-    # owner's Claude login file (2026-09-26 incident: a copy of it broke every
-    # login on the machine). The worker runs outside any agent sandbox, so this
-    # never nests.
-    guarded = agent_confinement.read_guard(
-        ["/bin/sh", "-c", command], home=_owner_home(),
+    # Security scan 2026-10-04, finding 2: an agent wrote this command, so it
+    # runs inside the agent's own write limits (the project's trusted grant,
+    # harness storage denied, the owner's login unreadable) - never with the
+    # worker's full write authority. Refused, not run open, where the
+    # platform cannot confine it.
+    guarded = agent_confinement.confine_agent_command(
+        ["/bin/sh", "-c", command], execution_root, home=_owner_home(),
         claude_config_dir=environment.get("CLAUDE_CONFIG_DIR") or None,
-        store=Path(tempfile.gettempdir()) / "harness-read-guard",
     )
     process = subprocess.Popen(
         guarded, cwd=execution_root, shell=False, stdout=subprocess.PIPE,

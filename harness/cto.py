@@ -22,6 +22,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import (
+    agent_confinement,
     accepted_bytes, board, browser_acceptance, child_process, contract, execution_identity, git_broker, git_process,
     lifecycle, runtime_probe,
 )
@@ -314,9 +315,15 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
                         archive_error = "disposable Git checkout identity mismatch"
                     if execute_health and health_command:
                         health_started_at = lifecycle.now()
+                        # Security scan finding 2: the agent-authored health
+                        # command runs inside the agent's own write limits.
+                        health_environment = child_process.execution_environment()
                         health = subprocess.run(
-                            health_command, cwd=checkout, shell=True, capture_output=True,
-                            text=True, env=child_process.execution_environment(),
+                            agent_confinement.confine_agent_command(
+                                ["/bin/sh", "-c", health_command], root,
+                                claude_config_dir=health_environment.get("CLAUDE_CONFIG_DIR") or None),
+                            cwd=checkout, capture_output=True,
+                            text=True, env=health_environment,
                         )
                         health_output = (health.stdout + health.stderr)[-2000:]
                         health_verified = health.returncode == 0
