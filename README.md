@@ -60,9 +60,19 @@ enable-linger <user>` fixes that). Each agent runs in its own named tmux
 session, and Mission Control shows the exact `tmux attach -t …` command to
 watch it. The platform's own Git writes are confined with bubblewrap; if
 bubblewrap is missing, those writes refuse to run rather than run unconfined.
-Project folders are chosen by typing a path, since there is no native folder
-dialog. A desktop-Linux experience with terminal windows is not part of this
+Choose project folders with **Browse folders** inside the app, or type/paste
+an absolute path and press **Use this folder**. The browser lists folders on
+the Linux machine running the app; from Windows, use the VM’s Linux paths. A desktop-Linux experience with terminal windows is not part of this
 release.
+
+**Linux CLI setup (including a VM on Windows):** install **both Codex CLI and
+Claude Code CLI inside Linux** and sign in to each using the account that runs
+NoMoreHappyPath. Make `codex` and `claude` available in `PATH` for **all shells**
+used by that account: login and non-interactive shells, tmux sessions, and the
+app's systemd service. Shell aliases and a PATH exported in just one terminal
+are insufficient. Check `codex --version` and `claude --version` from a fresh
+shell before installing the service. Run `bash install.sh --check` under the
+same Linux account to confirm the app can find both CLIs for its service.
 
 ## Install
 

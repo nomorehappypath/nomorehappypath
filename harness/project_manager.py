@@ -143,14 +143,37 @@ def folder_from_typed_path(raw: str, purpose: str, *, home=None) -> str:
     # A project inside a project makes two boards fight over the same tree.
     if home is not None:
         for existing in registry.entries(home):
-            other = Path(str(existing.get("root") or "")).resolve()
+            root = existing.get("code_root")
+            if not isinstance(root, str) or not root.strip() or not Path(root).is_absolute():
+                raise ValueError("the project registry has an invalid code_root; repair the existing project folder")
+            other = Path(root).resolve()
             if other == resolved:
                 raise ValueError(f"{resolved} is already a project")
             if other in resolved.parents:
                 raise ValueError(f"{resolved} is inside the existing project at {other}")
-            if resolved in other.parents:
+            # A new project's parent is not itself adopted: sibling projects
+            # can share it. The generated child is checked again on creation.
+            if purpose != "new-parent" and resolved in other.parents:
                 raise ValueError(f"{resolved} contains the existing project at {other}")
     return str(resolved)
+
+
+def list_folders(raw: str, *, start: Path) -> dict[str, Any]:
+    """List server-side directories for the in-app folder browser."""
+    text = str(raw or "").strip()
+    folder = Path(text).expanduser() if text else Path(start)
+    if not folder.is_absolute():
+        raise ValueError("the path must be absolute — start it with /")
+    folder = folder.resolve()
+    if not folder.is_dir():
+        raise ValueError(f"there is no folder at {folder}")
+    try:
+        children = sorted((child for child in folder.iterdir() if child.is_dir()),
+                          key=lambda child: (child.name.casefold(), child.name))
+    except OSError as error:
+        raise ValueError(f"cannot read folders at {folder}: {error.strerror}") from error
+    return {"path": str(folder), "parent": str(folder.parent),
+            "folders": [{"name": child.name, "path": str(child)} for child in children]}
 
 
 def page_version() -> str:
@@ -1252,6 +1275,10 @@ def make_handler(manager: ProjectManager):
                     manager.close_project(project_id)
                     return self._redirect("/")
                 self._require_json_api()
+                if self.path == "/api/folders/list":
+                    return self._send(200, list_folders(
+                        self._body().get("path", ""), start=manager.execution_root,
+                    ))
                 if self.path == "/api/folders/browse":
                     value = self._body()
                     typed = value.get("path", "")

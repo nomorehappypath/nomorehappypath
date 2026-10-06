@@ -73,26 +73,88 @@ class ValidationTests(unittest.TestCase):
 class NestingTests(unittest.TestCase):
     """A project inside a project makes two boards fight over one tree."""
 
-    def _reject_against(self, typed: str, existing: str) -> str:
+    def _reject_against(self, typed: str, existing: str, purpose="adopt-project") -> str:
         with mock.patch.object(project_manager.registry, "entries",
-                               return_value=[{"root": existing}]):
+                               return_value=[{"code_root": existing}]):
             with self.assertRaises(ValueError) as caught:
-                project_manager.folder_from_typed_path(typed, "new-parent", home=mock.Mock())
+                project_manager.folder_from_typed_path(typed, purpose, home=mock.Mock())
         return str(caught.exception)
 
     def test_the_same_folder_is_refused_as_already_a_project(self):
         with tempfile.TemporaryDirectory() as temporary:
-            self.assertIn("already a project", self._reject_against(temporary, temporary))
+            for purpose in ("adopt-project", "new-parent"):
+                self.assertIn("already a project", self._reject_against(temporary, temporary, purpose))
 
     def test_a_folder_INSIDE_an_existing_project_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
             inner = Path(temporary) / "inner"; inner.mkdir()
-            self.assertIn("inside the existing project", self._reject_against(str(inner), temporary))
+            for purpose in ("adopt-project", "new-parent"):
+                self.assertIn("inside the existing project", self._reject_against(str(inner), temporary, purpose))
 
     def test_a_folder_CONTAINING_an_existing_project_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
             inner = Path(temporary) / "inner"; inner.mkdir()
             self.assertIn("contains the existing project", self._reject_against(temporary, str(inner)))
+
+
+class RegistryRootRegressionTests(unittest.TestCase):
+    def test_unrelated_project_below_service_cwd_is_accepted_with_real_registry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            service_home = Path(temporary).resolve()
+            existing = service_home / "work" / "existing"
+            target = service_home / "work" / "test"
+            existing.mkdir(parents=True)
+            target.mkdir()
+            home = service_home / ".harness-home"
+            project_manager.registry.register(home, "Existing", existing, kind="adopted")
+            with mock.patch.object(os, "getcwd", return_value=str(service_home)):
+                self.assertEqual(project_manager.folder_from_typed_path(
+                    str(target), "adopt-project", home=home), str(target))
+
+    def test_new_project_parent_can_contain_existing_sibling_projects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            existing = parent / 'existing'
+            existing.mkdir()
+            home = parent / '.harness-home'
+            project_manager.registry.register(home, 'Existing', existing, kind='adopted')
+            self.assertEqual(project_manager.folder_from_typed_path(
+                str(parent), 'new-parent', home=home), str(parent))
+
+    def test_missing_empty_or_relative_registry_roots_never_become_cwd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for root in (None, "", "   ", "relative"):
+                with self.subTest(root=root), mock.patch.object(
+                        project_manager.registry, "entries", return_value=[{"code_root": root}]):
+                    with self.assertRaisesRegex(ValueError, "registry has an invalid code_root"):
+                        project_manager.folder_from_typed_path(
+                            temporary, "adopt-project", home=mock.Mock())
+
+
+class FolderBrowserTests(unittest.TestCase):
+    def test_lists_only_directories_including_hidden_and_special_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            for name in ("z", ".hidden", "a <folder>"):
+                (root / name).mkdir()
+            (root / "source.txt").write_text("untouched")
+            value = project_manager.list_folders("", start=root)
+            self.assertEqual(value["path"], str(root))
+            self.assertEqual(value["parent"], str(root.parent))
+            self.assertEqual([row["name"] for row in value["folders"]],
+                             [".hidden", "a <folder>", "z"])
+            self.assertEqual((root / "source.txt").read_text(), "untouched")
+
+    def test_empty_folder_and_missing_or_relative_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.assertEqual(project_manager.list_folders(str(root), start=root)["folders"], [])
+            for path, message in ((str(root / "missing"), "no folder"), ("relative", "absolute")):
+                with self.subTest(path=path), self.assertRaisesRegex(ValueError, message):
+                    project_manager.list_folders(path, start=root)
+            with mock.patch.object(Path, "iterdir", side_effect=PermissionError(13, "Permission denied")):
+                with self.assertRaisesRegex(ValueError, "cannot read folders"):
+                    project_manager.list_folders(str(root), start=root)
 
 
 class ModeTests(unittest.TestCase):
