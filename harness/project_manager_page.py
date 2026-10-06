@@ -169,6 +169,9 @@ PAGE = r'''<!doctype html>
     .field-hint { margin: 0; color: var(--subtle); font-size: 12px; }
     .folder-control { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: stretch; }
     .folder-control .button { min-height: 44px; box-shadow: none; }
+    .folder-list { display: grid; gap: 6px; max-height: 35vh; overflow: auto; margin: 12px 0; }
+    .folder-list .button { text-align: left; overflow-wrap: anywhere; }
+    #folder-browser-path { overflow-wrap: anywhere; }
     .typed-path { flex: 1; min-width: 220px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; }
     .selected-path { min-width: 0; display: flex; align-items: center; padding: 10px 12px; overflow: hidden; border: 1px solid #cfd7e2; border-radius: 10px; color: #526078; background: #f8fafc; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .selected-path.empty { color: var(--subtle); font-family: inherit; font-style: italic; }
@@ -310,8 +313,10 @@ PAGE = r'''<!doctype html>
         <section class="help-section" aria-labelledby="help-setup-title">
           <h2 id="help-setup-title">What This App Needs To Run</h2>
           <ul class="help-list">
-            <li>The app runs on this Mac only and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
+            <li>The app runs on your Mac or Linux machine and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
             <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
+            <li><strong>Linux, including a VM on Windows:</strong> install and sign in to both <strong>Codex CLI</strong> and <strong>Claude Code CLI</strong> inside Linux. Make <code>codex</code> and <code>claude</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
+            <li><strong>Linux project folders:</strong> use <strong>Browse folders</strong> to navigate folders on the Linux machine, or type/paste the full path and press <strong>Use this folder</strong>. These are Linux paths, even when your browser is on Windows.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
@@ -548,8 +553,8 @@ PAGE = r'''<!doctype html>
       <div class="field"><label for="project-name">Name</label><input id="project-name" name="name" required autocomplete="off"></div>
       <div class="field"><label for="project-description">Description</label><textarea id="project-description" name="description" rows="4" autocomplete="off" placeholder="Describe what this project is for and what matters about it."></textarea><p class="field-hint">This appears on the project card, so a short paragraph works well.</p></div>
       <div class="field">
-        <label id="project-folder-label">Parent folder</label>
-        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><input class="typed-path" type="text" id="project-folder-typed" placeholder="/home/you/projects" spellcheck="false" hidden><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
+        <label id="project-folder-label" for="project-folder-typed">Parent folder</label>
+        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><input class="typed-path" type="text" id="project-folder-typed" placeholder="/home/you/projects" spellcheck="false" hidden><button class="button secondary" type="button" id="project-folder-browser" hidden>Browse folders</button><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
         <p class="field-hint" id="project-folder-hint">Your project folder will be created inside the selected location.</p>
         <div class="folder-preview" id="project-folder-preview" hidden></div>
       </div>
@@ -563,10 +568,23 @@ PAGE = r'''<!doctype html>
       <h2 id="repair-title">Repair project folder</h2>
       <p class="modal-copy">Choose the folder where this project lives now. Saved harness data and project history will be preserved.</p>
       <div class="field"><label>Current folder</label><div class="selected-path" id="repair-current-path"></div></div>
-      <div class="field"><label>New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
+      <div class="field"><label for="repair-folder-typed">New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><button class="button secondary" type="button" id="repair-folder-browser" hidden>Browse folders</button><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
       <p class="form-error" id="repair-error" role="alert" aria-live="polite"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save folder</button></div>
     </form>
+  </dialog>
+
+  <dialog id="folder-browser" aria-labelledby="folder-browser-title">
+    <div class="modal">
+      <h2 id="folder-browser-title">Browse folders</h2>
+      <p class="modal-copy">Folders on the computer running NoMoreHappyPath.</p>
+      <p id="folder-browser-path"></p>
+      <button class="button secondary" type="button" id="folder-browser-up">Parent folder</button>
+      <p id="folder-browser-status" role="status" aria-live="polite"></p>
+      <div class="folder-list" id="folder-browser-list" aria-label="Folders"></div>
+      <p class="form-error" id="folder-browser-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button secondary" type="button" id="folder-browser-cancel">Cancel</button><button class="button" type="button" id="folder-browser-select">Use this folder</button></div>
+    </div>
   </dialog>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">
@@ -1006,8 +1024,10 @@ PAGE = r'''<!doctype html>
        ['#repair-folder-browse', '#repair-folder-typed', '#repair-folder-hint']].forEach(([button, field, hint]) => {
         const b = q(button), f = q(field), h = q(hint);
         if (f) f.hidden = native;
+        const browser = q(button.replace('-browse', '-browser'));
+        if (browser) browser.hidden = native;
         if (b) b.textContent = native ? 'Choose folder' : 'Use this folder';
-        if (h && !native) h.textContent = 'This system has no folder chooser, so type the full path, starting with /';
+        if (h && !native) h.textContent = 'Browse folders on the server, or type/paste the full path and press Use this folder.';
       });
     }
 
@@ -1026,10 +1046,65 @@ PAGE = r'''<!doctype html>
         ? 'The repository stays untouched; NoMoreHappyPath stores its board and workspaces in manager-owned folders.'
         : 'NoMoreHappyPath creates a folder from the project name inside the selected location.';
       q('#project-folder-browse').textContent = adopting ? 'Choose project folder' : 'Choose parent folder';
+      if (!nativeFolderPicker) applyFolderPickerMode();
       updateFolderPreview();
       createDialog.showModal();
       q('#project-name').focus();
     }
+    const folderBrowser = q('#folder-browser');
+    let browserFolder = '';
+    let browserParent = '';
+    let browserInput = '';
+    let browserApply = null;
+    let browserRequest = 0;
+    async function loadBrowserFolder(path) {
+      const request = ++browserRequest;
+      browserFolder = '';
+      q('#folder-browser-select').disabled = true;
+      q('#folder-browser-up').disabled = true;
+      q('#folder-browser-error').textContent = '';
+      q('#folder-browser-status').textContent = 'Loading folders…';
+      q('#folder-browser-list').replaceChildren();
+      try {
+        const value = await api('/api/folders/list', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path})});
+        if (request !== browserRequest || !folderBrowser.open) return;
+        browserFolder = value.path;
+        browserParent = value.parent;
+        q('#folder-browser-path').textContent = value.path;
+        q('#folder-browser-up').disabled = value.parent === value.path;
+        q('#folder-browser-select').disabled = false;
+        q('#folder-browser-status').textContent = value.folders.length ? 'Choose a folder to open it.' : 'No subfolders. You can select this folder.';
+        value.folders.forEach(folder => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'button secondary';
+          button.textContent = folder.name;
+          button.onclick = () => loadBrowserFolder(folder.path);
+          q('#folder-browser-list').append(button);
+        });
+      } catch (problem) {
+        if (request !== browserRequest || !folderBrowser.open) return;
+        q('#folder-browser-status').textContent = '';
+        q('#folder-browser-error').textContent = problem.message;
+        q('#folder-browser-path').textContent = path;
+      }
+    }
+    function openFolderBrowser(input, apply) {
+      browserInput = input;
+      browserApply = apply;
+      folderBrowser.showModal();
+      loadBrowserFolder(q(input).value.trim());
+    }
+    q('#folder-browser-up').onclick = () => loadBrowserFolder(browserParent);
+    q('#folder-browser-cancel').onclick = () => folderBrowser.close();
+    q('#folder-browser-select').onclick = async () => {
+      if (!browserFolder) return;
+      q(browserInput).value = browserFolder;
+      folderBrowser.close();
+      await browserApply();
+    };
+    q('#project-folder-browser').onclick = () => openFolderBrowser('#project-folder-typed', () => q('#project-folder-browse').onclick());
+    q('#repair-folder-browser').onclick = () => openFolderBrowser('#repair-folder-typed', () => q('#repair-folder-browse').onclick());
     q('#new-btn').onclick = () => openCreate('scaffold');
     q('#adopt-btn').onclick = () => openCreate('adopted');
     q('#create-cancel').onclick = () => createDialog.close();

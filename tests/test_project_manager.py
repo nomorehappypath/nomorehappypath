@@ -100,6 +100,27 @@ class ProjectManagerTests(unittest.TestCase):
         except HTTPError as error:
             return error.code, json.loads(error.read())
 
+    def test_folder_browser_http_lists_server_directories_and_reports_errors(self):
+        folder = self.base / "server folders"
+        folder.mkdir()
+        (folder / "child").mkdir()
+        (folder / "file.txt").write_text("source")
+        with self.served() as (base, manager):
+            manager.execution_root = folder.resolve()
+            status, value = self.request(base, "/api/folders/list", "POST", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(value["path"], str(folder.resolve()))
+            self.assertEqual(value["folders"], [{"name": "child", "path": str(folder.resolve() / "child")}])
+            status, value = self.request(base, "/api/folders/list", "POST", {"path": str(folder / "missing")})
+            self.assertEqual(status, 400)
+            self.assertIn("no folder", value["error"])
+            request = Request(base + "/api/folders/list", data=b"{}", method="POST",
+                              headers={"Content-Type": "application/json", "Origin": "https://untrusted.example"})
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=5)
+            self.assertEqual(caught.exception.code, 403)
+        self.assertEqual((folder / "file.txt").read_text(), "source")
+
     def _board_fixture(self, data_root: Path):
         board = data_root / "board"
         board.mkdir(parents=True)
