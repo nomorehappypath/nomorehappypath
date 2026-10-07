@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
-from harness import platform_support, web_guard
+from harness import platform_support, web_guard, agent_view
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -89,6 +89,7 @@ PAGE = r"""<!doctype html>
 <div id="notice" class="notice" aria-live="polite"></div>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
 <section id="decision-banner" class="panel section owner-actions" aria-live="polite" hidden></section>
+<section id="claude-auth-actions" class="panel section owner-actions" role="alert" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
 <section id="attention" class="panel section" aria-live="polite"></section>
@@ -100,6 +101,7 @@ PAGE = r"""<!doctype html>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
 <dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message will be sent as one complete owner instruction. It will not be submitted by pressing Enter inside the paragraph box.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 stored UTF-8 bytes. Line endings become line feeds and boundary whitespace is removed once; all interior text is preserved exactly.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">The browser reads the file as strict UTF-8. Its path is never sent or opened by the worker.</small></div><label for="owner-message-attachments"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
+<dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
 const loadedViewerVersion='__VIEWER_VERSION__';
 const loadedRuntimeCommit='__RUNTIME_COMMIT__';
@@ -877,6 +879,7 @@ function agentStatusSummary(agent,state,contracts){
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
+  if(agent.liveness==='needs_sign_in'&&agent.vendor==='Anthropic')return{summary:'Claude needs a new setup-token. Follow the Claude authentication card, then retry this agent.',next:'Generate the token in your own terminal and supply it to the harness.',ownerAction:'Follow the Claude authentication card.'};
   if(agent.liveness==='needs_sign_in')return{summary:agent.liveness_note||'This agent needs you to sign in again: open its terminal and run /login.',next:'Run /login in its terminal. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and run /login.'};
   if(agent.role==='cto'&&agent.recovery_state==='unresponsive')return{summary:'CTO is not responding - it may need /login. Three wake-ups in a row went unanswered, so the harness has stopped pinging it.',next:'Open the CTO terminal; if it shows a login prompt, run /login. The CTO resumes once it checks the board again.',ownerAction:'Open the CTO terminal and run /login if it asks you to sign in.'};
   if(agent.role==='cto'&&agent.recovery_state==='answered_without_poll')return{summary:'The CTO answered its last wake-up with a status update but has not polled the board yet. It is alive; the harness keeps waking it on the normal schedule and names the poll command each time.',next:'Run the board poll on the next cycle, then continue monitoring. Your action: none.',ownerAction:'None.'};
@@ -1031,6 +1034,50 @@ function renderWaiting(sessionItems){
 function waitingBadge(session){
   return session&&session.attention_since?'<span class="badge tone-waiting">WAITING FOR YOU</span>':'';
 }
+let agentInputQueue=Promise.resolve();
+let agentTerminal, agentViewSession='', agentViewTimer, agentViewGeneration=0, terminalAssets;
+function viewAgentButton(session){
+  const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent='View agent';
+  button.disabled=!session||!['launching','running'].includes(session.status)||Boolean(session.read_only);
+  button.onclick=()=>viewAgent(session);return button;
+}
+async function loadTerminalAssets(){
+  if(!terminalAssets)terminalAssets=new Promise((resolve,reject)=>{
+    const css=document.createElement('link');css.rel='stylesheet';css.href=apiPath('/api/agent-view-assets/xterm.css');document.head.append(css);
+    const script=document.createElement('script');script.src=apiPath('/api/agent-view-assets/xterm.js');script.onload=resolve;script.onerror=()=>{terminalAssets=null;reject(new Error('The terminal could not load. Please retry.'));};document.head.append(script);
+  });
+  return terminalAssets;
+}
+async function viewAgent(session){
+  try{
+    const opened=await call(`/api/sessions/${encodeURIComponent(session.id)}/view`);
+    if(opened.mode==='native'){el('#notice').textContent='Your existing agent session is open in Terminal.';return;}
+    await loadTerminalAssets();
+    const dialog=el('#agent-view-dialog');
+    clearTimeout(agentViewTimer);agentViewGeneration++;const generation=agentViewGeneration;agentViewSession=session.id;
+    el('#agent-view-title').textContent=session.role||session.label||'Live agent';el('#agent-view-error').textContent='';
+    if(agentTerminal)agentTerminal.dispose();el('#agent-terminal').replaceChildren();
+    agentTerminal=new Terminal({cols:80,rows:24,fontSize:14,screenReaderMode:true,convertEol:true,theme:{background:'#111827'}});
+    agentTerminal.open(el('#agent-terminal'));agentTerminal.onData(data=>{
+      const id=agentViewSession;
+      if(id)agentInputQueue=agentInputQueue.then(()=>call(`/api/sessions/${encodeURIComponent(id)}/input`,{text:data})).catch(error=>{el('#agent-view-error').textContent=error.message;});
+    });
+    if(!dialog.open)dialog.showModal();agentTerminal.focus();
+    let previous='';
+    async function refreshTerminal(){
+      if(generation!==agentViewGeneration||!dialog.open)return;
+      try{
+        const response=await fetch(apiPath(`/api/agent-view/${encodeURIComponent(session.id)}`),{cache:'no-store'});const value=await response.json();if(!response.ok)throw new Error(value.error||'This session is unavailable.');
+        if(generation!==agentViewGeneration||!dialog.open)return;
+        const current=JSON.stringify(value);
+        if(current!==previous){previous=current;agentTerminal.resize(value.cols,value.rows);agentTerminal.write('\x1b[H\x1b[2J'+value.screen.replace(/\n/g,'\r\n')+`\x1b[${value.cursor_y+1};${value.cursor_x+1}H`);}
+        agentViewTimer=setTimeout(refreshTerminal,opened.poll_ms);
+      }catch(error){if(generation===agentViewGeneration)el('#agent-view-error').textContent=error.message;}
+    }
+    refreshTerminal();
+  }catch(error){el('#notice').textContent=error.message;}
+}
+
 function openAgents(state,contracts,sessionItems=[]){
   const out=el('#agents');
   const attachableSessions=(sessionItems||[]).filter(sessionCanRepresentAgent);
@@ -1052,7 +1099,7 @@ function openAgents(state,contracts,sessionItems=[]){
     row.dataset.agentId=agent.id; row.dataset.sessionId=session?.id||''; row.dataset.task=task;
     const provider=agent.vendor||session?.vendor||'Provider not recorded', model=session?.model||'Model not recorded';
     row.innerHTML=`<div class="row"><div><strong>${esc(agent.display_name||agent.role)} — ${esc(task)}</strong><small class="agent-meta">Role: ${esc(agent.role)} · Provider: ${esc(provider)} · Model: ${esc(model)} · Board stage: ${esc(stage)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div><small class="agent-meta">${esc(wording.summary)}</small>`;
-    const actions=document.createElement('div');actions.className='actions';
+    const actions=document.createElement('div');actions.className='actions';actions.append(viewAgentButton(session));
     if(agent.role==='engineering'||agent.role==='development'){
       const waiting=agent.task==='AWAITING_OWNER_DIRECTION', directionSent=Boolean((state.owner_directions||{})[agent.session_id]?.text);
       const releaseReady=(state.releases||{})[agent.task]?.status==='VISUAL_TEST_REQUIRED',decision=(state.release_decisions||{})[agent.task];
@@ -1094,7 +1141,7 @@ function openAgents(state,contracts,sessionItems=[]){
     const stage=superseded?'STOPPING — SUPERSEDED':unmatchedSessionStage(session);
     const note=superseded?`Read-only predecessor superseded by ${session.superseded_by_agent_id||'the replacement Delivery Agent'}. Its terminal is stopping and cannot change the task.`:unmatchedSessionNote(session);
     row.innerHTML=`<div class="row"><div><strong>${esc(session.label)} — ${esc(task)}</strong><small class="agent-meta">${esc(note)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div>`;
-    const actions=document.createElement('div');actions.className='actions';
+    const actions=document.createElement('div');actions.className='actions';actions.append(viewAgentButton(session));
     const conversation=document.createElement('a');conversation.className='secondary conversation-link';conversation.href=apiPath(`/api/transcripts/${encodeURIComponent(session.id)}`);conversation.target='_blank';conversation.rel='noopener';conversation.textContent='Conversation';actions.append(conversation);
     const stop=document.createElement('button');stop.className='stop';stop.type='button';stop.textContent='Stop terminal';stop.disabled=session.status==='stopping';stop.onclick=()=>confirmStopSession(session.id,session.label,task,stage,session.task);actions.append(stop);
     row.append(actions);out.append(row);
@@ -1138,6 +1185,17 @@ function renderHarnessActions(state){
   if(!lines.length){section.hidden=true;section.innerHTML='';return;}
   section.hidden=false;
   section.innerHTML='<h2>What the harness did for you</h2><ul>'+lines.map(item=>`<li class="${item.kind==='self_heal_gave_up'?'gave-up':''}">${esc(item.message)} <small>${esc(relativeUpdate(item.at))}</small></li>`).join('')+'</ul>';
+}
+
+function renderClaudeAuthActions(managed){
+  const section=el('#claude-auth-actions');
+  const actions=(managed.sessions||[]).filter(item=>item.claude_auth_action);
+  section.hidden=!actions.length;
+  if(actions.length)el('#sign-in-banner').hidden=true;
+  section.innerHTML=actions.length?'<h2>Claude needs your attention</h2>'+actions.map(item=>{
+    const card=item.claude_auth_action;
+    return `<div class="owner-action"><strong>${esc(card.title)}</strong><p>${esc(card.why)}</p><pre>${esc(card.instructions)}</pre><p>After setup, retry this agent from Mission Control.</p></div>`;
+  }).join(''):'';
 }
 
 function renderOwnerActions(state){
@@ -1224,7 +1282,7 @@ function sessions(items,state,contracts){
     const colorNote=session.color_label?`<span class="terminal-color"><i class="terminal-color-swatch" style="background:${esc(session.color_hex||'#000000')}" aria-hidden="true"></i>Terminal color: ${esc(session.color_label)}</span>`:'<span class="terminal-color"><i class="terminal-color-swatch" style="background:#000000" aria-hidden="true"></i>Terminal color: Standard black</span>';
     const label=document.createElement('div');label.innerHTML=`<strong>${esc(session.label)} — ${esc(details.task)}</strong>${badge(details.stage)}<small>${esc(details.summary)}</small>${colorNote}`;
     const stop=document.createElement('button');stop.className='stop';stop.textContent='Stop';stop.disabled=session.status==='stopping';stop.dataset.sessionId=session.id;stop.dataset.task=details.task;stop.onclick=()=>confirmStopSession(session.id,session.label,details.task,details.stage);
-    row.append(label,stop);out.append(row);
+    const actions=document.createElement("div");actions.className="actions";actions.append(viewAgentButton(session),stop);row.append(label,actions);out.append(row);
   }
 }
 
@@ -1364,24 +1422,35 @@ async function start(kind,color='black'){
       ? `${role} started in a ${shade} session. Attach to watch it:  ${started.attach_hint}`
       : `${role} launch requested with ${shade} terminal.`;
     await refresh();}
-  catch(error){el('#notice').textContent='Could not launch session: '+error.message;}
+  catch(error){el('#notice').textContent='Could not launch session: '+error.message;await refresh();}
 }
 
 async function refresh(){
   if(refreshing)return;
   refreshing=true;
   try{
-    const [dashboard,managed]=await Promise.all([fetch(apiPath('/api/dashboard'),{cache:'no-store'}).then(response=>response.json()),fetch(apiPath('/api/control'),{cache:'no-store'}).then(response=>response.json())]);
+    const [dashboard,managed]=await Promise.all(['/api/dashboard','/api/control'].map(async path=>{
+      const response=await fetch(apiPath(path),{cache:'no-store'});
+      const value=await response.json();
+      if(!response.ok)throw Error(value.error||'Project status is unavailable');
+      return value;
+    }));
     if(dashboard.viewer_version&&dashboard.viewer_version!==loadedViewerVersion){window.location.reload();return;}
     render(dashboard,managed);
+    renderClaudeAuthActions(managed);
     boardFailures=0;
+    if(el('#notice').textContent.startsWith('Board unavailable:'))el('#notice').textContent='';
+    el('.top .live').lastChild.textContent='Board connected';
     el('#board-offline')?.classList.remove('show');
   }catch(error){
+    el('.top .live').lastChild.textContent='Status unavailable';
     el('#notice').textContent='Board unavailable: '+error.message;
     boardFailures+=1;
     if(boardFailures>=3){
       const overlay=el('#board-offline');
       if(overlay){
+        overlay.querySelector('h2').textContent='Project connection unavailable';
+        overlay.querySelector('.sub').textContent='The last known work is preserved. Its current status cannot be loaded. Retry or return to Projects.';
         const back=el('#project-nav-projects');
         const link=el('#board-offline-link');
         if(back&&link){link.href=back.href;link.hidden=false;}
@@ -1437,7 +1506,7 @@ el('#relaunch-preserved').onclick=async()=>{
   const ids=(el('#relaunch-preserved').dataset.sessions||'').split(',').filter(Boolean);
   for(const id of ids){
     try{await call('/api/sessions/'+encodeURIComponent(id)+'/resume-launch',{});}
-    catch(error){el('#notice').textContent='Could not relaunch a preserved agent: '+error.message;return;}
+    catch(error){el('#notice').textContent='Could not relaunch a preserved agent: '+error.message;await refresh();return;}
   }
   el('#notice').textContent=`Relaunch requested for ${ids.length} preserved agent${ids.length===1?'':'s'}.`;
   await refresh();
@@ -1532,6 +1601,8 @@ function openRequirementsModify(task){
   el('#owner-message-dialog').showModal();
 }
 const chatForm=el('#project-chat-form');
+el('#agent-view-close').onclick=()=>el('#agent-view-dialog').close();
+el('#agent-view-dialog').addEventListener('close',()=>{agentViewGeneration++;agentViewSession='';clearTimeout(agentViewTimer);if(agentTerminal){agentTerminal.dispose();agentTerminal=null;}});
 if(chatForm){
   chatForm.onsubmit=sendChat;
   el('#project-chat-cancel').onclick=cancelChat;
@@ -2847,6 +2918,8 @@ def notify_cto_of_cancel(root, task: str) -> list[str]:
 
 def launch_terminal(root: Path, session: dict, *, manager_home=None) -> platform_support.SessionSurface:
     """Open exactly one visible macOS Terminal session for a hard-coded agent role."""
+    from harness import claude_auth
+    auth_socket = claude_auth.prepare_launch(root, session)
     runner = Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"
     # This launcher's OWN argv: --close-terminal-on-exit, plus --task only when
     # the session has one. Neither belongs to the worker's launcher.
@@ -2866,6 +2939,8 @@ def launch_terminal(root: Path, session: dict, *, manager_home=None) -> platform
         # the storage the registry ASSIGNED this project, and a registry found
         # any other way can be planted by whoever supplied the bad path.
         arguments += ["--manager-home", str(manager_home)]
+    if auth_socket:
+        arguments += ["--claude-auth-bootstrap", auth_socket]
     color = control.SESSION_COLORS.get(session.get("color", "black"), control.SESSION_COLORS["black"])
     try:
         # The surface is RETURNED, not discarded. On macOS the window is already
@@ -3017,6 +3092,17 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            assets = {"/api/agent-view-assets/xterm.js": ("xterm.js", "text/javascript"), "/api/agent-view-assets/xterm.css": ("xterm.css", "text/css")}
+            if path in assets:
+                name, media = assets[path]
+                body = (Path(__file__).parent / "assets" / "xterm" / name).read_bytes()
+                self.send_response(200); self.send_header("Content-Type", media); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+            if path.startswith("/api/agent-view/"):
+                try:
+                    self.send_json(200, agent_view.capture(root, unquote(path[len("/api/agent-view/"):])) )
+                except ValueError as error:
+                    self.send_json(410, {"error": str(error)})
                 return
             if path == "/api/board":
                 self.send_json(200, payload(root)); return
@@ -3230,6 +3316,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     response["input"] = input_metadata
                     self.send_json(201, response); return
                 length = int(self.headers.get("Content-Length", "0"))
+                if path.startswith("/api/sessions/") and path.endswith(("/view", "/input")) and (length < 0 or length > 32 * 1024):
+                    raise ValueError("terminal request is too large")
                 data = json.loads(self.rfile.read(length) or b"{}")
                 if path == "/api/settings/connect":
                     result = (
@@ -3250,6 +3338,12 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     else:
                         control.update_agent_settings(root, selected)
                     self.send_json(200, settings_payload(root, settings_home)); return
+                session_prefix = "/api/sessions/"
+                if path.startswith(session_prefix) and path.endswith(("/view", "/input")):
+                    suffix = "/view" if path.endswith("/view") else "/input"
+                    session_id = unquote(path[len(session_prefix):-len(suffix)])
+                    result = agent_view.open_view(root, session_id) if suffix == "/view" else agent_view.send_input(root, session_id, data.get("text"))
+                    self.send_json(200, result); return
                 if path == "/api/sessions":
                     settings_override = (
                         global_settings.load(settings_home)["agent_settings"]

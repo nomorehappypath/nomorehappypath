@@ -90,3 +90,13 @@ def folder_chooser():
 def terminal_host():
     """The visible agent terminal for this platform."""
     return _selected().TERMINAL_HOST
+
+
+def launch_problem() -> str:
+    check = getattr(_selected(), "launch_problem", None)
+    return check() if check else ""
+
+
+def claude_credentials():
+    """Trusted service token source and owner setup guidance for this platform."""
+    return _selected().CLAUDE_CREDENTIALS

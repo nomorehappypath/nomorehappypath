@@ -23,6 +23,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import agent_confinement, agent_grant, board, contract, control, platform_support, project_registry
 from harness.board_client import ENDPOINT_ENV, PROTOCOL_ENV, TOKEN_ENV
 from harness.board_surface import PROTOCOL_VERSION, SessionTokenAuthority
@@ -195,6 +197,7 @@ class RunnerTests(unittest.TestCase):
                 "--python", os.path.realpath(os.sys.executable),
                 "--session-id", session["id"], "--kind", session["kind"],
                 "--manager-home", str(home), "--board-bootstrap", bootstrap,
+                *auth_arguments(self.context, session),
             ]
             env = {**os.environ, "HARNESS_EXECUTION_ROOT": str(self.context.code_root), **environment}
             return subprocess.run(command, cwd=self.context.code_root, env=env,

@@ -286,7 +286,7 @@ class OwnerCardTests(unittest.TestCase):
                 self.assertRaises(ValueError):
             board._execute_internal_qa("cat marker.txt", self.root, certification=self.certification(commit))
         card = next(iter(board.snapshot(self.root)["owner_actions"].values()))
-        pasted = subprocess.run(["/bin/zsh", "-c", card["command"]], capture_output=True, text=True, timeout=30)
+        pasted = subprocess.run(["/bin/bash", "-c", card["command"]], capture_output=True, text=True, timeout=30)
         self.assertEqual((pasted.returncode, pasted.stdout), (0, "reviewed bytes\n"), pasted.stderr)
 
     def test_an_uncommitted_workspace_review_runs_in_that_workspace(self):

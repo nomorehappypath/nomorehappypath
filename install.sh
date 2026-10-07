@@ -94,6 +94,17 @@ else
   missing=1
 fi
 
+# Check the required sandbox from this account and environment, just as launch does.
+if ! sandbox_problem="$(python3 -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from harness import platform_support; print(platform_support.launch_problem())' "$root")"; then
+  warn "Unable to check the required agent sandbox. Run bash install.sh --check again before starting agents."
+  missing=1
+elif [[ -n "$sandbox_problem" ]]; then
+  warn "$sandbox_problem"
+  missing=1
+elif [[ "$(platform_kind)" == "linux" ]]; then
+  ok "tmux and the bubblewrap sandbox work — agent sessions can start"
+fi
+
 # OpenAI API key for project chat — configured in the app, not here.
 say ""
 say "Project chat needs an OpenAI API key (pay-per-use). You do NOT enter it"
@@ -105,7 +116,7 @@ if [[ $core_missing -eq 1 ]]; then
 fi
 if [[ $missing -eq 1 ]]; then
   say ""
-  warn "You can install and explore now, but agent sessions will not launch until the missing CLI(s) above are installed and signed in."
+  warn "You can install and explore now, but agents require working sandbox setup and installed, signed-in CLIs. Resolve the issues above before starting agents."
 fi
 [[ "$mode" == "--check" ]] && exit 0
 

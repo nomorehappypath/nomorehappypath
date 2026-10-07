@@ -106,7 +106,7 @@ class LauncherDifferenceTests(unittest.TestCase):
         return recorded["argv"]
 
     def _session(self, **extra):
-        base = {"id": "s1", "kind": "delivery", "color": "blue", "task": ""}
+        base = {"id": "s1", "kind": "delivery", "provider": "codex", "color": "blue", "task": ""}
         base.update(extra)
         return base
 
@@ -153,9 +153,9 @@ class RefusalTests(unittest.TestCase):
                 mock.patch.object(platform_support.defaults.sys, "platform", "linux"):
             for launch in (
                 lambda: board_viewer.launch_terminal(Path("/root"), {
-                    "id": "s", "kind": "delivery", "color": "blue", "task": ""}),
+                    "id": "s", "kind": "delivery", "provider": "codex", "color": "blue", "task": ""}),
                 lambda: project_worker.launch_terminal(Path("/root"), {
-                    "id": "s", "kind": "delivery", "color": "blue", "task": ""}, "/tmp/s"),
+                    "id": "s", "kind": "delivery", "provider": "codex", "color": "blue", "task": ""}, "/tmp/s"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "requires macOS Terminal"):
                     launch()

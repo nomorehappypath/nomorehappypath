@@ -57,13 +57,37 @@ library. Windows is not supported.
 installer sets up a per-user systemd service and tells you if lingering is
 off (without it the service stops when you log out; `sudo loginctl
 enable-linger <user>` fixes that). Each agent runs in its own named tmux
-session, and Mission Control shows the exact `tmux attach -t …` command to
-watch it. The platform's own Git writes are confined with bubblewrap; if
-bubblewrap is missing, those writes refuse to run rather than run unconfined.
-Choose project folders with **Browse folders** inside the app, or type/paste
-an absolute path and press **Use this folder**. The browser lists folders on
-the Linux machine running the app; from Windows, use the VM’s Linux paths. A desktop-Linux experience with terminal windows is not part of this
-release.
+session. Click **View agent** beside Delivery, Reviewer or CTO to see live
+output and type to that same session in your browser, including from Windows.
+Closing the browser view leaves the agent running. On macOS, closing a CLI
+window also leaves its agent running. **View agent** focuses the existing
+Terminal window or reopens a window attached to that same session.
+
+Bubblewrap is required. The installer and every agent launch run a real sandbox
+probe; an installed but blocked sandbox refuses launch with setup guidance.
+On Ubuntu, if Bubblewrap reports `setting up uid map: Permission denied`, install
+and load the distribution's AppArmor profile:
+
+```sh
+sudo apt install apparmor-profiles
+sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+bash install.sh --check
+```
+
+Keep AppArmor and the system-wide user namespace restriction enabled. Other
+Linux distributions should use their supported Bubblewrap policy. A failing
+probe never permits agents to run without their required sandbox.
+
+To do all of this in one step, including installing tmux and Bubblewrap, run
+`sudo bash scripts/linux_enable_sandbox.sh` once in Linux. The app never runs it;
+it uses Ubuntu's own profile and leaves the system-wide restriction on. If an
+agent stops after it starts, its tmux window stays open until you press Enter,
+so you can read why.
+
+On Linux, type or paste an absolute folder path and press **Use this folder**.
+From Windows, enter the path on the Linux server. macOS retains its native
+folder picker.
 
 **Linux CLI setup (including a VM on Windows):** install **both Codex CLI and
 Claude Code CLI inside Linux** and sign in to each using the account that runs
@@ -73,6 +97,39 @@ app's systemd service. Shell aliases and a PATH exported in just one terminal
 are insufficient. Check `codex --version` and `claude --version` from a fresh
 shell before installing the service. Run `bash install.sh --check` under the
 same Linux account to confirm the app can find both CLIs for its service.
+
+### Claude agent authentication
+
+Harness-launched Claude agents require a dedicated one-year token created with
+`claude setup-token`. A normal interactive `/login` is not enough for these
+sandboxed agents. The harness checks the token with a real Claude request before
+launch; a missing or rejected token produces an owner-action card.
+
+On **macOS**, save the token as the password of a login Keychain generic password
+item named `claude-cli-oauth`, using Keychain Access. Unlock the login Keychain.
+The trusted manager reads that item before launch. Agents receive the token only
+through an authenticated, one-use local socket and cannot access the Keychain or
+shared Claude login files. If you already export `CLAUDE_CODE_OAUTH_TOKEN` into the
+manager's environment, that explicit environment value takes precedence.
+
+On **Linux**, provide the token to the user service in memory. Run these commands
+in your own Bash terminal; the prompt hides your input and keeps it out of shell
+history and files:
+
+```bash
+claude setup-token
+read -rsp 'Claude setup-token: ' CLAUDE_CODE_OAUTH_TOKEN; printf '\n'
+export CLAUDE_CODE_OAUTH_TOKEN
+systemctl --user import-environment CLAUDE_CODE_OAUTH_TOKEN
+unset CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Safely pause your project before restarting the harness user service, then retry
+the agent. Repeat the import after reboot. For foreground use, export the token
+before starting the harness instead of importing it into systemd. Do not store
+the value in unit files, shell startup files, project settings, or the board.
+Never run `/login` inside a harness agent to repair a missing or expired setup-token;
+generate a replacement in your own terminal and follow the owner-action card.
 
 ## Install
 

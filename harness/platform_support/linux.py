@@ -260,6 +260,47 @@ class _ProcProcessIdentity(_ProcessIdentity):
 PROCESS_IDENTITY = _ProcProcessIdentity()
 
 
+def _setup_script() -> str:
+    return str(Path(__file__).resolve().parents[2] / "scripts" / "linux_enable_sandbox.sh")
+
+
+def launch_problem() -> str:
+    """Why an agent cannot start here, or "" when it can. Runs the actual sandbox primitive.
+
+    Every problem is reported at once: an owner told about tmux, who then meets
+    the sandbox, has been sent round the same loop twice for one setup.
+    """
+    problems: list[str] = []
+    if not shutil.which("tmux"):
+        problems.append("tmux is not installed (sudo apt install tmux); agents need it for persistent sessions")
+    sandbox = False
+    binary = AGENT_CONFINEMENT.binary()
+    if not binary:
+        sandbox = True
+        problems.append("Bubblewrap is not installed (sudo apt install bubblewrap); the required sandbox is missing")
+    else:
+        try:
+            timeout = float(os.environ.get("HARNESS_SANDBOX_PROBE_TIMEOUT_SECONDS", "15"))
+            probe = subprocess.run([binary, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc", "--", "/bin/true"], capture_output=True, text=True, timeout=timeout, check=False)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            sandbox = True
+            problems.append(f"The required Bubblewrap sandbox could not be checked: {error}")
+        else:
+            if probe.returncode != 0:
+                sandbox = True
+                detail = (probe.stderr or probe.stdout).strip()[-1500:] or f"exit {probe.returncode}"
+                problems.append(f"Linux refused the required agent sandbox ({detail}); a missing AppArmor profile can cause this")
+    if not problems:
+        return ""
+    text = f"Agents cannot start yet: {'; '.join(problems)}. No agent was launched. Fix it in one step, once, in Linux: sudo bash {_setup_script()}"
+    if sandbox:
+        text += (". Or by hand on Ubuntu: sudo apt install apparmor-profiles; "
+                 "sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict; "
+                 "sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict. "
+                 "Then retry. Keep AppArmor and the system user namespace restriction enabled.")
+    return text
+
+
 class _TmuxTerminalHost:
     """An agent session the owner can watch, on a machine with no screen.
 
@@ -287,15 +328,16 @@ class _TmuxTerminalHost:
         return f"#{red:02x}{green:02x}{blue:02x}"
 
     def open_session(self, session_id: str, argv, *, color_rgb) -> SessionSurface:
-        if not shutil.which("tmux"):
-            # Named, not a bare FileNotFoundError from the exec: the owner needs
-            # to be told what to install, not shown a traceback.
-            raise UnsupportedPlatformOperation(
-                "visible agent terminal requires tmux (install it: apt install tmux)"
-            )
+        problem = launch_problem()
+        if problem:
+            raise UnsupportedPlatformOperation(problem)
         name = self.session_name(session_id)
+        environment = ["-e", "PATH=" + os.environ.get("PATH", "")]
+        binary = AGENT_CONFINEMENT.binary()
+        if binary:
+            environment += ["-e", "HARNESS_BWRAP_BIN=" + binary]
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", name, "--", *[str(item) for item in argv]],
+            ["tmux", "new-session", "-d", "-s", name, *environment, "--", *self.keep_failure_visible(argv)],
             check=True, capture_output=True, text=True,
         )
         # Role colour, same table that drives macOS, so a role looks like itself
@@ -305,6 +347,47 @@ class _TmuxTerminalHost:
             check=False, capture_output=True, text=True,
         )
         return SessionSurface(session_id=session_id, attach_hint=self.attach_command(session_id))
+
+    # tmux closes a session the moment its command exits, taking any refusal the
+    # command printed with it: the owner saw "it crashed, no window". A command
+    # that ends with an error now holds the window open until a key is pressed,
+    # so the message can be read. A clean exit still closes at once.
+    HOLD_ON_FAILURE = (
+        '"$@"; code=$?; if [ "$code" -ne 0 ]; then '
+        'printf "\\n--- The agent stopped (exit code %s). Read the message above, fix it, '
+        'then start the agent again. Press Enter to close this window. ---\\n" "$code"; '
+        'read -r _; fi; exit "$code"'
+    )
+
+    def keep_failure_visible(self, argv) -> list[str]:
+        return ["/bin/sh", "-c", self.HOLD_ON_FAILURE, "nmhp-agent", *[str(item) for item in argv]]
+
+    def _pane(self, session_id: str) -> str:
+        return "=" + self.session_name(session_id) + ":0.0"
+
+    def _view_run(self, argv):
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=float(os.environ.get("HARNESS_AGENT_VIEW_TIMEOUT_SECONDS", "5")))
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            raise ValueError("The live terminal could not be reached. Retry View agent.") from error
+
+    def capture_session(self, session_id: str) -> dict:
+        target = self._pane(session_id)
+        size = self._view_run(["tmux", "display-message", "-p", "-t", target, "#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}"])
+        if size.returncode:
+            raise ValueError("This agent's live terminal is unavailable. No replacement agent was started.")
+        width, height, x, y = map(int, size.stdout.split())
+        screen = self._view_run(["tmux", "capture-pane", "-p", "-e", "-t", target])
+        if screen.returncode:
+            raise ValueError("This agent's live terminal is unavailable.")
+        return {"screen": screen.stdout, "cols": width, "rows": height, "cursor_x": x, "cursor_y": y}
+
+    def input_session(self, session_id: str, data: bytes) -> None:
+        # Hex sends raw bytes, including arrow keys, paste, Enter and Ctrl+C.
+        # Neither input nor the session name is a shell command.
+        result = self._view_run(["tmux", "send-keys", "-t", self._pane(session_id), "-H", *[f"{value:02x}" for value in data]])
+        if result.returncode:
+            raise ValueError("This agent's live terminal is unavailable. Input was not sent.")
 
     def dismiss_current_session(self, stdin_fd: int = 0) -> None:
         """The occupant dismisses ITSELF, exactly as on macOS.
@@ -431,10 +514,8 @@ class _BwrapAgentConfinement(_AgentConfinement):
         return list(dict.fromkeys(paths))
 
     def protected_read_paths(self, home, claude_config_dir=None) -> list[str]:
-        """Nothing for the agent itself: Linux has no Keychain, so this file IS
-        the managed Claude agent's own login and it must stay readable to it.
-        Harness-run commands are still guarded by `read_guard`."""
-        return []
+        """Setup-token agents may never fall back to shared refresh credentials."""
+        return self.login_file_paths(home, claude_config_dir)
 
     def read_guard(self, argv, protected: list[str], *, store) -> list[str]:
         """Mask the owner's login files with an empty file; every other read and write is as before.
@@ -461,12 +542,16 @@ class _BwrapAgentConfinement(_AgentConfinement):
         command = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
         for path in writable:
             real = Path(self._real(path))
+            if real.is_file() and real.suffix == ".json" and real.stat().st_size == 0:
+                # Left empty by an earlier version of this launcher; Claude Code
+                # reads an empty state file as corrupt.
+                real.write_text("{}\n", encoding="utf-8")
             if not real.exists():
                 # A state file or directory the CLI has not created yet is
                 # created for it: bwrap cannot bind a path that does not exist.
                 if real.name == ".claude.json" or real.suffix == ".json":
                     real.parent.mkdir(parents=True, exist_ok=True)
-                    real.touch()
+                    real.write_text("{}\n", encoding="utf-8")
                 else:
                     real.mkdir(parents=True, exist_ok=True)
             command += ["--bind", str(real), str(real)]
@@ -478,7 +563,31 @@ class _BwrapAgentConfinement(_AgentConfinement):
             real = Path(self._real(path))
             real.mkdir(parents=True, exist_ok=True)
             command += ["--ro-bind", str(real), str(real)]
+        for path in protected_reads or []:
+            real = Path(self._real(path))
+            if real.is_file():
+                command += ["--ro-bind", "/dev/null", str(real)]
         return command + ["--", *list(argv)]
 
 
 AGENT_CONFINEMENT = _BwrapAgentConfinement()
+
+
+class _ClaudeCredentials:
+    uses_keychain = False
+
+    def read_token(self, environment) -> str:
+        return environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+
+    def instructions(self) -> str:
+        return ("Run claude setup-token in your own terminal. Supply its token to the harness service without a token file:\n"
+                "read -rsp 'Claude setup-token: ' CLAUDE_CODE_OAUTH_TOKEN; printf '\\n'\n"
+                "export CLAUDE_CODE_OAUTH_TOKEN\n"
+                "systemctl --user import-environment CLAUDE_CODE_OAUTH_TOKEN\n"
+                "unset CLAUDE_CODE_OAUTH_TOKEN\n"
+                "Restart the harness service when your project is safely paused, then retry. "
+                "For foreground use, export the token before starting the harness. Repeat after reboot. "
+                "Do not run /login inside a harness agent.")
+
+
+CLAUDE_CREDENTIALS = _ClaudeCredentials()

@@ -97,6 +97,8 @@ def _pin_run_root() -> Path:
     os.environ["CODEX_HOME"] = str(codex_home)
     # No test may post a notification on the owner's desktop.
     os.environ["HARNESS_DESKTOP_NOTIFICATIONS"] = "off"
+    # Never read the owner's real setup-token during ordinary tests.
+    os.environ["HARNESS_CLAUDE_KEYCHAIN_SERVICE"] = ""
     atexit.register(shutil.rmtree, run_root, True)
     return run_root
 

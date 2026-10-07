@@ -13,6 +13,7 @@ everywhere except where a person could see it.
 from __future__ import annotations
 
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,12 +21,13 @@ from unittest import mock
 from harness import board_viewer, platform_support
 from harness.platform_support import defaults, linux
 
-SESSION = {"id": "delivery-1", "kind": "delivery", "color": "blue", "task": ""}
+SESSION = {"id": "delivery-1", "kind": "delivery", "provider": "codex", "color": "blue", "task": ""}
 
 
 class SurfaceIsReturnedTests(unittest.TestCase):
     def test_linux_returns_the_exact_attach_command(self):
         with mock.patch.object(platform_support, "terminal_host", return_value=linux.TERMINAL_HOST), \
+                mock.patch.object(linux, "launch_problem", return_value=""), \
                 mock.patch.object(shutil, "which", return_value="/usr/bin/tmux"), \
                 mock.patch("subprocess.run"):
             surface = board_viewer.launch_terminal(Path("/root"), SESSION)
@@ -39,10 +41,11 @@ class SurfaceIsReturnedTests(unittest.TestCase):
         which made a test written to check platform honesty itself report the
         machine it ran on. Exactly the class it exists to guard against.
         """
-        with mock.patch.object(platform_support, "terminal_host", return_value=defaults.TERMINAL_HOST), \
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(platform_support, "terminal_host", return_value=defaults.TERMINAL_HOST), \
                 mock.patch.object(defaults.sys, "platform", "darwin"), \
                 mock.patch("subprocess.run"):
-            surface = board_viewer.launch_terminal(Path("/root"), SESSION)
+            surface = board_viewer.launch_terminal(Path(temporary), SESSION)
         self.assertEqual(surface.attach_hint, "")
 
     def test_the_launcher_does_not_DISCARD_the_surface(self):

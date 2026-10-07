@@ -35,7 +35,7 @@ def _fixture_home(root: Path) -> Path:
 
 
 class ProfileShapeTests(unittest.TestCase):
-    def test_the_macos_agent_profile_denies_the_login_file_and_not_the_keychain(self):
+    def test_the_macos_agent_profile_denies_shared_login_and_keychain(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = _fixture_home(Path(tmp))
             seatbelt = defaults._AgentConfinement()
@@ -45,8 +45,8 @@ class ProfileShapeTests(unittest.TestCase):
             self.assertIn(f'(deny file-read* (literal "{login}")', profile)
             self.assertIn(str((Path(tmp) / "relocated" / ".credentials.json").resolve()), profile,
                           "a relocated CLAUDE_CONFIG_DIR's login is protected too")
-            self.assertNotIn("Keychains", profile,
-                             "the Keychain folder stays readable: the CLI's own login goes through it")
+            self.assertIn("Keychains", profile, "setup-token agents must not read the shared Keychain")
+            self.assertIn("(deny mach-lookup", profile)
             self.assertIn("(deny file-write*)", profile, "the write boundary is unchanged")
 
     def test_linux_keeps_the_agents_own_login_and_masks_it_for_harness_commands(self):
@@ -54,8 +54,8 @@ class ProfileShapeTests(unittest.TestCase):
             home = _fixture_home(Path(tmp))
             bubblewrap = linux._BwrapAgentConfinement(which=lambda name: "/usr/bin/bwrap")
             with patch.dict(os.environ, {"HARNESS_BWRAP_BIN": ""}):
-                self.assertEqual(bubblewrap.protected_read_paths(home), [],
-                                 "no Keychain on Linux: the file is the agent's own login")
+                self.assertEqual(bubblewrap.protected_read_paths(home), [str(home / ".claude" / ".credentials.json")],
+                                 "setup-token agents must not refresh the shared Linux login")
                 command = agent_confinement.read_guard(
                     ["/bin/sh", "-c", "true"], home=home, store=Path(tmp) / "store", implementation=bubblewrap)
             login = str(home / ".claude" / ".credentials.json")

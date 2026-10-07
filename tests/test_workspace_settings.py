@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import control, workspace_settings
 
 
@@ -192,7 +194,7 @@ class WorkspaceSettingsTests(unittest.TestCase):
             environment.pop("HARNESS_EXECUTION_ROOT", None)
             environment["HARNESS_CLAUDE_BIN"] = str(fake)
             completed = subprocess.run(
-                ["bash", str(Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"), "--root", str(target), "--session-id", session["id"], "--kind", "claude_reviewer"],
+                ["bash", str(Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"), "--root", str(target), "--session-id", session["id"], "--kind", "claude_reviewer", *auth_arguments(target, session)],
                 capture_output=True, text=True, timeout=30, cwd=tmp, env=environment,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)

@@ -14,6 +14,8 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import board, board_viewer, contract, control, project_registry
 from harness.project_context import ProjectContext
 from tests.environment_support import require_loopback
@@ -88,7 +90,7 @@ class ControlTests(unittest.TestCase):
                 "HARNESS_WORKSPACE_ROOT": str(projects / "foreign-session-workspaces"),
             }
             process = subprocess.run(
-                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -116,7 +118,7 @@ class ControlTests(unittest.TestCase):
             session = control.create(root, "codex_delivery")
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex), "HARNESS_CAPTURE": str(capture)}
             process = subprocess.run(
-                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
                 env=environment, capture_output=True, text=True, timeout=5,
             )
             self.assertEqual(process.returncode, 0, process.stderr)
@@ -389,7 +391,7 @@ class ControlTests(unittest.TestCase):
 
             def start(session):
                 return subprocess.Popen(
-                    ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+                    ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
                     env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
 
@@ -450,7 +452,7 @@ class ControlTests(unittest.TestCase):
             master, slave = pty.openpty()
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex)}
             process = subprocess.Popen(
-                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
                 env=environment, stdin=slave, stdout=slave, stderr=slave, close_fds=True,
             )
             os.close(slave)
@@ -517,7 +519,7 @@ class ControlTests(unittest.TestCase):
                 control.create(root, "claude_reviewer", color="neon")
 
     def test_terminal_launcher_applies_selected_rgb_and_black_fallback(self):
-        with TemporaryDirectory() as tmp, patch("harness.board_viewer.subprocess.run") as run, patch("harness.board_viewer.sys.platform", "darwin"):
+        with TemporaryDirectory() as tmp, patch("harness.board_viewer.subprocess.run") as run, patch("harness.board_viewer.sys.platform", "darwin"), patch("harness.claude_auth.prepare_launch", return_value="/tmp/fixture-auth.sock"):
             root = Path(tmp)
             session = control.create(root, "codex_delivery", color="purple")
             board_viewer.launch_terminal(root, session)
@@ -613,7 +615,7 @@ class ControlTests(unittest.TestCase):
             fake_codex.chmod(0o755)
             session = control.create(root, "codex_delivery")
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex), "HARNESS_CAPTURE": str(capture), "HARNESS_WORKING_DIRECTORY": str(working_directory), "HARNESS_EXECUTION_ROOT": str(execution_root)}
-            process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]], env=environment)
+            process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env=environment)
             try:
                 for _ in range(30):
                     current = control.snapshot(root)["sessions"][0]
@@ -648,7 +650,7 @@ class ControlTests(unittest.TestCase):
         with TemporaryDirectory() as tmp, patch("harness.board_viewer.sys.platform", "darwin"), patch("harness.board_viewer.subprocess.run") as run:
             session = control.create(Path(tmp), "codex_delivery")
             board_viewer.launch_terminal(Path(tmp), session)
-            command = run.call_args.args[0][-1]
+            command = shlex.join(run.call_args_list[0].args[0][5:])
             self.assertIn("run_managed_agent.sh", command)
             self.assertIn("--close-terminal-on-exit", command)
             self.assertNotIn("--task", command)
@@ -663,8 +665,7 @@ class ControlTests(unittest.TestCase):
             context = ProjectContext(code, data, workspaces)
             session = control.create(context, "codex_delivery")
             board_viewer.launch_terminal(context, session)
-            command = run.call_args.args[0][-1]
-            arguments = shlex.split(command.removeprefix("exec "))
+            arguments = run.call_args_list[0].args[0][5:]
             self.assertFalse(any("ProjectContext(" in argument for argument in arguments))
             self.assertEqual(arguments[:9], [
                 "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
@@ -690,7 +691,7 @@ class ControlTests(unittest.TestCase):
             fake_claude.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
             fake_claude.chmod(0o755)
             session = control.create(root, "claude_cto")
-            process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]], env={**os.environ, "HARNESS_CLAUDE_BIN": str(fake_claude)})
+            process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env={**os.environ, "HARNESS_CLAUDE_BIN": str(fake_claude)})
             try:
                 for _ in range(30):
                     if control.snapshot(root)["sessions"][0]["status"] == "running":
@@ -981,7 +982,7 @@ class ControlTests(unittest.TestCase):
             control.update_agent_settings(root, settings)
             session = control.create(root, "codex_delivery")
             process = subprocess.run(
-                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+                ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
                 env={**os.environ, "HARNESS_CLAUDE_BIN": str(fake_claude), "HARNESS_CAPTURE": str(capture)},
                 capture_output=True, text=True,
             )
@@ -1018,7 +1019,7 @@ class ControlTests(unittest.TestCase):
                     capture = root / f"{kind}-arguments.txt"
                     session = control.create(root, kind)
                     completed = subprocess.run(
-                        ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", kind],
+                        ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", kind, *auth_arguments(root, session)],
                         env={
                             **os.environ,
                             "HARNESS_CODEX_BIN": str(fake_codex),

@@ -773,7 +773,8 @@ class ProjectManager:
         try:
             self.worker_action_token = ready_token
             self.worker_proxy_token = secrets.token_urlsafe(32)
-            environment = {**os.environ, PROXY_TOKEN_ENV: self.worker_proxy_token}
+            from harness import claude_auth
+            environment = claude_auth.manager_environment({**os.environ, PROXY_TOKEN_ENV: self.worker_proxy_token})
             self.worker = subprocess.Popen(
                 self.worker_argv(entry, ready_token), env=environment,
             )
