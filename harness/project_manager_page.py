@@ -171,6 +171,26 @@ PAGE = r'''<!doctype html>
     .folder-control .button { min-height: 44px; box-shadow: none; }
     .folder-list { display: grid; gap: 6px; max-height: 35vh; overflow: auto; margin: 12px 0; }
     .folder-list .button { text-align: left; overflow-wrap: anywhere; }
+    #folder-browser { width: min(780px, calc(100% - 32px)); }
+    .fb-modal { min-width: 0; }
+    .fb-bar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin: 6px 0 10px; }
+    .fb-bar .button { min-height: 40px; box-shadow: none; }
+    .fb-bar input { min-width: 0; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .fb-body { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 10px; height: min(340px, 45vh); }
+    .fb-places { overflow: auto; display: grid; align-content: start; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+    .fb-places-title { margin: 4px 8px 2px; color: var(--subtle); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .fb-place, .fb-item { width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: #25324a; font: inherit; font-size: 14px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+    .fb-place:hover, .fb-item:hover { background: #eef2fb; }
+    .fb-place[aria-current="true"] { background: #e3e9fb; color: var(--blue); font-weight: 650; }
+    .fb-list { overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: 10px; }
+    .fb-list:focus-visible, .fb-place:focus-visible, .fb-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .fb-item[aria-selected="true"] { background: var(--blue); color: white; }
+    .fb-newrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 4px; }
+    .fb-newrow input { min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+    .fb-status { min-height: 20px; margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+    .fb-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+    .fb-actions .fb-spacer { flex: 1; }
+    @media (max-width: 720px) { .fb-body { grid-template-columns: 1fr; height: min(420px, 60vh); } .fb-places { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; } .fb-place { width: auto; } }
     .typed-path { flex: 1; min-width: 220px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; }
     .selected-path { min-width: 0; display: flex; align-items: center; padding: 10px 12px; overflow: hidden; border: 1px solid #cfd7e2; border-radius: 10px; color: #526078; background: #f8fafc; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .selected-path.empty { color: var(--subtle); font-family: inherit; font-style: italic; }
@@ -316,7 +336,7 @@ PAGE = r'''<!doctype html>
             <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
             <li><strong>Linux, including a VM on Windows:</strong> install and sign in to both <strong>Codex CLI</strong> and <strong>Claude Code CLI</strong> inside Linux. Make <code>codex</code> and <code>claude</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
             <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
-            <li><strong>Linux project folders:</strong> type/paste the full path and press <strong>Use this folder</strong>. These are Linux paths, even when your browser is on Windows.</li>
+            <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
@@ -404,6 +424,7 @@ PAGE = r'''<!doctype html>
         <section class="help-section" aria-labelledby="help-direct-title">
           <h2 id="help-direct-title">Talking To The Agents Directly</h2>
           <p>Click <strong>View agent</strong> beside any agent: Linux opens its existing live session in your browser; macOS focuses its Terminal window or reopens a closed window for that same session. Closing the view or CLI window leaves the agent running. You can type to any agent at any time — ask what they are doing, why a decision was made, or for a plain-language summary.</p>
+          <p class="help-callout"><strong>First time an agent opens in a project, stay at your computer.</strong> Claude may ask <em>Do you trust this folder?</em> &mdash; choose <strong>Yes, I trust this folder</strong>. Codex may ask the same &mdash; choose <strong>Trust and continue</strong>. Open the agent with <strong>View agent</strong> to answer. Mission Control shows the agent as waiting for you until you do, and nothing else moves on that agent until then.</p>
           <p class="help-callout"><strong>Be careful while work is running.</strong> A message typed into a busy agent is not a side conversation — the agent stops to handle it. Interrupting a build, a review, or a release check inserts your request into the middle of that work and can slow it down or derail it. If it can wait, let the current stage finish and read the agent's status first; if you must redirect running work, use <strong>Send clarification</strong> so the change is recorded on the task, not lost in scrollback. New ideas belong in a new task after this one is accepted.</p>
         </section>
 
@@ -572,6 +593,29 @@ PAGE = r'''<!doctype html>
       <p class="form-error" id="repair-error" role="alert" aria-live="polite"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save folder</button></div>
     </form>
+  </dialog>
+
+  <dialog id="folder-browser" aria-labelledby="folder-browser-title">
+    <div class="modal fb-modal">
+      <h2 id="folder-browser-title">Choose folder</h2>
+      <p class="modal-copy" id="folder-browser-prompt">Folders on the computer running NoMoreHappyPath.</p>
+      <div class="fb-bar">
+        <button class="button secondary" type="button" id="folder-browser-up" aria-label="Parent folder">&#8593; Parent</button>
+        <input type="text" id="folder-browser-path" aria-label="Folder path (type a path and press Enter)" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="fb-body">
+        <nav class="fb-places" id="folder-browser-places" aria-label="Places"></nav>
+        <div class="fb-list" id="folder-browser-list" role="listbox" aria-label="Folders" tabindex="0"></div>
+      </div>
+      <p class="fb-status" id="folder-browser-status" role="status" aria-live="polite"></p>
+      <p class="form-error" id="folder-browser-error" role="alert" aria-live="polite"></p>
+      <div class="fb-actions">
+        <button class="button secondary" type="button" id="folder-browser-new">New Folder</button>
+        <span class="fb-spacer"></span>
+        <button class="button secondary" type="button" id="folder-browser-cancel">Cancel</button>
+        <button class="button" type="button" id="folder-browser-select">Choose</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">
@@ -975,28 +1019,197 @@ PAGE = r'''<!doctype html>
       preview.textContent = `New project folder: ${createFolder.replace(/\/$/, '')}/${folderName(q('#project-name').value)}`;
     };
     let nativeFolderPicker = true;
-    async function browseFolder(purpose, errorSelector, inputSelector) {
+    const FOLDER_PROMPTS = {
+      'new-parent': 'Choose where the new project folder will be created',
+      'adopt-project': 'Choose the existing project folder to adopt',
+      'repair-project': "Choose the project's current folder",
+    };
+    const fb = q('#folder-browser');
+    let fbPurpose = '', fbCurrent = '', fbParent = '', fbSelected = '', fbRequest = 0, fbResolve = null, fbPlaces = null, fbHome = '';
+    const fbPost = (url, data) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+    const fbFinish = (path) => { const done = fbResolve; fbResolve = null; if (done) done(path); };
+    function fbRenderPlaces() {
+      const box = q('#folder-browser-places');
+      box.replaceChildren();
+      const title = document.createElement('div');
+      title.className = 'fb-places-title';
+      title.textContent = 'Places';
+      box.append(title);
+      // The place that contains the current folder most closely is the current one.
+      let best = null;
+      fbPlaces.forEach(place => {
+        const inside = fbCurrent === place.path || fbCurrent.startsWith(place.path.replace(/\/$/, '') + '/');
+        if (inside && (!best || place.path.length > best.path.length)) best = place;
+      });
+      fbPlaces.forEach(place => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'fb-place';
+        button.textContent = place.kind === 'drive' ? '\u{1F4BF} ' + place.name : place.name;
+        button.title = place.path;
+        if (place === best) button.setAttribute('aria-current', 'true');
+        button.onclick = () => fbLoad(place.path);
+        box.append(button);
+      });
+    }
+    function fbSelect(path) {
+      fbSelected = path;
+      q('#folder-browser-list').querySelectorAll('.fb-item').forEach(item => {
+        const on = item.dataset.path === path;
+        item.setAttribute('aria-selected', on ? 'true' : 'false');
+        if (on) item.scrollIntoView({block: 'nearest'});
+      });
+    }
+    const fbVisible = (folders) => folders.filter(folder => !folder.name.startsWith('.'));
+    function fbRenderFolders(folders) {
+      const list = q('#folder-browser-list');
+      list.querySelectorAll('.fb-item').forEach(node => node.remove());
+      folders.forEach(folder => {
+        const item = document.createElement('div');
+        item.className = 'fb-item';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', 'false');
+        item.dataset.path = folder.path;
+        item.textContent = '\u{1F4C1} ' + folder.name;
+        item.onclick = () => { fbSelect(folder.path); list.focus(); };
+        item.ondblclick = () => fbLoad(folder.path);
+        list.append(item);
+      });
+    }
+    async function fbLoad(path, keepOnError) {
+      const request = ++fbRequest;
+      q('#folder-browser-error').textContent = '';
+      q('#folder-browser-status').textContent = 'Loading folders…';
+      try {
+        const value = await fbPost('/api/folders/list', {path});
+        if (request !== fbRequest || !fb.open) return false;
+        fbCurrent = value.path;
+        fbParent = value.parent;
+        fbSelected = '';
+        q('#folder-browser-path').value = value.path;
+        q('#folder-browser-up').disabled = value.parent === value.path;
+        const shown = fbVisible(value.folders);
+        fbRenderFolders(shown);
+        fbRenderPlaces();
+        q('#folder-browser-status').textContent = shown.length
+          ? shown.length + (shown.length === 1 ? ' folder' : ' folders')
+          : 'No folders in here. Choose selects this folder.';
+        return true;
+      } catch (problem) {
+        if (request !== fbRequest || !fb.open) return false;
+        q('#folder-browser-status').textContent = '';
+        q('#folder-browser-error').textContent = problem.message;
+        if (!keepOnError) q('#folder-browser-path').value = path;
+        return false;
+      }
+    }
+    function fbCloseNewRow() { const row = q('#folder-browser-newrow'); if (row) row.remove(); }
+    function fbOpenNewRow() {
+      if (q('#folder-browser-newrow') || !fbCurrent) { const input = q('#folder-browser-newname'); if (input) input.focus(); return; }
+      const row = document.createElement('div');
+      row.className = 'fb-newrow';
+      row.id = 'folder-browser-newrow';
+      const input = document.createElement('input');
+      input.type = 'text'; input.id = 'folder-browser-newname'; input.placeholder = 'Name of the new folder';
+      input.setAttribute('aria-label', 'Name of the new folder'); input.autocomplete = 'off';
+      const create = document.createElement('button');
+      create.type = 'button'; create.className = 'button'; create.textContent = 'Create'; create.id = 'folder-browser-create';
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.className = 'button secondary'; cancel.textContent = 'Cancel'; cancel.onclick = fbCloseNewRow;
+      const submit = async () => {
+        q('#folder-browser-error').textContent = '';
+        try {
+          const value = await fbPost('/api/folders/create', {path: fbCurrent, name: input.value});
+          fbCloseNewRow();
+          fbCurrent = value.path; fbParent = value.parent;
+          fbRenderFolders(fbVisible(value.folders));
+          fbSelect(value.created);
+          q('#folder-browser-status').textContent = 'Created ' + value.created.split('/').pop();
+        } catch (problem) {
+          q('#folder-browser-error').textContent = problem.message;
+          input.focus();
+        }
+      };
+      create.onclick = submit;
+      input.onkeydown = (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); submit(); }
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); fbCloseNewRow(); q('#folder-browser-list').focus(); }
+      };
+      row.append(input, create, cancel);
+      q('#folder-browser-list').prepend(row);
+      input.focus();
+    }
+    async function fbChoose() {
+      // What Choose takes is what the dialog shows: the highlighted folder, else the path in the path bar
+      // (the loaded folder, or a path typed there that could not be opened - which the server then refuses
+      // in words and the dialog stays open, instead of quietly taking the previous folder).
+      const target = fbSelected || q('#folder-browser-path').value.trim() || fbCurrent;
+      if (!target) return;
+      q('#folder-browser-error').textContent = '';
+      try {
+        // The same server-side checks as every other way of choosing a folder.
+        const value = await fbPost('/api/folders/browse', {purpose: fbPurpose, path: target});
+        const path = value.path || '';
+        fbResolve && fb.close();
+        fbFinish(path);
+      } catch (problem) {
+        q('#folder-browser-error').textContent = problem.message;
+      }
+    }
+    q('#folder-browser-up').onclick = () => fbLoad(fbParent);
+    q('#folder-browser-new').onclick = fbOpenNewRow;
+    q('#folder-browser-cancel').onclick = () => fb.close();
+    q('#folder-browser-select').onclick = fbChoose;
+    fb.addEventListener('close', () => { fbCloseNewRow(); fbFinish(''); });
+    q('#folder-browser-path').oninput = () => fbSelect('');   // typing a path replaces any highlighted folder
+    q('#folder-browser-path').onkeydown = (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); fbLoad(q('#folder-browser-path').value.trim(), true); }
+    };
+    q('#folder-browser-list').onkeydown = (event) => {
+      if (event.target !== event.currentTarget && !event.target.classList.contains('fb-item')) return;   // the New Folder box has its own keys
+      const items = Array.from(q('#folder-browser-list').querySelectorAll('.fb-item'));
+      const at = items.findIndex(item => item.dataset.path === fbSelected);
+      const move = (index) => { if (items.length) fbSelect(items[Math.max(0, Math.min(items.length - 1, index))].dataset.path); };
+      if (event.key === 'ArrowDown') { event.preventDefault(); move(at < 0 ? 0 : at + 1); }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); move(at < 0 ? items.length - 1 : at - 1); }
+      else if (event.key === 'Home') { event.preventDefault(); move(0); }
+      else if (event.key === 'End') { event.preventDefault(); move(items.length - 1); }
+      else if (event.key === 'Enter') { event.preventDefault(); if (fbSelected) fbLoad(fbSelected); else fbChoose(); }
+      else if (event.key === 'Backspace' && fbParent && fbParent !== fbCurrent) { event.preventDefault(); fbLoad(fbParent); }
+    };
+    async function openFolderDialog(purpose, start) {
+      fbPurpose = purpose;
+      q('#folder-browser-prompt').textContent = FOLDER_PROMPTS[purpose] || 'Choose a folder';
+      q('#folder-browser-error').textContent = '';
+      q('#folder-browser-status').textContent = 'Loading folders…';
+      q('#folder-browser-list').querySelectorAll('.fb-item').forEach(node => node.remove());
+      fbCloseNewRow();
+      const answer = new Promise(resolve => { fbResolve = resolve; });
+      fb.showModal();
+      try {
+        fbPlaces = (await fbPost('/api/folders/places', {})).places;
+      } catch (problem) {
+        fbPlaces = [];
+        q('#folder-browser-error').textContent = problem.message;
+      }
+      fbHome = (fbPlaces.find(place => place.kind === 'home') || {}).path || '/';
+      fbCurrent = '';
+      fbRenderPlaces();
+      if (!(start && await fbLoad(start))) await fbLoad(fbHome);
+      q('#folder-browser-list').focus();
+      return answer;
+    }
+    async function browseFolder(purpose, errorSelector, inputSelector, start) {
       const error = q(errorSelector);
       error.textContent = '';
-      // Where the system has no folder dialog — every Linux server, and any
-      // headless machine — the owner types the path into the field this button
-      // reveals. No browser dialog is used: this product uses its own, and a
-      // native one is neither styled nor reachable by the same keyboard path
-      // as the rest of the form. (The literal call is not written even in a
-      // comment - the page guard scans this file, as it should.)
-      const body = {purpose};
-      if (!nativeFolderPicker) {
-        const field = inputSelector ? q(inputSelector) : null;
-        const typed = field ? field.value.trim() : '';
-        if (!typed) {
-          error.textContent = 'Type the full path to the folder, starting with /';
-          if (field) field.focus();
-          return '';
-        }
-        body.path = typed;
-      }
+      // Where the system has no folder dialog (Linux, or any headless machine)
+      // the product's own dialog opens: places and drives on the left, the
+      // folders inside the current one, New Folder, Cancel, Choose - the same
+      // shape as the macOS dialog. The literal browser-dialog calls are not
+      // written even in a comment: the page guard scans this file, as it should.
+      if (!nativeFolderPicker) return openFolderDialog(purpose, start);
       try {
-        const value = await api('/api/folders/browse', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const value = await api('/api/folders/browse', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({purpose})});
         return value.path || '';
       } catch (problem) {
         error.textContent = problem.message;
@@ -1004,16 +1217,9 @@ PAGE = r'''<!doctype html>
       }
     }
     function applyFolderPickerMode() {
-      // One place decides what the folder controls look like, so the two forms
-      // cannot drift apart.
-      const native = nativeFolderPicker;
-      [['#project-folder-browse', '#project-folder-typed', '#project-folder-hint'],
-       ['#repair-folder-browse', '#repair-folder-typed', '#repair-folder-hint']].forEach(([button, field, hint]) => {
-        const b = q(button), f = q(field), h = q(hint);
-        if (f) f.hidden = native;
-        if (b) b.textContent = native ? 'Choose folder' : 'Use this folder';
-        if (h && !native) h.textContent = 'Type or paste the full path on the Linux machine, then press Use this folder.';
-      });
+      // The typed-path fields belonged to the interim Linux answer. The dialog
+      // has its own path bar, so the form looks the same on every platform.
+      ['#project-folder-typed', '#repair-folder-typed'].forEach(field => { const f = q(field); if (f) f.hidden = true; });
     }
 
     function openCreate(mode) {
@@ -1041,7 +1247,7 @@ PAGE = r'''<!doctype html>
     q('#create-cancel').onclick = () => createDialog.close();
     q('#project-name').addEventListener('input', updateFolderPreview);
     q('#project-folder-browse').onclick = async () => {
-      const selected = await browseFolder(adopting ? 'adopt-project' : 'new-parent', '#create-error', '#project-folder-typed');
+      const selected = await browseFolder(adopting ? 'adopt-project' : 'new-parent', '#create-error', '#project-folder-typed', createFolder);
       if (!selected) return;
       createFolder = selected;
       setPath('#project-folder-path', selected);

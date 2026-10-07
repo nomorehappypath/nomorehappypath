@@ -165,6 +165,80 @@ class AgentViewRenderedTests(unittest.TestCase):
             self.assertTrue(all(s['status'] == 'running' for s in control.snapshot(self.root)['sessions']))
             self.click('#agent-view-close')
 
+    def test_live_agent_popup_shows_the_first_line_and_keeps_a_selection_across_redraws(self):
+        """The owner must be able to select and copy text in the popup while the agent keeps redrawing.
+
+        The poller used to write every captured line plus a trailing newline, which scrolled the
+        view down one line on every redraw: the first line vanished above the visible rows, the
+        visible rows came out blank, and a selection drifted up with the scroll and was lost.
+        """
+        session = self.owned[0]
+        self.click('#agents [data-session-id="' + session['id'] + '"] .actions button:first-child')
+        self.wait("document.querySelector('#agent-view-dialog').open && document.querySelector('.xterm-screen') !== null")
+        self.wait_terminal_text('LIVE_SESSION_READY')
+        view = ("JSON.stringify({top: agentTerminal.buffer.active.viewportY, base: agentTerminal.buffer.active.baseY,"
+                "rows: document.querySelector('.xterm-rows').innerText, selected: agentTerminal.getSelection()})")
+        shown = json.loads(self.browser.evaluate(view))
+        self.assertEqual((shown['top'], shown['base']), (0, 0), 'the redraw scrolled the view: ' + str(shown))
+        self.assertIn('LIVE_SESSION_READY', shown['rows'], 'the first line is not visible: ' + str(shown))
+
+        box = self.browser.evaluate("(() => {const r=document.querySelector('.xterm-screen').getBoundingClientRect();"
+                                    "return {x:r.x,y:r.y,w:r.width,h:r.height,cols:agentTerminal.cols,rows:agentTerminal.rows};})()")
+        cell_w, cell_h = box['w'] / box['cols'], box['h'] / box['rows']
+        y = box['y'] + .5 * cell_h
+        for kind, col in (('mousePressed', .3), ('mouseMoved', 8), ('mouseMoved', 18), ('mouseReleased', 18)):
+            self.browser.call('Input.dispatchMouseEvent', {'type': kind, 'x': box['x'] + col * cell_w, 'y': y, 'button': 'left',
+                                                           'buttons': 0 if kind == 'mouseReleased' else 1, 'clickCount': 1})
+        self.assertEqual(json.loads(self.browser.evaluate(view))['selected'], 'LIVE_SESSION_READY')
+
+        # The agent now draws something new (not the owner typing, which would clear any selection),
+        # so the poller redraws the whole screen.
+        self.browser.evaluate("call('/api/sessions/' + encodeURIComponent(agentViewSession) + '/input', {text: 'go\\r'}); true")
+        self.wait_terminal_text('RECEIVED:go')
+        time.sleep(1.2)   # at least two more poll cycles
+        after = json.loads(self.browser.evaluate(view))
+        self.assertEqual((after['top'], after['base']), (0, 0), 'a redraw scrolled the view: ' + str(after))
+        self.assertEqual(after['selected'], 'LIVE_SESSION_READY', 'the selection was lost by a redraw: ' + str(after))
+
+    def open_live_popup(self):
+        session = self.owned[0]
+        self.click('#agents [data-session-id="' + session['id'] + '"] .actions button:first-child')
+        self.wait("document.querySelector('#agent-view-dialog').open && document.querySelector('.xterm-screen') !== null")
+        self.wait_terminal_text('LIVE_SESSION_READY')
+        self.browser.call('Browser.grantPermissions', {'permissions': ['clipboardReadWrite', 'clipboardSanitizedWrite'],
+                                                       'origin': self.browser.evaluate('location.origin')})
+        self.browser.evaluate("window.__sent=[]; agentTerminal.onData(d=>__sent.push(d)); agentTerminal.focus(); true")
+
+    def press(self, key, code, code_number, modifiers):
+        # Only the raw key: injecting the browser's copy/paste command would hide a missing shortcut.
+        event = {'modifiers': modifiers, 'key': key, 'code': code, 'windowsVirtualKeyCode': code_number}
+        self.browser.call('Input.dispatchKeyEvent', {'type': 'keyDown', **event})
+        self.browser.call('Input.dispatchKeyEvent', {'type': 'keyUp', **event})
+
+    def test_linux_copy_and_paste_keys_work_and_plain_ctrl_c_stays_the_agents_interrupt(self):
+        """Linux terminal convention: Ctrl+Shift+C copies, Ctrl+Shift+V pastes, Ctrl+C is the agent's interrupt."""
+        self.open_live_popup()
+        self.assertIn('Ctrl+Shift+C', self.browser.evaluate("document.querySelector('#agent-view-dialog').innerText"))
+        box = self.browser.evaluate("(() => {const r=document.querySelector('.xterm-screen').getBoundingClientRect();"
+                                    "return {x:r.x,y:r.y,w:r.width,h:r.height,cols:agentTerminal.cols,rows:agentTerminal.rows};})()")
+        cell_w, cell_h = box['w'] / box['cols'], box['h'] / box['rows']
+        for kind, col in (('mousePressed', .3), ('mouseMoved', 8), ('mouseMoved', 18), ('mouseReleased', 18)):
+            self.browser.call('Input.dispatchMouseEvent', {'type': kind, 'x': box['x'] + col * cell_w, 'y': box['y'] + .5 * cell_h,
+                                                           'button': 'left', 'buttons': 0 if kind == 'mouseReleased' else 1, 'clickCount': 1})
+        self.assertEqual(self.browser.evaluate('agentTerminal.getSelection()'), 'LIVE_SESSION_READY')
+        self.browser.call('Runtime.evaluate', {'awaitPromise': True, 'expression': "navigator.clipboard.writeText('SENTINEL')"})
+        self.press('C', 'KeyC', 67, 10)                              # Ctrl+Shift+C, the raw key: no injected copy command
+        time.sleep(.3)
+        self.assertEqual(self.browser.evaluate('JSON.stringify(__sent)'), '[]', 'Ctrl+Shift+C reached the agent')
+        self.assertEqual(self.browser.call('Runtime.evaluate', {'awaitPromise': True, 'returnByValue': True,
+            'expression': 'navigator.clipboard.readText()'})['result']['value'], 'LIVE_SESSION_READY')
+        self.browser.call('Runtime.evaluate', {'awaitPromise': True, 'expression': "navigator.clipboard.writeText('PASTED-TEXT')"})
+        self.press('V', 'KeyV', 86, 10)                              # Ctrl+Shift+V, the raw key: no injected paste command
+        self.wait("JSON.stringify(__sent) === JSON.stringify(['PASTED-TEXT'])")
+        self.browser.evaluate('agentTerminal.clearSelection(); window.__sent=[]; true')
+        self.press('c', 'KeyC', 67, 2)                               # plain Ctrl+C
+        self.wait("JSON.stringify(__sent) === JSON.stringify(['\\u0003'])")
+
     def test_missing_profile_shows_guidance_without_starting_another_terminal(self):
         # A copied executable has no path-matched AppArmor profile. Loaded
         # system policy is untouched, and no restriction is switched off.

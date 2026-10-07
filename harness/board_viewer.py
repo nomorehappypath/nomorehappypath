@@ -101,7 +101,7 @@ PAGE = r"""<!doctype html>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
 <dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message will be sent as one complete owner instruction. It will not be submitted by pressing Enter inside the paragraph box.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 stored UTF-8 bytes. Line endings become line feeds and boundary whitespace is removed once; all interior text is preserved exactly.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">The browser reads the file as strict UTF-8. Its path is never sent or opened by the worker.</small></div><label for="owner-message-attachments"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
-<dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
+<dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
 const loadedViewerVersion='__VIEWER_VERSION__';
 const loadedRuntimeCommit='__RUNTIME_COMMIT__';
@@ -1048,6 +1048,10 @@ async function loadTerminalAssets(){
   });
   return terminalAssets;
 }
+async function copySelection(text){
+  // The helper textarea of the terminal holds the selection, so the browser's own copy works where the async clipboard does not (plain http on a LAN address).
+  try{await navigator.clipboard.writeText(text);}catch(error){document.execCommand('copy');}
+}
 async function viewAgent(session){
   try{
     const opened=await call(`/api/sessions/${encodeURIComponent(session.id)}/view`);
@@ -1058,6 +1062,15 @@ async function viewAgent(session){
     el('#agent-view-title').textContent=session.role||session.label||'Live agent';el('#agent-view-error').textContent='';
     if(agentTerminal)agentTerminal.dispose();el('#agent-terminal').replaceChildren();
     agentTerminal=new Terminal({cols:80,rows:24,fontSize:14,screenReaderMode:true,convertEol:true,theme:{background:'#111827'}});
+    // Ctrl+Shift+C copies the selection (the Linux terminal convention; the browser would otherwise open its inspector).
+    // Plain Ctrl+C is untouched: it stays the agent's interrupt. Paste (Ctrl+Shift+V) is the browser's own.
+    agentTerminal.attachCustomKeyEventHandler(event=>{
+      if(event.type!=='keydown'||!event.ctrlKey||!event.shiftKey||event.altKey||event.metaKey||event.key.toLowerCase()!=='c')return true;
+      event.preventDefault();
+      const text=agentTerminal.getSelection();
+      if(text)copySelection(text);
+      return false;
+    });
     agentTerminal.open(el('#agent-terminal'));agentTerminal.onData(data=>{
       const id=agentViewSession;
       if(id)agentInputQueue=agentInputQueue.then(()=>call(`/api/sessions/${encodeURIComponent(id)}/input`,{text:data})).catch(error=>{el('#agent-view-error').textContent=error.message;});
@@ -1070,7 +1083,7 @@ async function viewAgent(session){
         const response=await fetch(apiPath(`/api/agent-view/${encodeURIComponent(session.id)}`),{cache:'no-store'});const value=await response.json();if(!response.ok)throw new Error(value.error||'This session is unavailable.');
         if(generation!==agentViewGeneration||!dialog.open)return;
         const current=JSON.stringify(value);
-        if(current!==previous){previous=current;agentTerminal.resize(value.cols,value.rows);agentTerminal.write('\x1b[H\x1b[2J'+value.screen.replace(/\n/g,'\r\n')+`\x1b[${value.cursor_y+1};${value.cursor_x+1}H`);}
+        if(current!==previous){previous=current;agentTerminal.resize(value.cols,value.rows);agentTerminal.write('\x1b[H\x1b[2J'+value.screen.replace(/\n$/,'').replace(/\n/g,'\r\n')+`\x1b[${value.cursor_y+1};${value.cursor_x+1}H`);}
         agentViewTimer=setTimeout(refreshTerminal,opened.poll_ms);
       }catch(error){if(generation===agentViewGeneration)el('#agent-view-error').textContent=error.message;}
     }
