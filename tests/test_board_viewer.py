@@ -91,8 +91,8 @@ process.stdout.write(JSON.stringify(nodes.sessions.children.map(row=>({
   sessionId:row.dataset.sessionId,
   task:row.dataset.task,
   label:row.children[0].innerHTML,
-  stopSessionId:row.children[1].dataset.sessionId,
-  stopTask:row.children[1].dataset.task
+  stopSessionId:row.children[1].children.find(button=>button.className==='stop').dataset.sessionId,
+  stopTask:row.children[1].children.find(button=>button.className==='stop').dataset.task
 }))));
 """ % (json.dumps(state), json.dumps(contracts), json.dumps(sessions_value), json.dumps(state), json.dumps(contracts))
         return self.run_node(invocation)
@@ -737,7 +737,7 @@ openAgents(lastBoard.state,lastBoard.contracts);
 showAgentStatus(%s);
 process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:row.innerHTML,buttons:row.children.at(-1).children.map(button=>button.textContent)})),title:nodes['status-dialog-title'].textContent,body:nodes['status-dialog-body'].innerHTML}));
 """ % (json.dumps(dashboard), json.dumps(live_agent["id"]))
-                rendered = json.loads(subprocess.run(["node", "-e", dom_script + invocation], capture_output=True, text=True, check=True).stdout)
+                rendered = json.loads(subprocess.run(["node", "--input-type=commonjs", "-"], input=dom_script + invocation, capture_output=True, text=True, check=True).stdout)
                 live_row = next(row for row in rendered["rows"] if "Viewer Integration Live" in row["html"])
                 self.assertEqual(live_row["buttons"].count("View status"), 1)
                 self.assertIn("Recover agent", live_row["buttons"])
@@ -909,7 +909,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
         script = page.split("<script>", 1)[1].split("</script>", 1)[0]
         declarations = script.split("el('#status-dialog-close')", 1)[0]
         completed = subprocess.run(
-            ["node", "-e", declarations + "\n" + invocation],
+            ["node", "--input-type=commonjs", "-"], input=declarations + "\n" + invocation,
             capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -1016,7 +1016,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
             "globalThis.fetch=async()=>({ok:true,json:async()=>({})});"
         )
         completed = subprocess.run(
-            ["node", "-e", prelude + "\n" + declarations + "\n" + invocation],
+            ["node", "--input-type=commonjs", "-"], input=prelude + "\n" + declarations + "\n" + invocation,
             capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -1207,7 +1207,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
 const nodes={agents:{children:[],replaceChildren(){this.children=[]},append(...items){this.children.push(...items)}}};
 globalThis.document={querySelector(selector){return nodes[selector.slice(1)]||null;},createElement(tag){return {tagName:tag,className:'',dataset:{},innerHTML:'',children:[],append(...items){this.children.push(...items)}};}};
 openAgents(%s,{});
-const row=nodes.agents.children[0],button=row.children[0].children[0];
+const row=nodes.agents.children[0],button=row.children[0].children.find(button=>button.textContent==='Respond to Delivery');
 process.stdout.write(JSON.stringify({label:button.textContent,disabled:button.disabled}));
 """ % json.dumps(state)
         result = self.run_node(invocation)

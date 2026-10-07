@@ -126,6 +126,9 @@ class Transcript:
         self._emit("<<", line)
 
     def _emit(self, marker: str, line: str) -> None:
+        token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        if token:
+            line = line.replace(token, "[REDACTED CLAUDE TOKEN]")
         try:
             self._handle.write(f"{_now()} {marker} {line}\n")
             self._handle.flush()

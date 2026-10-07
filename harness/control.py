@@ -747,7 +747,11 @@ def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
             raise ValueError("unknown session")
         if session["status"] != "launching":
             raise ValueError("session was cancelled before it attached")
-        session.update({"status": "running", "pid": pid, "attached_at": now(), "reason": "interactive CLI session is running"})
+        try:
+            terminal_tty = os.ttyname(0)
+        except OSError:
+            terminal_tty = ""
+        session.update({"status": "running", "pid": pid, "terminal_tty": terminal_tty, "attached_at": now(), "reason": "interactive CLI session is running"})
         return dict(session)
 
 
@@ -1087,7 +1091,9 @@ def fail_launch(root: Path, session_id: str, reason: str) -> dict[str, Any]:
         if not session:
             raise ValueError("unknown session")
         if session["status"] == "launching":
-            session.update({"status": "failed", "ended_at": now(), "reason": reason[:240]})
+            # Keep the actionable diagnostic, including sandbox setup commands.
+            limit = int(os.environ.get("HARNESS_LAUNCH_ERROR_MAX_CHARS", "4096"))
+            session.update({"status": "failed", "ended_at": now(), "reason": reason[:limit]})
         return dict(session)
 
 

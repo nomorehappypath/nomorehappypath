@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import cli_capabilities, conversation, control, global_settings, project_registry
 from harness.board_surface import SessionTokenAuthority
 from harness.project_context import ProjectContext
@@ -97,6 +99,7 @@ class Stage4RunnerTests(unittest.TestCase):
                 "--data-root", str(self.context.data_root), "--workspace-root", str(self.context.workspace_root),
                 "--python", os.path.realpath(sys.executable), "--session-id", session["id"], "--kind", kind,
                 "--manager-home", str(self.home), "--board-bootstrap", bootstrap,
+                *auth_arguments(self.context, session),
             ], cwd=self.context.code_root, env={**os.environ, "HARNESS_EXECUTION_ROOT": str(self.context.code_root), **self.environment},
                 capture_output=True, text=True, timeout=60)
         self.assertEqual(completed.returncode, 0, completed.stderr)

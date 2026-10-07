@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import control, project_context, project_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +47,7 @@ class ReviewerLaunchPromptTests(unittest.TestCase):
                 ["bash", str(RUNNER), "--root", str(code), "--session-id", SESSION_ID,
                  "--kind", "claude_reviewer", "--data-root", str(data),
                  "--workspace-root", str(workspace), "--python", sys.executable,
-                 "--manager-home", str(home)],
+                 "--manager-home", str(home), *auth_arguments(context, control._read_state(context)["sessions"][SESSION_ID])],
                 capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
             self.assertTrue(captured.exists(), done.stderr)
             prompt = " ".join(captured.read_text(encoding="utf-8").split())

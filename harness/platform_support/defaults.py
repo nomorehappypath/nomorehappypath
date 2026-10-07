@@ -710,12 +710,81 @@ end run'''
                 "central CLI launch currently requires macOS Terminal"
             )
         title = role_title(session_id)
+        argv = [str(item) for item in argv]
+        if '--data-root' in argv:
+            directory = Path(argv[argv.index('--data-root') + 1]) / 'control' / 'terminal-sockets'
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            name = self._screen_name(session_id)
+            subprocess.run([
+                '/usr/bin/screen', '-c', '/dev/null', '-dmS', name, *argv,
+            ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True)
+            self._open_screen_view(directory, session_id, color_rgb)
+            return SessionSurface(session_id=session_id)
         command = "exec " + shlex.join(list(argv))
         subprocess.run(
             ["/usr/bin/osascript", "-e", self._open_script(color_rgb, title), command],
             check=True, capture_output=True, text=True,
         )
         return SessionSurface(session_id=session_id)
+
+    @staticmethod
+    def _screen_name(session_id):
+        if not session_id or any(not (character.isalnum() or character in '_-') for character in session_id):
+            raise ValueError('Invalid managed session identity.')
+        return 'nmhp-' + session_id
+
+    def _open_screen_view(self, directory, session_id, color_rgb):
+        title = role_title(session_id) + ' [' + session_id + ']'
+        command = 'exec ' + shlex.join([
+            '/usr/bin/env', 'SCREENDIR=' + str(directory),
+            '/usr/bin/screen', '-c', '/dev/null', '-r', self._screen_name(session_id),
+        ])
+        subprocess.run(['/usr/bin/osascript', '-e', self._open_script(color_rgb, title), command],
+                       check=True, capture_output=True, text=True)
+
+    FOCUS_SCRIPT = r'''on run argv
+ tell application "Terminal"
+  repeat with terminalWindow in windows
+   repeat with terminalTab in tabs of terminalWindow
+    if tty of terminalTab is item 1 of argv then
+     set selected tab of terminalWindow to terminalTab
+     set index of terminalWindow to 1
+     activate
+     return "focused"
+    end if
+   end repeat
+  end repeat
+ end tell
+ return "not found"
+end run'''
+
+    def view_session(self, session: dict, *, root=None) -> dict:
+        if root is not None:
+            from harness.project_context import project_context
+            directory = project_context(root).storage_path('control', 'terminal-sockets')
+            name = self._screen_name(session['id'])
+            if directory.is_dir() and list(directory.glob('*.' + name)):
+                title = role_title(session['id']) + ' [' + session['id'] + ']'
+                script = self.FOCUS_SCRIPT.replace('tty of terminalTab', 'custom title of terminalTab')
+                focused = subprocess.run(['/usr/bin/osascript', '-e', script, title],
+                                         check=True, capture_output=True, text=True)
+                if focused.stdout.strip() != 'focused':
+                    from harness import control
+                    color = control.SESSION_COLORS.get(session.get('color', 'black'), control.SESSION_COLORS['black'])
+                    self._open_screen_view(directory, session['id'], color['rgb'])
+                return {'mode': 'native', 'session_id': session['id']}
+        terminal_tty = session.get("terminal_tty", "")
+        if not terminal_tty and session.get("pid"):
+            result = subprocess.run(["/bin/ps", "-p", str(int(session["pid"])), "-o", "tty="], capture_output=True, text=True, check=False)
+            named = result.stdout.strip()
+            if named and named != "??":
+                terminal_tty = "/dev/" + named
+        if not terminal_tty:
+            raise ValueError("This agent's Terminal is unavailable. Its saved task remains on the board.")
+        result = subprocess.run(["/usr/bin/osascript", "-e", self.FOCUS_SCRIPT, terminal_tty], capture_output=True, text=True, check=True)
+        if result.stdout.strip() != "focused":
+            raise ValueError("This agent's existing Terminal window is no longer open.")
+        return {"mode": "native", "session_id": session["id"]}
 
     DISMISS_SCRIPT = r'''on run argv
  set targetTTY to item 1 of argv
@@ -852,18 +921,8 @@ class _AgentConfinement:
         return ["/usr/bin/sandbox-exec", "-f", str(path), *list(argv)]
 
     def protected_read_paths(self, home, claude_config_dir=None) -> list[str]:
-        """Owner login material no managed agent may read (2026-09-26 incident).
-
-        On macOS the CLI authenticates through the Keychain (the security
-        service), not by reading this file, so denying it keeps the agent's own
-        login working (proven live: `claude auth status` → loggedIn under the
-        deny) and stops the copy of the owner's login file into another config
-        folder that broke every login on the machine.
-        """
-        # The Keychain folder is deliberately NOT denied: the CLI's own login
-        # goes through the system security service, which reads it; denying it
-        # breaks `security find-generic-password` (proven live 2026-09-26).
-        return self.login_file_paths(home, claude_config_dir)
+        """Managed agents authenticate with setup-tokens, never shared login."""
+        return self.login_file_paths(home, claude_config_dir) + [str(Path(home).expanduser() / "Library" / "Keychains")]
 
     def profile(self, writable: list[str], protected_reads: list[str] | None = None,
                 protected_writes: list[str] | None = None) -> str:
@@ -890,6 +949,10 @@ class _AgentConfinement:
         lines.append('(allow file-write* (subpath "/dev"))')
         for path in protected_writes or []:
             lines.append(f'(deny file-write* (subpath "{self._quote(self._real(path))}"))')
+        for path in protected_reads or []:
+            lines.append(f'(deny file-write* (literal "{self._quote(self._real(path))}") (subpath "{self._quote(self._real(path))}"))')
+        if any(Path(path).name == "Keychains" for path in protected_reads or []):
+            lines.append('(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.securityd.xpc") (global-name "com.apple.secd"))')
         return "\n".join(lines) + "\n"
 
     def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
@@ -918,3 +981,31 @@ def _loopback_url(host: str, port: str) -> str:
     if host in ("[::1]", "::1"):
         return f"http://[::1]:{int(port)}/"
     return ""
+
+
+class _ClaudeCredentials:
+    uses_keychain = True
+
+    def read_token(self, environment) -> str:
+        token = environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        if environment.get("HARNESS_CLAUDE_TOKEN_SOURCE") == "keychain":
+            token = ""
+        service = environment.get("HARNESS_CLAUDE_KEYCHAIN_SERVICE", "claude-cli-oauth")
+        # An explicitly empty source disables Keychain access, including in tests.
+        if not token and service and sys.platform == "darwin":
+            try:
+                result = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", service, "-w"],
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False,
+                                        timeout=float(environment.get("HARNESS_CLAUDE_AUTH_TIMEOUT_SECONDS", "45")))
+                token = result.stdout.strip() if result.returncode == 0 else ""
+            except (OSError, subprocess.SubprocessError):
+                token = ""
+        return token
+
+    def instructions(self) -> str:
+        return ("Run claude setup-token in your own Terminal. Save the new token in the login Keychain item "
+                "claude-cli-oauth using Keychain Access, then retry the agent. Unlock your login Keychain if needed. "
+                "Do not run /login inside a harness agent.")
+
+
+CLAUDE_CREDENTIALS = _ClaudeCredentials()

@@ -51,8 +51,12 @@ def stage_relaunch(root: Path, session_id: str) -> None:
 
 
 def run_runner(root: Path, session: dict, environment: dict) -> subprocess.CompletedProcess:
+    from harness import claude_auth
+    auth_args = []
+    if session.get("provider") == "claude":
+        auth_args = ["--claude-auth-bootstrap", claude_auth._handoff(root, session["id"], "test-setup-token")]
     return subprocess.run(
-        ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"]],
+        ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_args],
         env=environment, capture_output=True, text=True, timeout=20,
     )
 

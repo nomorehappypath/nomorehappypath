@@ -32,7 +32,9 @@ class ExecutionPreflightTests(unittest.TestCase):
             "| S-001 | Python gate | `python3 -m unittest tests.test_smoke` | Python tests execute. | Python tests executed. | PASS |\n"
             "| S-002 | Web gate | `npm test --prefix web` | Web tests execute. | Web tests executed. | PASS |\n"
         )
-        with patch("harness.board.subprocess.run") as execute:
+        # This case tests missing dependencies, independently of host npm installation.
+        original_which = execution_preflight.shutil.which
+        with patch("harness.execution_preflight.shutil.which", side_effect=lambda name, **kwargs: '/fixture/npm' if name == 'npm' else original_which(name, **kwargs)), patch("harness.board.subprocess.run") as execute:
             with self.assertRaisesRegex(ValueError, "Node dependencies are not installed"):
                 board._execute_scenario_simulations(self.root, ledger)
         execute.assert_not_called()

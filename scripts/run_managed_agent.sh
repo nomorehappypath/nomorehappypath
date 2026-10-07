@@ -12,6 +12,7 @@ session_id=""
 kind=""
 board_endpoint=""
 board_bootstrap=""
+claude_auth_bootstrap=""
 close_terminal_on_exit="0"
 launch_mode="fresh"
 cli_session_id=""
@@ -55,6 +56,9 @@ while [[ $# -gt 0 ]]; do
     --board-bootstrap)
       [[ $# -ge 2 ]] || { echo "--board-bootstrap requires a socket" >&2; exit 2; }
       board_bootstrap="$2"; shift 2 ;;
+    --claude-auth-bootstrap)
+      [[ $# -ge 2 ]] || { echo "--claude-auth-bootstrap requires a socket" >&2; exit 2; }
+      claude_auth_bootstrap="$2"; shift 2 ;;
     --close-terminal-on-exit)
       close_terminal_on_exit="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -82,7 +86,7 @@ fi
 for ambient_name in ${!GIT_@}; do
   unset "$ambient_name"
 done
-unset BASH_ENV ENV CDPATH ZDOTDIR
+unset BASH_ENV ENV CDPATH ZDOTDIR CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_PROFILE CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
 if [[ -z "$python_bin" ]]; then
   python_bin="$(command -v python3 || true)"
 fi
@@ -152,15 +156,23 @@ register_agent() {
 }
 
 launch_visible_cli() {
+  credential_prefix=()
+  if [[ "$provider" == "claude" ]]; then
+    if [[ -z "$claude_auth_bootstrap" ]]; then
+      echo "REFUSED: Claude needs a validated setup-token. Launch from Mission Control." >&2
+      exit 2
+    fi
+    credential_prefix=("$python_bin" -E "$harness_root/harness/claude_auth.py" --socket "$claude_auth_bootstrap" --session "$session_id" --)
+  fi
   if [[ -t 0 && -t 1 ]]; then
     supervisor_args=("${context_args[@]}" --session-id "$session_id" --agent-id "$agent_id" --provider "$provider" --execution-root "$execution_root")
     if [[ "$close_terminal_on_exit" == "1" ]]; then
       supervisor_args+=(--close-terminal-on-exit)
     fi
     supervisor_args+=(${stage3_supervisor_args[@]+"${stage3_supervisor_args[@]}"})
-    exec "$python_bin" -E "$harness_root/harness/interactive_supervisor.py" "${supervisor_args[@]}" -- "$@"
+    exec ${credential_prefix[@]+"${credential_prefix[@]}"} "$python_bin" -E "$harness_root/harness/interactive_supervisor.py" "${supervisor_args[@]}" -- "$@"
   fi
-  exec "$@"
+  exec ${credential_prefix[@]+"${credential_prefix[@]}"} "$@"
 }
 
 launch_settings_json="$("$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" resolve --kind "$kind" --session-id "$session_id")"

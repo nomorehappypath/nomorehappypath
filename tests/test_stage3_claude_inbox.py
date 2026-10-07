@@ -20,6 +20,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.claude_auth_support import auth_arguments
+
 from harness import board, control
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -418,6 +420,7 @@ class RunnerTests(unittest.TestCase):
                 "--data-root", str(self.context.data_root), "--workspace-root", str(self.context.workspace_root),
                 "--python", os.path.realpath(sys.executable), "--session-id", session["id"], "--kind", "claude_reviewer",
                 "--manager-home", str(self.home), "--board-bootstrap", bootstrap,
+                *auth_arguments(self.context, session),
             ], cwd=self.context.code_root, stdin=slave, stdout=slave, stderr=slave, close_fds=True,
                 env={**os.environ, "HARNESS_EXECUTION_ROOT": str(self.context.code_root), **environment})
             os.close(slave)

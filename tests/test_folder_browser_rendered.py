@@ -89,92 +89,32 @@ class FolderBrowserRenderedTests(unittest.TestCase):
             (target / name).write_bytes(base64.b64decode(
                 self.browser.call('Page.captureScreenshot', {'format': 'png'})['data']))
 
-    def test_linux_browser_and_typed_path_adopt_unrelated_projects(self):
+    def test_linux_typed_adoption_replaces_the_custom_browser(self):
         self.click('#adopt-btn')
-        self.wait("document.querySelector('#create-dialog').open")
-        self.assertFalse(self.browser.evaluate("document.querySelector('#project-folder-typed').hidden"))
-        self.assertEqual(self.browser.evaluate("document.querySelector('#project-folder-browse').textContent"),
-                         'Use this folder')
-        self.click('#project-folder-browser')
-        self.wait("document.querySelector('#folder-browser-path').textContent === " + json.dumps(str(self.base)))
-        # Cancel via a real key event, then reopen with pointer input.
-        self.browser.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
-        self.browser.call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
-        self.wait("!document.querySelector('#folder-browser').open")
-        self.assertEqual(self.browser.evaluate("document.querySelector('#project-folder-path').textContent"), 'No folder selected')
-        self.click('#project-folder-browser')
-        self.wait("document.querySelector('#folder-browser-select').disabled === false")
-        self.screenshot('folder-browser.png')
-        self.browser.evaluate("Array.from(document.querySelectorAll('#folder-browser-list button')).find(b=>b.textContent==='work').id='work-folder'")
-        self.enter('#work-folder')
-        self.wait("document.querySelector('#folder-browser-path').textContent === " + json.dumps(str(self.work)))
-        self.click('#folder-browser-up')
-        self.wait("document.querySelector('#folder-browser-path').textContent === " + json.dumps(str(self.base)))
-        self.browser.evaluate("Array.from(document.querySelectorAll('#folder-browser-list button')).find(b=>b.textContent==='work').id='work-folder'")
-        self.click('#work-folder')
-        self.wait("document.querySelector('#folder-browser-path').textContent === " + json.dumps(str(self.work)))
-        self.browser.evaluate("Array.from(document.querySelectorAll('#folder-browser-list button')).find(b=>b.textContent==='test').id='test-folder'")
-        self.click('#test-folder')
-        self.wait("document.querySelector('#folder-browser-status').textContent.includes('No subfolders')")
-        self.enter('#folder-browser-select')
-        self.wait("document.querySelector('#project-folder-path').textContent === " + json.dumps(str(self.target)))
-        self.click('#create-save')
-        self.wait("!document.querySelector('#create-dialog').open && document.body.innerText.includes('Existing project adopted')")
-        self.wait("document.querySelectorAll('.project').length === 2")
-        self.screenshot('adopted-project.png')
-        self.assertEqual((self.target / 'source.txt').read_text(), 'owner source remains untouched')
-        self.assertEqual(list(self.target.iterdir()), [self.target / 'source.txt'])
-        # The typed/pasted alternative still validates and adopts independently.
-        typed_target = self.work / 'pasted'
-        typed_target.mkdir()
-        self.click('#adopt-btn')
-        self.type_path(typed_target / 'missing')
+        self.assertIsNone(self.browser.evaluate("document.querySelector('#folder-browser')"))
+        self.assertIsNone(self.browser.evaluate("document.querySelector('#project-folder-browser')"))
+        self.type_path(self.target / 'missing')
         self.enter('#project-folder-browse')
         self.wait("document.querySelector('#create-error').textContent.includes('no folder')")
-        self.type_path(typed_target)
+        self.type_path(self.target)
         self.enter('#project-folder-browse')
-        self.wait("document.querySelector('#project-folder-path').textContent === " + json.dumps(str(typed_target)))
+        self.wait("document.querySelector('#project-folder-path').textContent === " + json.dumps(str(self.target)))
         self.enter('#create-save')
-        self.wait("document.querySelectorAll('.project').length === 3 && !document.querySelector('#create-dialog').open")
-        self.assertEqual(list(typed_target.iterdir()), [])
-        self.click('[data-page="help"]')
-        self.wait("!document.querySelector('#help-page').hidden")
-        help_text = self.browser.evaluate("document.querySelector('#help-setup-title').parentElement.innerText")
-        for phrase in ('Linux, including a VM on Windows', 'Codex CLI', 'Claude Code CLI',
-                       'PATH', 'all shells', 'non-interactive shells', 'systemd service',
-                       'codex --version', 'claude --version', 'Browse folders', 'Use this folder'):
-            self.assertIn(phrase, help_text)
-        self.browser.evaluate("document.querySelector('#help-setup-title').scrollIntoView({block:'start'})")
-        self.assertGreater(self.browser.evaluate("document.querySelector('#help-setup-title').getBoundingClientRect().height"), 0)
-        self.screenshot('linux-help.png')
-        self.assertEqual({e['code_root'] for e in registry.entries(self.home)},
-                         {str(self.work / 'existing'), str(self.target), str(typed_target)})
+        self.wait("document.querySelectorAll('.project').length === 2 && !document.querySelector('#create-dialog').open")
+        self.assertEqual(list(self.target.iterdir()), [self.target / 'source.txt'])
+        self.assertEqual((self.target / 'source.txt').read_text(), 'owner source remains untouched')
+        self.screenshot('linux-typed-adoption.png')
 
-
-    def test_queued_close_event_does_not_cancel_a_reopened_browser(self):
-        self.click('#adopt-btn')
-        self.click('#project-folder-browser')
-        self.wait("document.querySelector('#folder-browser-select').disabled === false")
-        self.browser.call('Network.enable')
-        self.browser.call('Network.emulateNetworkConditions', {
-            'offline': False, 'latency': 100, 'downloadThroughput': -1, 'uploadThroughput': -1})
-        self.browser.evaluate("document.querySelector('#folder-browser-cancel').click(); document.querySelector('#project-folder-browser').click()")
-        self.wait("document.querySelector('#folder-browser-select').disabled === false")
-        self.assertTrue(self.browser.evaluate("document.querySelector('#folder-browser').open"))
-
-    def test_new_project_and_repair_share_the_linux_browser(self):
+    def test_new_project_and_repair_keep_typed_paths(self):
         self.click('#new-btn')
         self.click('#project-name')
         self.browser.call('Input.insertText', {'text': 'New build'})
-        parent = self.work
-        self.type_path(parent)
-        self.click('#project-folder-browser')
-        self.wait("document.querySelector('#folder-browser-select').disabled === false")
-        self.click('#folder-browser-select')
+        self.type_path(self.work)
+        self.enter('#project-folder-browse')
         self.wait("document.querySelector('#project-folder-preview').textContent.includes('/new-build')")
         self.click('#create-save')
         self.wait("document.querySelectorAll('.project').length === 2 && !document.querySelector('#create-dialog').open")
-        self.assertTrue((parent / 'new-build' / '.harness').is_dir())
+        self.assertTrue((self.work / 'new-build' / '.harness').is_dir())
         existing = next(e for e in registry.entries(self.home) if e['name'] == 'Existing')
         moved = self.work / 'relocated'
         (self.work / 'existing').rename(moved)
@@ -182,9 +122,7 @@ class FolderBrowserRenderedTests(unittest.TestCase):
         self.browser.evaluate('openRepair(projectsById.get(' + json.dumps(existing['id']) + '))')
         self.click('#repair-folder-typed')
         self.browser.call('Input.insertText', {'text': str(moved)})
-        self.click('#repair-folder-browser')
-        self.wait("document.querySelector('#folder-browser-select').disabled === false")
-        self.enter('#folder-browser-select')
+        self.enter('#repair-folder-browse')
         self.wait("document.querySelector('#repair-folder-path').textContent === " + json.dumps(str(moved)))
         self.enter('#repair-save')
         self.wait("!document.querySelector('#repair-dialog').open")

@@ -736,6 +736,10 @@ def run(
             controller_queue.clear()
         try:
             if kind == "waiting":
+                if provider == "claude" and "/login" in str(reason):
+                    from harness import claude_auth
+                    with control.locked_state(root) as state:
+                        state["sessions"][session_id]["claude_auth_action"] = claude_auth.action("rejected")
                 control.record_attention(root, session_id, reason or "is waiting for you")
                 transcript.note(f"terminal is waiting for the owner: {reason}")
             else:
@@ -846,14 +850,18 @@ def run(
     titles = TitlePrefix(session_id)
     child_output_seen = False
     stop_requested = False
+    resize_pending = False
 
     def request_stop(_signal, _frame):
         nonlocal stop_requested
         stop_requested = True
 
     def resize(_signal, _frame):
-        _copy_terminal_size(stdin_fd, master)
-        note_attention(watch.resize(_terminal_rows(stdin_fd)))
+        # SIGWINCH can interrupt a control update that already holds its file
+        # lock. Never acquire that lock (via note_attention) from the handler:
+        # the interrupted update cannot release it until this handler returns.
+        nonlocal resize_pending
+        resize_pending = True
 
     def owner_input(data: bytes) -> None:
         """Everything the owner's terminal sent: forward it, record it, time it."""
@@ -886,6 +894,10 @@ def run(
         tty.setraw(stdin_fd)
         print("HARNESS | interactive supervisor ready; terminal input remains yours and is visible.", flush=True)
         while child.poll() is None:
+            if resize_pending:
+                resize_pending = False
+                _copy_terminal_size(stdin_fd, master)
+                note_attention(watch.resize(_terminal_rows(stdin_fd)))
             if stop_requested:
                 if not _stop_child_group(child):
                     transcript.note(

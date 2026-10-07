@@ -171,7 +171,6 @@ PAGE = r'''<!doctype html>
     .folder-control .button { min-height: 44px; box-shadow: none; }
     .folder-list { display: grid; gap: 6px; max-height: 35vh; overflow: auto; margin: 12px 0; }
     .folder-list .button { text-align: left; overflow-wrap: anywhere; }
-    #folder-browser-path { overflow-wrap: anywhere; }
     .typed-path { flex: 1; min-width: 220px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; }
     .selected-path { min-width: 0; display: flex; align-items: center; padding: 10px 12px; overflow: hidden; border: 1px solid #cfd7e2; border-radius: 10px; color: #526078; background: #f8fafc; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .selected-path.empty { color: var(--subtle); font-family: inherit; font-style: italic; }
@@ -316,7 +315,8 @@ PAGE = r'''<!doctype html>
             <li>The app runs on your Mac or Linux machine and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
             <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
             <li><strong>Linux, including a VM on Windows:</strong> install and sign in to both <strong>Codex CLI</strong> and <strong>Claude Code CLI</strong> inside Linux. Make <code>codex</code> and <code>claude</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
-            <li><strong>Linux project folders:</strong> use <strong>Browse folders</strong> to navigate folders on the Linux machine, or type/paste the full path and press <strong>Use this folder</strong>. These are Linux paths, even when your browser is on Windows.</li>
+            <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
+            <li><strong>Linux project folders:</strong> type/paste the full path and press <strong>Use this folder</strong>. These are Linux paths, even when your browser is on Windows.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
@@ -403,7 +403,7 @@ PAGE = r'''<!doctype html>
 
         <section class="help-section" aria-labelledby="help-direct-title">
           <h2 id="help-direct-title">Talking To The Agents Directly</h2>
-          <p>Every agent runs in a visible terminal window, and you can type to any of them at any time — ask what they are doing, why a decision was made, or for a plain-language summary.</p>
+          <p>Click <strong>View agent</strong> beside any agent: Linux opens its existing live session in your browser; macOS focuses its Terminal window or reopens a closed window for that same session. Closing the view or CLI window leaves the agent running. You can type to any agent at any time — ask what they are doing, why a decision was made, or for a plain-language summary.</p>
           <p class="help-callout"><strong>Be careful while work is running.</strong> A message typed into a busy agent is not a side conversation — the agent stops to handle it. Interrupting a build, a review, or a release check inserts your request into the middle of that work and can slow it down or derail it. If it can wait, let the current stage finish and read the agent's status first; if you must redirect running work, use <strong>Send clarification</strong> so the change is recorded on the task, not lost in scrollback. New ideas belong in a new task after this one is accepted.</p>
         </section>
 
@@ -554,7 +554,7 @@ PAGE = r'''<!doctype html>
       <div class="field"><label for="project-description">Description</label><textarea id="project-description" name="description" rows="4" autocomplete="off" placeholder="Describe what this project is for and what matters about it."></textarea><p class="field-hint">This appears on the project card, so a short paragraph works well.</p></div>
       <div class="field">
         <label id="project-folder-label" for="project-folder-typed">Parent folder</label>
-        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><input class="typed-path" type="text" id="project-folder-typed" placeholder="/home/you/projects" spellcheck="false" hidden><button class="button secondary" type="button" id="project-folder-browser" hidden>Browse folders</button><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
+        <div class="folder-control"><button class="button secondary" type="button" id="project-folder-browse">Choose folder</button><input class="typed-path" type="text" id="project-folder-typed" placeholder="/home/you/projects" spellcheck="false" hidden><output class="selected-path empty" id="project-folder-path">No folder selected</output></div>
         <p class="field-hint" id="project-folder-hint">Your project folder will be created inside the selected location.</p>
         <div class="folder-preview" id="project-folder-preview" hidden></div>
       </div>
@@ -568,23 +568,10 @@ PAGE = r'''<!doctype html>
       <h2 id="repair-title">Repair project folder</h2>
       <p class="modal-copy">Choose the folder where this project lives now. Saved harness data and project history will be preserved.</p>
       <div class="field"><label>Current folder</label><div class="selected-path" id="repair-current-path"></div></div>
-      <div class="field"><label for="repair-folder-typed">New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><button class="button secondary" type="button" id="repair-folder-browser" hidden>Browse folders</button><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
+      <div class="field"><label for="repair-folder-typed">New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
       <p class="form-error" id="repair-error" role="alert" aria-live="polite"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save folder</button></div>
     </form>
-  </dialog>
-
-  <dialog id="folder-browser" aria-labelledby="folder-browser-title">
-    <div class="modal">
-      <h2 id="folder-browser-title">Browse folders</h2>
-      <p class="modal-copy">Folders on the computer running NoMoreHappyPath.</p>
-      <p id="folder-browser-path"></p>
-      <button class="button secondary" type="button" id="folder-browser-up">Parent folder</button>
-      <p id="folder-browser-status" role="status" aria-live="polite"></p>
-      <div class="folder-list" id="folder-browser-list" aria-label="Folders"></div>
-      <p class="form-error" id="folder-browser-error" role="alert"></p>
-      <div class="dialog-actions"><button class="button secondary" type="button" id="folder-browser-cancel">Cancel</button><button class="button" type="button" id="folder-browser-select">Use this folder</button></div>
-    </div>
   </dialog>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">
@@ -1024,10 +1011,8 @@ PAGE = r'''<!doctype html>
        ['#repair-folder-browse', '#repair-folder-typed', '#repair-folder-hint']].forEach(([button, field, hint]) => {
         const b = q(button), f = q(field), h = q(hint);
         if (f) f.hidden = native;
-        const browser = q(button.replace('-browse', '-browser'));
-        if (browser) browser.hidden = native;
         if (b) b.textContent = native ? 'Choose folder' : 'Use this folder';
-        if (h && !native) h.textContent = 'Browse folders on the server, or type/paste the full path and press Use this folder.';
+        if (h && !native) h.textContent = 'Type or paste the full path on the Linux machine, then press Use this folder.';
       });
     }
 
@@ -1051,60 +1036,6 @@ PAGE = r'''<!doctype html>
       createDialog.showModal();
       q('#project-name').focus();
     }
-    const folderBrowser = q('#folder-browser');
-    let browserFolder = '';
-    let browserParent = '';
-    let browserInput = '';
-    let browserApply = null;
-    let browserRequest = 0;
-    async function loadBrowserFolder(path) {
-      const request = ++browserRequest;
-      browserFolder = '';
-      q('#folder-browser-select').disabled = true;
-      q('#folder-browser-up').disabled = true;
-      q('#folder-browser-error').textContent = '';
-      q('#folder-browser-status').textContent = 'Loading folders…';
-      q('#folder-browser-list').replaceChildren();
-      try {
-        const value = await api('/api/folders/list', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path})});
-        if (request !== browserRequest || !folderBrowser.open) return;
-        browserFolder = value.path;
-        browserParent = value.parent;
-        q('#folder-browser-path').textContent = value.path;
-        q('#folder-browser-up').disabled = value.parent === value.path;
-        q('#folder-browser-select').disabled = false;
-        q('#folder-browser-status').textContent = value.folders.length ? 'Choose a folder to open it.' : 'No subfolders. You can select this folder.';
-        value.folders.forEach(folder => {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'button secondary';
-          button.textContent = folder.name;
-          button.onclick = () => loadBrowserFolder(folder.path);
-          q('#folder-browser-list').append(button);
-        });
-      } catch (problem) {
-        if (request !== browserRequest || !folderBrowser.open) return;
-        q('#folder-browser-status').textContent = '';
-        q('#folder-browser-error').textContent = problem.message;
-        q('#folder-browser-path').textContent = path;
-      }
-    }
-    function openFolderBrowser(input, apply) {
-      browserInput = input;
-      browserApply = apply;
-      folderBrowser.showModal();
-      loadBrowserFolder(q(input).value.trim());
-    }
-    q('#folder-browser-up').onclick = () => loadBrowserFolder(browserParent);
-    q('#folder-browser-cancel').onclick = () => folderBrowser.close();
-    q('#folder-browser-select').onclick = async () => {
-      if (!browserFolder) return;
-      q(browserInput).value = browserFolder;
-      folderBrowser.close();
-      await browserApply();
-    };
-    q('#project-folder-browser').onclick = () => openFolderBrowser('#project-folder-typed', () => q('#project-folder-browse').onclick());
-    q('#repair-folder-browser').onclick = () => openFolderBrowser('#repair-folder-typed', () => q('#repair-folder-browse').onclick());
     q('#new-btn').onclick = () => openCreate('scaffold');
     q('#adopt-btn').onclick = () => openCreate('adopted');
     q('#create-cancel').onclick = () => createDialog.close();

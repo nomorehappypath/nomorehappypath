@@ -279,6 +279,8 @@ class ProjectWatchdog:
 
 def launch_terminal(root, session: dict, bootstrap_socket: str, *, manager_home=None):
     """Launch one managed Terminal with only a non-secret local socket in argv."""
+    from harness import claude_auth
+    auth_socket = claude_auth.prepare_launch(root, session)
     runner = Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh"
     # This launcher's OWN argv: --board-bootstrap, and neither of the viewer's
     # two flags. The seam takes argv already built, so the difference survives.
@@ -295,6 +297,8 @@ def launch_terminal(root, session: dict, bootstrap_socket: str, *, manager_home=
         # The TRUSTED registry location — see board_viewer for why a
         # discovered one cannot be trusted.
         arguments += ["--manager-home", str(manager_home)]
+    if auth_socket:
+        arguments += ["--claude-auth-bootstrap", auth_socket]
     color = control.SESSION_COLORS.get(session.get("color", "black"), control.SESSION_COLORS["black"])
     try:
         # Returned for the same reason as the viewer's: on Linux this is the

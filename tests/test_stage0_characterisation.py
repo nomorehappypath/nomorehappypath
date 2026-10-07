@@ -61,8 +61,8 @@ class SecondLauncherArgvTests(unittest.TestCase):
     def test_argv_prefix_and_runner_are_pinned(self):
         with tempfile.TemporaryDirectory() as tmp:
             run, _ = self._launch(tmp)
-            command = run.call_args.args[0][-1]
-            arguments = shlex.split(command.removeprefix("exec "))
+            arguments = run.call_args_list[0].args[0][5:]
+            command = shlex.join(arguments)
             self.assertEqual(arguments[:9], [
                 "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
                 "/bin/bash", "--noprofile", "--norc", str(RUNNER),
@@ -73,7 +73,7 @@ class SecondLauncherArgvTests(unittest.TestCase):
         """The difference from the board-viewer launcher, which §4.1 must preserve."""
         with tempfile.TemporaryDirectory() as tmp:
             run, _ = self._launch(tmp)
-            command = run.call_args.args[0][-1]
+            command = shlex.join(run.call_args_list[0].args[0][5:])
             self.assertIn("--board-bootstrap", command)
             self.assertIn("/tmp/bootstrap.sock", command)
             self.assertNotIn("--close-terminal-on-exit", command)
@@ -405,18 +405,16 @@ class ServiceTakedownTests(unittest.TestCase):
 class LaunchFailureSurfaceTests(unittest.TestCase):
     """board_viewer.py:2297, project_worker.py:490 — no test makes a launch raise.
 
-    The owner-facing message and its 240-character truncation
-    (harness/control.py:638) are unasserted anywhere today.
+    Setup guidance remains readable, with a configurable bounded reason.
     """
 
     def test_a_failed_launch_is_recorded_with_a_truncated_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = control.create(Path(tmp), "codex_delivery")
-            reason = "unable to open Terminal: " + ("x" * 400)
+            reason = "unable to open Terminal: " + ("x" * 5000)
             failed = control.fail_launch(Path(tmp), session["id"], reason)
             self.assertEqual(failed["status"], "failed")
-            self.assertEqual(len(failed["reason"]), 240,
-                             "the reason is truncated to 240 characters")
+            self.assertEqual(len(failed["reason"]), 4096)
             self.assertTrue(failed["reason"].startswith("unable to open Terminal: "))
             self.assertTrue(failed["ended_at"])
 
