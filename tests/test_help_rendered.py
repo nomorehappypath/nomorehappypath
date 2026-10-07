@@ -64,6 +64,28 @@ LEGAL_PROBE = r"""
 """
 
 
+TRUST_PROBE = r"""
+<script>
+(async () => {
+  document.querySelector('[data-page="help"]').click();
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const page = document.querySelector('#help-page');
+    if (page && !page.hidden) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const note = Array.from(document.querySelectorAll('#help-page .help-callout'))
+    .find(node => node.textContent.includes('First time an agent opens'));
+  const box = note ? note.getBoundingClientRect() : null;
+  await fetch('/__probe__', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: note ? note.innerText : null, visible: !!box && box.width > 0 && box.height > 0}),
+  });
+})();
+</script>
+"""
+
+
 class RenderedHelpTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -122,6 +144,19 @@ class RenderedHelpTests(unittest.TestCase):
                        "accept these terms", "do not accept them", "accept them in full", "complete, binding",
                        "indemnify", "hold harmless", "travis county"):
             self.assertNotIn(phrase, shown, f"the rendered Legal page still shows: {phrase!r}")
+
+    def test_help_tells_the_owner_to_answer_the_first_time_trust_question(self):
+        reading = self._render(TRUST_PROBE)
+        self.assertTrue(reading, "Chrome reported nothing for the Help page")
+        self.assertTrue(reading["visible"], "the first-time trust note is not visibly rendered in Help")
+        shown = " ".join(reading["text"].split())
+        for words in ("stay at your computer", "Do you trust this folder?", "Yes, I trust this folder", "Trust and continue", "View agent"):
+            self.assertIn(words, shown)
+
+    def test_readme_carries_the_same_first_time_note(self):
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+        for words in ("First time an agent opens in a project", "Yes, I trust this folder", "Trust and continue"):
+            self.assertIn(words, readme)
 
     def test_help_page_visibly_renders_every_guide_section(self):
         with tempfile.TemporaryDirectory() as temporary:

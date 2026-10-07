@@ -85,9 +85,11 @@ it uses Ubuntu's own profile and leaves the system-wide restriction on. If an
 agent stops after it starts, its tmux window stays open until you press Enter,
 so you can read why.
 
-On Linux, type or paste an absolute folder path and press **Use this folder**.
-From Windows, enter the path on the Linux server. macOS retains its native
+On Linux, **Choose folder** opens a folder dialog like the macOS one: places on the left (Home, Computer and any connected drive), the folders inside the current one, **New Folder**, **Cancel** and **Choose**. The box at the top also accepts a typed path.
+From Windows, the dialog shows the folders of the Linux server. macOS retains its native
 folder picker.
+
+**First time an agent opens in a project:** stay at your computer. Claude may ask *Do you trust this folder?* (choose *Yes, I trust this folder*) and Codex may ask the same (choose *Trust and continue*). Use **View agent** to answer it. Mission Control shows that agent as waiting for you until you do.
 
 **Linux CLI setup (including a VM on Windows):** install **both Codex CLI and
 Claude Code CLI inside Linux** and sign in to each using the account that runs

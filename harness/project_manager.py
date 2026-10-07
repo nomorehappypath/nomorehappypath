@@ -176,6 +176,74 @@ def list_folders(raw: str, *, start: Path) -> dict[str, Any]:
             "folders": [{"name": child.name, "path": str(child)} for child in children]}
 
 
+PROC_MOUNTS = "/proc/mounts"
+_VOLUME_ROOTS = ("/media/", "/run/media/", "/mnt/")
+# Mount points that belong to the operating system, never a place to keep a project.
+_SYSTEM_MOUNTS = ("/boot", "/snap", "/var", "/usr", "/etc", "/proc", "/sys", "/dev", "/run", "/tmp", "/opt", "/home")
+_NETWORK_FS = ("nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.sshfs")
+
+
+def _mounted_volumes(mounts_text: str) -> list[dict[str, str]]:
+    """Drives and network shares a person would pick: external disks, a second disk, a share.
+
+    Read from the mount table, so a USB disk that is plugged in appears and one that
+    is removed does not. Pseudo file systems, snaps and system folders are left out.
+    """
+    volumes: dict[str, dict[str, str]] = {}
+    for line in mounts_text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        device, mount, kind = parts[0], re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), parts[1]), parts[2]
+        if mount == "/" or mount in volumes:
+            continue
+        under_volume_root = mount.startswith(_VOLUME_ROOTS)
+        system = any(mount == prefix or mount.startswith(prefix + "/") for prefix in _SYSTEM_MOUNTS)
+        real_disk = device.startswith("/dev/") and not device.startswith(("/dev/loop", "/dev/ram"))
+        if not (under_volume_root or (not system and (real_disk or kind in _NETWORK_FS))):
+            continue
+        path = Path(mount)
+        if not path.is_dir() or not os.access(path, os.R_OK | os.X_OK):
+            continue
+        volumes[mount] = {"name": path.name or mount, "path": mount, "kind": "drive"}
+    return sorted(volumes.values(), key=lambda item: (item["name"].casefold(), item["path"]))
+
+
+def folder_places() -> dict[str, Any]:
+    """The left-hand list of the folder dialog: Home and its usual folders, Computer, then drives."""
+    home = Path.home()
+    places = [{"name": "Home", "path": str(home), "kind": "home"}]
+    for name in ("Desktop", "Documents", "Downloads"):
+        child = home / name
+        if child.is_dir():
+            places.append({"name": name, "path": str(child), "kind": "home-folder"})
+    places.append({"name": "Computer", "path": "/", "kind": "root"})
+    try:
+        mounts = Path(PROC_MOUNTS).read_text(errors="replace")
+    except OSError:
+        mounts = ""
+    places.extend(_mounted_volumes(mounts))
+    return {"places": places}
+
+
+def create_folder(raw_parent: str, raw_name: str) -> dict[str, Any]:
+    """Make one new folder inside a folder the dialog is showing, like New Folder in the macOS dialog."""
+    listing = list_folders(raw_parent, start=Path.home())
+    name = str(raw_name or "").strip()
+    if not name:
+        raise ValueError("type a name for the new folder")
+    if name in {".", ".."} or "/" in name or "\0" in name or len(name.encode()) > 255:
+        raise ValueError("a folder name cannot contain / and must be 255 bytes or fewer")
+    target = Path(listing["path"]) / name
+    if target.exists():
+        raise ValueError(f"{name} already exists in this folder")
+    try:
+        target.mkdir()
+    except OSError as error:
+        raise ValueError(f"cannot create {name} here: {error.strerror}") from error
+    return {**list_folders(listing["path"], start=Path.home()), "created": str(target)}
+
+
 def page_version() -> str:
     """One digest of the served page so stale browser tabs reload themselves."""
     import hashlib
@@ -1280,6 +1348,11 @@ def make_handler(manager: ProjectManager):
                     return self._send(200, list_folders(
                         self._body().get("path", ""), start=manager.execution_root,
                     ))
+                if self.path == "/api/folders/places":
+                    return self._send(200, folder_places())
+                if self.path == "/api/folders/create":
+                    value = self._body()
+                    return self._send(200, create_folder(value.get("path", ""), value.get("name", "")))
                 if self.path == "/api/folders/browse":
                     value = self._body()
                     typed = value.get("path", "")
