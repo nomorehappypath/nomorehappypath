@@ -87,5 +87,37 @@ class ReviewerRealClaudeHowToTests(unittest.TestCase):
             self.assertIn(words, text)
 
 
+class LongWalkRuleTests(unittest.TestCase):
+    """2026-10-07: the Reviewer split a 20-minute walk into pieces because its commands were capped at 10 minutes."""
+
+    def test_reviewer_directive_lets_the_walk_take_as_long_as_it_needs(self):
+        from pathlib import Path
+        text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
+        for words in ("The end-to-end walk takes the time it takes",
+                      "explicit long `timeout`",
+                      "That is not the board polling the no-loops rule above is about",
+                      "Never stop at ten minutes",
+                      "never split the walk into separate pieces and call that the end-to-end test",
+                      "mark the verdict `TASK DONE: NOT TESTED`"):
+            self.assertIn(words, text)
+
+
+class CrossVendorStepsRuleTests(unittest.TestCase):
+    """2026-10-08: the Reviewer could not sign in to the other vendor's CLI and the directive gave it no path."""
+
+    def test_directive_sends_other_vendor_steps_to_the_agent_that_is_that_vendor_in_either_direction(self):
+        from pathlib import Path
+        text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
+        for words in ("What the app gives you, and what it does not",
+                      "the sanctioned route for the Reviewer, and it needs nothing from the owner",
+                      "Nothing gives any agent the owner's Codex sign-in or an OpenAI API key",
+                      "the API key is used only by the project-chat question",
+                      "the other vendor's CLI whichever vendor you run as",
+                      "Delivery, or the Reviewer if the owner swapped the roles",
+                      "which the other vendor's agent ran, and which no one ran",
+                      "run it for real and record what happened, never a stand-in"):
+            self.assertIn(words, text)
+
+
 if __name__ == "__main__":
     unittest.main()

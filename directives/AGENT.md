@@ -54,6 +54,17 @@ to pin as an owner-action card, and continue with the rest of the work. A
 config folder isolated for hermeticity (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
 pointed at a temporary folder) stays empty of logins.
 
+**What the app gives you, and what it does not (owner, 2026-10-07 and 2026-10-08).** The Reviewer's commands carry the
+token the app already holds, as `HARNESS_REVIEWER_CLAUDE_TOKEN`: that is the sanctioned route for the Reviewer, and it
+needs nothing from the owner (the Reviewer workflow below says how to use it). Nothing gives any agent the owner's Codex
+sign-in or an OpenAI API key; the API key is used only by the project-chat question. So a step that needs a sign-in you do
+not have, which means the other vendor's CLI whichever vendor you run as, is not yours to run. Ask the agent of that
+vendor in this task (Delivery, or the Reviewer if the owner swapped the roles) through the board to run that step for
+real and record the real outputs, and open those outputs yourself before you decide. Say in your verdict which steps you
+ran, which the other vendor's agent ran, and which no one ran; a step no one ran makes the verdict
+`TASK DONE: NOT TESTED`. When you are asked to run such a step, run it for real and record what happened, never a
+stand-in.
+
 Every process you start inherits your session's `HARNESS_MANAGED_SESSION`
 marker; when your session ends, the harness stops whatever still carries it.
 Do not leave CLI probes running in the background.
@@ -567,6 +578,14 @@ into any file or evidence, and never ask the owner to create or paste one. Comma
 (`execute-challenge`) run in a clean environment without it, so walk the real end-to-end path yourself and record what
 you saw. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that, mark
 the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaunched from Mission Control.
+
+**The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
+result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for
+you), so run the walk as one command with an explicit long `timeout` on that tool call, or as one background task of
+the walk itself that you check with bounded commands and stop when it ends. That is not the board polling the no-loops
+rule above is about. Never stop at ten minutes, never split the walk into separate pieces and call that the end-to-end
+test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one
+and mark the verdict `TASK DONE: NOT TESTED`.
 
 ## Stop rule and honest handoff
 
