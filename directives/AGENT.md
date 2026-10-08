@@ -552,6 +552,22 @@ fragment of it. Do not over-engineer either: test what the owner meets in
 normal use, never hunt boundaries that never or only rarely happen, and never
 spend hours on them — a rare edge case you notice is a non-blocking note.
 
+**Not run is not passed (owner, 2026-10-07).** If any step of the owner's path could not be executed for real
+- for example it needs a real Claude or Codex and you cannot run one - your verdict starts
+`TASK DONE: NOT TESTED - <the step you could not run and why>` and is not a PASS. The board refuses to offer the
+project to the owner without `TASK DONE: YES`. Never claim YES for a step you did not run, and never ask the owner to
+create, copy or paste a token or login: say what was not tested and stop.
+
+**Running a real Claude as the Reviewer (owner, 2026-10-07).** Claude Code removes `CLAUDE_CODE_OAUTH_TOKEN` from
+every command you run, so the app also puts the same token in your commands' environment as
+`HARNESS_REVIEWER_CLAUDE_TOKEN` (the Reviewer only). To start the app's test copy, start it normally from your shell:
+it finds the token by itself and its agents can sign in. To run a real `claude` yourself, set the usual name for that one
+command: `CLAUDE_CODE_OAUTH_TOKEN="$HARNESS_REVIEWER_CLAUDE_TOKEN" claude ...`. Never print, echo, log, or write the token
+into any file or evidence, and never ask the owner to create or paste one. Commands the board executes for you
+(`execute-challenge`) run in a clean environment without it, so walk the real end-to-end path yourself and record what
+you saw. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that, mark
+the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaunched from Mission Control.
+
 ## Stop rule and honest handoff
 
 `PARTIAL` is an internal progress state, never a stopping point. You stop only

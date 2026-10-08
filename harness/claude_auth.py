@@ -19,6 +19,11 @@ if __package__ in {None, ""}:
 from harness import agent_confinement, control, global_settings, platform_support
 
 TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+# Claude Code strips CLAUDE_CODE_OAUTH_TOKEN from every command it runs (measured 2026-10-07 with the real CLI),
+# so a Reviewer's test copy of the app never saw the owner's setup-token and could not start a real Claude. The
+# managed Reviewer's process also gets the same token under this harness-owned name, which Claude Code leaves in its
+# commands' environment, and resolve_token() accepts it as a last-resort source (owner's order 2026-10-07).
+REVIEWER_TOKEN_ENV = "HARNESS_REVIEWER_CLAUDE_TOKEN"
 OTHER_AUTH = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 _cache = {}
 _lock = threading.Lock()
@@ -40,7 +45,7 @@ def action(reason="missing") -> dict:
 
 def resolve_token(environment=None) -> str:
     environment = os.environ if environment is None else environment
-    token = platform_support.claude_credentials().read_token(environment)
+    token = platform_support.claude_credentials().read_token(environment) or str(environment.get(REVIEWER_TOKEN_ENV, "")).strip()
     if not token or len(token) > 2048 or any(ord(c) < 33 or ord(c) > 126 for c in token):
         raise ClaudeAuthRequired()
     return token
@@ -169,7 +174,7 @@ def _handoff(root, session_id: str, token: str) -> str:
     return str(path)
 
 
-def exec_with_token(path: str, session_id: str, command: list[str]) -> None:
+def exec_with_token(path: str, session_id: str, command: list[str], share_with_commands: bool = False) -> None:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(5)
@@ -181,6 +186,9 @@ def exec_with_token(path: str, session_id: str, command: list[str]) -> None:
             raise ClaudeAuthRequired()
         environment = {k: v for k, v in os.environ.items() if k not in OTHER_AUTH}
         environment[TOKEN_ENV] = token
+        environment.pop(REVIEWER_TOKEN_ENV, None)
+        if share_with_commands:
+            environment[REVIEWER_TOKEN_ENV] = token
         os.execvpe(command[0], command, environment)
     except (OSError, ValueError, KeyError, ClaudeAuthRequired):
         sys.stderr.write("Claude authentication handoff failed. Retry from Mission Control.\n")
@@ -191,7 +199,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
     parser.add_argument("--session", required=True)
+    parser.add_argument("--share-with-commands", action="store_true", help="Reviewer only: also expose the token to commands the agent runs, under REVIEWER_TOKEN_ENV")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    exec_with_token(args.socket, args.session, command)
+    exec_with_token(args.socket, args.session, command, args.share_with_commands)

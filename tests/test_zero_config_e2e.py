@@ -48,7 +48,7 @@ class ZeroConfigThreeCliE2E(unittest.TestCase):
             final = board.request_review(root, delivery["id"], str(ledger.relative_to(root)), "full final acceptance", phase="final_acceptance", test_command="python3 -m unittest test_smoke")
             board.claim_qa(root, reviewer["id"], final["id"], str(challenge.relative_to(root)))
             board.execute_challenge(root, reviewer["id"], final["id"])
-            board.qa_result(root, reviewer["id"], final["id"], "passed", "full objective independently passed", str(evidence))
+            board.qa_result(root, reviewer["id"], final["id"], "passed", "TASK DONE: YES — the full objective runs end to end vs it did; full objective independently passed", str(evidence))
             board.complete(root, delivery["id"], "all chunks and final acceptance complete")
 
             result = cto.release_check(root, "TASK-ZERO", ledger, root, execute_health=True, health_command="test -f app.txt")

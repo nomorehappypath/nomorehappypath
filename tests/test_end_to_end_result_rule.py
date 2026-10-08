@@ -57,5 +57,35 @@ class EndToEndResultRuleTests(unittest.TestCase):
                         "immediately after the What-justifies-a-FAIL paragraph")
 
 
+
+
+class NotRunIsNotPassedRuleTests(unittest.TestCase):
+    """2026-10-07: the reviewer said TASK DONE: YES for a step it could not run with a real AI."""
+
+    def test_product_directive_says_not_run_is_not_passed_and_never_asks_the_owner_for_a_token(self):
+        from pathlib import Path
+        text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
+        for words in ("Not run is not passed", "TASK DONE: NOT TESTED", "is not a PASS",
+                      "The board refuses to offer the project to the owner without `TASK DONE: YES`",
+                      "never ask the owner to create, copy or paste a token or login"):
+            self.assertIn(words, text)
+
+
+class ReviewerRealClaudeHowToTests(unittest.TestCase):
+    """2026-10-07: the Reviewer could not know how to use the token the app now gives it."""
+
+    def test_reviewer_directive_says_how_to_run_a_real_claude_and_never_to_leak_or_request_the_token(self):
+        from pathlib import Path
+        text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
+        for words in ("HARNESS_REVIEWER_CLAUDE_TOKEN",
+                      'CLAUDE_CODE_OAUTH_TOKEN="$HARNESS_REVIEWER_CLAUDE_TOKEN" claude',
+                      "start it normally from your shell",
+                      "Never print, echo, log, or write the token",
+                      "never ask the owner to create or paste one",
+                      "run in a clean environment without it",
+                      "ask only for your terminal to be relaunched from Mission Control"):
+            self.assertIn(words, text)
+
+
 if __name__ == "__main__":
     unittest.main()
