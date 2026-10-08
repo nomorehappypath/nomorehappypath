@@ -686,6 +686,12 @@ sys.stdout.write("\0".join(wrapped) + "\0")
     # select or copy text (the Codex window could). The documented switch turns
     # the capture off so the terminal's own selection works; Page Up/Down still scroll.
     export CLAUDE_CODE_DISABLE_MOUSE=1
+    # The Reviewer's end-to-end walk of a whole task takes about 20 minutes, but Claude Code caps each Bash command at
+    # BASH_MAX_TIMEOUT_MS = 10 minutes by default, so the Reviewer split the walk into pieces and said so (owner's order
+    # 2026-10-07: "take the time it requires ... not be limited to 10 minutes"). The Reviewer only; the value is a setting.
+    if [[ "$kind" == "claude_reviewer" ]]; then
+      export BASH_MAX_TIMEOUT_MS="${HARNESS_REVIEWER_BASH_MAX_TIMEOUT_MS:-7200000}"
+    fi
     if [[ -n "$system_directive" ]]; then
       # Stage 4, Claude: the rules in the system layer, with Stage 3's
       # authority note (when on) folded into the same text.
