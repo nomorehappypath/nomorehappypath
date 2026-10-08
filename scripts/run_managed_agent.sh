@@ -86,7 +86,7 @@ fi
 for ambient_name in ${!GIT_@}; do
   unset "$ambient_name"
 done
-unset BASH_ENV ENV CDPATH ZDOTDIR CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_PROFILE CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+unset BASH_ENV ENV CDPATH ZDOTDIR CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_PROFILE CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY HARNESS_REVIEWER_CLAUDE_TOKEN
 if [[ -z "$python_bin" ]]; then
   python_bin="$(command -v python3 || true)"
 fi
@@ -162,7 +162,12 @@ launch_visible_cli() {
       echo "REFUSED: Claude needs a validated setup-token. Launch from Mission Control." >&2
       exit 2
     fi
-    credential_prefix=("$python_bin" -E "$harness_root/harness/claude_auth.py" --socket "$claude_auth_bootstrap" --session "$session_id" --)
+    credential_prefix=("$python_bin" -E "$harness_root/harness/claude_auth.py" --socket "$claude_auth_bootstrap" --session "$session_id")
+    # Only the Reviewer: its end-to-end test copy of the app must start a real Claude (owner's order 2026-10-07).
+    if [[ "$kind" == "claude_reviewer" ]]; then
+      credential_prefix+=(--share-with-commands)
+    fi
+    credential_prefix+=(--)
   fi
   if [[ -t 0 && -t 1 ]]; then
     supervisor_args=("${context_args[@]}" --session-id "$session_id" --agent-id "$agent_id" --provider "$provider" --execution-root "$execution_root")
@@ -676,6 +681,11 @@ sys.stdout.write("\0".join(wrapped) + "\0")
     # write confinement above, or refused. Measured on 2.1.288: without it a
     # fresh git project asks "Yes, I trust this folder"; with it, the prompt.
     export CLAUDE_CODE_SANDBOXED=1
+    # Select and copy (owner's order 2026-10-07): Claude Code's full-screen mode
+    # captures the mouse, so in the CTO and Reviewer windows the owner could not
+    # select or copy text (the Codex window could). The documented switch turns
+    # the capture off so the terminal's own selection works; Page Up/Down still scroll.
+    export CLAUDE_CODE_DISABLE_MOUSE=1
     if [[ -n "$system_directive" ]]; then
       # Stage 4, Claude: the rules in the system layer, with Stage 3's
       # authority note (when on) folded into the same text.

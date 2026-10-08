@@ -532,6 +532,22 @@ def _matching_certified_delivery_health(
     return _certified_delivery_health(root, request)
 
 
+# Owner's order 2026-10-07: "it said ready for me, when the reviewer could not run Claude to test".
+# Since 2026-09-30 the final reviewer's verdict starts "TASK DONE: YES|NO - ..." (the end-to-end result
+# rule). A final review whose verdict does not say YES - including "not tested" - never makes a project
+# ready for the owner. Reviews recorded before the rule existed are not held to it.
+END_TO_END_RULE_FROM = "2026-09-30"
+
+
+def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
+    if not review:
+        return False
+    if str(review.get("completed_at") or "")[:10] < END_TO_END_RULE_FROM:
+        return True
+    text = str(review.get("result_summary") or "").lstrip(" \t\r\n>*-#`\"'")
+    return text.upper().startswith("TASK DONE: YES")
+
+
 def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict | None = None, execute_health: bool = False, health_command: str = "") -> dict[str, Any]:
     release_check_started_at = lifecycle.now()
     state = board.snapshot(root)
@@ -617,6 +633,7 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         "independent_review_passed": bool(latest_review and latest_review.get("status") == "passed" and latest_review.get("evidence")),
         "latest_independent_review_request": latest_review.get("id") if latest_review else None,
         "final_acceptance_review_present": bool(latest_review),
+        "final_review_says_task_done_yes": final_review_says_task_done_yes(latest_review),
         "delivery_chunks_complete": structure_complete,
     }
     developers = [
@@ -776,7 +793,7 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         required = {
             "requirements_confirmation_recorded", "requirements_confirmation_scope_match",
             "delivery_plan_recorded", "product_structure_complete", "development_qa_passed",
-            "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present",
+            "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes",
             "delivery_chunks_complete", "scenario_ledger_complete",
             "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed",
             "reviewer_scenario_simulations_executed", "completion_contract_complete",
@@ -786,7 +803,7 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
             "mirror_candidate_verified", "runtime_verification_scope_correct",
         }
     else:
-        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified"}
+        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified"}
     if checks.get("runtime_gate_required"):
         required |= {"deployed_runtime_verified", "deployed_chat_verified"}
     checks["ready_for_owner_test"] = all(checks.get(key) is True for key in required)

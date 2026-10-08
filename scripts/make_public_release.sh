@@ -42,7 +42,7 @@ if grep -rn "$trace" "$out" --exclude-dir=.git 2>/dev/null | grep -v "/Users/own
   grep -rn "$trace" "$out" --exclude-dir=.git | head >&2
   exit 1
 fi
-if grep -rInE "sk-[A-Za-z0-9]{40,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY" "$out" --exclude-dir=.git | grep -q .; then
+if grep -rInE "sk-[A-Za-z0-9]{40,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY" "$out" --exclude-dir=.git | grep -q .; then
   echo "REFUSED: secret-shaped strings in outgoing tree" >&2
   exit 1
 fi

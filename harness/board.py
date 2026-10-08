@@ -5003,11 +5003,18 @@ def _require_completed_ledger(
         raise ValueError(f"cannot record PASS: {label} is incomplete: " + "; ".join(problems))
 
 
+# The shape of Claude setup-tokens and API keys (sk-ant-oat01-..., sk-ant-api03-...). Evidence is kept and shared, so a
+# file that contains one is refused rather than recorded (owner's order 2026-10-07: the reviewer's test copy holds the token).
+CLAUDE_TOKEN_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9]{2,6}\d{2}-[A-Za-z0-9_-]{20,}")
+
+
 def _require_evidence_file(root: Path, value: str, label: str) -> str:
     path = _ledger_path(root, value)
     if not value.strip() or not path.is_file():
         raise ValueError(f"{label} file is missing: {path}")
     text = path.read_text(encoding="utf-8", errors="replace")
+    if CLAUDE_TOKEN_SHAPE.search(text):
+        raise ValueError(f"{label} contains what looks like a Claude login token; remove it and record the evidence again")
     lines = text.splitlines()
     command_line = re.compile(r"^\s*(?:command:\s*)?(?:\$\s*)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:python(?:3)?\s+-m\s+|pytest\b|npm\s+(?:test|run)\b|curl\b|git\s+|test\b)", re.I)
     result_line = re.compile(r"^\s*(?:(?:result|status|exit(?:\s+code)?)\s*:\s*(?:pass(?:ed)?|ok|success|fail(?:ed)?|0)\b|(?:ok|failed)\b|ran\s+\d+\s+tests?\b)", re.I)
@@ -9677,7 +9684,7 @@ def repin_final_review(root: Path, agent_id: str, task: str, candidate_commit: s
 RELEASE_REQUIRED_CHECKS = {
     "delivery_plan_recorded", "product_structure_complete",
     "development_qa_passed", "unit_tests_passed", "independent_review_passed",
-    "final_acceptance_review_present", "delivery_chunks_complete",
+    "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete",
     "scenario_ledger_complete", "reviewer_challenge_ledger_complete",
     "delivery_scenario_simulations_executed",
     "reviewer_scenario_simulations_executed",
@@ -9691,7 +9698,7 @@ RELEASE_REQUIRED_CHECKS = {
 BROKER_RELEASE_REQUIRED_CHECKS = {
     "delivery_plan_recorded", "product_structure_complete",
     "development_qa_passed", "unit_tests_passed", "independent_review_passed",
-    "final_acceptance_review_present", "delivery_chunks_complete",
+    "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete",
     "scenario_ledger_complete", "reviewer_challenge_ledger_complete",
     "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed",
     "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed",

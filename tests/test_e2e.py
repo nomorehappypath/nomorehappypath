@@ -14,7 +14,7 @@ class EndToEndHarnessTests(unittest.TestCase):
     def git(self, root, *args):
         return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
 
-    def test_clean_main_requires_and_accepts_the_full_release_contract(self):
+    def _release_check_after_final_review(self, summary):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             remote = Path(tmp) / "remote.git"
@@ -64,10 +64,14 @@ class EndToEndHarnessTests(unittest.TestCase):
             reviewer = board.register(root, "qa", "QA-QUEUE", vendor="Anthropic")
             board.claim_qa(root, reviewer["id"], review["id"], str(challenge.relative_to(root)))
             board.execute_challenge(root, reviewer["id"], review["id"])
-            board.qa_result(root, reviewer["id"], review["id"], "passed", "challenge scenarios passed", str(execution_evidence))
+            board.qa_result(root, reviewer["id"], review["id"], "passed", summary, str(execution_evidence))
             board.complete(root, developer["id"], "all implementation deliverables complete")
 
-            result = cto.release_check(root, "TASK-E2E", ledger, root, profile, execute_health=True)
+            return cto.release_check(root, "TASK-E2E", ledger, root, profile, execute_health=True)
+
+    def test_clean_main_requires_and_accepts_the_full_release_contract(self):
+        result = self._release_check_after_final_review("TASK DONE: YES — the release flow ends in a released task vs it did; challenge scenarios passed")
+        if True:
             self.assertTrue(result["ready_for_owner_test"], result)
             self.assertTrue(all(result[key] for key in (
                 "development_qa_passed", "independent_review_passed", "scenario_ledger_complete",
@@ -77,6 +81,17 @@ class EndToEndHarnessTests(unittest.TestCase):
                 "candidate_health_verified",
             )))
             self.assertFalse(result["main_pushed"])
+
+    def test_a_passed_final_review_that_does_not_say_task_done_yes_never_makes_the_project_ready(self):
+        """2026-10-07: "it said ready for me, when the reviewer could not run claude to test"."""
+        for summary in ("TASK DONE: NOT TESTED — the Continue step needs a real Claude and the reviewer is not signed in",
+                        "TASK DONE: NO — expected a finished document, got nothing",
+                        "challenge scenarios passed"):
+            with self.subTest(summary=summary[:40]):
+                result = self._release_check_after_final_review(summary)
+                self.assertTrue(result["independent_review_passed"], "the review itself passed")
+                self.assertFalse(result["final_review_says_task_done_yes"], result)
+                self.assertFalse(result["ready_for_owner_test"], result)
 
 
 if __name__ == "__main__":
