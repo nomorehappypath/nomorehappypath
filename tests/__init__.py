@@ -99,6 +99,10 @@ def _pin_run_root() -> Path:
     os.environ["HARNESS_DESKTOP_NOTIFICATIONS"] = "off"
     # Never read the owner's real setup-token during ordinary tests.
     os.environ["HARNESS_CLAUDE_KEYCHAIN_SERVICE"] = ""
+    # The suite never starts the owner's real Antigravity CLI (`agy`): it keeps its sign-in in the
+    # OS keyring and `$HOME/.gemini`, which no test home can isolate. Gemini is "not installed"
+    # unless a test names a stub through HARNESS_AGY_BIN itself.
+    os.environ["HARNESS_AGY_BIN"] = str(run_root / "no-agy-in-tests" / "agy")
     atexit.register(shutil.rmtree, run_root, True)
     return run_root
 

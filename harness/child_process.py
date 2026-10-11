@@ -76,4 +76,55 @@ def execution_environment(source: Mapping[str, str] | None = None) -> dict[str, 
         "GIT_CONFIG_GLOBAL": os.devnull,
         "CI": "1",
     })
+    from harness import platform_support
+    host = platform_support.browser_host()
+    if host.confined_by_harness() and not host.inside_os_sandbox():
+        # A confined process that starts governed execution again (a fixture-board test, for example) keeps telling
+        # its browser helper that the outer confinement is in place.
+        values[host.CONFINED_MARKER] = "1"
     return values
+
+
+# Set for every governed test, scenario or health command (and so for everything it starts): the canonical data
+# root of the LIVE board it must not touch. `board.main` refuses a call aimed at that board with a plain message
+# instead of failing on the protected lock file. A diagnostic only: OS confinement is the protection.
+LIVE_BOARD_ENV = "HARNESS_CERTIFIED_BOARD"
+
+
+def with_live_board(environment: Mapping[str, str], live_root: object) -> dict[str, str]:
+    from harness.project_context import project_context
+    values = dict(environment)
+    values[LIVE_BOARD_ENV] = str(Path(project_context(live_root).data_root).resolve())
+    return values
+
+
+def run_bounded(argv, *, cwd, env, timeout: float):
+    """Run a command in its own process group with a hard time limit and return
+    (exit_code, output, timed_out). On timeout the whole group is stopped, so a server or
+    helper the command started cannot outlive it and hold a port or a pipe."""
+    import os
+    import signal
+    import subprocess
+    process = subprocess.Popen(
+        list(argv), cwd=cwd, env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+        return int(process.returncode or 0), output or "", False
+    except subprocess.TimeoutExpired:
+        for signal_number in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(process.pid, signal_number)
+            except ProcessLookupError:
+                break
+            try:
+                output, _ = process.communicate(timeout=5)
+                return -1, output or "", True
+            except subprocess.TimeoutExpired:
+                continue
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            output = ""
+        return -1, output or "", True

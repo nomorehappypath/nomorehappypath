@@ -38,12 +38,12 @@ from typing import Any, Callable
 
 from harness import global_settings
 
-PROVIDERS = ("codex", "claude")
+PROVIDERS = ("codex", "claude", "gemini")
 CACHE_DIRECTORY = "cli-capabilities"
 PROBE_TIMEOUT_SECONDS = 60
 UNPROVEN = "UNPROVEN"
 # Bumped whenever the static probe asks a new question (2: Claude relay admission).
-PROBE_VERSION = 3
+PROBE_VERSION = 4
 
 # Live items the spike proves (spec §2 gaps). Absent from a cache = UNPROVEN.
 LIVE_ITEMS = {
@@ -61,6 +61,15 @@ LIVE_ITEMS = {
         "claude.socket_authority_parity",   # G-5
         "claude.append_prompt_on_resume",
         "claude.mcp_reaches_board",
+    ),
+    # Antigravity CLI (`agy`). Spec docs: board/tasks/2026-10-07_gemini-provider_SPEC.md §5, §13.
+    "gemini": (
+        "gemini.auth_under_confinement",    # G-A: a boxed session uses the owner's subscription sign-in
+        "gemini.process_group_cleanup",     # G-B: one process per session, SIGKILL of the group ends it
+        "gemini.session_scoped_controls",   # G-C: hooks/rules from an --add-dir runtime directory
+        "gemini.busy_delivery_receipt",     # G-D: PreInvocation injectSteps, receipt in the transcript
+        "gemini.mcp_reaches_board",         # T2: the plugin's board tools start and reach the board
+        "gemini.confined_socket_connect",   # T3: a hook inside the sandbox reaches the supervisor's socket
     ),
     "both": (
         "confined_socket_bind",             # G-7
@@ -81,6 +90,27 @@ STATIC_ITEMS = {
         "claude.settings_flag", "claude.mcp_config", "claude.append_system_prompt", "claude.system_prompt_snapshot",
         "claude.inline_settings_hooks", "claude.inbox_socket_env", "claude.inbox_relay_admission",
     ),
+    "gemini": (
+        "gemini.print_json", "gemini.add_dir", "gemini.conversation_resume", "gemini.model_flag",
+        "gemini.effort_flag", "gemini.mcp_command", "gemini.skip_permissions_flag",
+    ),
+}
+
+# Live proofs made by the development team, executed on macOS and on real Linux with the real
+# CLI (spec board/tasks/2026-10-07_gemini-provider_SPEC.md §13, scripts/agy_spike.sh), that count
+# for every later version of the same MAJOR version (the owner's 2026-10-04 carry-forward policy).
+# A machine without a recorded proof of its own starts from these; its own explicit `false` wins.
+PROVEN_BASELINE: dict[str, dict[str, Any]] = {
+    "gemini": {
+        "version": "1.3.1",
+        "items": {
+            "gemini.process_group_cleanup": "one process group per session; SIGKILL of the group leaves nothing (macOS, Linux)",
+            "gemini.session_scoped_controls": "hooks and rules load from an --add-dir runtime directory; .agents is tamper-proof (macOS, Linux)",
+            "gemini.busy_delivery_receipt": "PreInvocation injectSteps delivers to a running turn; transcript holds SYSTEM_SDK with the delivery id (macOS, Linux)",
+            "gemini.mcp_reaches_board": "the board's MCP tools, from a plugin in the runtime directory, are listed to the model and a real turn's call_mcp_tool findings returned the real board's answer through the authenticated gateway (macOS and Linux, 2026-10-08)",
+            "gemini.confined_socket_connect": "a hook, as the CLI's own child inside the wrapper, reaches the supervisor's socket in the runtime directory and gets its answer; the directory and settings.json stay unwritable (macOS: real agy hook delivered a message with receipt; Linux: client inside the real bwrap)",
+        },
+    },
 }
 
 # What each stage needs, per provider (spec §5). A stage absent for a provider
@@ -89,10 +119,12 @@ STAGE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     "stage1_hooks": {
         "claude": ("claude.settings_flag", "claude.inline_settings_hooks"),
         "codex": ("codex.hooks_session_flags", "codex.bypass_hook_trust_flag", "codex.hooks_loaded_once"),
+        "gemini": ("gemini.add_dir", "gemini.session_scoped_controls"),
     },
     "stage2_board_mcp": {
         "claude": ("claude.mcp_config", "claude.mcp_reaches_board"),
         "codex": ("codex.mcp_command", "codex.mcp_reaches_board"),
+        "gemini": ("gemini.mcp_command", "gemini.add_dir", "gemini.session_scoped_controls", "gemini.mcp_reaches_board"),
     },
     "stage3_codex_app_server": {
         "codex": ("codex.app_server_stdio", "codex.remote_tui", "codex.turn_client_message_id",
@@ -105,9 +137,14 @@ STAGE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
                    "claude.system_prompt_snapshot", "claude.inbox_receipt", "claude.socket_authority_parity",
                    "confined_socket_bind", "cross_agent_isolation", "launch_surfaces_tamperproof"),
     },
+    "stage3_gemini_delivery": {
+        "gemini": ("gemini.add_dir", "gemini.conversation_resume", "gemini.session_scoped_controls",
+                   "gemini.busy_delivery_receipt", "gemini.confined_socket_connect"),
+    },
     "stage4_system_layer_directives": {
         "claude": ("claude.append_system_prompt", "claude.system_prompt_snapshot", "claude.append_prompt_on_resume"),
         "codex": ("codex.developer_instructions", "codex.developer_instructions_on_resume"),
+        "gemini": ("gemini.add_dir", "gemini.session_scoped_controls"),
     },
     "stage5_structured_verdicts": {},
 }
@@ -224,6 +261,33 @@ def _probe_claude(executable: str, scratch: Path) -> dict[str, bool]:
         "claude.system_prompt_snapshot": "--system-prompt-snapshot" in help_text,
         "claude.inline_settings_hooks": "started" in fired,
         "claude.inbox_socket_env": "CLAUDE_CODE_MESSAGING_SOCKET=" in fired,
+    }
+
+
+def _probe_gemini(executable: str, scratch: Path) -> dict[str, bool]:
+    """Static facts of the Antigravity CLI from its own `--help`: never a model turn, never a sign-in.
+
+    The home is a SCRATCH home: the CLI keeps all of its state in `$HOME/.gemini`
+    (it has no override variable), so a private HOME is what keeps the probe
+    off the owner's `~/.gemini`. A signed-out CLI answers `--help` all the same.
+    """
+    environment = global_settings.provider_environment(executable)
+    home = scratch / "gemini-home"
+    home.mkdir(parents=True, exist_ok=True)
+    environment["HOME"] = str(home)
+    for variable in ("GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL"):
+        environment.pop(variable, None)
+    completed = subprocess.run([executable, "--help"], env=environment, cwd=str(scratch), capture_output=True,
+                               text=True, timeout=PROBE_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
+    help_text = f"{completed.stdout}\n{completed.stderr}"
+    return {
+        "gemini.print_json": "--output-format" in help_text and "json" in help_text and "-p" in help_text,
+        "gemini.add_dir": "--add-dir" in help_text,
+        "gemini.conversation_resume": "--conversation" in help_text,
+        "gemini.model_flag": "--model" in help_text,
+        "gemini.effort_flag": "--effort" in help_text,
+        "gemini.mcp_command": "\n  mcp " in help_text,
+        "gemini.skip_permissions_flag": "--dangerously-skip-permissions" in help_text,
     }
 
 
@@ -392,7 +456,8 @@ def _probe_claude_relay_admission(executable: str, scratch: Path) -> bool:
         shutil.rmtree(handover.parent, ignore_errors=True)
 
 
-PROBES: dict[str, Callable[[str, Path], dict[str, bool]]] = {"codex": _probe_codex, "claude": _probe_claude}
+PROBES: dict[str, Callable[[str, Path], dict[str, bool]]] = {"codex": _probe_codex, "claude": _probe_claude,
+                                                              "gemini": _probe_gemini}
 
 
 def capabilities(home: Path, provider: str, *, refresh: bool = False,
@@ -431,7 +496,54 @@ def capabilities(home: Path, provider: str, *, refresh: bool = False,
     except (OSError, ValueError):
         live = {}
     live, carried = _with_carried_live(home, identity, live)
+    live, carried = _with_proven_baseline(identity, live, carried)
     return {**record, "live": live, **({"carried": carried} if carried else {})}
+
+
+def _with_proven_baseline(identity: dict[str, str], live: dict[str, Any], carried: dict[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Add the development team's proofs for this provider when the CLI's major version matches."""
+    baseline = PROVEN_BASELINE.get(identity.get("provider", ""))
+    current, proven = _version_tuple(identity.get("version", "")), _version_tuple((baseline or {}).get("version", ""))
+    if not baseline or current is None or proven is None or current[0] != proven[0] or current < proven:
+        return live, carried
+    merged, notes = dict(live), dict(carried)
+    for name in baseline["items"]:
+        if merged.get(name, UNPROVEN) == UNPROVEN:
+            merged[name] = True
+            notes[name] = f"{baseline['version']} (development proof)"
+    return merged, notes
+
+
+def provider_availability(home: Path, provider: str, *, source_environment: dict[str, str] | None = None) -> dict[str, Any]:
+    """Whether Settings may offer `provider`, and if not the plain reason shown beside it.
+
+    Claude and Codex are always offered (as before). Gemini is offered only on a machine where the
+    Antigravity CLI is installed, answers every static question the harness asks of it, and is a
+    version whose live gates (authentication under confinement, process cleanup, session-scoped
+    controls) are proven; until then it is listed, disabled, with the reason (spec C-39).
+    """
+    if provider != "gemini":
+        from harness import global_settings
+        try:
+            executable = global_settings.provider_executable(provider, source_environment=source_environment)
+        except Exception:
+            executable = ""
+        return {"available": True, "reason": "", "executable": executable}
+    prefix = "Gemini (Antigravity CLI) — not yet available on this machine: "
+    record = capabilities(home, "gemini", source_environment=source_environment)
+    identity = record.get("identity") or {}
+    who = {"version": identity.get("version", ""), "executable": identity.get("path") or identity.get("executable") or ""}
+    if record.get("missing"):
+        return {"available": False, "reason": prefix + "the Antigravity CLI (agy) is not installed.", **who}
+    absent = [name for name in STATIC_ITEMS["gemini"] if record.get("static", {}).get(name) is not True]
+    if absent:
+        return {"available": False, "reason": prefix + "this agy version lacks " + ", ".join(absent) + ".", **who}
+    gates = ("gemini.process_group_cleanup", "gemini.session_scoped_controls")
+    unproven = [name for name in gates if not capability(record, name)]
+    if unproven:
+        return {"available": False, "reason": prefix + f"agy {record['identity'].get('version') or '(unknown version)'} "
+                "has not been proven for harness agents yet (" + ", ".join(unproven) + ").", **who}
+    return {"available": True, "reason": "", **who}
 
 
 def _version_tuple(version: str) -> tuple[int, ...] | None:

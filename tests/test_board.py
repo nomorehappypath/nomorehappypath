@@ -1581,9 +1581,70 @@ class BoardTests(unittest.TestCase):
             "| S-101 | The independent challenge runs and verifies the expected owner behavior. | `python3 -m unittest test_smoke -k passes` | Real challenge runs | PASS: targeted reviewer simulation ran | PASS |\n"
             "| S-102 | An unavailable external dependency does not silently become a passed check. | N/A | N/A | N/A | N/A: CTO - temporary external dependency outage |\n"
         )
-        board.claim_qa(self.root, reviewer["id"], request["id"], str(challenge.relative_to(self.root)))
-        with self.assertRaisesRegex(ValueError, "S-102.*approved exception"):
-            board.execute_challenge(self.root, reviewer["id"], request["id"])
+        # A review simulation is executed, so an approved N/A row can never pass it: refused at intake (2026-10-10),
+        # with the instruction to raise an owner-action card, instead of being accepted and failing later.
+        with self.assertRaisesRegex(ValueError, "S-102.*N/A or DEFERRED.*owner-action card"):
+            board.claim_qa(self.root, reviewer["id"], request["id"], str(challenge.relative_to(self.root)))
+
+    def _cited_review(self, task: str, *, damage=None):
+        """A real chunk + final review whose ledgers cite real screen captures; `damage` may spoil one before the verdict."""
+        import hashlib as _hashlib
+        import json as _json
+        dev = self.delivery(task)
+        qa = board.register(self.root, "qa", "REVIEW-QUEUE", vendor="Anthropic")
+        self.declare_chunks(dev["id"], [("core", "cited captures")])
+        directory = board.board_dir(self.root) / "evidence" / "screen-checks"
+        directory.mkdir(parents=True, exist_ok=True)
+
+        def capture(check_id: str, role: str) -> dict:
+            files = {}
+            for kind, suffix, payload in (("html", "html", b"<p>74 mph</p>"), ("text", "txt", b"74 mph"), ("screenshot", "png", b"\x89PNG")):
+                path = directory / f"{check_id}.{suffix}"
+                path.write_bytes(payload)
+                files[kind] = {"path": str(path), "sha256": _hashlib.sha256(payload).hexdigest()}
+            (directory / f"{check_id}.json").write_text(_json.dumps({
+                "id": check_id, "task": task, "agent_id": "x", "role": role, "url": "http://127.0.0.1:1/",
+                "expect": "mph", "expect_found": True, "blank": False, "evidence": files}), encoding="utf-8")
+            return files
+
+        delivery_files = capture("screen-20261010T090000-d1d1d1d1", "engineering")
+        reviewer_files = capture("screen-20261010T090001-e2e2e2e2", "qa")
+
+        def cite(name: str, check_id: str) -> str:
+            relative = self.ledger(name)
+            path = self.root / relative
+            path.write_text(path.read_text().replace("PASS: targeted", f"PASS: {check_id} showed 74 mph; targeted"))
+            return relative
+
+        chunk = board.request_review(self.root, dev["id"], self.ledger("ledger.md"), "chunk review", chunk="core", test_command=self.qa_command())
+        board.claim_qa(self.root, qa["id"], chunk["id"], self.ledger("chunk-challenge.md"))
+        board.execute_challenge(self.root, qa["id"], chunk["id"])
+        board.qa_result(self.root, qa["id"], chunk["id"], "passed", "chunk passed", self.evidence("chunk.txt"))
+        final = board.request_review(self.root, dev["id"], cite("final-ledger.md", "screen-20261010T090000-d1d1d1d1"),
+                                     "final review", phase="final_acceptance", test_command=self.qa_command())
+        board.claim_qa(self.root, qa["id"], final["id"], cite("final-challenge.md", "screen-20261010T090001-e2e2e2e2"))
+        board.execute_challenge(self.root, qa["id"], final["id"])
+        if damage == "reviewer":
+            Path(reviewer_files["screenshot"]["path"]).unlink()
+        elif damage == "delivery":
+            Path(delivery_files["text"]["path"]).write_bytes(b"edited afterwards")
+        return qa, final
+
+    def test_a_certified_pass_is_refused_when_a_cited_capture_was_removed_or_edited_after_acceptance(self):
+        for damage, words in (("reviewer", "changed after it was accepted"), ("delivery", "changed after it was accepted")):
+            with self.subTest(damage=damage):
+                qa, final = self._cited_review(f"TASK-CITE-{damage.upper()}", damage=damage)
+                with self.assertRaisesRegex(ValueError, words):
+                    board.qa_result(self.root, qa["id"], final["id"], "passed", "final passed", self.evidence("final.txt"))
+                self.assertNotEqual(board.snapshot(self.root)["qa_requests"][final["id"]]["status"], "passed")
+
+    def test_a_certified_pass_with_intact_cited_captures_is_recorded(self):
+        qa, final = self._cited_review("TASK-CITE-INTACT")
+        board.qa_result(self.root, qa["id"], final["id"], "passed", "final passed", self.evidence("final.txt"))
+        request = board.snapshot(self.root)["qa_requests"][final["id"]]
+        self.assertEqual(request["status"], "passed")
+        self.assertEqual([c["id"] for c in request["cited_screen_checks"]], ["screen-20261010T090000-d1d1d1d1"])
+        self.assertEqual([c["id"] for c in request["challenge_cited_screen_checks"]], ["screen-20261010T090001-e2e2e2e2"])
 
     def test_repaired_scenario_simulation_requires_a_new_review_cycle(self):
         dev = self.delivery("TASK-REVIEW-REPAIR")

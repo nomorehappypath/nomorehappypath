@@ -28,6 +28,8 @@ from harness import (
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
 
+HEALTH_COMMAND_TIMEOUT_SECONDS = 600
+
 
 def _requests_for_task(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
     active = list(state.get("qa_requests", {}).values())
@@ -317,19 +319,23 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
                         health_started_at = lifecycle.now()
                         # Security scan finding 2: the agent-authored health
                         # command runs inside the agent's own write limits.
-                        health_environment = child_process.execution_environment()
-                        health = subprocess.run(
+                        health_environment = child_process.with_live_board(child_process.execution_environment(), root)
+                        health_code, health_text, health_timed_out = child_process.run_bounded(
                             agent_confinement.confine_agent_command(
                                 ["/bin/sh", "-c", health_command], root,
                                 claude_config_dir=health_environment.get("CLAUDE_CONFIG_DIR") or None),
-                            cwd=checkout, capture_output=True,
-                            text=True, env=health_environment,
+                            cwd=checkout, env=health_environment, timeout=HEALTH_COMMAND_TIMEOUT_SECONDS,
                         )
-                        health_output = (health.stdout + health.stderr)[-2000:]
-                        health_verified = health.returncode == 0
+                        if health_timed_out:
+                            health_text = (
+                                f"the health command did not finish within {HEALTH_COMMAND_TIMEOUT_SECONDS} seconds and was stopped "
+                                "with everything it started; it must not wait for input, a provider or a child process | " + health_text
+                            )
+                        health_output = health_text[-2000:]
+                        health_verified = health_code == 0 and not health_timed_out
                         health_measurement = lifecycle.command_measurement(
                             health_command, health_started_at, lifecycle.now(),
-                            exit_code=health.returncode,
+                            exit_code=health_code,
                         )
         except (OSError, git_broker.BrokerError) as error:
             archive_error = str(error)

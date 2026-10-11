@@ -74,6 +74,21 @@ def _start_token(pid: int) -> str:
     return browser_acceptance._start_token(pid)
 
 
+def preview_environment(source, extra=None):
+    """The environment a candidate preview is started with.
+
+    The worker's PATH comes first and loses nothing; the folders the harness already
+    searches for the owner's tools (Homebrew, ~/.local/bin, /usr/local/bin ...) follow,
+    only where they exist, without repeats."""
+    values = dict(source)
+    values.update(extra or {})
+    folders = [item for item in str(values.get("PATH", "")).split(os.pathsep) if item]
+    tools = (*platform_support.discovery().owner_tool_directories(), *platform_support.discovery().GOVERNED_PATH_SUFFIX)
+    folders += [item for item in tools if item not in folders and os.path.isdir(item)]
+    values["PATH"] = os.pathsep.join(dict.fromkeys(folders))
+    return values
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -530,10 +545,14 @@ class ReleasePreviewSupervisor:
                 "head_commit": head_commit, "workspace": workspace, "branch": branch,
                 "requested": requested or None,
             })
-            if detected:
-                # PORT is how the candidate learns its port; BROWSER=true stops a
-                # Python app from opening a second tab of its own.
-                environment = {**os.environ, "PORT": str(preview.port), "BROWSER": "true"}
+            # PORT is how the candidate learns its port; BROWSER=true stops a
+            # Python app from opening a second tab of its own. The PATH is widened
+            # for every start, the owner's own command included: the worker is
+            # started by launchd with only the system folders, so `npm` (Homebrew)
+            # was "not found" for any Node project on a normal Mac.
+            environment = preview_environment(
+                os.environ, {"PORT": str(preview.port), "BROWSER": "true"} if detected else None,
+            )
             # Owner, 2026-09-28 14:07: "if running the app crashes, let the
             # mission control give the full command ... the user will run it in
             # the shell." The clean checkout stays until the release closes.

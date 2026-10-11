@@ -76,8 +76,30 @@ def _validated_tmpdir(tmpdir: str | None, temp_paths: list[str]) -> list[str]:
     )
 
 
+GEMINI_STATE = ".gemini/antigravity-cli"
+GEMINI_PROTECTED_FILES = (".gemini/antigravity-cli/settings.json",)
+GEMINI_CONTROLS = ".gemini/config"
+
+
+def gemini_state_paths(home: str | Path) -> list[str]:
+    """What the Antigravity CLI writes to run: its operational folder and the shared user cache.
+
+    NEVER `~/.gemini/config/` (hooks, MCP servers, rules live there: spec M-5)
+    and never the whole `~/.gemini`. The CLI keeps its sign-in inside the
+    operational folder when the OS keyring is unreachable, and reads it in place.
+    """
+    home = Path(home).expanduser()
+    return [str(home / GEMINI_STATE), str(home / ".cache")]
+
+
+def gemini_protected_writes(home: str | Path) -> list[str]:
+    """Owner-controlled Gemini files denied even inside the granted state folder."""
+    home = Path(home).expanduser()
+    return [str(home / name) for name in GEMINI_PROTECTED_FILES] + [str(home / GEMINI_CONTROLS)]
+
+
 def writable_paths(writable_roots: list[str], *, home: str | Path, claude_config_dir: str | None = None,
-                   implementation=None, tmpdir: str | None = None) -> list[str]:
+                   implementation=None, tmpdir: str | None = None, provider: str = "claude") -> list[str]:
     """The full write grant: the project's roots plus the CLI's own state and temp space.
 
     Everything that comes from the environment (`CLAUDE_CONFIG_DIR`, `TMPDIR`)
@@ -87,12 +109,13 @@ def writable_paths(writable_roots: list[str], *, home: str | Path, claude_config
     implementation = implementation or platform_support.agent_confinement()
     temp = implementation.temp_paths() + _validated_tmpdir(tmpdir if tmpdir is not None else os.environ.get("TMPDIR"), implementation.temp_paths())
     config_dir = _validated_config_dir(home, claude_config_dir, temp)
-    return list(writable_roots) + implementation.cli_state_paths(home, config_dir) + temp
+    state = gemini_state_paths(home) if provider == "gemini" else implementation.cli_state_paths(home, config_dir)
+    return list(writable_roots) + state + temp
 
 
 def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str | Path,
          claude_config_dir: str | None = None, implementation=None,
-         protected_writes: list[str] | None = None) -> list[str]:
+         protected_writes: list[str] | None = None, provider: str = "claude") -> list[str]:
     """The command to run so that `argv` can write only inside the grant.
 
     `protected_writes` are harness-owned paths (`agent_grant.agent_protected_roots`)
@@ -103,7 +126,10 @@ def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str |
     with an open boundary because a package is missing.
     """
     implementation = implementation or platform_support.agent_confinement()
-    writable = writable_paths(writable_roots, home=home, claude_config_dir=claude_config_dir, implementation=implementation)
+    writable = writable_paths(writable_roots, home=home, claude_config_dir=claude_config_dir, implementation=implementation,
+                              provider=provider)
+    if provider == "gemini":
+        protected_writes = list(protected_writes or []) + gemini_protected_writes(home)
     for root in writable_roots:
         # A granted root that does not exist yet (the task-workspace root of a
         # fresh project) must be created HERE: inside the boundary, creating
@@ -112,8 +138,16 @@ def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str |
         Path(root).mkdir(parents=True, exist_ok=True)
     protected = getattr(implementation, "protected_read_paths", None)
     protected_reads = protected(home, claude_config_dir) if protected else []
+    extra = {}
+    if provider == "gemini":
+        # Antigravity saves its refreshed sign-in to the macOS Keychain by running
+        # /usr/bin/security. Inside this sandbox that call cannot succeed and, instead
+        # of failing, hangs while macOS shows "a keychain cannot be found" to the
+        # owner about once an hour per agent. Refusing to start the program makes it
+        # fail at once and fall back to its sign-in file, as it does anyway.
+        extra["denied_executables"] = ["/usr/bin/security"]
     return implementation.wrap(list(argv), writable, store=Path(store), protected_reads=protected_reads,
-                               protected_writes=list(protected_writes or []))
+                               protected_writes=list(protected_writes or []), **extra)
 
 
 def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_dir: str | None = None,
@@ -172,13 +206,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--writable-roots", required=True, help="JSON list of the granted roots")
     parser.add_argument("--protected-writes", default="[]", help="JSON list of harness-owned paths denied inside the grant")
     parser.add_argument("--home", default=os.path.expanduser("~"))
+    parser.add_argument("--provider", default="claude", choices=["claude", "codex", "gemini"])
     parser.add_argument("--claude-config-dir", default=os.environ.get("CLAUDE_CONFIG_DIR") or None)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="the CLI command (after --)")
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     try:
         wrapped = wrap(command, json.loads(args.writable_roots), store=Path(args.store), home=args.home,
-                       claude_config_dir=args.claude_config_dir, protected_writes=json.loads(args.protected_writes))
+                       claude_config_dir=args.claude_config_dir, protected_writes=json.loads(args.protected_writes),
+                       provider=args.provider)
     except ConfinementUnavailable as error:
         print(str(error), file=sys.stderr)
         return 3

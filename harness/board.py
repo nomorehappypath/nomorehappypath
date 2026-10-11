@@ -2103,6 +2103,12 @@ def _git_task_baseline(root: ProjectRoot, mode: str = "task_start") -> dict[str,
     }
 
 
+def _harness_owned_status_line(line: str) -> bool:
+    """A `git status --porcelain` line about a path inside .harness (the app's own storage)."""
+    path = line[3:].split(" -> ", 1)[-1].strip().strip('"')
+    return path == ".harness" or path.startswith(".harness/")
+
+
 def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[str, Any]:
     """Capture exactly what an independent review examined.
 
@@ -2117,6 +2123,10 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
         return {"available": False, "commit": "", "branch": "", "files": [], "working_tree_digest": "", "working_tree_files": [], "immutable_clean": False}
     status = git_process.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=root, capture_output=True, text=True)
     status_lines = [line for line in status.stdout.splitlines() if line] if status.returncode == 0 else []
+    # The app's own files under .harness (for example the macOS sandbox profile it writes for
+    # each launch) are never project content. Counting them made an ordinary pause and resume
+    # look like a change to the reviewed code and threw away a passed review.
+    status_lines = [line for line in status_lines if not _harness_owned_status_line(line)]
     manifest_command = ["git", *accepted_bytes.commit_manifest_arguments(head.stdout.strip())]
     if baseline_commit and baseline_commit != head.stdout.strip():
         manifest_command = ["git", *accepted_bytes.name_only_arguments(f"{baseline_commit}..{head.stdout.strip()}")]
@@ -2139,7 +2149,7 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
     )
     clean = status.returncode == 0 and not status_lines
     immutable_candidate = clean or committed_candidate
-    digest = hashlib.sha256(status.stdout.encode("utf-8"))
+    digest = hashlib.sha256("".join(line + "\n" for line in status_lines).encode("utf-8"))
     if not immutable_candidate:
         diff = git_process.run(["git", *accepted_bytes.binary_patch_arguments("HEAD")], cwd=root, capture_output=True)
         digest.update(b"\0" + diff.stdout)
@@ -3056,8 +3066,10 @@ ROLE_NAMES = {"qa": "Reviewer", "cto": "CTO", "engineering": "Delivery agent", "
 
 def sign_in_message(agent: dict[str, Any]) -> str:
     """One plain line naming who needs signing in and how (backlog #8)."""
+    from harness import attention, control
     role = ROLE_NAMES.get(str(agent.get("role", "")), "agent")
-    return f"The {role} needs you to sign in again: open its terminal and run /login."
+    provider = next((name for name, entry in control.PROVIDERS.items() if entry["vendor"] == agent.get("vendor")), "claude")
+    return f"The {role} needs you to sign in again: open its terminal and {attention.sign_in_how(provider)}."
 
 
 def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[dict[str, Any]]:
@@ -3079,12 +3091,14 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             item.get("id") for item in sessions_snapshot
             if item.get("status") in control.ACTIVE_STATUSES
         }
-        signed_out_session_ids = {
-            item.get("id") for item in sessions_snapshot
-            if item.get("status") in control.ACTIVE_STATUSES and attention.needs_sign_in(item)
+        signed_out_sessions = {
+            item.get("id"): item for item in sessions_snapshot
+            if item.get("status") in control.ACTIVE_STATUSES and attention.needs_owner(item)
         }
+        signed_out_session_ids = set(signed_out_sessions)
     except (OSError, ValueError):
         live_session_ids = None
+        signed_out_sessions = {}
         signed_out_session_ids = set()
     with locked_state(root) as state:
         _expire_owner_actions(state, current)
@@ -3097,7 +3111,8 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             # resume on the first check after the prompt leaves the screen.
             if agent.get("session_id") in signed_out_session_ids:
                 if agent.get("liveness") != SIGNED_OUT_LIVENESS:
-                    note = sign_in_message(agent)
+                    note = attention.owner_block_sentence(ROLE_NAMES.get(str(agent.get("role", "")), "agent"),
+                                                          signed_out_sessions.get(agent.get("session_id")))
                     agent.update({"liveness": SIGNED_OUT_LIVENESS, "liveness_note": note})
                     agent.pop("automatic_recovery_requested_at", None)
                     agent.pop("consecutive_stalls", None)
@@ -3970,6 +3985,59 @@ def record_owner_action(
 
 SCREEN_CHECK_TIMEOUT_SECONDS = 60
 SCREEN_CHECK_TEXT_LIMIT = 20_000
+SCREEN_CHECK_ID = re.compile(r"\bscreen-\d{8}T\d{6}-[0-9a-f]{8}\b")
+
+
+def _screen_check_problems(root: Path, task: str, check_id: str) -> tuple[dict[str, Any] | None, str]:
+    path = board_dir(root) / "evidence" / "screen-checks" / f"{check_id}.json"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, f"{check_id}: no screen-check record exists for it (an invented id, or a capture made before records were kept); run screen-check again with --expect and cite the new id"
+    if record.get("task") != task:
+        return None, f"{check_id}: it belongs to another task"
+    if record.get("blank") or not record.get("expect_found"):
+        return None, f"{check_id}: that capture was blank or did not find its expected text; capture again with --expect"
+    for kind, meta in (record.get("evidence") or {}).items():
+        try:
+            actual = hashlib.sha256(Path(meta["path"]).read_bytes()).hexdigest()
+        except (OSError, KeyError, TypeError):
+            return None, f"{check_id}: its {kind} file is missing"
+        if actual != meta.get("sha256"):
+            return None, f"{check_id}: its {kind} file no longer matches the capture"
+    return record, ""
+
+
+def _cited_screen_checks(root: Path, task: str, ledger_path: Path, *, require_role: str = "") -> list[dict[str, Any]]:
+    """Every screen-check id a ledger cites must be a real, successful, unmodified capture of the same task."""
+    ids = sorted(set(SCREEN_CHECK_ID.findall(ledger_path.read_text(encoding="utf-8", errors="replace"))))
+    records, problems = [], []
+    for check_id in ids:
+        record, problem = _screen_check_problems(root, task, check_id)
+        if problem:
+            problems.append(problem)
+        else:
+            records.append(record)
+    if problems:
+        raise ValueError("cited screen-check evidence is not valid: " + " | ".join(problems))
+    if require_role and records and not any(record.get("role") == require_role for record in records):
+        raise ValueError(
+            "the Challenge Ledger cites only screen checks captured by Delivery; the Reviewer runs its own "
+            "screen-check as a board command before attaching the ledger and cites that id"
+        )
+    return [
+        {"id": r["id"], "role": r.get("role", ""), "agent_id": r.get("agent_id", ""),
+         "hashes": {kind: meta.get("sha256", "") for kind, meta in (r.get("evidence") or {}).items()}}
+        for r in records
+    ]
+
+
+def _verify_recorded_screen_checks(root: Path, task: str, recorded: list[dict[str, Any]]) -> None:
+    problems = [problem for item in recorded or [] for _, problem in [_screen_check_problems(root, task, item.get("id", ""))] if problem]
+    if problems:
+        raise ValueError("cited screen-check evidence changed after it was accepted: " + " | ".join(problems))
+
+
 def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[str, Any]:
     """Render the project's own local page in the harness browser for an agent.
 
@@ -3994,7 +4062,19 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         try:
             page = browser_acceptance.render_page(url, runtime, timeout=SCREEN_CHECK_TIMEOUT_SECONDS)
         except (OSError, RuntimeError, ValueError) as error:
-            raise ValueError(f"the harness browser could not render {url}: {str(error)[:300]}") from error
+            detail = str(error)[:300]
+            lowered = detail.lower()
+            if "refused" in lowered or "connection" in lowered or "unreachable" in lowered:
+                advice = "nothing answered at that address: verify the candidate server is running (it stops when the project is paused) and use its actual port"
+            elif "did not finish" in lowered or "timed out" in lowered:
+                advice = "the page did not finish loading in time: check the candidate server responds and the page does not wait forever"
+            elif "another browser check" in lowered or "another process held" in lowered:
+                advice = "the harness browser was busy: run the screen check again in a moment"
+            elif "browser" in lowered and ("find" in lowered or "no usable" in lowered or "not found" in lowered):
+                advice = "the harness has no usable browser on this machine: tell the owner (Settings shows the browser status)"
+            else:
+                advice = "run the screen check again; if it repeats, tell the owner what this message says"
+            raise ValueError(f"the harness browser could not render {url}: {detail} | {advice}") from error
     finally:
         shutil.rmtree(runtime, ignore_errors=True)
     # What a person sees: the browser's rendered body text, never markup that
@@ -4020,6 +4100,13 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         else f"expected text {'found' if result['expect_found'] else 'NOT found'}" if expect
         else "rendered"
     )
+    record = {
+        "id": check_id, "task": task, "agent_id": agent_id, "role": str(agent.get("role") or ""),
+        "url": url, "expect": expect, "expect_found": result["expect_found"], "blank": result["blank"],
+        "captured_at": datetime.now(timezone.utc).isoformat(), "evidence": evidence,
+        "note": "one page at one moment; the candidate and the server's identity are not verified",
+    }
+    (directory / f"{check_id}.json").write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         _event(state, "screen_check", agent, {
@@ -4163,6 +4250,15 @@ def hook_event(root: Path, agent_id: str, event: str, payload_text: str) -> dict
         if agent.get("session_id"):
             from harness import control  # local, as everywhere in this module (import cycle)
             control.record_turn_state(root, agent["session_id"], HOOK_TURN_STATES[event])
+            model = str(payload.get("model") or "")
+            if model and control.record_observed_model(root, agent["session_id"], model):
+                with locked_state(root) as state:
+                    live = state.get("agents", {}).get(agent_id) or agent
+                    _event(state, "agent_action_denied", live, {
+                        "task": live.get("task", ""), "rule": "M-3", "tool": "model",
+                        "message": (f"this Gemini session is running {model}, which is not a Google model; it takes no review "
+                                    "assignment until it is back on a gemini- model"),
+                    })
         return {"decision": "allow", "event": event}
     from harness import hook_rules
     context = project_context(root)
@@ -4734,7 +4830,8 @@ def due_owner_alerts(
         if (current - datetime.fromisoformat(since)).total_seconds() < after_seconds:
             return []
         needed["alerted_at"] = now()
-        message = "Open the Reviewer's terminal and run /login. A review is waiting and nothing will progress until then."
+        how = str(needed.get("sign_in_how") or "run /login")
+        message = f"Open the Reviewer's terminal and {how}. A review is waiting and nothing will progress until then."
         _event(state, "owner_alerted", None, {
             "request_id": needed.get("request_id", ""), "message": f"{REVIEWER_SIGN_IN_HEADLINE}. {message}",
         })
@@ -4762,8 +4859,10 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
     # 2026-09-27 backlog #8: a signed-out reviewer is not eligible. The board
     # re-routed one review to a logged-out reviewer every 90 s for an hour.
     signed_out = {
-        session_id for session_id, session in active_sessions.items() if attention.needs_sign_in(session)
+        session_id for session_id, session in active_sessions.items() if attention.needs_owner(session)
     }
+    # A Gemini session the owner switched to a non-Google model is not vendor Google any more (spec M-3).
+    off_vendor = {session_id for session_id, session in active_sessions.items() if session.get("model_mismatch")}
     current = datetime.now(timezone.utc)
     deliveries: list[dict[str, Any]] = []
     superseded_routes: list[dict[str, Any]] = []
@@ -4797,6 +4896,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 and routed.get("role") == "qa"
                 and routed_session
                 and routed.get("session_id") not in signed_out
+                and routed.get("session_id") not in off_vendor
                 and routed.get("id") not in held_reviewers
                 and (routed.get("task") in {"REVIEW_QUEUE", request.get("task")} or _task_finished(state, routed.get("task", "")))
                 and (
@@ -4822,7 +4922,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     session_id = candidate.get("session_id", "")
                     if not candidate.get("active") or candidate.get("role") != "qa" or session_id not in active_sessions:
                         continue
-                    if session_id in signed_out:
+                    if session_id in signed_out or session_id in off_vendor:
                         continue
                     if candidate.get("task") not in {"REVIEW_QUEUE", request.get("task")} and not _task_finished(state, candidate.get("task", "")):
                         continue
@@ -4840,13 +4940,16 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     candidates.append(candidate)
                 if not candidates:
                     request["route_state"] = "waiting_for_eligible_reviewer"
-                    waiting_for_sign_in = any(
-                        agent.get("active") and agent.get("role") == "qa" and agent.get("session_id") in signed_out
+                    blocked_reviewer = next((
+                        active_sessions[agent["session_id"]]
                         for agent in state.get("agents", {}).values()
-                    )
+                        if agent.get("active") and agent.get("role") == "qa" and agent.get("session_id") in signed_out
+                    ), None)
+                    block = attention.owner_block(blocked_reviewer) if blocked_reviewer else ""
+                    waiting_for_sign_in = block == "sign_in"
+                    sign_in_how = attention.sign_in_how((blocked_reviewer or {}).get("provider") or "claude")
                     reason = (
-                        "The Reviewer needs you to sign in again: open its terminal and run /login."
-                        if waiting_for_sign_in else
+                        attention.owner_block_sentence("Reviewer", blocked_reviewer) if block else
                         "open review queue has no live eligible reviewer; start one from Mission Control"
                     )
                     needed = state.get("reviewer_needed") or {}
@@ -4856,6 +4959,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                             "request_id": request.get("id", ""),
                             "message": reason,
                             "sign_in": waiting_for_sign_in,
+                            "sign_in_how": sign_in_how,
                             # The sign-in clock starts when the wait becomes a sign-in wait.
                             "sign_in_since": (
                                 (needed.get("sign_in_since") if needed.get("sign_in") else "") or now()
@@ -4932,7 +5036,8 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "Run one bounded board poll, reserve this exact request, read its bounded authoring brief, "
                 "and record your independent review intentions before Delivery evidence is revealed. You may "
                 "author the distinct Challenge Ledger now, but do not attach it, execute review commands, or "
-                "post a verdict until the board records Delivery success. Do not start or continue any polling, "
+                "post a verdict until the board records Delivery success; the board will message you when it does. "
+                "Do not start or continue any polling, "
                 "watch, sleep, caffeinate, or background helper. USER ACTION: None."
             )
         else:
@@ -4965,6 +5070,10 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     "instruction_queued" if delivery["delivered"] else "instruction_failed"
                 )
                 request["route_instruction_id"] = delivery.get("instruction_id", "")
+                if delivery["delivered"] and delivery["delivery_state"] == "executing":
+                    # The Reviewer was told to wait for Delivery success: it is owed exactly one
+                    # "Delivery succeeded" message, whichever comes first - its reservation or the success.
+                    request["delivery_wait_told"] = True
                 _event(state, "instruction_route_queued" if delivery["delivered"] else "instruction_route_failed", reviewer, {
                     "task": delivery["task"],
                     "request_id": delivery["request_id"],
@@ -4976,6 +5085,15 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     ),
                 })
     return deliveries
+
+
+def _delivery_succeeded_instruction(request_id: str, task: str) -> str:
+    return (
+        f"DELIVERY SUCCEEDED: review {request_id} for task {task} now has passing Delivery "
+        "evidence. Continue the review you reserved: finish and attach your distinct Challenge Ledger, claim "
+        "this exact request, execute your simulations and post the formal PASS or FAIL result. Do not start "
+        "or continue any polling, watch, sleep, caffeinate, or background helper. USER ACTION: None."
+    )
 
 
 def _ledger_path(root: Path, value: str) -> Path:
@@ -5027,7 +5145,7 @@ def _require_evidence_file(root: Path, value: str, label: str) -> str:
 
 def _execute_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
-    certification: dict[str, Any] | None = None,
+    certification: dict[str, Any] | None = None, live_board_root: Path | None = None,
 ) -> str:
     """Run Delivery's declared test command outside the board lock.
 
@@ -5038,7 +5156,7 @@ def _execute_internal_qa(
     runs the same check outside the sandbox.
     """
     try:
-        return _run_internal_qa(command, root, measurement=measurement, certification=certification)
+        return _run_internal_qa(command, root, measurement=measurement, certification=certification, live_board_root=live_board_root)
     except ValueError as error:
         if certification is None or browser_acceptance.SANDBOX_BLOCKED not in str(error):
             raise
@@ -5058,19 +5176,23 @@ def _execute_internal_qa(
                 "Run a screen check yourself",
                 rerun,
                 "An agent's check needed a browser, and the browser cannot run inside the "
-                "agent's sandbox. Paste this into Terminal to run the same check on your Mac. "
-                "The check is not counted as passed until it runs.",
+                "agent's sandbox. Running this command in Terminal shows you the result but does not count "
+                "as passed. A rendered test whose own headless browser can run in the sandbox is fine; one that "
+                "cannot must stay out of the governed command, and the agent captures the rendered page with the "
+                "screen-check board command and cites that id in its ledger.",
                 str(certification.get("task") or ""),
             )
         raise ValueError(
-            f"{error} | the screen check could not run inside the agent's sandbox; "
-            "Mission Control now shows the owner the command to run it outside"
+            f"{error} | the browser could not run inside the agent's sandbox. A rendered test whose own headless browser can "
+            "run in the sandbox is fine; one that cannot must stay out of the governed command. Capture the rendered page with "
+            "the screen-check board command (with --expect) and cite its screen-... id in the ledger. Mission Control also "
+            "shows the owner the command"
         ) from error
 
 
 def _run_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
-    certification: dict[str, Any] | None = None,
+    certification: dict[str, Any] | None = None, live_board_root: Path | None = None,
 ) -> str:
     """The command itself; see _execute_internal_qa for the owner-card rule."""
     if not command.strip():
@@ -5103,7 +5225,8 @@ def _run_internal_qa(
         # Security scan finding 2: the agent's command runs inside the agent's own limits.
         completed = subprocess.run(agent_confinement.confine_agent_command(["/bin/sh", "-c", command], root,
                                    claude_config_dir=execution_env.get("CLAUDE_CONFIG_DIR") or None),
-                                   cwd=execution_root, capture_output=True, text=True, timeout=300, env=execution_env)
+                                   cwd=execution_root, capture_output=True, text=True, timeout=300,
+                                   env=child_process.with_live_board(execution_env, live_board_root) if live_board_root is not None else execution_env)
     except subprocess.TimeoutExpired as error:
         if measurement is not None:
             measurement.update(lifecycle.command_measurement(
@@ -5141,7 +5264,7 @@ def _run_internal_qa(
             "internal-QA test command reported zero executed tests", output,
         ))
     if completed.returncode == 0 and browser_acceptance.blocked_note(output):
-        raise ValueError(f"internal-QA test command could not run its screen check: {browser_acceptance.blocked_note(output)}")
+        raise ValueError(browser_acceptance.with_blocked_note("internal-QA test command could not run its screen check", output))
     if completed.returncode != 0:
         raise ValueError(browser_acceptance.with_blocked_note(
             f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}", output,
@@ -5155,6 +5278,7 @@ def _run_internal_qa(
 
 def _execute_scenario_simulations(
     root: Path, ledger: Path, *, certification: dict[str, Any] | None = None,
+    live_board_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Execute distinct commands and attribute results to every scenario row."""
     valid, problems, scenarios = contract.scenario_simulations(ledger)
@@ -5204,7 +5328,7 @@ def _execute_scenario_simulations(
         try:
             output = _execute_internal_qa(
                 scenario["command"], root, measurement=measurement,
-                certification=certification,
+                certification=certification, live_board_root=live_board_root,
             )
         except ValueError as error:
             output = str(error)
@@ -8346,6 +8470,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         [test_command, *[scenario["command"] for scenario in planned_scenarios]],
         environment=child_process.execution_environment(),
     )
+    cited_screen_checks = _cited_screen_checks(root, developer["task"], ledger_path)
     delivery_scope = {
         "task": task_name, "structure_revision": structure_revision,
         "phase": phase, "subtask": subtask, "chunk": chunk,
@@ -8456,11 +8581,11 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         with review_execution_lease(root, agent_id, execution_id, f"delivery QA: {test_command}"):
             output = _execute_internal_qa(
                 test_command, execution_root, measurement=unit_measurement,
-                certification=delivery_certification,
+                certification=delivery_certification, live_board_root=root,
             )
             scenario_started_at = lifecycle.now()
             simulation_results = _execute_scenario_simulations(
-                execution_root, ledger_path, certification=delivery_certification,
+                execution_root, ledger_path, certification=delivery_certification, live_board_root=root,
             )
             scenario_finished_at = lifecycle.now()
         if not ledger_path.is_file():
@@ -8605,6 +8730,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "changes_summary": changes,
             "status": "reserved" if staged_existing.get("status") == "reserved" else "open",
             "delivery_state": "passed", "staged_authoring": True,
+            "cited_screen_checks": cited_screen_checks,
             "requested_at": requested_at,
             "claimed_by": None, "claimed_at": None, "result": None,
             "result_summary": None, "evidence": None, "completed_at": None,
@@ -8618,6 +8744,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "route_transport_state", "route_instruction_id",
             "reviewer_initial_intents", "reviewer_intents_recorded_at",
             "reviewer_intent_amendments", "reviewer_authoring_overlap_started",
+            "delivery_wait_told",
         ):
             if key in staged_existing:
                 request[key] = json.loads(json.dumps(staged_existing[key]))
@@ -8683,7 +8810,31 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         })
         _event(state, "independent_review_requested", developer, {"task": developer["task"], "request_id": request_id, "stage": INDEPENDENT_REVIEW, "phase": phase, "subtask": subtask, "chunk": chunk, "cycle": cycle, "ledger": ledger, "evidence": delivery_evidence, "scenario_count": len(simulation_results), "lifecycle": request_lifecycle, "command_execution_count": len([item for item in request["command_executions"] if item.get("cache_decision") != "same_request_deduplicated"]), "message": summary})
         created = dict(request)
+        # A Reviewer that reserved the staged request while Delivery was still
+        # checking was told not to attach its ledger or execute until Delivery
+        # succeeded. Nothing else tells it that has now happened, so a literal
+        # Reviewer (Gemini observed) stopped and waited for the reservation
+        # timeout. Tell it, once, in one line.
+        success_wake = None
+        if (
+            staged_existing.get("status") == "reserved" and staged_existing.get("reserved_by")
+            and request.get("delivery_wait_told")
+        ):
+            waiting = state.get("agents", {}).get(staged_existing["reserved_by"]) or {}
+            if waiting.get("session_id"):
+                success_wake = waiting["session_id"]
+                request["delivery_wait_told"] = False
     route_open_reviews(root)
+    if success_wake:
+        from harness import control  # local, as everywhere in this module (import cycle)
+        try:
+            control.enqueue_instruction(
+                root, success_wake, _delivery_succeeded_instruction(request_id, created.get("task", "")),
+                source="review-delivery-succeeded",
+            )
+        except (ValueError, OSError):
+            # The reservation timeout still re-routes an abandoned review.
+            pass
     return dict(snapshot(root)["qa_requests"].get(request_id, created))
 
 
@@ -8727,6 +8878,23 @@ def review_brief(
 
 def reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any]:
     """Immediately reserve an independent review before ledger authoring."""
+    result = _reserve_qa(root, agent_id, request_id)
+    session = result.pop("_delivery_wake_session", "")
+    if session:
+        # The Reviewer was told to wait for Delivery success, but Delivery had already succeeded
+        # when it reserved (the ordinary case for a short check): nothing else would ever tell it.
+        from harness import control  # local, as everywhere in this module (import cycle)
+        try:
+            control.enqueue_instruction(
+                root, session, _delivery_succeeded_instruction(result.get("id", ""), result.get("task", "")),
+                source="review-delivery-succeeded",
+            )
+        except (ValueError, OSError):
+            pass  # the reservation timeout still re-routes an abandoned review
+    return result
+
+
+def _reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any]:
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         if qa["role"] != "qa":
@@ -8776,7 +8944,11 @@ def reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any
                 request["reviewer_authoring_overlap_started"] = True
             qa.update({"task": request["task"], "status": "qa_preparing", "status_note": f"preparing a distinct Challenge Ledger for {request['id']}", "last_status_at": reserved_at})
             _event(state, "qa_reserved", qa, {"task": request["task"], "request_id": request["id"], "stage": request.get("stage"), "cycle": request["cycle"], "message": "reviewer reserved the request and is preparing a distinct Challenge Ledger"})
-            return dict(request)
+            reserved_copy = dict(request)
+            if request.get("delivery_state") == "passed" and request.get("delivery_wait_told") and qa.get("session_id"):
+                request["delivery_wait_told"] = False
+                reserved_copy["_delivery_wake_session"] = qa["session_id"]
+            return reserved_copy
         claimed_at = now()
         request_lifecycle = request.setdefault("lifecycle", {})
         queue_started = str(request_lifecycle.get("review_queue", {}).get("started_at") or request.get("requested_at", ""))
@@ -8895,6 +9067,7 @@ def attach_challenge_ledger(
         challenge_scenarios = contract.scenario_fingerprints(challenge)
         if not challenge_scenarios - source_scenarios:
             raise ValueError("reviewer Challenge Ledger must introduce at least one scenario command beyond the delivery ledger")
+        request["challenge_cited_screen_checks"] = _cited_screen_checks(root, request["task"], challenge, require_role="qa")
         attached_at = now()
         challenge_digest = hashlib.sha256(challenge.read_bytes()).hexdigest()
         if correction:
@@ -9134,7 +9307,7 @@ def _execute_challenge_locked(
                 lockfile_digests = _execution_lockfile_digests(candidate_root)
                 started = datetime.now(timezone.utc)
                 simulations = _execute_scenario_simulations(
-                    candidate_root, candidate_ledger,
+                    candidate_root, candidate_ledger, live_board_root=root,
                     certification={
                         "board_root": root, "candidate": candidate,
                         "environment_sha256": environment_sha256,
@@ -9311,6 +9484,13 @@ def qa_result(
             review_state = json.loads(json.dumps(state))
             review_request = json.loads(json.dumps(request))
             simulation_digest = hashlib.sha256(simulation_path.read_bytes()).hexdigest()
+    if result == "passed":
+        # Every PASS path, certified or not: what the ledgers cited must still be intact.
+        _verify_recorded_screen_checks(
+            root, str((review_request or {}).get("task") or ""),
+            list((review_request or {}).get("cited_screen_checks") or [])
+            + list((review_request or {}).get("challenge_cited_screen_checks") or []),
+        )
     # Reviewer commands run outside the board lock so board polls remain live.
     certified = None
     if result == "passed" and simulation_field == "reviewer_simulations":
@@ -9334,7 +9514,7 @@ def qa_result(
         )
         with execution:
             with _review_candidate_checkout(root, review_state or {}, review_request or {}, simulation_path) as (candidate_root, candidate_ledger):
-                simulations = _execute_scenario_simulations(candidate_root, candidate_ledger)
+                simulations = _execute_scenario_simulations(candidate_root, candidate_ledger, live_board_root=root)
                 _require_completed_ledger(
                     candidate_root, str(candidate_ledger), "reviewer Scenario Ledger",
                     owner_readable=True,
@@ -9965,6 +10145,23 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
         release = state.get("releases", {}).get(task)
         if not release or release.get("status") not in RELEASED_STATUSES:
             raise ValueError("owner responses are available only for a released task")
+        task_requests = _task_requests(state, task)
+        if (
+            decision == "accepted"
+            and state.get("task_repositories", {}).get(task)
+            and not state.setdefault("release_decisions", {}).get(task)
+            and any(r.get("phase") == "final_acceptance" and r.get("integrity_invalidated") for r in task_requests)
+            and not any(
+                r.get("phase") == "final_acceptance" and r.get("status") == "passed" and r.get("mirror_ref")
+                for r in task_requests
+            )
+        ):
+            # Its passing review was reset (for example by a resume that found the code changed).
+            # Recording "accepted" here would claim work reached main without the Git transaction.
+            raise ValueError(
+                "this task's passing independent review was reset, so its files cannot be moved into main "
+                "yet; ask Delivery for a fresh review, then accept"
+            )
         prior = state.setdefault("release_decisions", {}).get(task)
         if prior:
             # 2026-09-25 defect: a saved Accept whose fast-forward failed could
@@ -11141,6 +11338,10 @@ def main(argv: list[str] | None = None) -> int:
     from harness import board_client
     client_state = board_client.environment_state()
     requested = list(sys.argv[1:] if argv is None else argv)
+    live_board = os.environ.get(child_process.LIVE_BOARD_ENV, "")
+    if live_board and client_state != "legacy" and not any(item in {"-h", "--help"} for item in requested):
+        print("error: " + execution_preflight.BOARD_CALL_REFUSAL, file=sys.stderr)
+        return 2
     # Help is answered locally, never sent to the worker: a managed agent that
     # asked `--help` used to get "response is invalid or incompatible" back
     # and spent a minute deciding whether the board was broken (2026-09-23).
@@ -11149,6 +11350,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     root = context_from_args(args)
+    if live_board:
+        try:
+            aimed_at_live_board = Path(live_board).resolve() == Path(project_context(root).data_root).resolve()
+        except OSError:
+            aimed_at_live_board = False
+        if aimed_at_live_board:
+            # A governed test or scenario command cannot reach the live board; say so instead of
+            # failing on its protected lock file. A disposable fixture board is not the live board.
+            print("error: " + execution_preflight.BOARD_CALL_REFUSAL, file=sys.stderr)
+            return 2
     try:
         if args.command == "register": out = register(root, args.role, args.task, args.name, args.vendor, args.session_id)
         elif args.command == "poll": out = poll(root, args.agent)

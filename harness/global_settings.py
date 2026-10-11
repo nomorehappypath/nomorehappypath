@@ -70,12 +70,13 @@ def _now() -> str:
 # stage is OFF by default; with all of them off, behaviour is today's exactly.
 PLUMBING_STAGES = (
     "stage1_hooks", "stage2_board_mcp", "stage3_codex_app_server",
-    "stage3_claude_socket_delivery", "stage4_system_layer_directives", "stage5_structured_verdicts",
+    "stage3_claude_socket_delivery", "stage3_gemini_delivery", "stage4_system_layer_directives", "stage5_structured_verdicts",
 )
 # A stage needs these stages on as well (spec §5, enforced, never advisory).
 PLUMBING_DEPENDENCIES = {
     "stage3_codex_app_server": ("stage1_hooks",),
     "stage3_claude_socket_delivery": ("stage1_hooks",),
+    "stage3_gemini_delivery": ("stage1_hooks",),
     "stage5_structured_verdicts": ("stage2_board_mcp",),
 }
 PLUMBING_LIMITS = {
@@ -86,6 +87,9 @@ PLUMBING_LIMITS = {
     # How long a message the CLI has queued may wait while the session is busy
     # (Claude reads its inbox between tool calls and at the end of a turn).
     "delivery_busy_wait_seconds": (900, 30, 7200),
+    # How long the supervisor looks for the conversation a Gemini session started (the CLI creates it only
+    # when the first turn runs, which can wait on a sign-in or trust answer).
+    "gemini_conversation_wait_seconds": (1800, 60, 7200),
 }
 
 
@@ -154,20 +158,32 @@ def _default() -> dict[str, Any]:
         "agent_settings": control.default_agent_settings(),
         "connectivity": {},
         "plumbing": default_plumbing(),
+        "notices": [],
     }
 
 
-def _validate_document(value: Any) -> dict[str, Any]:
+def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict) or int(value.get("version", 0)) != SETTINGS_VERSION:
         raise ValueError(f"global settings must use version {SETTINGS_VERSION}")
     connectivity = value.get("connectivity", {})
     if not isinstance(connectivity, dict):
         raise ValueError("global connectivity results must be an object")
+    found: list[str] = []
+    agent_settings = control._validated_agent_settings(value.get("agent_settings"), notices=found, repair=True)
+    # A repair is never silent and never replaces the owner's other choices with defaults: the notices stay in the
+    # document, and Settings shows them, until the owner's next explicit save.
+    notices = [str(item) for item in (value.get("notices") or []) if isinstance(item, str)]
+    for item in found:
+        if item not in notices:
+            notices.append(item)
+    if repairs is not None:
+        repairs.extend(found)
     return {
         "version": SETTINGS_VERSION,
-        "agent_settings": control._validated_agent_settings(value.get("agent_settings")),
+        "agent_settings": agent_settings,
         "connectivity": connectivity,
         "plumbing": _validated_plumbing(value.get("plumbing")),
+        "notices": notices,
     }
 
 
@@ -249,10 +265,13 @@ def initialize(home: Path, data_roots: list[Path] | None = None) -> dict[str, An
     with _locked(home):
         path = _path(home)
         if path.exists():
+            repairs: list[str] = []
             try:
-                value = _validate_document(json.loads(path.read_text(encoding="utf-8")))
+                value = _validate_document(json.loads(path.read_text(encoding="utf-8")), repairs)
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
                 return {**_default(), "error": f"saved global settings need attention: {error}"}
+            if repairs:
+                _write(home, value)          # what launches must match what Settings shows
             _remove_legacy_project_copies(roots)
             return value
         value = _default()
@@ -544,7 +563,7 @@ def provider_executable(
     if provider not in control.PROVIDERS:
         return ""
     environment = os.environ if source_environment is None else source_environment
-    configured = str(environment.get(control.PROVIDERS[provider]["binary_env"], provider))
+    configured = str(environment.get(control.PROVIDERS[provider]["binary_env"], control.provider_executable_name(provider)))
     if os.path.isabs(configured):
         path = Path(configured)
         return str(path) if path.is_file() and os.access(path, os.X_OK) else ""
@@ -646,7 +665,13 @@ def provider_environment(
 
 
 def update_agent_settings(home: Path, value: dict[str, Any]) -> dict[str, Any]:
-    validated = control._validated_agent_settings(value)
+    save_notices: list[str] = []
+    validated = control._validated_agent_settings(value, notices=save_notices)
+    from harness import cli_capabilities
+    for role, entry in validated.items():
+        availability = cli_capabilities.provider_availability(home, entry["provider"])
+        if not availability["available"]:
+            raise ValueError(availability["reason"])
     with _locked(home):
         current = _default()
         path = _path(home)
@@ -661,6 +686,7 @@ def update_agent_settings(home: Path, value: dict[str, Any]) -> dict[str, Any]:
                 _preserve_broken(path)
                 current = _default()
         current["agent_settings"] = validated
+        current["notices"] = save_notices      # an explicit save clears older repair notices
         _write(home, current)
         return json.loads(json.dumps(current))
 
@@ -679,19 +705,114 @@ def _record_connectivity(home: Path, provider: str, result: dict[str, Any]) -> b
         return True
 
 
+GEMINI_SIGN_IN_SIGNALS = ("not logged into", "authentication failed", "authentication required", "please sign in",
+                          "waiting for authentication", "unauthenticated")
+GEMINI_QUOTA_SIGNALS = ("quota", "resource_exhausted", "weekly limit", "usage limit", "rate limit", "429")
+GEMINI_CAPACITY_SIGNALS = ("capacity", "overloaded", "unavailable", "503")
+GEMINI_BILLING_SIGNALS = ("insufficient credit", "credits", "billing", "payment required", "402")
+
+
+def _gemini_connection_failure(output: str, model: str, effort: str, detail: str) -> str:
+    """The plain sentence for a failed Gemini test: signed out, quota, capacity, billing or a refused model/effort."""
+    lowered = output.lower()
+    if any(signal in lowered for signal in GEMINI_SIGN_IN_SIGNALS):
+        return ("Gemini is not signed in where the agents run. Start a Gemini agent from Mission Control and "
+                "follow the sign-in prompt in its window once; the agents keep that sign-in. "
+                f"The CLI said: {detail}")
+    if any(signal in lowered for signal in GEMINI_BILLING_SIGNALS):
+        return ("Your Google account needs credits or a paid plan to run this - add them on the Google side "
+                f"(one.google.com). The app itself is fine. The CLI said: {detail}")
+    if any(signal in lowered for signal in GEMINI_QUOTA_SIGNALS):
+        return ("Gemini has used up your Google plan's quota for now - the agents cannot work until it refreshes "
+                f"or the plan is upgraded on the Google side. The CLI said: {detail}")
+    if any(signal in lowered for signal in GEMINI_CAPACITY_SIGNALS):
+        return f"Gemini has no capacity right now. Try again in a few minutes. The CLI said: {detail}"
+    return f"Gemini CLI rejected model {model} or effort {effort}: {detail}"
+
+
+def _test_gemini_connection(home: Path, model: str, effort: str, workspace: Path) -> dict[str, Any]:
+    """One bounded REAL request to Gemini, made the way the agents run it: inside the confinement wrapper.
+
+    A pass proves that the model and effort run on the owner's Google subscription sign-in AND that this
+    sign-in is reachable from inside the agents' sandbox (on macOS that is a separate, one-time sign-in).
+    """
+    import tempfile
+    from harness import agent_confinement, gemini_auth
+    tested_at = _now()
+
+    def fail(message: str) -> ValueError:
+        _record_connectivity(home, "gemini", {"ok": False, "model": model, "effort": effort,
+                                              "tested_at": tested_at, "message": message})
+        return ValueError(message)
+
+    configured = os.environ.get(control.PROVIDERS["gemini"]["binary_env"], "agy")
+    executable = provider_executable("gemini")
+    if not executable:
+        raise fail(f"The Antigravity CLI (agy) was not found ({configured}). Install it from antigravity.google/cli.")
+    problem = gemini_auth.api_key_problem()
+    if problem:
+        raise fail(problem)
+    command = [executable, "-p", CONNECTION_TEST_PROMPT, "--model", model, "--effort", effort,
+               "--output-format", "json", "--dangerously-skip-permissions"]
+    folder = Path(workspace).resolve()
+    with tempfile.TemporaryDirectory(prefix="harness-gemini-test-") as store:
+        try:
+            command = agent_confinement.wrap(command, [str(folder)], store=Path(store), home=Path.home(), provider="gemini")
+        except agent_confinement.ConfinementUnavailable as error:
+            raise fail(f"This computer cannot confine the Gemini agent, so it cannot run here: {error}") from error
+        try:
+            completed = subprocess.run(command, cwd=str(folder), capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                       timeout=CONNECTION_TEST_TIMEOUT_SECONDS, env=provider_environment(executable))
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise fail(f"Gemini CLI could not be started or did not answer in time: {error}") from error
+    output = f"{completed.stdout}\n{completed.stderr}"
+    try:
+        envelope = json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
+    except ValueError:
+        envelope = {}
+    answered = completed.returncode == 0 and str(envelope.get("status", "")).upper() == "SUCCESS" \
+        and str(envelope.get("response", "")).strip()
+    if not answered:
+        detail = str(envelope.get("error") or completed.stderr or completed.stdout or "the CLI rejected the request").strip()
+        detail = detail.splitlines()[-1] if detail.splitlines() else detail
+        raise fail(_gemini_connection_failure(output, model, effort, detail))
+    version = cli_version(executable)
+    result = {
+        "ok": True, "provider": "gemini", "model": model, "effort": effort, "tested_at": tested_at,
+        "cli_path": executable, "cli_version": version,
+        "message": (
+            f"Gemini ran a one-word test with model {model} at {effort} effort and answered, from inside the agents' "
+            f"sandbox, on your Google account. This was a real request and used a little of your plan's quota. "
+            f"The agents use Antigravity CLI {version or '(version not reported)'} at {executable}."
+        ),
+    }
+    if not _record_connectivity(home, "gemini", {key: value for key, value in result.items() if key != "provider"}):
+        result["message"] += " Repair the saved global settings before this result can be stored."
+    return result
+
+
 def test_connection(home: Path, provider: str, model: str, effort: str,
                     workspace: Path) -> dict[str, Any]:
     """Verify one local CLI's model/effort flags without launching a task."""
     initialize(home)
     provider = str(provider).strip().lower()
     if provider not in control.PROVIDERS:
-        raise ValueError("choose Codex or Claude before testing the connection")
+        raise ValueError("choose Codex, Claude or Gemini before testing the connection")
     model = control.normalize_provider_model(provider, model)
     effort = control.normalize_provider_effort(provider, effort)
     if effort not in control.PROVIDER_EFFORTS[provider]:
         choices = ", ".join(control.PROVIDER_EFFORTS[provider])
         raise ValueError(f"{provider.title()} does not support '{effort}'. Choose {choices}.")
-    configured = os.environ.get(control.PROVIDERS[provider]["binary_env"], provider)
+    if provider == "gemini":
+        asked_model = model
+        model, effort, notice = control.gemini_pair(model, effort, repair=False)
+        result = _test_gemini_connection(home, model, effort, workspace)
+        result["effective_model"], result["effective_effort"] = model, effort
+        if notice:
+            result["notice"] = notice
+            result["message"] = f"{notice}. {result.get('message', '')}".strip()
+        return result
+    configured = os.environ.get(control.PROVIDERS[provider]["binary_env"], control.provider_executable_name(provider))
     executable = provider_executable(provider)
     # A --help probe exits 0 whatever model is named: it proves the flags parse,
     # never that the model RUNS. That false green let an older Codex CLI pass

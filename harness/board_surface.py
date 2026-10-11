@@ -168,8 +168,13 @@ _PROJECT_COMMAND_LOCKS_GUARD = threading.Lock()
 # Their board functions use the durable state lock, and staged review authoring
 # depends on them remaining responsive while Delivery evidence executes.
 CONCURRENT_BOARD_OPERATIONS = {
-    "poll", "reserve-qa", "review-brief", "review-intents",
+    "poll", "reserve-qa", "review-brief", "review-intents", "screen-check",
 }
+# `screen-check` is here because Delivery's own rendered test calls it while
+# `request-review` is running that very test. Serialised behind it, the nested
+# call could never start: the test failed, the review was cancelled, and the
+# project looped (found on a live project, 2026-10-09). It holds no board lock
+# while the browser renders; it only takes the durable state lock briefly.
 # Short heartbeat and read commands never queue behind a long serialized
 # command (finding: agent commands failed under load while the worker
 # reported ready). They skip only the gateway's coarse serialization; the
@@ -452,6 +457,29 @@ def _argument_value(arguments: list[str], name: str) -> str | None:
     return found[0] if found else None
 
 
+def _screen_check_arguments(arguments: list[str]) -> tuple[str, str, str]:
+    """Strictly parse `screen-check --agent A --url U [--expect T]` for the direct-call path."""
+    values: dict[str, list[str]] = {"--agent": [], "--url": [], "--expect": []}
+    index = 1
+    while index < len(arguments):
+        name, separator, inline = arguments[index].partition("=")
+        if name not in values:
+            raise SurfaceProtocolError("concurrent board command arguments are invalid")
+        if separator:
+            value, index = inline, index + 1
+        else:
+            if index + 1 >= len(arguments):
+                raise SurfaceProtocolError(f"{name} requires a value")
+            value, index = arguments[index + 1], index + 2
+        values[name].append(value)
+    for name in ("--agent", "--url"):
+        if len(values[name]) != 1 or not values[name][0]:
+            raise SurfaceProtocolError(f"{name} must be supplied exactly once")
+    if len(values["--expect"]) > 1:
+        raise SurfaceProtocolError("--expect may be supplied only once")
+    return values["--agent"][0], values["--url"][0], (values["--expect"] or [""])[0]
+
+
 def _concurrent_arguments(
     operation: str, arguments: list[str],
 ) -> tuple[str, str, list[str], bool]:
@@ -718,7 +746,7 @@ class CommandGateway:
 
         if operation == "register":
             session = self.authority._session(identity.session_id)
-            vendor = "Anthropic" if str(session.get("provider", "")).lower() == "claude" else "OpenAI"
+            vendor = control.PROVIDERS.get(str(session.get("provider", "")).lower(), control.PROVIDERS["codex"])["vendor"]
             display = {"engineering": "Delivery Agent", "qa": "Independent Reviewer", "cto": "CTO"}[identity.role]
             initial_task = {"engineering": "AWAITING_OWNER_DIRECTION", "qa": "REVIEW_QUEUE", "cto": "GLOBAL_MONITOR"}[identity.role]
             canonical = [operation]
@@ -995,6 +1023,15 @@ class CommandGateway:
         """Run the small staged-authoring surface without global command contention."""
         from harness import board
 
+        if operation == "screen-check":
+            agent_id, url, expect = _screen_check_arguments(arguments)
+            try:
+                return board.screen_check(self.context, agent_id, url, expect)
+            except ValueError as error:
+                # The serialised path turned every board refusal into this; keep it.
+                raise SurfaceProtocolError(
+                    _sanitized_text(str(error).removeprefix("error: ").strip(), self.context)
+                ) from error
         agent_id, request_id, intents, amendment = _concurrent_arguments(
             operation, arguments,
         )

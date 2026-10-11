@@ -132,6 +132,74 @@ class StagedReviewAuthoringTests(unittest.TestCase):
         )
         self.assertEqual(claimed["status"], "claimed")
 
+    def test_a_reviewer_waiting_on_delivery_is_told_when_delivery_succeeds(self):
+        # A literal Reviewer (Gemini) obeys "do not attach until Delivery succeeds"
+        # and stops; nothing used to wake it, so it waited out the reservation.
+        reviewer_session = control.create(self.root, "claude_reviewer")
+        waiting = board.register(
+            self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=reviewer_session["id"],
+        )
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+
+        def execute(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                self.assertTrue(release.wait(timeout=5))
+            return "Ran 1 test in 0.001s\nOK\n"
+
+        def queued():
+            with control.locked_state(self.root) as state:
+                return [e.get("text", "") for e in (state.get("inbox") or {}).get(reviewer_session["id"], [])]
+
+        for result, thread in self._request_in_thread(execute):
+            self.assertTrue(started.wait(timeout=5))
+            staged = next(iter(board.snapshot(self.root)["qa_requests"].values()))
+            board.reserve_qa(self.root, waiting["id"], staged["id"])
+            board.record_review_intents(
+                self.root, waiting["id"], staged["id"],
+                ["Try an independent unexecuted-verdict case and require the board to fail closed."],
+            )
+            self.assertFalse([t for t in queued() if "DELIVERY SUCCEEDED" in t])
+            release.set()
+
+        self.assertNotIn("error", result)
+        wakes = [t for t in queued() if "DELIVERY SUCCEEDED" in t]
+        self.assertEqual(len(wakes), 1)
+        self.assertIn(result["request"]["id"], wakes[0])
+        self.assertIn("attach your distinct Challenge Ledger", wakes[0])
+
+    def test_a_reviewer_that_reserves_after_delivery_already_succeeded_is_still_woken_once(self):
+        # The ordinary short-check order (seen live on both platforms): routed -> Delivery succeeds
+        # within a second -> the Reviewer reserves seconds later. It was told to wait; nothing woke it.
+        reviewer_session = control.create(self.root, "claude_reviewer")
+        late = board.register(
+            self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=reviewer_session["id"],
+        )
+
+        def queued():
+            with control.locked_state(self.root) as state:
+                return [e.get("text", "") for e in (state.get("inbox") or {}).get(reviewer_session["id"], [])]
+
+        with patch.object(board, "_execute_internal_qa", return_value="Ran 1 test in 0.001s\nOK\n"):
+            completed = board.request_review(
+                self.root, self.delivery["id"], self.delivery_ledger,
+                "Review the frozen candidate", chunk="core",
+                test_command="python3 -m unittest test_smoke",
+            )
+        self.assertEqual(completed["delivery_state"], "passed")
+        self.assertTrue([t for t in queued() if "REVIEW AUTHORING ROUTED" in t], "the Reviewer was told to wait")
+        self.assertFalse([t for t in queued() if "DELIVERY SUCCEEDED" in t], "nothing to say before it reserves")
+        reserved = board.reserve_qa(self.root, late["id"], completed["id"])
+        self.assertEqual(reserved["status"], "reserved")
+        self.assertNotIn("_delivery_wake_session", reserved)
+        wakes = [t for t in queued() if "DELIVERY SUCCEEDED" in t]
+        self.assertEqual(len(wakes), 1)
+        self.assertIn(completed["id"], wakes[0])
+
     def test_delivery_failure_cancels_execution_and_archives_staged_review(self):
         started = threading.Event()
         release = threading.Event()

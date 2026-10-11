@@ -37,7 +37,7 @@ REVIEWER_WAIT_SECONDS = 5 * 60
 # terminals that closed days ago).
 ENDED_RECENT_SECONDS = 30 * 60
 MAX_ACTIONS_PER_HOUR = 3
-SIGN_IN_WORDS = ("login", "log in", "sign in", "signed out", "logged out", "401")
+SIGN_IN_WORDS = ("login", "log in", "sign in", "signed out", "logged out", "401", "out of quota")
 EVENT_KINDS = ("agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up")
 ROLE_BY_KIND = {"codex_delivery": "the Delivery Agent", "claude_reviewer": "the Reviewer", "claude_cto": "the CTO"}
 
@@ -195,9 +195,14 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         session.get("kind") == "claude_reviewer" and not agents_by_session.get(str(session.get("id")))
         for session in live
     )
-    # Claude sign-in is shared by every Claude terminal on the machine: a new
-    # Reviewer would be signed out too. Backlog #8 tells the owner instead.
-    claude_signed_out = any(session.get("kind", "").startswith("claude") and _needs_sign_in(session) for session in live)
+    # A provider's sign-in is shared by every terminal of that provider on the
+    # machine: a new Reviewer of the configured provider would be signed out
+    # too. Backlog #8 tells the owner instead. (Claude and Gemini alike.)
+    reviewer_provider = str(((control_state.get("agent_settings") or {}).get("reviewer") or {}).get("provider") or "")
+    claude_signed_out = any(
+        (session.get("provider") == reviewer_provider if reviewer_provider and session.get("provider")
+         else session.get("kind", "").startswith("claude")) and _needs_sign_in(session)
+        for session in live)
     if needed and waited is not None and waited >= REVIEWER_WAIT_SECONDS and not reviewer_starting and not claude_signed_out:
         actions.append(_limited(state, "role:reviewer", current, {
             "action": "start_reviewer", "kind": "claude_reviewer",
