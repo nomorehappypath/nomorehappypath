@@ -164,6 +164,19 @@ def codex_rollout_path(cli_session_id: str) -> Path | None:
     return None
 
 
+def gemini_brain() -> Path:
+    """Antigravity CLI keeps `<home>/.gemini/antigravity-cli/brain/<conversationId>/`; its home has no override."""
+    return Path.home() / ".gemini" / "antigravity-cli" / "brain"
+
+
+def gemini_transcript_path(cli_session_id: str) -> Path | None:
+    """`brain/<id>/.system_generated/logs/transcript.jsonl`, once the first turn has created it."""
+    if not cli_session_id or "/" in cli_session_id or cli_session_id.startswith("."):
+        return None
+    path = gemini_brain() / cli_session_id / ".system_generated" / "logs" / "transcript.jsonl"
+    return path if path.is_file() else None
+
+
 CODEX_MARKER_PREFIX = "HARNESS_MANAGED_SESSION="
 
 
@@ -209,6 +222,33 @@ def _rollout_carries_marker(path: Path, marker: str, byte_limit: int = 8 * 1024 
     except OSError:
         return False
     return False
+
+
+def discover_gemini_session_id(since: float, marker: str) -> str | None:
+    """Find the Antigravity conversation THIS launch started, by the marker in its first request.
+
+    The CLI creates `brain/<id>/` only when the first turn runs, and the owner
+    may have other `agy` sessions of their own running, so the new directory
+    is never taken on its own: the one claimed is the one whose transcript
+    carries this launch's marker (the same device Codex uses).
+    """
+    if not marker:
+        raise ValueError("a launch marker is required to identify a Gemini conversation")
+    brain = gemini_brain()
+    if not brain.is_dir():
+        return None
+    for directory in sorted(brain.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+        transcript = directory / ".system_generated" / "logs" / "transcript.jsonl"
+        try:
+            if not transcript.is_file() or transcript.stat().st_mtime < since - 1:
+                continue
+            with transcript.open("r", encoding="utf-8", errors="replace") as handle:
+                head = handle.read(2 * 1024 * 1024)
+        except OSError:
+            continue
+        if marker in head:
+            return directory.name
+    return None
 
 
 def discover_codex_session_id(since: float, cwd: Path, marker: str) -> str | None:
@@ -261,7 +301,7 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
     says why, and the runner writes that reason into the transcript.
     """
     provider = str(provider or "").strip()
-    if provider not in {"claude", "codex"}:
+    if provider not in {"claude", "codex", "gemini"}:
         raise ValueError("unknown CLI provider")
     record = control.cli_session(root, session_id)
     known = str(record.get("cli_session_id") or "")
@@ -277,6 +317,10 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
         if provider == "codex" and codex_rollout_path(known) is not None:
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
                     "transcript": transcript, "reason": f"resuming Codex session {known}",
+                    "predecessor": predecessor, "after_pause": after_pause}
+        if provider == "gemini" and gemini_transcript_path(known) is not None:
+            return {"mode": "resume", "provider": provider, "cli_session_id": known,
+                    "transcript": transcript, "reason": f"resuming Gemini conversation {known}",
                     "predecessor": predecessor, "after_pause": after_pause}
         reason = f"previous {provider} session {known} is not in the vendor store; starting fresh"
         # The stale id must go: the supervisor discovers a NEW Codex rollout only
@@ -295,7 +339,7 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
                 "transcript": transcript, "reason": reason, "predecessor": predecessor, "after_pause": after_pause}
     return {"mode": "fresh", "provider": provider, "cli_session_id": "",
             "transcript": transcript, "reason": reason, "predecessor": predecessor, "after_pause": after_pause,
-            "codex_marker": codex_launch_marker(session_id, launches + 1)}
+            "codex_marker": codex_launch_marker(session_id, launches + 1)}   # Codex and Gemini both find their id by it
 
 
 def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_command_prefix: str,
@@ -349,7 +393,7 @@ def codex_discovery_state(root: ProjectRoot, session_id: str, provider: str) -> 
     record = control.cli_session(root, session_id)
     launch_number = int(record.get("cli_launches") or 1)
     marker = codex_launch_marker(session_id, launch_number)
-    pending = provider == "codex" and not record.get("cli_session_id")
+    pending = provider in {"codex", "gemini"} and not record.get("cli_session_id")
     return pending, marker
 
 
@@ -405,6 +449,8 @@ def vendor_conversation_path(provider: str, cli_session_id: str) -> Path | None:
         return None
     if provider == "codex":
         return codex_rollout_path(cli_session_id)
+    if provider == "gemini":
+        return gemini_transcript_path(cli_session_id)
     return None
 
 
@@ -420,7 +466,7 @@ def _tool_line(name: str, arguments: Any) -> str:
         except ValueError:
             return f"{name}: {arguments[:200]}"
     if isinstance(arguments, dict):
-        for key in ("command", "cmd", "file_path", "path", "pattern", "query", "url"):
+        for key in ("command", "cmd", "CommandLine", "file_path", "AbsolutePath", "path", "pattern", "query", "url"):
             value = arguments.get(key)
             if isinstance(value, str) and value.strip():
                 return f"{name}: {value.strip()[:300]}"
@@ -516,12 +562,69 @@ def read_codex_conversation(path: Path) -> list[dict[str, str]]:
     return entries
 
 
+USER_REQUEST = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.DOTALL)
+
+
+def read_gemini_conversation(path: Path) -> list[dict[str, str]]:
+    """Antigravity's `transcript.jsonl`: owner and harness messages, the model's answers, its tool calls.
+
+    `USER_EXPLICIT` entries are the owner's typing; `SYSTEM_SDK` entries are
+    messages the harness injected through a hook (they carry their own
+    `[SYSTEM CONTROL - source]` label, so they read as what they are). The
+    model's reasoning (`thinking`), tool results and system notices are not
+    the conversation.
+    """
+    entries: list[dict[str, str]] = []
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return entries
+    with handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            at = str(record.get("created_at") or "")
+            source, kind = record.get("source"), record.get("type")
+            content = record.get("content")
+            if kind == "USER_INPUT" and source in {"USER_EXPLICIT", "SYSTEM_SDK"} and isinstance(content, str):
+                match = USER_REQUEST.search(content)
+                text = (match.group(1) if match else content).strip()
+                if text:
+                    entries.append(_entry(at, "owner", "text", text))
+            elif source == "MODEL" and kind == "PLANNER_RESPONSE":
+                if isinstance(content, str) and content.strip():
+                    entries.append(_entry(at, "agent", "text", content))
+                for call in record.get("tool_calls") or []:
+                    if isinstance(call, dict):
+                        arguments = {key: _unquote(value) for key, value in (call.get("args") or {}).items()} \
+                            if isinstance(call.get("args"), dict) else call.get("args")
+                        entries.append(_entry(at, "agent", "tool", _tool_line(str(call.get("name", "tool")), arguments)))
+    return entries
+
+
+def _unquote(value: Any) -> Any:
+    """Antigravity stores tool arguments as JSON-encoded strings (`"\"ls\""`)."""
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            return value
+        return decoded if isinstance(decoded, (str, int, float)) else value
+    return value
+
+
 def read_vendor_conversation(provider: str, cli_session_id: str) -> list[dict[str, str]] | None:
     path = vendor_conversation_path(provider, cli_session_id)
     if path is None:
         return None
     if provider == "claude":
         return read_claude_conversation(path)
+    if provider == "gemini":
+        return read_gemini_conversation(path)
     return read_codex_conversation(path)
 
 

@@ -294,23 +294,34 @@ review.
   test how it looks. Fewer rows that each decide something beat many rows
   that decide nothing, and a ledger you cannot finish inside a review window
   is a ledger full of rows that decide nothing.
-- **A user-facing change is proven on the rendered surface.** When a scenario
-  covers something a person sees or operates, its `Simulation command` must
-  drive the running surface and capture what was actually rendered, using the
-  project's own UI test tooling or a headless driver you add in your task
-  workspace or a temporary directory when it has none. Reading served markup, template source, or a build log is
-  not seeing the page; an empty or error render is a FAIL row, not a pass.
-  When your own browser cannot open the page (a sandbox or browser-tool
-  policy refuses localhost), ask the harness instead: the board command
-  `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"` opens
-  your running app in the harness browser, outside your sandbox, and returns
-  the rendered text; the HTML and a screenshot are saved as board evidence
-  under a `screen-...` id you cite in the ledger. It accepts only loopback
-  addresses of your own app, never a harness port.
-  Where the project genuinely cannot be driven this way, record the limitation
-  as an approved Completion Contract exclusion with its reason, and never
-  present an unexecuted surface as covered by a chunk or final review
-  simulation.
+- **A user-facing change is proven on the rendered surface, and every command the board runs stays hermetic (owner's rule, every project).**
+  Commands the board runs for you (`--test-command`, every Scenario Ledger and
+  Challenge Ledger `Simulation command`, and everything a test starts) run in
+  the review sandbox and cannot reach the live board. They must never run
+  `board.py` or `screen-check`, directly or from test code; the board refuses
+  such a command at once. Make each one a hermetic check of the behaviour: the
+  project's own tests, or a headless driver you add that needs nothing from the
+  board. Reading served markup, template source, or a build log is not seeing
+  the page; an empty or error render is a FAIL row, not a pass.
+  The rendered page itself is captured independently, before you submit (and
+  the Reviewer before it attaches its ledger): run the board command
+  `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"`. It
+  opens your running app in the harness browser, outside your sandbox, and
+  returns the rendered text; the HTML and a screenshot are saved as board
+  evidence under a `screen-...` id. Always pass `--expect`: a blank page, or one
+  without its expected text, cannot be cited. It accepts only loopback
+  addresses of your own app, never a harness port. Write the id and the text
+  it returned in the ledger row's observed column. The board checks every cited
+  id (a real, unmodified capture of this task), and the Reviewer's ledger must
+  cite the Reviewer's own capture, not only Delivery's.
+  A screen-check shows one page at one moment from a loopback server; it does
+  not prove clicking, typing or a sequence of steps, and the board does not
+  verify which candidate or server it came from. Say that in your summary,
+  and exercise interactions with the project's own tooling when it runs in the
+  sandbox. If part of the owner's path cannot be proven either way, do not write
+  an N/A or DEFERRED row (the board refuses it) and never present it as
+  covered: raise an owner-action card naming the unproven scope, so the owner
+  decides. A project with no web page needs no screen-check. If a browser your test starts is refused with a message saying the host denies the browser's network inside the sandbox (some Linux machines do, for the installed Chrome), that test cannot run in a governed command there: keep it out and use screen-check for the rendered proof and cite its id. The one exception to "never run `board.py`" is a test of the board CLI itself: it runs the CLI against its own disposable fixture board, created inside the test, and never against the live board or with live-board credentials; the board refuses any call aimed at the live board.
 - **User-facing means usable, not just rendered.** A surface the owner will
   see is judged as a product surface: readable at the size it ships, affected
   interactions work with keyboard and pointer, relevant empty/loading/error
@@ -552,9 +563,14 @@ acceptance review ends with you using the finished product the way the owner
 will. Start the whole app from the candidate — its own ports and data, never
 the owner's running copy — and walk the path the owner asked for from start to
 finish on the running or rendered surface (the project's UI tooling, or the
-board's `screen-check`), then compare what actually happens with the expected
-result in the confirmed requirements. Make that walk a Challenge Ledger row so
-the board executes and certifies it. Your verdict summary then begins with one
+board's `screen-check` as a board command you run yourself), then compare what
+actually happens with the expected result in the confirmed requirements. Make
+that walk a Challenge Ledger row whose command is a hermetic check the board can
+execute and certify (never one that runs `board.py` or `screen-check`), capture
+the rendered result yourself with `screen-check` before you attach the ledger,
+and cite its id in the row. Include at least one command Delivery's ledger does
+not contain. Your verdict says separately what the executed command certified
+and what the independent capture showed. Your verdict summary then begins with one
 line: `TASK DONE: YES — <expected result> vs <what happened>` or
 `TASK DONE: NO — <expected result> vs <what happened>`. PASS always means TASK
 DONE: YES; when the walk does not deliver the expected result, the verdict is
@@ -576,8 +592,11 @@ it finds the token by itself and its agents can sign in. To run a real `claude` 
 command: `CLAUDE_CODE_OAUTH_TOKEN="$HARNESS_REVIEWER_CLAUDE_TOKEN" claude ...`. Never print, echo, log, or write the token
 into any file or evidence, and never ask the owner to create or paste one. Commands the board executes for you
 (`execute-challenge`) run in a clean environment without it, so walk the real end-to-end path yourself and record what
-you saw. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that, mark
-the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaunched from Mission Control.
+you saw. That evidence is separate from the hermetic certification and from screen captures: a screen capture alone never
+proves a real provider workflow. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that, mark
+the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaunched from Mission Control. If instead
+Claude rejects the token or the service is unavailable, say exactly that, mark the verdict `TASK DONE: NOT TESTED`, and
+use the app's own sign-in controls (the attention card in Mission Control) rather than asking for repeated relaunches.
 
 **The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
 result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for

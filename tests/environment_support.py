@@ -85,3 +85,16 @@ def home_outside_temp_space(case: unittest.TestCase, prefix: str) -> "Path":
     home = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
     case.addCleanup(shutil.rmtree, home, True)
     return home
+
+
+def assert_agy_pinned() -> None:
+    """The suite never finds the owner's real Antigravity CLI: `HARNESS_AGY_BIN` stays pinned to a path that is not there.
+
+    A test that REMOVES the variable instead of restoring it lets later tests discover and run the real `agy` from
+    PATH (found when a cleanup used `os.environ.pop`). Each Gemini test module checks this when it finishes.
+    """
+    import os
+    from pathlib import Path
+    pinned = os.environ.get("HARNESS_AGY_BIN", "")
+    if not pinned or Path(pinned).exists():
+        raise AssertionError(f"HARNESS_AGY_BIN must stay pinned to a missing path during the suite, found {pinned!r}")

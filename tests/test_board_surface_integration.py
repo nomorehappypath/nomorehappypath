@@ -312,6 +312,69 @@ class BoardArtifactIngestionTests(unittest.TestCase):
         self.assertEqual(opened.call_count, 2)
         slept.assert_called_once_with(board_client.POLL_RETRY_DELAYS[0])
 
+    def test_screen_check_runs_while_request_review_holds_the_command_lock(self):
+        # Delivery's rendered test calls screen-check from inside request-review's
+        # own unit-test command; queued behind it, it could never start.
+        _, delivery, _, delivery_token, delivery_gateway = self.session(
+            "codex_delivery", "engineering", board.AWAITING_OWNER_DIRECTION,
+        )
+        _, other, _, other_token, other_gateway = self.session(
+            "codex_delivery", "engineering", board.AWAITING_OWNER_DIRECTION,
+        )
+        with board.locked_state(self.context) as state:
+            state["agents"][delivery["id"]].update({"task": "STAGED", "vendor": "OpenAI"})
+        payload = b"# ledger\n"
+        artifact = {"ledger": {
+            "content": base64.b64encode(payload).decode("ascii"),
+            "length": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+            "media_type": "text/markdown",
+        }}
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def fake_main(arguments):
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            print(json.dumps({"operation": "request-review"}))
+            return 0
+
+        def fake_screen_check(context, agent_id, url, expect=""):
+            calls.append((agent_id, url, expect))
+            return {"check_id": "screen-test", "ok": True}
+
+        with mock.patch.object(board, "main", side_effect=fake_main), \
+                mock.patch.object(board, "screen_check", side_effect=fake_screen_check):
+            long_result = []
+            long_thread = threading.Thread(target=lambda: long_result.append(
+                delivery_gateway.execute(delivery_token, {
+                    "protocol": PROTOCOL_VERSION, "nonce": 401, "operation": "request-review",
+                    "arguments": [
+                        "request-review", "--agent", delivery["id"], "--ledger", "upload:ledger",
+                        "--summary", "long", "--unit-test-command", "python3 -m unittest",
+                    ],
+                    "artifacts": artifact,
+                })
+            ))
+            long_thread.start()
+            self.assertTrue(started.wait(timeout=2))
+            checked = other_gateway.execute(other_token, {
+                "protocol": PROTOCOL_VERSION, "nonce": 402, "operation": "screen-check",
+                "arguments": ["screen-check", "--agent", other["id"], "--url", "http://127.0.0.1:9/", "--expect", "mph"],
+                "artifacts": {},
+            })
+            self.assertTrue(long_thread.is_alive(), "screen-check must not have waited for the long command")
+            release.set()
+            long_thread.join(timeout=5)
+        self.assertEqual(checked["result"]["check_id"], "screen-test")
+        self.assertEqual(calls, [(other["id"], "http://127.0.0.1:9/", "mph")])
+        for bad in (["screen-check", "--agent", other["id"]],
+                    ["screen-check", "--agent", other["id"], "--url", "http://127.0.0.1:9/", "--bogus", "x"]):
+            with self.assertRaises(SurfaceProtocolError):
+                other_gateway.execute(other_token, {
+                    "protocol": PROTOCOL_VERSION, "nonce": 403 + len(bad), "operation": "screen-check",
+                    "arguments": bad, "artifacts": {},
+                })
+
     def test_concurrent_surface_rejects_parser_bypasses_without_board_mutation(self):
         _, reviewer, _, token, gateway = self.session(
             "claude_reviewer", "qa", "REVIEW_QUEUE",

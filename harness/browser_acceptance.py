@@ -59,7 +59,10 @@ def resolve_binary() -> str:
         selected = _safe_binary(candidate)
         if selected:
             return selected
-    raise FileNotFoundError("no process-isolated Chromium headless binary is available")
+    raise FileNotFoundError(
+        "no process-isolated Chromium headless binary is available on this machine. A rendered test cannot run in a "
+        "governed command here; keep it out and capture the page with the screen-check board command"
+    )
 
 
 def _release_launch_lock(lock_handle) -> None:
@@ -119,21 +122,55 @@ ProcessTableUnavailable = platform_support.ProcessTableUnavailable
 # the full command"): one line a certified check's output carries when the
 # acceptance browser could not run inside the agent's sandbox. The board turns
 # it into an owner card with the command to run the same check outside.
+LAUNCH_LOCK_TIMEOUT_SECONDS = 45
 SANDBOX_BLOCKED = "HARNESS BROWSER BLOCKED IN SANDBOX"
 
 
 def _report_blocked(reason: str) -> None:
-    if platform_support.browser_host().inside_os_sandbox():
+    if platform_support.browser_host().confined_by_harness():
         print(f"{SANDBOX_BLOCKED}: {reason}", file=sys.stderr, flush=True)
 
 
+HOST_BLOCKS_BROWSER_NETWORK = (
+    "the browser cannot open network sockets inside the sandbox on this machine (a host policy such as AppArmor "
+    "for the installed Chrome denies it, even though the page is served on loopback). A rendered browser test cannot "
+    "run in a governed command here; keep it out and capture the page with the screen-check board command instead "
+    "and cite its id in the ledger"
+)
+
+
+def _network_denied(text: str) -> bool:
+    return "CreatePlatformSocket() failed: Permission denied" in str(text or "")
+
+
+def board_call_note(output: str) -> str:
+    """The board's own refusal line, in full, when a command called the live board from inside a governed run.
+
+    Found on the owner's live project: the failure shown to the agent is the last 500 characters of the output,
+    and this one-line instruction sat earlier in a long Node trace, so Delivery never saw why its checks failed.
+    Only a line that STARTS with the board's own `error: <marker>` counts (a quoted log or an assertion that merely
+    contains the words does not). The text is diagnostic: it never authorises access and never certifies anything.
+    """
+    from harness import execution_preflight
+    prefix = "error: " + execution_preflight.BOARD_CALL_MARKER
+    for line in str(output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.removeprefix("error: ")[:2000]
+    return ""
+
+
 def with_blocked_note(message: str, output: str) -> str:
-    """A refusal message that keeps the blocked-browser reason, whatever the refusal.
+    """A refusal message that keeps the actionable reasons, whatever the refusal.
 
     Review r3 B4: a browser that died in setUpClass left "Ran 0 tests", and the
     zero-tests refusal dropped the marker, so the owner got no card. Every
-    refusal raised after a command's output exists goes through here.
+    refusal raised after a command's output exists goes through here. A call to
+    the live board is put FIRST, in full: it is the instruction the agent needs.
     """
+    refusal = board_call_note(output)
+    if refusal and refusal not in message:
+        message = f"{refusal} | {message}"
     note = blocked_note(output)
     return f"{message} | {note}" if note and note not in message else message
 
@@ -441,7 +478,7 @@ def launch(
         # confines it, and the URL is already limited to loopback. Codex's
         # sandbox also refuses the Mach service Chrome's child processes meet
         # through (review 2026-09-28 B1), so the renderer stays in-process.
-        *(["--no-sandbox", "--single-process"] if platform_support.browser_host().inside_os_sandbox() else []),
+        *(platform_support.browser_host().confined_browser_args() if platform_support.browser_host().confined_by_harness() else []),
         *extra_args, url,
     ]
     # Everything from here to the successful return holds two locks. Any escape
@@ -450,7 +487,11 @@ def launch(
     # caller blocked forever on _PROCESS_LOCK.acquire(). One handler now covers
     # every exit, including the ones that were never anticipated - an
     # unreadable process table among them.
-    _PROCESS_LOCK.acquire()
+    if not _PROCESS_LOCK.acquire(timeout=LAUNCH_LOCK_TIMEOUT_SECONDS):
+        raise RuntimeError(
+            f"another browser check held the harness browser for more than {LAUNCH_LOCK_TIMEOUT_SECONDS} seconds; "
+            "run the screen check again in a moment"
+        )
     lock_path = Path(os.environ.get("TMPDIR") or "/tmp") / "harness-browser-acceptance.lock"
     lock_handle = None
     process = None
@@ -458,14 +499,31 @@ def launch(
     observer: threading.Thread | None = None
     try:
         lock_handle = lock_path.open("a+")
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        give_up = time.monotonic() + LAUNCH_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= give_up:
+                    raise RuntimeError(
+                        f"another process held the harness browser for more than {LAUNCH_LOCK_TIMEOUT_SECONDS} seconds; "
+                        "run the screen check again in a moment"
+                    ) from None
+                time.sleep(0.2)
         baseline = _process_table()
+        stderr_log = None
+        if not capture_output:
+            # Kept so that a browser that dies on start-up can be explained instead of reported as a timeout.
+            stderr_log = open(runtime / "output" / "browser-stderr.txt", "wb")
         process = subprocess.Popen(
             args, env=environment, start_new_session=True,
             stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
-            stderr=subprocess.PIPE if capture_output else subprocess.DEVNULL,
+            stderr=subprocess.PIPE if capture_output else stderr_log,
             text=capture_output,
         )
+        if stderr_log is not None:
+            stderr_log.close()
         start_token = ""
         for _ in range(20):
             start_token = _start_token(process.pid)
@@ -533,11 +591,27 @@ def dump_dom(url: str, runtime: Path, *, timeout: float = 30) -> str:
     return _one_shot(url, runtime, "--dump-dom", timeout)
 
 
-def _devtools(runtime: Path, deadline: float) -> tuple[int, str]:
+def _early_exit_message(runtime: Path, process: "subprocess.Popen") -> str:
+    tail = ""
+    try:
+        tail = (Path(runtime) / "output" / "browser-stderr.txt").read_text(encoding="utf-8", errors="replace").strip()[-400:]
+    except OSError:
+        pass
+    return (
+        f"the browser exited with code {process.returncode} before finishing its page"
+        + (f": {tail}" if tail else "")
+        + (". " + HOST_BLOCKS_BROWSER_NETWORK if _network_denied(tail)
+           else ". Check that a usable headless browser is installed on this machine")
+    )
+
+
+def _devtools(runtime: Path, deadline: float, process: "subprocess.Popen | None" = None) -> tuple[int, str]:
     """The page target's debugging port and WebSocket path, from Chrome's own file."""
     import http.client
     active = Path(runtime) / "profile" / "DevToolsActivePort"
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None and not active.exists():
+            raise RuntimeError(_early_exit_message(runtime, process))
         try:
             port = int(active.read_text(encoding="utf-8").splitlines()[0])
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
@@ -548,6 +622,13 @@ def _devtools(runtime: Path, deadline: float) -> tuple[int, str]:
             return port, urlsplit(page["webSocketDebuggerUrl"]).path
         except (OSError, ValueError, IndexError, StopIteration, KeyError):
             time.sleep(0.1)
+    tail = ""
+    try:
+        tail = (Path(runtime) / "output" / "browser-stderr.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    if _network_denied(tail):
+        raise RuntimeError("the browser did not open its page in time: " + HOST_BLOCKS_BROWSER_NETWORK)
     raise RuntimeError("the browser did not open its page in time")
 
 
@@ -625,6 +706,10 @@ class _DevToolsSocket:
             pass
 
 
+# Chrome shows its own error pages ("This site can't be reached") at the address chrome-error://chromewebdata/, which no
+# real page can have: that scheme, not a class name a page could also use, is what marks one.
+ERROR_PAGE_EXPRESSION = "location.protocol === 'chrome-error:'"
+
 VISIBLE_TEXT_EXPRESSION = """(() => {
   if (!document.body) return '';
   for (const element of document.body.querySelectorAll('*')) {
@@ -641,6 +726,16 @@ VISIBLE_TEXT_EXPRESSION = """(() => {
 
 
 def render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, Any]:
+    try:
+        return _render_page(url, runtime, timeout=timeout)
+    except (RuntimeError, OSError, ValueError) as error:
+        # Inside the harness confinement the cause must survive a test that fails in setUpClass (the board would
+        # otherwise report "zero executed tests"): the blocked-browser marker is the channel that carries it.
+        _report_blocked(str(error)[:600])
+        raise
+
+
+def _render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, Any]:
     """What a person sees: the body's rendered text, the HTML, and a PNG.
 
     The text is the browser's own innerText of <body>, so hidden elements,
@@ -654,13 +749,15 @@ def render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, An
     session = launch(url, runtime)
     inspector = None
     try:
-        port, path = _devtools(runtime, deadline)
+        port, path = _devtools(runtime, deadline, session.process)
         inspector = _DevToolsSocket(port, path, timeout=max(1.0, deadline - time.monotonic()))
         text_expression = "document.body ? document.body.innerText : ''"
         settle_until = None
         previous = None
         stable_since = time.monotonic()
         while time.monotonic() < deadline:
+            if session.process is not None and session.process.poll() is not None:
+                raise RuntimeError(_early_exit_message(runtime, session.process))
             if inspector.evaluate("document.readyState") == "complete":
                 settle_until = settle_until or time.monotonic() + SETTLE_MILLISECONDS / 1000
                 text = inspector.evaluate(text_expression)
@@ -670,7 +767,26 @@ def render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, An
                     break
             time.sleep(0.25)
         else:
-            raise RuntimeError("the page did not finish loading in time")
+            tail = ""
+            try:
+                tail = (Path(runtime) / "output" / "browser-stderr.txt").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+            raise RuntimeError("the page did not finish loading in time" + (": " + HOST_BLOCKS_BROWSER_NETWORK if _network_denied(tail) else ""))
+        if inspector.evaluate(ERROR_PAGE_EXPRESSION):
+            # The browser showed ITS error page ("This site can't be reached"), not the page asked for: a page that
+            # failed to load is never evidence that the page works. Inside a Linux confinement that has no network
+            # for the browser this is what a capture silently produced.
+            cause = ""
+            try:
+                cause = (Path(runtime) / "output" / "browser-stderr.txt").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"the browser could not load {url} and showed its own error page"
+                + (": " + HOST_BLOCKS_BROWSER_NETWORK if _network_denied(cause)
+                   else " (is the page's server still running on that port?)")
+            )
         png = base64.b64decode(inspector.call("Page.captureScreenshot", {"format": "png"})["data"])
         html = str(inspector.evaluate("document.documentElement.outerHTML") or "")
         # innerText still counts text nobody can see: fully transparent

@@ -144,6 +144,8 @@ PAGE = r'''<!doctype html>
     .topbar-version { margin-right: 14px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: transparent; color: #cbd5e5; padding: 5px 12px; font-size: 12px; font-weight: 700; }
     .topbar-version:hover { color: white; border-color: rgba(255,255,255,.45); }
     .settings-footer { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
+    .settings-notice { margin: 0 0 10px; color: var(--ink, #1f2937); background: #f4f1e6; border: 1px solid #e0d9b8; border-radius: 6px; padding: 8px 12px; font-size: 13px; }
+    .settings-notice[hidden] { display: none; }
     .settings-error { flex: 1; margin: 0; color: var(--red); font-size: 13px; }
     .help-shell { display: grid; gap: 14px; padding-bottom: 30px; }
     .help-section { min-width: 0; padding: 18px 20px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 2px 5px rgba(23,36,58,.035); overflow-wrap: anywhere; }
@@ -311,6 +313,7 @@ PAGE = r'''<!doctype html>
           <div class="connection-result" id="openai-result" role="status" aria-live="polite"></div>
         </section>
         <div class="settings-cards" id="settings-fields"><div class="skeleton"><div class="spinner" aria-label="Loading settings"></div></div></div>
+        <p class="settings-notice" id="settings-notices" role="status" aria-live="polite" hidden></p>
         <div class="settings-footer"><p class="settings-error" id="settings-error" role="alert" aria-live="polite"></p><button class="button" type="submit" id="settings-save">Save agent settings</button></div>
       </form>
     </section>
@@ -333,8 +336,9 @@ PAGE = r'''<!doctype html>
           <h2 id="help-setup-title">What This App Needs To Run</h2>
           <ul class="help-list">
             <li>The app runs on your Mac or Linux machine and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
-            <li>The AI agents run on <strong>your own accounts</strong> through two CLIs: the Codex CLI (OpenAI account) and the Claude Code CLI (Anthropic account). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use either CLI. Install both and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors, so both CLIs are required.</li>
-            <li><strong>Linux, including a VM on Windows:</strong> install and sign in to both <strong>Codex CLI</strong> and <strong>Claude Code CLI</strong> inside Linux. Make <code>codex</code> and <code>claude</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
+            <li>The AI agents run on <strong>your own accounts</strong> through up to three CLIs: the Codex CLI (OpenAI account), the Claude Code CLI (Anthropic account) and Google's Antigravity CLI, <code>agy</code>, for <strong>Gemini</strong> (Google account, free or on a Google AI plan). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use any installed CLI. Install at least two and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors. Gemini shows in Settings as soon as <code>agy</code> is installed; until then it is listed greyed out with the reason. Gemini asks for its own sign-in once inside the agent's window (the app tells you when), because the agent's sandbox keeps its own copy of that sign-in.</li>
+            <li><strong>Linux, including a VM on Windows:</strong> install and sign in to the CLIs you use (<strong>Codex CLI</strong>, <strong>Claude Code CLI</strong>, optionally <strong>Antigravity CLI</strong> for Gemini) inside Linux. Make <code>codex</code>, <code>claude</code> and <code>agy</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
+            <li><strong>Setting up Gemini (optional):</strong> install Google's Antigravity CLI with <code>curl -fsSL https://antigravity.google/cli | bash</code> (it installs <code>agy</code> into <code>~/.local/bin</code>), run <code>agy</code> once in your own terminal, choose <em>Google OAuth</em>, open the link, approve and paste the code back. It then shows a <em>Terms of Service &amp; Data Use</em> checkbox about letting Google use your interactions data; that choice is yours, the app never makes it for you. A free Google account runs out of quota quickly; a Google AI Pro or Ultra plan is recommended. In <strong>Settings</strong> pick <em>Gemini (Antigravity CLI)</em> for a role and click <strong>Test Gemini connection</strong>. The app records folder trust for you, and each agent window may ask for its own sign-in once because the agent's sandbox keeps its own copy.</li>
             <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
             <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
@@ -392,7 +396,7 @@ PAGE = r'''<!doctype html>
             <li>Settings has one card per role — <strong>Delivery Agent</strong>, <strong>Independent Reviewer</strong>, and <strong>CTO</strong>. Each picks a CLI provider, a model, and a reasoning effort.</li>
             <li>Keep Delivery and Reviewer on <strong>different providers</strong>; that separation is the point of independent review.</li>
             <li>Bigger models and higher effort cost more on your provider plans and think longer. A common setup: strong models for Delivery and Reviewer, a medium setting for the CTO.</li>
-            <li><strong>Test connection</strong> on a card checks that the CLI is installed and accepts the chosen model — it launches nothing and bills nothing.</li>
+            <li><strong>Test connection</strong> on a card makes one real, tiny request to the provider from inside the agents' sandbox to check that the CLI is installed, signed in and accepts the chosen model. It starts no agent and does not touch your projects, but it does count against your plan (Gemini uses a little of its quota). A stored result is history: it shows when and with what it was made, and asks you to test again if the model, the effort or the CLI has changed. For Gemini the thinking level is part of the model name (<code>-low</code>, <code>-medium</code>, <code>-high</code>), so the effort you choose selects it, and Settings tells you when it changed one.</li>
             <li>Saving applies to <strong>new agent sessions only</strong>; running terminals keep the model and effort they started with.</li>
           </ul>
         </section>
@@ -412,7 +416,7 @@ PAGE = r'''<!doctype html>
         <section class="help-section" aria-labelledby="help-go-title">
           <h2 id="help-go-title">Agree The Requirements And Say Go Ahead</h2>
           <ol class="help-steps">
-            <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once.</li>
+            <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once. Gemini does not ask: the project you open in this app is recorded as trusted for it. If Gemini ever shows that question anyway, the app says so and waits for you to answer it in its window.</li>
             <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long.</li>
             <li>Delivery may ask clarifying questions in its terminal window — answer there; that conversation shapes the requirements.</li>
             <li>When the requirements are agreed, Delivery <strong>files them on the board</strong>. The task card then shows <strong>"Final agreed requirements — your decision"</strong> with the full text and two buttons. Nothing is built before your decision.</li>
@@ -497,7 +501,7 @@ PAGE = r'''<!doctype html>
           <ul class="help-list">
             <li><strong>The Codex and Claude CLI agents can do whatever they need to do inside the project folder you choose</strong> — create, edit, delete, and run code there. That power is what makes them useful, and it is real: <strong>be careful which folder you point them at.</strong></li>
             <li>Never choose a folder holding things you cannot afford to lose without a safety net. Keep the project in version control (git) or back it up first; adopt the exact project folder, not a parent folder that contains unrelated work.</li>
-            <li>Agents spend money on <strong>your</strong> OpenAI and Anthropic accounts while they work. Their usage is your bill; the Stop buttons exist for a reason.</li>
+            <li>Agents spend money on <strong>your</strong> OpenAI, Anthropic and Google accounts while they work. Their usage is your bill; the Stop buttons exist for a reason.</li>
             <li>Everything runs and stays on your Mac. Nothing is sent to us — which also means we cannot see, restore, or recover anything for you.</li>
             <li>Clicking <strong>Accepted</strong> is your decision. The platform gates and collects evidence, but the final judgment — especially before anything reaches real users — is yours.</li>
           </ul>
@@ -514,7 +518,7 @@ PAGE = r'''<!doctype html>
               <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes.</td></tr>
               <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
               <tr><td>A red blinking banner says an agent is waiting for you</td><td>That agent's Terminal window has stopped at a question — usually a "Do you want to proceed?" permission prompt, or a line that says it needs you to act — and nothing moves until it is answered. Switch to that Terminal window and answer it. Managed agents are launched so this should not happen; if it keeps happening, note which prompt you saw and tell your developer.</td></tr>
-              <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI or Anthropic account ran out of credit or hit its usage limit. <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
+              <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI, Anthropic or Google account ran out of credit or hit its usage limit (Gemini: your Google AI plan's quota, billing at one.google.com). <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
               <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
               <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
               <tr><td>"Update now" does not appear although a newer version exists</td><td>A project is running. Pause or close it and check again — the app never restarts under running work. If the dialog reports local changes instead, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command.</td></tr>
@@ -788,29 +792,55 @@ PAGE = r'''<!doctype html>
       renderOpenAI(value);
       const providers = Object.entries(value.providers || {});
       q('#settings-error').textContent = value.error || '';
+      const noticeBox = q('#settings-notices');
+      noticeBox.textContent = (value.notices || []).join(' ');
+      noticeBox.hidden = !(value.notices || []).length;
       q('#settings-fields').innerHTML = settingRoles.map((role) => {
         const selected = value.agent_settings?.[role.id] || {};
         const result = value.connectivity?.[selected.provider];
-        const resultClass = result ? (result.ok ? 'ok' : 'bad') : '';
-        const resultText = result?.message || 'Not tested yet. This checks the local CLI and launch flags without starting an agent.';
+        // A stored test is history, not a promise: show when and with what it was made, and say so when this
+        // role now uses another model or effort, or the CLI has changed since.
+        // A result without the model/effort it was made with (an older build's) is unverified history, not a match.
+        // Claude and Codex records carry the CLI identity but not a pair: for them the CLI comparison below decides.
+        const hasPair = !!(result && (result.effective_model || result.model) && (result.effective_effort || result.effort));
+        const hasCli = !!(result && (result.cli_version || result.cli_path));
+        const sameSetting = !result || (hasPair
+          ? (result.effective_model || result.model) === selected.model && (result.effective_effort || result.effort) === selected.effort
+          : hasCli);
+        const availability = value.provider_availability?.[selected.provider] || {};
+        // Versions only: the same CLI can be spelled by two paths (/tmp and /private/tmp), a version change is what matters.
+        const cliChanged = !!result && !!(result.cli_version && availability.version) && String(availability.version) !== String(result.cli_version);
+        const stale = !!result && (!sameSetting || cliChanged);
+        const resultClass = result && !stale ? (result.ok ? 'ok' : 'bad') : '';
+        const when = result?.tested_at ? ` (tested ${String(result.tested_at).slice(0, 16).replace('T', ' ')} with ${result.effective_model || result.model || 'its default'}${result.cli_version ? `, CLI ${result.cli_version}` : ''})` : '';
+        const resultText = !result ? 'Not tested yet. The test makes a real request to the provider (Gemini uses a little of your plan quota) from inside the agents\' sandbox.'
+          : stale ? `The last test was made with another ${!sameSetting ? 'model or effort' : 'CLI version'}${when}. Press Test to check this setting.`
+          : `${result.message || ''}${when}`;
         return `<section class="settings-card" data-settings-role="${role.id}">
           <div><h2>${esc(role.label)}</h2><p class="settings-card-copy">${esc(role.copy)}</p></div>
-          <div class="field"><label for="provider-${role.id}">CLI provider</label><select id="provider-${role.id}" data-setting-provider="${role.id}">${providers.map(([id, provider]) => `<option value="${esc(id)}"${id === selected.provider ? ' selected' : ''}>${esc(provider.label)}</option>`).join('')}</select></div>
+          <div class="field"><label for="provider-${role.id}">CLI provider</label><select id="provider-${role.id}" data-setting-provider="${role.id}">${providers.map(([id, provider]) => { const availability = value.provider_availability?.[id] || {available: true}; return `<option value="${esc(id)}"${id === selected.provider ? ' selected' : ''}${availability.available || id === selected.provider ? '' : ' disabled'}>${esc(availability.available ? provider.label : availability.reason)}</option>`; }).join('')}</select></div>
           <div class="field"><label for="model-${role.id}">Model</label><select id="model-${role.id}" data-setting-model-choice="${role.id}">${modelOptions(selected.provider, selected.model)}</select></div>
           <div class="field" data-setting-custom="${role.id}"${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? ' hidden' : ''}><label for="custom-model-${role.id}">Custom model ID</label><input id="custom-model-${role.id}" data-setting-model="${role.id}" value="${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? '' : esc(selected.model || '')}" autocomplete="off" placeholder="Provider model ID"></div>
           <div class="field"><label for="effort-${role.id}">Reasoning effort</label><select id="effort-${role.id}" data-setting-effort="${role.id}">${effortOptions(selected.provider, selected.effort)}</select></div>
-          <button class="button secondary" type="button" data-settings-test="${role.id}">Test ${esc(selected.provider === 'claude' ? 'Claude' : 'Codex')} connection</button>
+          <button class="button secondary" type="button" data-settings-test="${role.id}">Test ${esc(value.providers?.[selected.provider]?.short || 'the')} connection</button>
           <div class="connection-result ${resultClass}" data-settings-result="${role.id}" role="status" aria-live="polite">${esc(resultText)}</div>
         </section>`;
       }).join('');
-      document.querySelectorAll('[data-setting-model-choice]').forEach((select) => select.onchange = () => syncCustomModel(select.dataset.settingModelChoice));
+      const markRetest = (role) => {
+        const box = q(`[data-settings-result="${role}"]`);
+        box.className = 'connection-result';
+        box.textContent = 'Settings changed. Press Test to check this setting.';
+      };
+      document.querySelectorAll('[data-setting-model-choice]').forEach((select) => select.onchange = () => { syncCustomModel(select.dataset.settingModelChoice); markRetest(select.dataset.settingModelChoice); });
+      document.querySelectorAll('[data-setting-effort]').forEach((select) => select.addEventListener('change', () => markRetest(select.dataset.settingEffort)));
+      document.querySelectorAll('[data-setting-custom] input').forEach((input) => input.addEventListener('input', () => markRetest(input.closest('[data-setting-custom]').dataset.settingCustom)));
       document.querySelectorAll('[data-setting-provider]').forEach((select) => select.onchange = () => {
         const role = select.dataset.settingProvider;
         const models = settingsCatalog.provider_models?.[select.value] || [];
         q(`[data-setting-model-choice="${role}"]`).innerHTML = modelOptions(select.value, models[0] || '');
         syncCustomModel(role);
         q(`[data-setting-effort="${role}"]`).innerHTML = effortOptions(select.value);
-        q(`[data-settings-test="${role}"]`).textContent = `Test ${select.value === 'claude' ? 'Claude' : 'Codex'} connection`;
+        q(`[data-settings-test="${role}"]`).textContent = `Test ${settingsCatalog.providers?.[select.value]?.short || 'the'} connection`;
         const result = q(`[data-settings-result="${role}"]`);
         result.className = 'connection-result';
         result.textContent = 'Settings changed. Test this provider before saving if you want to verify local access.';
@@ -821,10 +851,21 @@ PAGE = r'''<!doctype html>
         button.disabled = true;
         result.className = 'connection-result';
         result.textContent = 'Testing the local CLI and flags…';
+        const sent = JSON.stringify(settingValue(role));
         try {
-          const tested = await api('/api/settings/connect', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settingValue(role))});
-          result.className = 'connection-result ok';
-          result.textContent = tested.message;
+          const tested = await api('/api/settings/connect', {method: 'POST', headers: {'Content-Type':'application/json'}, body: sent});
+          if (JSON.stringify(settingValue(role)) !== sent) {
+            result.className = 'connection-result';
+            result.textContent = 'You changed this setting while the test ran, so its result is not shown. Press Test again.';
+          } else {
+            result.className = 'connection-result ok';
+            result.textContent = tested.message;
+            if (tested.effective_model) {
+              const choice = q(`[data-setting-model-choice="${role}"]`);
+              if ([...choice.options].some((option) => option.value === tested.effective_model)) choice.value = tested.effective_model;
+              else { choice.value = '__custom__'; const custom = q(`[data-setting-custom="${role}"] input`); if (custom) custom.value = tested.effective_model; syncCustomModel(role); }
+            }
+          }
         } catch (error) {
           result.className = 'connection-result bad';
           result.textContent = error.message;

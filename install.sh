@@ -94,6 +94,13 @@ else
   missing=1
 fi
 
+# Gemini is optional: report it, never fail the check because of it.
+if gemini_path="$(provider_path gemini)" && [[ -n "$gemini_path" ]]; then
+  ok "Antigravity CLI found ($gemini_path) — Gemini is available, uses your Google account"
+else
+  say "Antigravity CLI (Gemini) not found — optional. To add it: curl -fsSL https://antigravity.google/cli | bash, then run 'agy' once and sign in with your Google account."
+fi
+
 # Check the required sandbox from this account and environment, just as launch does.
 if ! sandbox_problem="$(python3 -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from harness import platform_support; print(platform_support.launch_problem())' "$root")"; then
   warn "Unable to check the required agent sandbox. Run bash install.sh --check again before starting agents."

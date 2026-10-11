@@ -560,6 +560,38 @@ class _BrowserHost:
     def cache_layout(self):
         return self.MACOS_LAYOUT if sys.platform == "darwin" else self.LINUX_LAYOUT
 
+    CONFINED_MARKER = "HARNESS_OS_SANDBOX"
+
+    def confined_by_harness(self) -> bool:
+        """True when the browser runs inside the harness's own OS confinement, so Chrome's inner sandbox
+        cannot initialise and must be left off (the outer boundary is the confinement).
+
+        This selects Chrome flags and a failure note ONLY. It is deliberately not what `confine_agent_command`
+        asks (that stays `inside_os_sandbox`): nothing security-relevant may read an environment variable.
+        macOS: exactly `inside_os_sandbox()`. Linux: the marker the bubblewrap builder sets AND the kernel's own
+        NoNewPrivs flag, so a variable forged in an unconfined process changes nothing but Chrome's flags.
+        """
+        if self.inside_os_sandbox():
+            return True
+        if sys.platform.startswith("linux") and os.environ.get(self.CONFINED_MARKER) == "1":
+            try:
+                no_new_privs = any(
+                    line.split(":", 1)[1].strip() == "1"
+                    for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines()
+                    if line.startswith("NoNewPrivs:")
+                )
+                # Chrome's own sandbox fails exactly when the process is inside an unprivileged user namespace,
+                # as bubblewrap makes it. The initial namespace maps every id to itself.
+                first_map = Path("/proc/self/uid_map").read_text(encoding="utf-8").split("\n", 1)[0].split()
+                in_user_namespace = first_map[:3] != ["0", "0", "4294967295"]
+                return no_new_privs and in_user_namespace
+            except (OSError, IndexError):
+                return False
+        return False
+
+    def confined_browser_args(self) -> list[str]:
+        return ["--no-sandbox", "--single-process"] if sys.platform == "darwin" else ["--no-sandbox"]
+
     def inside_os_sandbox(self) -> bool:
         """True when this process already runs inside a Seatbelt sandbox.
 
@@ -715,9 +747,14 @@ end run'''
             directory = Path(argv[argv.index('--data-root') + 1]) / 'control' / 'terminal-sockets'
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             name = self._screen_name(session_id)
+            # GNU screen resets HOME to the account's real home folder, so an app started with
+            # another HOME (a private test copy, a second profile) would launch its agents in the
+            # real one. Every other variable survives, so HOME travels under another name and the
+            # runner (scripts/run_managed_agent.sh) puts it back before anything else.
+            carried = {'HARNESS_AGENT_HOME': os.environ['HOME']} if os.environ.get('HOME') else {}
             subprocess.run([
                 '/usr/bin/screen', '-c', '/dev/null', '-dmS', name, *argv,
-            ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True)
+            ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, **carried, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True)
             self._open_screen_view(directory, session_id, color_rgb)
             return SessionSurface(session_id=session_id)
         command = "exec " + shlex.join(list(argv))
@@ -925,7 +962,8 @@ class _AgentConfinement:
         return self.login_file_paths(home, claude_config_dir) + [str(Path(home).expanduser() / "Library" / "Keychains")]
 
     def profile(self, writable: list[str], protected_reads: list[str] | None = None,
-                protected_writes: list[str] | None = None) -> str:
+                protected_writes: list[str] | None = None,
+                denied_executables: list[str] | None = None) -> str:
         """Seatbelt: allow default, deny file-write*, allow file-write* only inside the grant;
         deny file-read* on the owner's login material; deny file-write* again on
         harness-owned storage inside the grant (F-1).
@@ -953,14 +991,18 @@ class _AgentConfinement:
             lines.append(f'(deny file-write* (literal "{self._quote(self._real(path))}") (subpath "{self._quote(self._real(path))}"))')
         if any(Path(path).name == "Keychains" for path in protected_reads or []):
             lines.append('(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.securityd.xpc") (global-name "com.apple.secd"))')
+        for path in denied_executables or []:
+            # The program cannot start at all: a refusal in milliseconds, not a hang.
+            lines.append(f'(deny process-exec (literal "{self._quote(self._real(path))}"))')
         return "\n".join(lines) + "\n"
 
     def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
-             protected_writes: list[str] | None = None) -> list[str]:
+             protected_writes: list[str] | None = None,
+             denied_executables: list[str] | None = None) -> list[str]:
         """The command to run so that `argv` can write only inside `writable` and never reads the protected paths."""
         if not self.available():
             raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to launch the agent unconfined")
-        profile = self.profile(writable, protected_reads, protected_writes)
+        profile = self.profile(writable, protected_reads, protected_writes, denied_executables)
         store = Path(store)
         store.mkdir(parents=True, exist_ok=True)
         path = store / f"agent-sandbox-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"

@@ -150,7 +150,7 @@ class BrowserFailsBeforeAnyTestTests(CrashedBrowserNeverPassesTests):
         with self.assertRaises(ValueError) as caught:
             board._execute_internal_qa(command, self.root, certification=self.certification())
         self.assertIn(browser_acceptance.SANDBOX_BLOCKED, str(caught.exception))
-        self.assertIn("Mission Control now shows the owner the command", str(caught.exception))
+        self.assertIn("Mission Control also shows the owner the command", str(caught.exception))
         cards = list((board.snapshot(self.root).get("owner_actions") or {}).values())
         self.assertEqual([(card["command"], card["task"]) for card in cards], [(f"cd {self.root} && {command}", "screen-task")])
         stored = [json.loads(line) for line in (board.board_dir(self.root) / "execution-store.jsonl").read_text().splitlines()]
@@ -262,7 +262,7 @@ class OwnerCardTests(unittest.TestCase):
             f"internal-QA test command failed with exit code 1: ... | {browser_acceptance.SANDBOX_BLOCKED}: the browser crashed (signal 5)",
             self.certification(),
         )
-        self.assertIn("Mission Control now shows the owner the command", error, "the check must still fail")
+        self.assertIn("Mission Control also shows the owner the command", error, "the check must still fail")
         self.assertEqual(len(cards), 1)
         card = next(iter(cards.values()))
         self.assertEqual(card["title"], "Run a screen check yourself")

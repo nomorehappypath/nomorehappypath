@@ -42,7 +42,34 @@ PERMISSION_REASON = "is asking permission to continue ('Do you want to proceed?'
 CODEX_TRUST_REASON = ("is asking whether you trust this project folder (open its terminal and choose "
                       "'Trust and continue')")
 
+# Antigravity CLI (Gemini). The sign-in and trust questions show in the agent's own
+# window and the owner answers them there (owner's rule, one person at the harness):
+# the harness types nothing into them and says so plainly.
+GEMINI_TRUST_REASON = ("is waiting for you in its terminal: Gemini is asking whether to trust this project "
+                       "(answer it in its window)")
+GEMINI_SIGN_IN_REASON = ("is waiting for you in its terminal: Gemini needs you to sign in "
+                         "(follow the prompt in its window)")
+
+# The CLI's own quota line, measured on 1.3.1 (2026-10-07): "⚠ Individual quota reached. Please upgrade your
+# subscription to increase your limits. Resets in 165h0m46s." Nothing to answer: the agent cannot work until the
+# quota refreshes, so the harness types nothing, routes nothing there, restarts nothing, and says so plainly.
+GEMINI_QUOTA_MARK = "Gemini ran out of quota"
+QUOTA_RECENT_LINES = 8     # the error, its id, the prompt box and the status line sit within this
+GEMINI_QUOTA_PATTERN = re.compile(r"quota reached.{0,160}?Resets in\s*(?:(\d+)h)?", re.IGNORECASE | re.DOTALL)
+
+
+def gemini_quota_reason(hours: str | None) -> str:
+    """Stable for the whole hour (the CLI's countdown changes every redraw; the banner must not)."""
+    span = f" for about {hours} more hours" if hours else ""
+    return f"{GEMINI_QUOTA_MARK}{span} (open Settings and choose another provider for this role, or upgrade your Google plan)"
+
+
 PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"Do you trust the contents of this project", re.IGNORECASE), GEMINI_TRUST_REASON),
+    # Only wording the CLI itself printed (measured on 1.3.1); a guess that an agent's own output could quote would
+    # hold harness messages for nothing.
+    (re.compile(r"You are not logged into Antigravity|Waiting for authentication \(timeout|paste the authorization code",
+                re.IGNORECASE), GEMINI_SIGN_IN_REASON),
     # F-8 (2026-10-02): Claude Code asks this the first time it opens a folder
     # it does not trust - after an agent's `git init`, every new project. The
     # default is "No, exit": a harness message typed into it, with its Enter,
@@ -87,7 +114,8 @@ def holds_harness_input(reason: str | None) -> bool:
     keeps receiving messages.
     """
     reason = str(reason or "")
-    return "/login" in reason or reason in {TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON}
+    return "/login" in reason or GEMINI_QUOTA_MARK in reason or reason in {
+        TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON, GEMINI_TRUST_REASON, GEMINI_SIGN_IN_REASON}
 
 
 def needs_sign_in(session: dict | None) -> bool:
@@ -97,7 +125,39 @@ def needs_sign_in(session: dict | None) -> bool:
     again, so the board stops routing to it (2026-09-27 backlog #8). The state
     clears by itself when the prompt leaves the screen after /login.
     """
-    return "/login" in str((session or {}).get("attention_reason") or "")
+    reason = str((session or {}).get("attention_reason") or "")
+    return "/login" in reason or GEMINI_SIGN_IN_REASON in reason
+
+
+def has_quota_block(session: dict | None) -> bool:
+    return GEMINI_QUOTA_MARK in str((session or {}).get("attention_reason") or "")
+
+
+def needs_owner(session: dict | None) -> bool:
+    """Signed out, or out of quota: nothing can run in this terminal until the owner acts, so nothing is sent to it."""
+    return needs_sign_in(session) or has_quota_block(session)
+
+
+def owner_block(session: dict | None) -> str:
+    return "sign_in" if needs_sign_in(session) else ("quota" if has_quota_block(session) else "")
+
+
+def owner_block_sentence(role: str, session: dict | None) -> str:
+    """One plain line for the owner about a terminal that cannot work until they act."""
+    if has_quota_block(session):
+        match = re.search(r"about (\d+) more hours", str((session or {}).get("attention_reason") or ""))
+        span = f" (about {match.group(1)} more hours)" if match else ""
+        return (f"The {role} is out of Gemini quota{span}: open Settings and choose another provider for it, or upgrade "
+                "your Google plan. Its work is paused, not lost.")
+    return f"The {role} needs you to sign in again: open its terminal and {sign_in_how((session or {}).get('provider'))}."
+
+
+SIGN_IN_HOW = {"claude": "run /login", "gemini": "follow the sign-in prompt in its window"}
+
+
+def sign_in_how(provider: str | None) -> str:
+    """What the owner does in the terminal of a signed-out agent of `provider` (Claude's answer is the default)."""
+    return SIGN_IN_HOW.get(str(provider or "").lower(), SIGN_IN_HOW["claude"])
 
 # One token of the stream: an escape sequence, a control character, or text.
 _TOKEN = re.compile(
@@ -111,6 +171,12 @@ _TOKEN = re.compile(
 
 def detect(text: str) -> str | None:
     """The reason a terminal is waiting, or None when this text shows none."""
+    # The quota line counts only as the MOST RECENT event: among the last few lines of the screen. A resumed
+    # conversation replays old output, including an old quota error above work the agent has since done.
+    recent = "\n".join([line for line in text.splitlines() if line.strip()][-QUOTA_RECENT_LINES:])
+    quota = GEMINI_QUOTA_PATTERN.search(recent)
+    if quota:
+        return gemini_quota_reason(quota.group(1))
     for pattern, reason in PROMPT_FORMS:
         if pattern.search(text):
             return reason

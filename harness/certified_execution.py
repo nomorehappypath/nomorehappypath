@@ -17,7 +17,7 @@ import tempfile
 import threading
 from typing import Any, Iterator, Mapping
 
-from harness import browser_acceptance, execution_identity, agent_confinement
+from harness import browser_acceptance, child_process, execution_identity, agent_confinement
 
 
 def _reports_zero_executed_tests(output: str) -> bool:
@@ -251,13 +251,16 @@ def run(
                 },
             }
         if decision.get("reason") == "prior_execution_failed" and not retry_reason.strip():
-            raise ValueError(
+            earlier = execution_identity.latest_failed_output(board_root, identity)
+            raise ValueError(browser_acceptance.with_blocked_note(
                 "retrying a failed certified command requires a non-empty repair reason"
-            )
+                + (" | the earlier attempt ended: " + earlier.strip()[-300:] if earlier.strip() and not browser_acceptance.board_call_note(earlier) else ""),
+                earlier,
+            ))
         started_at = _at()
         started = datetime.now(timezone.utc)
         exit_code, output, process_audit = _run_observed(
-            command, execution_root, environment, timeout_seconds,
+            command, execution_root, child_process.with_live_board(environment, board_root), timeout_seconds,
         )
         audit_manifest = _write_process_audit(board_root, process_audit)
         if process_audit["timed_out"]:

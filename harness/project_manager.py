@@ -38,7 +38,7 @@ from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, board_surface, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
+from harness import board, board_surface, cli_capabilities, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
 from harness import workspace_settings
 from harness import platform_support, web_guard
@@ -425,7 +425,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             needed = state.get("reviewer_needed") or {}
             if isinstance(needed, dict) and needed.get("sign_in"):
                 latest_progress = (
-                    f"{board.REVIEWER_SIGN_IN_HEADLINE}. Open the Reviewer's terminal and run /login."
+                    f"{board.REVIEWER_SIGN_IN_HEADLINE}. Open the Reviewer's terminal and {needed.get('sign_in_how') or 'run /login'}."
                 )
             event_times = [str(event.get("at", "")) for event in events if event.get("at")]
             if event_times:
@@ -560,6 +560,7 @@ class ProjectManager:
             "provider_efforts": control.PROVIDER_EFFORTS,
             "provider_models": control.PROVIDER_MODELS,
             "provider_model_descriptions": control.PROVIDER_MODEL_DESCRIPTIONS,
+            "provider_availability": {name: cli_capabilities.provider_availability(self.home, name) for name in control.PROVIDERS},
             "openai": global_settings.openai_status(self.home),
             "chat_model": global_settings.chat_settings(self.home)["model"],
         }

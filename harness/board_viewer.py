@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, board_surface, child_process, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
+from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
 from harness import platform_support, web_guard, agent_view
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
@@ -85,7 +85,7 @@ PAGE = r"""<!doctype html>
 <section class="panel paused-banner" id="paused-banner" hidden role="status"><div><h2>Project paused</h2><p>This board is read-only. Saved work, review ownership, and evidence are preserved exactly where they stopped.</p></div><a class="resume-link" id="resume-project" href="__RESUME_LINK__">Resume project</a></section>
 
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
-<section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
+<section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
 <section id="decision-banner" class="panel section owner-actions" aria-live="polite" hidden></section>
@@ -565,7 +565,7 @@ function renderSignInBanner(state){
   if(!needed.sign_in){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
   section.hidden=false;
   const since=needed.sign_in_since?` A review has been waiting since ${esc(historyTimestamp(needed.sign_in_since))}.`:'';
-  const html=`<h2>Reviewer needs sign-in: nothing will progress</h2><p>Open the Reviewer's terminal and run <strong>/login</strong>.${since} Work continues by itself once it is signed in.</p>`;
+  const html=`<h2>Reviewer needs sign-in: nothing will progress</h2><p>Open the Reviewer's terminal and ${needed.sign_in_how&&needed.sign_in_how!=='run /login'?esc(needed.sign_in_how):'run <strong>/login</strong>'}.${since} Work continues by itself once it is signed in.</p>`;
   const signature=_cardSignature(html);
   if(section.dataset.signature===signature)return;
   section.dataset.signature=signature;
@@ -818,7 +818,7 @@ function deliveryTaskAccepted(agent,state){
 function humanStage(agent,state,contracts){
   if(deliveryTaskAccepted(agent,state))return'TASK ACCEPTED';
   if(agent.status==='paused')return'PAUSED';
-  if(agent.liveness==='needs_sign_in')return'NEEDS SIGN-IN';
+  if(agent.liveness==='needs_sign_in')return String(agent.liveness_note||'').includes('out of Gemini quota')?'OUT OF QUOTA':'NEEDS SIGN-IN';
   if(agent.role==='cto'){
     if(agent.recovery_state==='unresponsive')return'CTO NOT RESPONDING';
     if(agent.liveness==='stalled')return'CTO RECOVERY REQUIRED';
@@ -880,6 +880,8 @@ function agentStatusSummary(agent,state,contracts){
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
   if(agent.liveness==='needs_sign_in'&&agent.vendor==='Anthropic')return{summary:'Claude needs a new setup-token. Follow the Claude authentication card, then retry this agent.',next:'Generate the token in your own terminal and supply it to the harness.',ownerAction:'Follow the Claude authentication card.'};
+  if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('out of Gemini quota'))return{summary:agent.liveness_note,next:'Choose another provider for this role in Settings, or wait for the quota to refresh. The harness holds its messages until then and carries on by itself.',ownerAction:'Open Settings and choose another provider, or upgrade your Google plan.'};
+  if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('sign-in prompt'))return{summary:agent.liveness_note,next:'Follow the sign-in prompt in its window. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and follow the sign-in prompt.'};
   if(agent.liveness==='needs_sign_in')return{summary:agent.liveness_note||'This agent needs you to sign in again: open its terminal and run /login.',next:'Run /login in its terminal. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and run /login.'};
   if(agent.role==='cto'&&agent.recovery_state==='unresponsive')return{summary:'CTO is not responding - it may need /login. Three wake-ups in a row went unanswered, so the harness has stopped pinging it.',next:'Open the CTO terminal; if it shows a login prompt, run /login. The CTO resumes once it checks the board again.',ownerAction:'Open the CTO terminal and run /login if it asks you to sign in.'};
   if(agent.role==='cto'&&agent.recovery_state==='answered_without_poll')return{summary:'The CTO answered its last wake-up with a status update but has not polled the board yet. It is alive; the harness keeps waking it on the normal schedule and names the poll command each time.',next:'Run the board poll on the next cycle, then continue monitoring. Your action: none.',ownerAction:'None.'};
@@ -1023,11 +1025,11 @@ function renderWaiting(sessionItems){
   banner.hidden=false;
   // 2026-09-27 backlog #8: a signed-out agent is not a stray prompt. Say who
   // needs signing in and how, and nothing else, and do not call it a bug.
-  const signedOut=waiting.filter(session=>String(session.attention_reason||'').includes('/login'));
+  const signedOut=waiting.filter(session=>{const reason=String(session.attention_reason||'');return reason.includes('/login')||reason.includes('Gemini needs you to sign in')||reason.includes('Gemini ran out of quota');});
   const prompts=waiting.filter(session=>!signedOut.includes(session));
   const roleName=session=>({'Independent Reviewer':'Reviewer','Delivery Agent':'Delivery agent'})[session.role]||session.role||session.label;
   banner.innerHTML=`<div>${waiting.length===1?'An agent is waiting for you':`${waiting.length} agents are waiting for you`} — nothing moves until you answer in its Terminal window.</div>`+
-    signedOut.map(session=>`<p class="sign-in-needed">The ${esc(roleName(session))} needs you to sign in again: open its terminal and run /login. Its work is paused, not lost — waiting ${esc(waitingSince(session))}.</p>`).join('')+
+    signedOut.map(session=>`<p class="sign-in-needed">The ${esc(roleName(session))} ${String(session.attention_reason||'').includes('Gemini ran out of quota')?'is out of Gemini quota — open Settings and choose another provider for it, or upgrade your Google plan':'needs you to sign in again: open its terminal and '+(String(session.attention_reason||'').includes('Gemini')?'follow the sign-in prompt in its window':'run /login')}. Its work is paused, not lost — waiting ${esc(waitingSince(session))}.</p>`).join('')+
     prompts.map(session=>`<p>${esc(session.role||session.label)} (${esc(session.label)}) ${esc(session.attention_reason||'is waiting for you')} — waiting ${esc(waitingSince(session))}.</p>`).join('')+
     (prompts.length?`<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`:`<small>Signing in is the only thing needed; the harness holds its messages until then and carries on by itself.</small>`);
 }
@@ -1377,10 +1379,10 @@ function render(data,managed){
   ];
   for(const [selector,kind,label] of launchButtons){
     const button=el(selector), active=Number(counts[kind]||0), limit=Number(limits[kind]||0);
-    const role=kind==='codex_delivery'?'delivery':kind==='claude_reviewer'?'reviewer':'cto', setting=configured[role]||{}, provider=setting.provider==='claude'?'Claude':'Codex', model=setting.model||'default model', effort=setting.effort==='xhigh'?'extra high':(setting.effort||'high');
+    const role=kind==='codex_delivery'?'delivery':kind==='claude_reviewer'?'reviewer':'cto', setting=configured[role]||{}, provider=(managed.providers&&managed.providers[setting.provider]&&managed.providers[setting.provider].short)||(setting.provider==='claude'?'Claude':setting.provider==='gemini'?'Gemini':'Codex'), model=setting.model||'default model', effort=setting.effort==='xhigh'?'extra high':(setting.effort||'high');
     button.textContent=`${provider} · ${model} · ${role==='reviewer'?'Reviewer':role==='cto'?'CTO':'Delivery'} · ${effort} (${active}/${limit})`;
     button.disabled=active>=limit;
-    button.title=active>=limit?`Limit reached: ${active} of ${limit} active. Stop one before starting another.`:`Start a visible ${label} session (${active} of ${limit} active).`;
+    button.title=active>=limit?`Limit reached: ${active} of ${limit} active. Stop one before starting another.`:`Start a visible ${provider} ${role==='reviewer'?'Reviewer':role==='cto'?'CTO':'Delivery Agent'} session (${active} of ${limit} active).`;
   }
   const staged=(managed.sessions||[]).filter(item=>item.status==='launching'&&!item.resume_launch_requested_at&&item.resume_offer==='relaunch');
   const relaunch=el('#relaunch-preserved');
@@ -1426,7 +1428,7 @@ function showColorDialog(kind){
 }
 
 async function start(kind,color='black'){
-  try{const started=await call('/api/sessions',{kind,color});const role=kind==='codex_delivery'?'CODEX Delivery Agent':kind==='claude_reviewer'?'CLAUDE Independent Reviewer':'CTO';const shade=terminalColors.find(item=>item.id===color)?.label||'standard black';
+  try{const started=await call('/api/sessions',{kind,color});const providerName=String(started&&started.provider||(kind==='codex_delivery'?'codex':'claude')).toUpperCase(), role=kind==='claude_cto'?'CTO':`${providerName} ${kind==='codex_delivery'?'Delivery Agent':'Independent Reviewer'}`;const shade=terminalColors.find(item=>item.id===color)?.label||'standard black';
     // On macOS the window is already in front of the owner and there is nothing
     // to say. On Linux the session runs in tmux with no window at all, so the
     // exact attach command is the ONLY way they can reach their agent - the
@@ -2823,8 +2825,11 @@ def settings_payload(root: Path, settings_home: Path | None = None) -> dict:
     value["provider_efforts"] = control.PROVIDER_EFFORTS
     value["provider_models"] = available_provider_models()
     value["provider_model_descriptions"] = control.PROVIDER_MODEL_DESCRIPTIONS
+    if settings_home:
+        value["provider_availability"] = {name: cli_capabilities.provider_availability(settings_home, name) for name in control.PROVIDERS}
     if global_value:
         value["connectivity"] = global_value.get("connectivity", {})
+        value["notices"] = global_value.get("notices", [])
         value["settings_scope"] = "global"
     return value
 
@@ -2859,7 +2864,9 @@ def test_provider_connection(root: Path, provider: str, effort: str, model: str 
     """
     provider = str(provider).strip().lower()
     if provider not in control.PROVIDERS:
-        raise ValueError("choose Codex or Claude before testing the connection")
+        raise ValueError("choose Codex, Claude or Gemini before testing the connection")
+    if provider == "gemini":
+        raise ValueError("The Gemini connection test makes a real request on your Google account; run it from Settings in Mission Control.")
     model = control.normalize_provider_model(provider, model)
     effort = control.normalize_provider_effort(provider, effort)
     if effort not in control.PROVIDER_EFFORTS[provider]:

@@ -3,6 +3,13 @@
 # Internal runner launched in a visible Terminal window by the board control panel.
 set -euo pipefail
 
+# GNU screen (the macOS terminal host) resets HOME to the account's real home; the app passes the
+# HOME it was started with as HARNESS_AGENT_HOME. Restore it before anything reads HOME.
+if [[ -n "${HARNESS_AGENT_HOME:-}" ]]; then
+  export HOME="$HARNESS_AGENT_HOME"
+  unset HARNESS_AGENT_HOME
+fi
+
 target_root=""
 data_root=""
 workspace_root=""
@@ -184,8 +191,7 @@ launch_settings_json="$("$python_bin" -E "$harness_root/harness/control.py" "${c
 provider="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["provider"])' <<<"$launch_settings_json")"
 model="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<<"$launch_settings_json")"
 effort="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["effort"])' <<<"$launch_settings_json")"
-vendor="OpenAI"
-if [[ "$provider" == "claude" ]]; then vendor="Anthropic"; fi
+vendor="$("$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from harness import control; print(control.PROVIDERS[sys.argv[2]]["vendor"])' "$harness_root" "$provider")"
 
 # ONE CLI, CHOSEN DETERMINISTICALLY. This Terminal's own PATH decides nothing:
 # on 2026-09-26 a months-old Homebrew `claude` sat first on it and the agents
@@ -202,7 +208,11 @@ print(json.dumps(global_settings.resolved_cli(sys.argv[2])))
 cli_path="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("path",""))' <<<"$resolved_cli_json")"
 cli_version="$("$python_bin" -E -c 'import json,sys; d=json.load(sys.stdin); print(d.get("version") or ("set by HARNESS_%s_BIN" % sys.argv[1].upper() if d.get("source")=="configured" else "unknown"))' "$provider" <<<"$resolved_cli_json")"
 if [[ -n "$cli_path" ]]; then
-  if [[ "$provider" == "codex" ]]; then export HARNESS_CODEX_BIN="$cli_path"; else export HARNESS_CLAUDE_BIN="$cli_path"; fi
+  case "$provider" in
+    codex) export HARNESS_CODEX_BIN="$cli_path" ;;
+    gemini) export HARNESS_AGY_BIN="$cli_path" ;;
+    *) export HARNESS_CLAUDE_BIN="$cli_path" ;;
+  esac
   export PATH="$(dirname "$cli_path"):$PATH"
 fi
 
@@ -317,9 +327,10 @@ $(earlier_conversation_note)"
 
 $(pause_resume_note)"
     fi
-    if [[ "$provider" == "codex" && -n "$codex_marker" ]]; then
-      # Codex records this prompt as the first message of its rollout; the
-      # marker is how the supervisor finds THIS launch's rollout and no other.
+    if [[ ( "$provider" == "codex" || "$provider" == "gemini" ) && -n "$codex_marker" ]]; then
+      # Codex records this prompt as the first message of its rollout, and the
+      # Antigravity CLI as the first request of its transcript; the marker is how
+      # the supervisor finds THIS launch's conversation and no other.
       prompt="${prompt}
 
 ${codex_marker}"
@@ -416,6 +427,8 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from harness import cli_capabilities
 harness_root, home, provider, role, python, writable, agent = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], json.loads(sys.argv[6]), sys.argv[7]
+if provider == "gemini":
+    raise SystemExit(0)          # the board tools of a Gemini session are a plugin in its runtime directory (harness/gemini_runtime.py)
 status = cli_capabilities.stage_status(home, "stage2_board_mcp", provider)
 real = os.path.realpath(harness_root)
 if status["enabled"] and any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in writable):
@@ -542,6 +555,84 @@ sys.stdout.write("\0".join(["--codex-app-server-json", json.dumps(argv), "--code
       launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" resume --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"} "$cli_session_id" "$prompt"
     else
       launch_visible_cli "${HARNESS_CODEX_BIN:-codex}" --cd "$execution_root" --model "$model" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"} "$prompt"
+    fi
+  elif [[ "$provider" == "gemini" ]]; then
+    # GEMINI (Antigravity CLI, `agy`), spec board/tasks/2026-10-07_gemini-provider_SPEC.md.
+    # Same unattended-and-confined contract as Claude: every permission request is
+    # auto-approved (--dangerously-skip-permissions) BECAUSE the whole process runs
+    # inside the harness's OS write confinement, limited to the same roots Codex and
+    # Claude get plus the CLI's own state (provider-aware: ~/.gemini/antigravity-cli
+    # and the cache, never ~/.gemini/config, and the owner's settings.json is a
+    # protected write). The CLI reads the owner's subscription sign-in IN PLACE; an
+    # API-key or custom-endpoint setup is refused, never silently used (M-2).
+    # Folder trust is the owner's decision, made by opening the project (owner's order 2026-10-03: no human at
+    # any trust question): the folders go into the CLI's own trustedWorkspaces, written here, outside the sandbox.
+    trust_folders=("$execution_root")
+    while IFS= read -r granted_root; do [[ -n "$granted_root" ]] && trust_folders+=("$granted_root"); done < <("$python_bin" -E -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$writable_roots_json")
+    "$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from harness import gemini_auth; raise SystemExit(gemini_auth.main(sys.argv[2:]))' "$harness_root" --trust "${trust_folders[@]}" || {
+      echo "REFUSED: Gemini is not on your Google subscription sign-in (see the message above)." >&2; exit 3; }
+    # A key in the owner's shell must not switch the CLI off the subscription sign-in (it is unset for Gemini
+    # only: a Claude or Codex agent's own project may legitimately use one).
+    unset GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_GEMINI_BASE_URL
+    gemini_access=(--dangerously-skip-permissions)
+    # PLUMBING STAGES 1, 2, 3, 4 for Gemini (harness/gemini_runtime.py): hooks, the board as MCP tools and the
+    # rules, written by the harness into this session's runtime directory (outside every write grant) and
+    # handed to the CLI with --add-dir. Each stage is behind its own switch and proof; a refused stage says
+    # why in the session log and the launch is exactly today's.
+    gemini_runtime_json='{}'
+    if [[ -n "$board_surface" && -n "$manager_home" ]]; then
+      gemini_runtime_json="$(printf '%s' "$system_directive" | "$python_bin" -E "$harness_root/harness/gemini_runtime.py" \
+        --manager-home "$manager_home" --project "$data_root" --session "$session_id" --harness-root "$harness_root" \
+        --python "$python_bin" --writable-json "$writable_roots_json" --role "$mcp_role" --agent "${agent_id:-}" \
+        2>>"${transcript_path:-/dev/null}")" || gemini_runtime_json='{}'
+    fi
+    if [[ -n "$manager_home" ]]; then
+      # How long the supervisor looks for this session's conversation: an owner-settable limit, not a number here.
+      stage3_supervisor_args+=(--conversation-wait "$("$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from harness import global_settings; print(global_settings.load(Path(sys.argv[2]))["plumbing"]["gemini_conversation_wait_seconds"])' "$harness_root" "$manager_home")")
+    fi
+    gemini_add_dir="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("add_dir",""))' <<<"$gemini_runtime_json")"
+    if [[ -n "$gemini_add_dir" ]]; then
+      gemini_access+=(--add-dir "$gemini_add_dir")
+      while IFS= read -r -d '' part; do stage3_supervisor_args+=("$part"); done < <("$python_bin" -E -c 'import json,sys; sys.stdout.write("\0".join(json.load(sys.stdin).get("supervisor_args",[]))+"\0")' <<<"$gemini_runtime_json")
+      export HARNESS_HOOK_GATE_TIMEOUT="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("gate_timeout",5))' <<<"$gemini_runtime_json")"
+      if [[ -n "$system_directive" && "$launch_mode" != "resume" && "$("$python_bin" -E -c 'import json,sys; print("1" if json.load(sys.stdin).get("stage4") else "")' <<<"$gemini_runtime_json")" == "" ]]; then
+        # The rules could not be placed in the system layer after all: the first message carries them, as today.
+        prompt="${system_directive}
+
+${prompt}"
+      fi
+    elif [[ -n "$system_directive" && "$launch_mode" != "resume" ]]; then
+      prompt="${system_directive}
+
+${prompt}"
+    fi
+    execution_root_real="$(cd "$execution_root" && pwd -P)"
+    while IFS= read -r granted_root; do
+      if [[ -n "$granted_root" && "$granted_root" != "$execution_root_real" ]]; then gemini_access+=(--add-dir "$granted_root"); fi
+    done < <("$python_bin" -E -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$writable_roots_json")
+    gemini_confined=()
+    while IFS= read -r -d '' part; do gemini_confined+=("$part"); done < <(
+      "$python_bin" -E -c '
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement
+try:
+    wrapped = agent_confinement.wrap([], json.loads(sys.argv[2]), store=sys.argv[3], home=os.path.expanduser("~"),
+                                     protected_writes=json.loads(sys.argv[4]), provider="gemini")
+except agent_confinement.ConfinementUnavailable as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(3)
+sys.stdout.write("\0".join(wrapped) + "\0")
+' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json"
+    )
+    if [[ ${#gemini_confined[@]} -eq 0 ]]; then
+      echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2
+      exit 3
+    fi
+    if [[ "$launch_mode" == "resume" ]]; then
+      launch_visible_cli "${gemini_confined[@]}" "${HARNESS_AGY_BIN:-agy}" --model "$model" --effort "$effort" "${gemini_access[@]}" --conversation "$cli_session_id" -i "$prompt"
+    else
+      launch_visible_cli "${gemini_confined[@]}" "${HARNESS_AGY_BIN:-agy}" --model "$model" --effort "$effort" "${gemini_access[@]}" -i "$prompt"
     fi
   else
     # NO PERMISSION PROMPTS, AND A REAL BOUNDARY. A managed Claude terminal

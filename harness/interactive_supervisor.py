@@ -515,6 +515,14 @@ def _stage3_tick(root: Path, session_id: str, agent_id: str, stage3: dict, contr
                 pass
             transcript.note(f"codex session id recorded from the app-server: {detail}")
             keep_scanning = False
+        elif kind == "conversation" and detail:
+            # Gemini: the hook's own conversationId, replacing the directory scan (spec M-13).
+            try:
+                control.record_cli_session(root, session_id, detail, "gemini")
+            except ValueError:
+                pass
+            transcript.note(f"gemini conversation id recorded from the hook: {detail}")
+            keep_scanning = False
         elif kind == "refused":
             transcript.note(f"plumbing stage 3: {detail}")
             _plumbing_event(root, agent_id, "plumbing_channel_refused", detail)
@@ -550,11 +558,13 @@ def _stage3_tick(root: Path, session_id: str, agent_id: str, stage3: dict, contr
         # comes up it is used again.
         stage3["late_noted"] = True
         transcript.note(f"PLUMBING FALLBACK {stage3['stage']} the delivery channel is not up yet; typing meanwhile")
-    stage3["typing_meanwhile"] = late
+    # Gemini: nothing fires a hook while the session is idle, so an idle session is woken by typing
+    # (the owner-input hold is unchanged) and a working one by injection; both end at the transcript receipt.
+    stage3["typing_meanwhile"] = late or (stage3["stage"] == "stage3_gemini_delivery" and mux.idle())
     outcome = stage3["worker"].take_outcome()
     if outcome is not None:
         item, result = outcome
-        channel = "app-server" if stage3["stage"] == "stage3_codex_app_server" else "inbox"
+        channel = {"stage3_codex_app_server": "app-server", "stage3_gemini_delivery": "hook"}.get(stage3["stage"], "inbox")
         if result == "delivered":
             stage3["failures"] = 0
             control.acknowledge_instruction(root, session_id, item["id"])
@@ -609,12 +619,27 @@ def _stage3_tick(root: Path, session_id: str, agent_id: str, stage3: dict, contr
             message = f"message {instruction} was posted to the inbox but no receipt appeared in the session transcript"
             transcript.note(f"plumbing stage 3: {message}")
             _plumbing_event(root, agent_id, "plumbing_receipt_missing", message)
-            try:
-                # The live CLI holds it (most likely consumed): acknowledged so
-                # it is never sent again; the event says it was not confirmed.
-                control.acknowledge_instruction(root, session_id, instruction)
-            except ValueError:
-                pass
+            if stage3["stage"] == "stage3_gemini_delivery":
+                # Gemini's receipt is exact - the delivery id in the conversation's transcript - and a request the CLI
+                # rejected (its quota, an error) leaves NONE. So a missing receipt is never "delivered": the message
+                # stays durably `posted` (the next start of this terminal takes it back and checks the transcript
+                # first), and this run sends it again at most once, after checking the transcript under the same id.
+                item = stage3.get("posted", {}).pop(instruction, None)
+                retries = stage3.setdefault("receipt_retries", {})
+                if item is not None and retries.get(instruction, 0) < 1:
+                    retries[instruction] = retries.get(instruction, 0) + 1
+                    item["_stage3_retry"] = True
+                    controller_queue.insert(0, item)
+                    transcript.note(f"controller message {instruction} is not confirmed; it is checked against the conversation and sent once more")
+                else:
+                    transcript.note(f"controller message {instruction} stays unconfirmed (not acknowledged); the next start of this terminal takes it back")
+            else:
+                try:
+                    # The live CLI holds it (most likely consumed): acknowledged so
+                    # it is never sent again; the event says it was not confirmed.
+                    control.acknowledge_instruction(root, session_id, instruction)
+                except ValueError:
+                    pass
             if stage3["failures"] >= STAGE3_FAILURES_BEFORE_FALLBACK and not stage3["fallback"]:
                 stage3["fallback"] = True
                 transcript.note(f"PLUMBING FALLBACK {stage3['stage']} receipt: two posted messages had no receipt; new messages are typed")
@@ -689,7 +714,7 @@ def run(
     root: Path, session_id: str, agent_id: str, command: list[str],
     *, close_terminal_on_exit: bool = False, provider: str = "", execution_root: str = "",
     codex_app_server: list[str] | None = None, runtime_directory: str = "", claude_inbox: bool = False,
-    codex_expected_policy: dict | None = None, busy_wait: float = 900.0,
+    gemini_delivery: bool = False, conversation_wait: float = 1800.0, codex_expected_policy: dict | None = None, busy_wait: float = 900.0,
     receipt_timeout: float = 30.0, response_timeout: float = 20.0,
 ) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -824,6 +849,46 @@ def run(
         except (OSError, ValueError) as error:
             transcript.note(f"PLUMBING FALLBACK stage3_claude_socket_delivery could not start the inbox handover: {error}")
             stage3["fallback"] = True
+    elif gemini_delivery and runtime_directory:
+        # PLUMBING STAGE 3, Gemini: the CLI's PreInvocation hook (its own child, inside its confinement) asks
+        # this socket for the next harness message and injects it into the running turn.
+        from harness import codex_app_server as _codex_app_server, gemini_delivery as _gemini_delivery, runtime_dir
+        import threading as _threading
+        event_lock = _threading.Lock()
+        stage3["stage"] = "stage3_gemini_delivery"
+
+        def stage3_event(kind: str, detail: str) -> None:
+            with event_lock:
+                stage3["events"].append((kind, detail))
+
+        def command_of(pid: int) -> str:
+            try:
+                return str((platform_support.process_identity().process_table().get(pid) or {}).get("command", ""))
+            except OSError:
+                return ""
+
+        try:
+            runtime_dir.create(Path(runtime_directory))
+            inbox = _gemini_delivery.GeminiInbox(
+                os.path.join(runtime_directory, "g.sock"), session_id=session_id,
+                is_cli=lambda pid: _descends_from(pid, stage3["child_pid"]),
+                peer_pid=platform_support.process_identity().peer_process_id, command_of=command_of,
+                on_event=stage3_event, turn_state=lambda: _turn_state(root, session_id), busy_wait=busy_wait,
+                # A relaunch RESUMES a conversation whose transcript already holds what the last run delivered: a
+                # carried message is checked against it before it is typed again (no hook has run yet to name it).
+                transcript_hint=lambda: str(conversation.gemini_transcript_path(
+                    str(control.cli_session(root, session_id).get("cli_session_id") or "")) or ""),
+            )
+            inbox.start()
+            child_environment["HARNESS_GEMINI_HANDOVER"] = inbox.socket_path
+            stage3["mux"] = inbox
+            stage3["worker"] = _codex_app_server.DeliveryWorker(
+                inbox, response_timeout=response_timeout, receipt_timeout=receipt_timeout)
+            stage3["event_lock"] = event_lock
+            transcript.note("plumbing stage 3: harness messages reach Gemini through its hook while it works, and are typed when it is idle")
+        except (OSError, ValueError) as error:
+            transcript.note(f"PLUMBING FALLBACK stage3_gemini_delivery could not start the delivery socket: {error}")
+            stage3["fallback"] = True
     child = subprocess.Popen(
         command,
         stdin=slave,
@@ -932,13 +997,20 @@ def run(
                 # Codex mints its own session id and writes it to a rollout file
                 # shortly after starting; record it so a relaunch can resume.
                 next_codex_probe = time.time() + 2.0
-                found = conversation.discover_codex_session_id(launched_at, Path(execution_root or os.getcwd()), codex_marker)
+                if provider == "gemini":
+                    # The conversation directory exists only once the first turn has run,
+                    # which can wait on the owner's sign-in or trust answer: allow longer.
+                    found = conversation.discover_gemini_session_id(launched_at, codex_marker)
+                    give_up_after = conversation_wait
+                else:
+                    found = conversation.discover_codex_session_id(launched_at, Path(execution_root or os.getcwd()), codex_marker)
+                    give_up_after = 120
                 if found:
-                    control.record_cli_session(root, session_id, found, "codex")
-                    transcript.note(f"codex session id recorded: {found}")
+                    control.record_cli_session(root, session_id, found, provider)
+                    transcript.note(f"{provider} session id recorded: {found}")
                     codex_id_pending = False
-                elif time.time() - launched_at > 120:
-                    transcript.note("codex session id not found within 120s; a relaunch will start fresh")
+                elif time.time() - launched_at > give_up_after:
+                    transcript.note(f"{provider} session id not found within {give_up_after}s; a relaunch will start fresh")
                     codex_id_pending = False
             if not input_held:
                 # A terminal showing a menu the owner must answer (sign-in,
@@ -987,7 +1059,7 @@ def run(
                         # server - never typed. Its outcome is read next tick.
                         item = controller_queue.pop(0)
                         retry = bool(item.pop("_stage3_retry", False))
-                        channel = "app-server" if stage3["stage"] == "stage3_codex_app_server" else "inbox"
+                        channel = {"stage3_codex_app_server": "app-server", "stage3_gemini_delivery": "hook"}.get(stage3["stage"], "inbox")
                         transcript.note(f"controller message ({item['source']}) via {channel}: {item['text']}")
                         stage3["worker"].submit(item, f"[SYSTEM CONTROL — {item['source']}] {item['text']}", retry=retry)
                 else:
@@ -999,8 +1071,17 @@ def run(
                         transcript.note(f"controller message {item['id']} had already arrived; not typed again")
                         continue
                     transcript.note(f"controller message ({item['source']}): {item['text']}")
-                    _submit_controller_message(master, item["source"], item["text"])
-                    control.acknowledge_instruction(root, session_id, item["id"])
+                    if stage3["stage"] == "stage3_gemini_delivery" and stage3["mux"] is not None:
+                        # Typed into an idle window, but still tied to its receipt: the delivery id in the
+                        # transcript, exactly as for an injected message. Not acknowledged until it is seen.
+                        client = f"harness-{item['id']}"
+                        _submit_controller_message(master, item["source"], f"{item['text']}\n\n(harness delivery {client})")
+                        control.mark_posted(root, session_id, item["id"], item)
+                        stage3.setdefault("posted", {})[item["id"]] = item
+                        stage3["mux"].expect_receipt(client)
+                    else:
+                        _submit_controller_message(master, item["source"], item["text"])
+                        control.acknowledge_instruction(root, session_id, item["id"])
         exited = child.poll()
         if exited is None and stop_requested:
             return STUCK_EXIT_CODE
@@ -1030,7 +1111,7 @@ def run(
             stopper.join(timeout=STAGE3_TEARDOWN_SECONDS)
             if stopper.is_alive():
                 transcript.note("plumbing stage 3: the delivery channel did not close within its bound; the terminal closes anyway")
-        if runtime_directory and (codex_app_server or claude_inbox):
+        if runtime_directory and (codex_app_server or claude_inbox or gemini_delivery or provider == "gemini"):
             # Always, even when the channel never started (review r1: a stale
             # runtime directory outlived its session).
             from harness import runtime_dir
@@ -1068,6 +1149,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--codex-app-server-json", default="")
     parser.add_argument("--runtime-dir", default="")
     parser.add_argument("--claude-inbox", action="store_true")
+    parser.add_argument("--gemini-delivery", action="store_true")
+    parser.add_argument("--conversation-wait", type=float, default=1800.0)
     parser.add_argument("--codex-expected-policy", default="")
     parser.add_argument("--busy-wait", type=float, default=900.0)
     parser.add_argument("--receipt-timeout", type=float, default=30.0)
@@ -1084,7 +1167,7 @@ def main(argv: list[str] | None = None) -> int:
         close_terminal_on_exit=args.close_terminal_on_exit,
         provider=args.provider, execution_root=args.execution_root,
         codex_app_server=json.loads(args.codex_app_server_json) if args.codex_app_server_json else None,
-        runtime_directory=args.runtime_dir, claude_inbox=args.claude_inbox, receipt_timeout=args.receipt_timeout,
+        runtime_directory=args.runtime_dir, claude_inbox=args.claude_inbox, gemini_delivery=args.gemini_delivery, conversation_wait=args.conversation_wait, receipt_timeout=args.receipt_timeout,
         codex_expected_policy=json.loads(args.codex_expected_policy) if args.codex_expected_policy else None,
         busy_wait=args.busy_wait,
         response_timeout=args.app_server_timeout,

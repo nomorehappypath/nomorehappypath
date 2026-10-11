@@ -223,6 +223,23 @@ def _lookup_entries(
     return {"status": "miss", "reason": "no_exact_match", "diverged_fields": diverged}
 
 
+def latest_failed_output(root: Path, identity: dict[str, Any]) -> str:
+    """The stored output of the most recent FAILED attempt of this exact identity, or "" when there is none
+    (or its artifact is gone). Lets a retry refusal show why the earlier attempt failed."""
+    try:
+        with _store_lock(root, exclusive=False) as path:
+            entries = _read_entries(path)
+        failed = [
+            entry for entry in entries
+            if entry.get("identity_kind") == identity.get("kind")
+            and entry.get("identity_sha256") == identity.get("sha256")
+            and int(entry.get("exit_code", 1)) != 0
+        ]
+        return load_output(failed[-1]) if failed else ""
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
 def certify(
     root: Path,
     identity: dict[str, Any],

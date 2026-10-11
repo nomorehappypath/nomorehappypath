@@ -3,7 +3,7 @@
 **Agents that prove it. An AI development-governance platform: AI agents do the
 work — the platform refuses every happy-path claim until the evidence exists.**
 
-NoMoreHappyPath (nomorehappypath.com) runs real AI coding agents (Codex CLI, Claude CLI) as a governed
+NoMoreHappyPath (nomorehappypath.com) runs real AI coding agents (Codex CLI, Claude CLI, and optionally Gemini through Google's Antigravity CLI) as a governed
 delivery team — a Delivery Agent that builds, an Independent Reviewer from a
 *different vendor* that verifies by running the code, and a CTO watchtower
 that audits every claim against evidence. A human owner stays in charge of one
@@ -46,6 +46,7 @@ AI agents it governs run on **your own accounts**.
 | **macOS 13+** with Python 3.9+, or **Linux** (tested on Ubuntu 24.04) with Python 3.9+, git, tmux and bubblewrap | `python3 --version` to check; on Ubuntu `sudo apt install git tmux bubblewrap` | free |
 | **Codex CLI** (the Delivery agent) | `npm install -g @openai/codex` — sign in with your OpenAI account | your OpenAI/ChatGPT plan |
 | **Claude Code CLI** (the Reviewer/CTO) | https://claude.com/claude-code — sign in with your Anthropic account | your Anthropic plan |
+| **Antigravity CLI** (`agy`, optional — Gemini for any role) | https://antigravity.google/cli — sign in with your Google account; the agent asks once more inside its own window | a free Google account has a weekly quota; Google AI Pro/Ultra raise it (billing: one.google.com) |
 | **OpenAI API key** (project chat) | https://platform.openai.com/api-keys — entered under Settings, verified before storage, kept in a file only you can read | pay-per-use, cents |
 
 You can start with just one CLI, but the platform's core guarantee —
@@ -89,16 +90,16 @@ On Linux, **Choose folder** opens a folder dialog like the macOS one: places on 
 From Windows, the dialog shows the folders of the Linux server. macOS retains its native
 folder picker.
 
-**First time an agent opens in a project:** stay at your computer. Claude may ask *Do you trust this folder?* (choose *Yes, I trust this folder*) and Codex may ask the same (choose *Trust and continue*). Use **View agent** to answer it. Mission Control shows that agent as waiting for you until you do.
+**First time an agent opens in a project:** stay at your computer. Claude may ask *Do you trust this folder?* (choose *Yes, I trust this folder*) and Codex may ask the same (choose *Trust and continue*). Use **View agent** to answer it. Mission Control shows that agent as waiting for you until you do. Gemini does not ask (the project you opened is recorded as trusted for it); it asks you to sign in once inside its own window, and Mission Control says so when it does.
 
-**Linux CLI setup (including a VM on Windows):** install **both Codex CLI and
-Claude Code CLI inside Linux** and sign in to each using the account that runs
-NoMoreHappyPath. Make `codex` and `claude` available in `PATH` for **all shells**
+**Linux CLI setup (including a VM on Windows):** install **the CLIs you use (Codex CLI, Claude Code CLI,
+and optionally Antigravity CLI for Gemini) inside Linux** and sign in to each using the account that runs
+NoMoreHappyPath. Make `codex`, `claude` and `agy` available in `PATH` for **all shells**
 used by that account: login and non-interactive shells, tmux sessions, and the
 app's systemd service. Shell aliases and a PATH exported in just one terminal
-are insufficient. Check `codex --version` and `claude --version` from a fresh
+are insufficient. Check `codex --version`, `claude --version` and `agy --version` from a fresh
 shell before installing the service. Run `bash install.sh --check` under the
-same Linux account to confirm the app can find both CLIs for its service.
+same Linux account to confirm the app can find the CLIs for its service.
 
 ### Claude agent authentication
 
@@ -132,6 +133,27 @@ before starting the harness instead of importing it into systemd. Do not store
 the value in unit files, shell startup files, project settings, or the board.
 Never run `/login` inside a harness agent to repair a missing or expired setup-token;
 generate a replacement in your own terminal and follow the owner-action card.
+
+### Gemini agent setup (optional)
+
+Gemini runs through Google's Antigravity CLI (`agy`) on your own Google account. No API key is used or accepted.
+
+1. **Install** (macOS or Linux, same command): `curl -fsSL https://antigravity.google/cli | bash`. It puts `agy` in `~/.local/bin`; make sure that folder is in `PATH`
+   for every shell (see the Linux CLI setup above). Check with `agy --version`.
+2. **Sign in once, in your own terminal:** run `agy`, choose *Google OAuth*, open the link it prints, approve with your Google account and paste the code it shows back
+   into the terminal. This also works over SSH or in a Linux VM. Then it asks you to pick a colour scheme and shows **Terms of Service & Data Use** with one
+   checkbox about letting Google use your interactions data. That is your own choice: the app never answers it for you, and leaving it ticked or unticked both work.
+   Quit (`Ctrl+C`) after the folder-trust question; the app records trust for the projects it opens, so agents never ask.
+3. **Plan:** a free Google account has a small weekly quota and agents run out of it fast; a Google AI Pro or Ultra plan is recommended
+   (billing: one.google.com). When the quota is used up, Mission Control says so in plain words and for how long.
+4. **In the app:** open **Settings**, choose *Gemini (Antigravity CLI)* for any role, then click **Test Gemini connection**. It sends one real word to Gemini from inside
+   the agents' sandbox, on your account, and says what it found. Gemini is greyed out in Settings, with the reason, until `agy` is found and proven.
+5. **First launch:** each agent window may ask you to sign in once more. The agent's sandbox keeps its own copy of the sign-in and does not use your Keychain or your
+   normal sign-in files. Mission Control shows the agent as waiting for you until you do. On Linux, do this under the same account that runs the app.
+
+Agents run with `--dangerously-skip-permissions`, like the other providers, but inside the same write sandbox: they can write only to the project, the task workspace and
+Gemini's own state and cache folders; your `~/.gemini/antigravity-cli/settings.json` and `~/.gemini/config` stay protected. Antigravity CLI 1.x is what was tested;
+`bash install.sh --check` reports whether `agy` is found.
 
 ## Install
 
@@ -212,7 +234,7 @@ to us — there is no us-server at all.
 
 **What does it cost to run?**
 Think of it as hiring a governed engineering team, not buying an app. The
-agents work on your own OpenAI and Anthropic plans, and a serious build -
+agents work on your own OpenAI, Anthropic and Google plans, and a serious build -
 with adversarial reviews, scenario tests, and failure-path evidence - can
 run into the hundreds or a few thousand dollars of model spend. Measure
 that against what the software is for: a product that will
@@ -257,7 +279,7 @@ provided as-is with no warranty (see LICENSE). The CLI agents can do whatever
 they need to do inside the project folder you choose — create, edit, delete,
 and run code — so choose that folder carefully, keep it under version control,
 and never point the agents at data you cannot afford to lose. Agent usage is
-billed to your own OpenAI/Anthropic accounts.
+billed to your own OpenAI/Anthropic/Google accounts.
 
 The license's own no-warranty and limitation-of-liability terms apply (see
 LICENSE, sections 7 and 8). [DISCLAIMER.md](DISCLAIMER.md) is an informational

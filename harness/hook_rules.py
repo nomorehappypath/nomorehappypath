@@ -36,7 +36,10 @@ BACKGROUND_HELPERS = re.compile(r"(?:^|[\s;&|(])(?:nohup|disown|caffeinate|setsi
 BACKGROUND_JOB = re.compile(r"(?<![&>|])&(?![&>])")
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 BOARD_POLL_LOOP = re.compile(r"\b(?:while|until|for)\b[\s\S]*\bboard\.py\b[\s\S]*\bpoll\b|\bwatch\b[\s\S]*\bboard\.py\b")
-CREDENTIAL_FILES = (".codex/auth.json", ".claude/.credentials.json", "/.credentials.json")
+CREDENTIAL_FILES = (".codex/auth.json", ".claude/.credentials.json", "/.credentials.json",
+                    # Antigravity CLI: its sign-in file (read in place when the OS keyring is unreachable) and the owner's
+                    # settings. Literal markers only - the guard has no globs (spec M-6).
+                    ".gemini/antigravity-cli/antigravity-oauth-token", ".gemini/antigravity-cli/settings.json")
 
 
 def _text(value: Any) -> str:

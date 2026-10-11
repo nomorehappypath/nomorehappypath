@@ -323,15 +323,32 @@ def _scenario_rows(path: Path, *, require_owner_description: bool = False):
     return rows, problems
 
 
+EXCEPTION_ROW_PROBLEM = (
+    "{id} is an N/A or DEFERRED row, but a review simulation must be executed by the board. Behaviour that "
+    "cannot be proven by a hermetic command plus an independently captured screen-check is raised to the owner "
+    "with an owner-action card; it is never written as an exception row"
+)
+
+
+def _refuse_exception_rows(rows, problems) -> None:
+    """A review simulation is executed, so an N/A/DEFERRED row can never pass the execution that follows.
+    Say so at intake instead of letting the ledger be accepted and then fail downstream."""
+    for row in rows:
+        if row["result"].upper().startswith(("N/A:", "DEFERRED:")):
+            problems.append(EXCEPTION_ROW_PROBLEM.format(id=row["id"]))
+
+
 def scenario_simulations(path: Path):
     """Return a validated per-scenario executable simulation plan."""
     rows, problems = _scenario_rows(path)
+    _refuse_exception_rows(rows, problems)
     return not problems, problems, rows
 
 
 def scenario_submission_simulations(path: Path):
     """Validate a newly submitted ledger, including owner-readable wording."""
     rows, problems = _scenario_rows(path, require_owner_description=True)
+    _refuse_exception_rows(rows, problems)
     return not problems, problems, rows
 
 
@@ -375,12 +392,14 @@ def scenario_submission_complete(path: Path):
 def scenario_ledger_exists(path: Path):
     """Require a concrete executable simulation plan before review begins."""
     rows, problems = _scenario_rows(path)
+    _refuse_exception_rows(rows, problems)
     return bool(rows) and not problems, problems
 
 
 def scenario_submission_exists(path: Path):
     """Require concrete scenarios and owner-readable wording for new intake."""
     rows, problems = _scenario_rows(path, require_owner_description=True)
+    _refuse_exception_rows(rows, problems)
     return bool(rows) and not problems, problems
 
 def scenario_fingerprints(path: Path):

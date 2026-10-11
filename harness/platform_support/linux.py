@@ -336,10 +336,19 @@ class _TmuxTerminalHost:
         binary = AGENT_CONFINEMENT.binary()
         if binary:
             environment += ["-e", "HARNESS_BWRAP_BIN=" + binary]
-        subprocess.run(
-            ["tmux", "new-session", "-d", "-s", name, *environment, "--", *self.keep_failure_visible(argv)],
-            check=True, capture_output=True, text=True,
-        )
+        command = ["tmux", "new-session", "-d", "-s", name, *environment, "--", *self.keep_failure_visible(argv)]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as error:
+            # A paused or stopped agent ends with a non-zero code, so its window
+            # is held open for the owner to read (keep_failure_visible) and the
+            # tmux session still carries this name. The harness only opens a
+            # session whose agent is not alive (a live one is re-adopted), so
+            # that leftover is a dead window: clear it and open the new one.
+            if "duplicate session" not in (error.stderr or ""):
+                raise
+            subprocess.run(["tmux", "kill-session", "-t", "=" + name], check=False, capture_output=True, text=True)
+            subprocess.run(command, check=True, capture_output=True, text=True)
         # Role colour, same table that drives macOS, so a role looks like itself
         # on both platforms. A tmux too old for this must not fail the launch.
         subprocess.run(
@@ -532,7 +541,8 @@ class _BwrapAgentConfinement(_AgentConfinement):
         return command + ["--", *list(argv)]
 
     def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
-             protected_writes: list[str] | None = None) -> list[str]:
+             protected_writes: list[str] | None = None,
+             denied_executables: list[str] | None = None) -> list[str]:
         bwrap = self.binary()
         if not bwrap:
             raise AgentConfinementUnavailable(
@@ -561,12 +571,22 @@ class _BwrapAgentConfinement(_AgentConfinement):
         # create it inside the writable parent.
         for path in protected_writes or []:
             real = Path(self._real(path))
-            real.mkdir(parents=True, exist_ok=True)
+            if not real.exists():
+                if real.suffix == ".json":
+                    # A protected FILE (the Antigravity CLI's settings.json): created as the empty object the CLI reads
+                    # as "no settings", never as a directory - the CLI could not use a directory where its file goes.
+                    real.parent.mkdir(parents=True, exist_ok=True)
+                    real.write_text("{}\n", encoding="utf-8")
+                else:
+                    real.mkdir(parents=True, exist_ok=True)
             command += ["--ro-bind", str(real), str(real)]
         for path in protected_reads or []:
             real = Path(self._real(path))
             if real.is_file():
                 command += ["--ro-bind", "/dev/null", str(real)]
+        # Tells the browser helper it is already confined (it then leaves Chrome's own inner sandbox off). The helper
+        # only trusts it together with the kernel's NoNewPrivs flag; no security decision reads it.
+        command += ["--setenv", "HARNESS_OS_SANDBOX", "1"]
         return command + ["--", *list(argv)]
 
 

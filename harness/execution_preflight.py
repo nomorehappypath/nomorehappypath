@@ -23,6 +23,68 @@ def _tokens(command: str) -> list[str]:
     return values
 
 
+BOARD_CALL_MARKER = "this command runs the harness board CLI"
+BOARD_CALL_REFUSAL = (
+    f"{BOARD_CALL_MARKER} (board.py or screen-check), which a test or scenario command may not do: "
+    "it runs in the review sandbox, which cannot reach the live board. Keep every simulation command hermetic. "
+    "Run screen-check yourself as a board command before you submit, and cite its screen-... evidence id and the text it "
+    "returned in the ledger row. A test of the board CLI itself must run it against a disposable fixture board from "
+    "inside the test's own code"
+)
+
+HARNESS_BOARD = Path(__file__).resolve().parent / "board.py"
+_NO_VALUE_FLAGS = {"-E", "-I", "-B", "-u", "-s", "-S", "-O", "-OO", "-q", "-d", "-v", "-x", "-b", "-bb", "-R", "-P"}
+_VALUE_FLAGS = {"-W", "-X", "-r", "--require", "--import", "-e", "--eval", "-p", "--print", "--loader", "--experimental-loader"}
+
+
+def _resolves_to_board(token: str, cwd: Path, search_path: str) -> bool:
+    if "/" in token:
+        candidate = (cwd / token).resolve()
+    else:
+        found = shutil.which(token, path=search_path)
+        candidate = Path(found).resolve() if found else None
+    return candidate is not None and candidate == HARNESS_BOARD
+
+
+def calls_the_board(values: list[str], *, cwd: Path, search_path: str) -> bool:
+    """True when the command EXECUTES the harness board CLI: as the program, as the script an
+    interpreter runs, or as `python -m harness.board`. A mention inside a -c string, another
+    project's board.py, `pytest board.py` and `npm test -- screen-check` are not execution."""
+    values = list(values)
+    while values and values[0].rsplit("/", 1)[-1] == "env":
+        values.pop(0)
+        while values:
+            if values[0] in {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"} and len(values) > 1:
+                del values[:2]
+            elif values[0].startswith("-") or ("=" in values[0] and values[0].split("=", 1)[0].isidentifier()):
+                values.pop(0)
+            else:
+                break
+    if not values:
+        return False
+    program = values[0]
+    if _resolves_to_board(program, cwd, search_path):
+        return True
+    name = program.rsplit("/", 1)[-1]
+    if not (name.startswith("python") or name in {"node", "nodejs", "sh", "bash", "zsh", "dash"}):
+        return False
+    index = 1
+    while index < len(values):
+        argument = values[index]
+        if argument == "-m" and name.startswith("python"):
+            return index + 1 < len(values) and values[index + 1] in {"harness.board", "harness.board_client"}
+        if argument in {"-c"}:
+            return False
+        if argument in _VALUE_FLAGS:
+            index += 2
+            continue
+        if argument.startswith("-") and (argument in _NO_VALUE_FLAGS or len(argument) > 1):
+            index += 1
+            continue
+        return _resolves_to_board(argument, cwd, search_path)
+    return False
+
+
 def _npm_root(root: Path, values: list[str]) -> Path:
     prefix = "."
     for index, value in enumerate(values):
@@ -88,6 +150,9 @@ def validate_commands(
             continue
         if not values:
             problems.append("test command has no executable")
+            continue
+        if calls_the_board(values, cwd=execution_root, search_path=executable_path):
+            problems.append(BOARD_CALL_REFUSAL)
             continue
         executable = values[0]
         available = (

@@ -33,9 +33,16 @@ ROLE_SETTINGS = {
     "reviewer": {"label": "Independent Reviewer", "default_provider": "claude", "default_model": "opus", "default_effort": "max"},
 }
 PROVIDERS = {
-    "codex": {"label": "Codex", "binary_env": "HARNESS_CODEX_BIN"},
-    "claude": {"label": "Claude", "binary_env": "HARNESS_CLAUDE_BIN"},
+    "codex": {"label": "Codex", "short": "Codex", "binary_env": "HARNESS_CODEX_BIN", "vendor": "OpenAI"},
+    "claude": {"label": "Claude", "short": "Claude", "binary_env": "HARNESS_CLAUDE_BIN", "vendor": "Anthropic"},
+    # Antigravity CLI: the executable is `agy`, not the provider id (spec M-1).
+    "gemini": {"label": "Gemini (Antigravity CLI)", "short": "Gemini", "binary_env": "HARNESS_AGY_BIN", "executable": "agy",
+               "vendor": "Google"},
 }
+# Gemini sessions may only run Google's models (spec M-3): the Antigravity CLI
+# also lists third-party models on some plans, and a Claude model behind the
+# Gemini provider would defeat the cross-vendor review rule.
+GEMINI_MODEL_PREFIX = "gemini-"
 PROVIDER_EFFORTS = {
     # Verified live 2026-09-24: Codex's API accepts low … xhigh, max; its own
     # model catalog adds "ultra" (maximum reasoning with automatic task
@@ -44,6 +51,8 @@ PROVIDER_EFFORTS = {
               "ultra": "Ultra (delegates subtasks)"},
     # Claude Code 2.1.281: --effort low, medium, high, xhigh, max.
     "claude": {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"},
+    # Antigravity CLI 1.3.1: --effort low|medium|high|xhigh|max.
+    "gemini": {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"},
 }
 # What each suggested model is for, in the providers' own words where they
 # give them (the CLI pickers, 2026-09-24) — shown next to the ID in Settings
@@ -79,6 +88,13 @@ PROVIDER_MODEL_DESCRIPTIONS = {
         "haiku": "Latest Haiku (alias) — fastest for quick answers",
         "claude-haiku-4-5-20251001": "Haiku 4.5 — fastest for quick answers",
     },
+    "gemini": {
+        "gemini-3.1-pro-high": "Gemini 3.1 Pro, high thinking — strongest, for complex work (Gemini default)",
+        "gemini-3.1-pro-low": "Gemini 3.1 Pro, low thinking — strong and quicker",
+        "gemini-3.8-flash-high": "Gemini 3.8 Flash, high thinking — fast and capable",
+        "gemini-3.8-flash-medium": "Gemini 3.8 Flash, medium thinking — fast everyday model",
+        "gemini-3.8-flash-low": "Gemini 3.8 Flash, low thinking — fastest, for simple tasks",
+    },
 }
 PROVIDER_MODELS = {
     # Suggestions only, newest first. The settings UI also accepts a full
@@ -100,8 +116,13 @@ PROVIDER_MODELS = {
         "claude-fable-5[1m]", "claude-fable-5", "claude-opus-5",
         "claude-sonnet-5", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001",
     ],
+    # `agy models` on 2026-10-07, filtered to Google's own models (GEMINI_MODEL_PREFIX).
+    "gemini": [
+        "gemini-3.1-pro-high", "gemini-3.1-pro-low",
+        "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    ],
 }
-PROVIDER_DEFAULT_MODELS = {"codex": "gpt-5.6-sol", "claude": "opus"}
+PROVIDER_DEFAULT_MODELS = {"codex": "gpt-5.6-sol", "claude": "opus", "gemini": "gemini-3.1-pro-high"}
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-\[\]]{0,119}$")
 # Backward-compatible union for older callers; validation is provider-specific.
 EFFORTS = {key: label for values in PROVIDER_EFFORTS.values() for key, label in values.items()}
@@ -130,6 +151,24 @@ SESSION_COLORS = {
     "red": {"label": "Brick red", "hex": "#5A2525", "rgb": (0x5A, 0x25, 0x25)},
     "amber": {"label": "Dark amber", "hex": "#5A4314", "rgb": (0x5A, 0x43, 0x14)},
 }
+
+
+def session_identity(kind: str, provider: str) -> dict[str, str]:
+    """The label and vendor a session of `kind` running `provider` shows and declares.
+
+    The role kinds (`codex_delivery`, `claude_reviewer`, `claude_cto`) are role
+    identities and stay as they are; what the window says and which vendor the
+    board records come from the provider that actually runs (a Claude Delivery
+    agent is not "CODEX CLI", and a Gemini reviewer is vendor Google).
+    """
+    short = {"codex": "CODEX", "claude": "CLAUDE", "gemini": "GEMINI"}[provider]
+    label = f"CTO ({short})" if kind == "claude_cto" else f"{short} CLI"
+    return {"label": label, "vendor": PROVIDERS[provider]["vendor"]}
+
+
+def provider_executable_name(provider: str) -> str:
+    """The program a provider runs as: its own `executable` key, else its id (Gemini's is `agy`)."""
+    return str(PROVIDERS[provider].get("executable", provider))
 
 
 def now() -> str:
@@ -165,6 +204,45 @@ def normalize_provider_effort(provider: str, effort: str) -> str:
     return effort
 
 
+ROLE_NOTICE_NAMES = {"cto": "CTO", "delivery": "Delivery", "reviewer": "Reviewer"}
+GEMINI_LEVEL = re.compile(r"^(gemini-.+)-(low|medium|high)$")
+
+
+def gemini_pair(model: str, effort: str, *, repair: bool) -> tuple[str, str, str]:
+    """One consistent (model, effort) for Gemini, and a plain notice when something was changed.
+
+    Antigravity's model ids already carry the thinking level (gemini-3.8-flash-low|medium|high) and the CLI
+    rejects a pair where --model and --effort disagree, so the effort the owner chose selects the level of the
+    model (the owner's intent wins). A level missing from the catalog is not refused (the catalog is only
+    suggestions): the notice says to confirm it with Test connection. xhigh/max cannot exist for a suffixed
+    model: refused when the owner saves it, repaired to the model's own level when it is an older stored value.
+    Unsuffixed ids and other providers are untouched.
+    """
+    match = GEMINI_LEVEL.match(model)
+    if not match:
+        return model, effort, ""
+    family, own = match.groups()
+    if effort in {"low", "medium", "high"}:
+        target = f"{family}-{effort}"
+        if target == model:
+            return model, effort, ""
+        known = target in PROVIDER_MODELS["gemini"]
+        notice = (
+            f"Gemini's thinking level is part of the model name, so your {effort} effort selects {target} "
+            f"(you had {model})"
+            + ("" if known else f"; {target} is not in the list this app last saw, so press Test connection to confirm it exists")
+        )
+        return target, effort, notice
+    if repair:
+        return model, own, (
+            f"Gemini model {model} carries its own thinking level ({own}); the stored effort {effort} was changed to {own}"
+        )
+    raise ValueError(
+        f"Gemini's thinking level is part of the model name: {model} is already {own}. "
+        "Choose low, medium or high effort (xhigh and max do not exist for Gemini models)"
+    )
+
+
 def normalize_provider_model(provider: str, model: str) -> str:
     """Return one explicit CLI model, migrating legacy provider-only settings."""
     provider = str(provider).strip().lower()
@@ -173,10 +251,13 @@ def normalize_provider_model(provider: str, model: str) -> str:
         model = PROVIDER_DEFAULT_MODELS.get(provider, "")
     if not MODEL_PATTERN.fullmatch(model):
         raise ValueError("model must be a provider alias or model ID without spaces")
+    if provider == "gemini" and not model.startswith(GEMINI_MODEL_PREFIX):
+        raise ValueError(f"Gemini sessions run only Google's models (ids starting {GEMINI_MODEL_PREFIX}); {model} is not one")
     return model
 
 
-def _validated_agent_settings(value: dict | None) -> dict[str, dict[str, str]]:
+def _validated_agent_settings(value: dict | None, *, notices: list[str] | None = None,
+                              repair: bool = False) -> dict[str, dict[str, str]]:
     candidate = default_agent_settings() if value is None else value
     if not isinstance(candidate, dict):
         raise ValueError("agent settings must be an object")
@@ -188,11 +269,15 @@ def _validated_agent_settings(value: dict | None) -> dict[str, dict[str, str]]:
         provider = str(entry.get("provider", "")).strip().lower()
         effort = normalize_provider_effort(provider, entry.get("effort", ""))
         if provider not in PROVIDERS:
-            raise ValueError(f"unsupported provider for {role}; choose codex or claude")
+            raise ValueError(f"unsupported provider for {role}; choose codex, claude or gemini")
         model = normalize_provider_model(provider, entry.get("model", ""))
         if effort not in PROVIDER_EFFORTS[provider]:
             choices = ", ".join(PROVIDER_EFFORTS[provider])
             raise ValueError(f"unsupported effort for {role} with {provider}; choose {choices}")
+        if provider == "gemini":
+            model, effort, note = gemini_pair(model, effort, repair=repair)
+            if note and notices is not None:
+                notices.append(f"{ROLE_NOTICE_NAMES.get(role, role)}: {note}")
         result[role] = {"provider": provider, "model": model, "effort": effort}
     if result["delivery"]["provider"] == result["reviewer"]["provider"]:
         raise ValueError("Delivery and Independent Reviewer must use different providers so independent review remains claimable")
@@ -250,6 +335,12 @@ def session_launch_settings(root: Path, session_id: str, kind: str) -> dict[str,
         effort = normalize_provider_effort(provider, session.get("effort", ""))
         if provider not in PROVIDERS or effort not in PROVIDER_EFFORTS[provider]:
             raise ValueError("managed session has invalid launch settings")
+        if provider == "gemini":
+            # A session captured before the pair rule existed (or by another build) may still hold
+            # flash-low with effort medium; the CLI rejects that pair, so repair it at launch too.
+            model, effort, note = gemini_pair(model, effort, repair=True)
+            if note and session.get("setting_repaired") != note:
+                session.update({"model": model, "effort": effort, "setting_repaired": note})
         return {
             "role": role_for_kind(kind),
             "provider": provider,
@@ -502,6 +593,7 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             **_cli_memory_fields(),
             "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
             **KINDS[kind],
+            **session_identity(kind, selected["provider"]),
             "provider": selected["provider"],
             "model": selected["model"],
             "effort": selected["effort"],
@@ -622,6 +714,7 @@ def restore_missing_resume_session(
                 datetime.now(timezone.utc) + timedelta(seconds=30)
             ).isoformat(),
             **KINDS[kind],
+            **session_identity(kind, selected["provider"]),
             "provider": selected["provider"], "model": selected["model"],
             "effort": selected["effort"],
             "provider_label": PROVIDERS[selected["provider"]]["label"],
@@ -824,6 +917,32 @@ def record_turn_state(root: Path, session_id: str, turn_state: str) -> dict[str,
         session["turn_state"] = turn_state
         session["turn_state_at"] = now()
         return {"session_id": session_id, "turn_state": turn_state, "turn_state_at": session["turn_state_at"]}
+
+
+def record_observed_model(root: Path, session_id: str, model: str) -> bool:
+    """The model a Gemini turn actually used (its hook reports it); True when it is not a Google model.
+
+    The owner can switch models inside the CLI's own window. A Gemini session on a third-party model is
+    no longer vendor Google, so it must not take a review assignment (spec M-3, cross-vendor rule).
+    """
+    model = str(model or "").strip()
+    with locked_state(root) as state:
+        session = state["sessions"].get(session_id)
+        if not session or session.get("provider") != "gemini" or not model:
+            return False
+        mismatch = not model.startswith(GEMINI_MODEL_PREFIX)
+        changed = bool(session.get("model_mismatch")) != mismatch
+        requested = str(session.get("model") or "")
+        # Any Google model other than the one the app asked for (another thinking level, another family)
+        # is recorded, not only a switch to a non-Google model.
+        session["selection_differs"] = (
+            f"asked for {requested}, the window reports {model[:120]}"
+            if not mismatch and requested.startswith(GEMINI_MODEL_PREFIX) and model.startswith(GEMINI_MODEL_PREFIX) and model != requested
+            else ""
+        )
+        session["observed_model"] = model[:120]
+        session["model_mismatch"] = model[:120] if mismatch else ""
+        return mismatch and changed
 
 
 def record_attention(root: Path, session_id: str, reason: str) -> dict[str, Any]:
