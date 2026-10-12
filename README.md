@@ -279,10 +279,15 @@ provided as-is with no warranty (see LICENSE). The CLI agents can do whatever
 they need to do inside the project folder you choose — create, edit, delete,
 and run code — so choose that folder carefully, keep it under version control,
 and never point the agents at data you cannot afford to lose. Agent usage is
-billed to your own OpenAI/Anthropic/Google accounts.
+billed to your own OpenAI/Anthropic/Google accounts. A Gemini agent's CLI can send what the agent
+reaches (not only the project folder) to Google, under Google's terms and the data-use choice you made when
+you signed in. NoMoreHappyPath is independent and not affiliated with or endorsed by OpenAI,
+Anthropic or Google; their names are trademarks of their owners.
 
-The license's own no-warranty and limitation-of-liability terms apply (see
-LICENSE, sections 7 and 8). [DISCLAIMER.md](DISCLAIMER.md) is an informational
+Bugs and defects in the app, and in what its agents build for you, are not the
+responsibility of KpiMinds LLC to the extent applicable law allows: the license's own no-warranty and
+limitation-of-liability terms apply (see LICENSE, sections 7 and 8). The license covers this software,
+not the projects you build with it. [DISCLAIMER.md](DISCLAIMER.md) is an informational
 safety notice about what autonomous agents can do; it adds no conditions.
 
 ## License

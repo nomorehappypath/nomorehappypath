@@ -128,5 +128,83 @@ class LicenseIsApacheTests(unittest.TestCase):
         self.assertGreaterEqual(headers, 200, f"only {headers} files carry the header; the sweep missed some")
 
 
+
+
+class GeminiLegalCoverageTests(unittest.TestCase):
+    """Owner 2026-10-12: Gemini and its legal protections must be in the notice, the Legal page, the README and Help."""
+
+    @staticmethod
+    def plain(text):
+        return " ".join(text.replace("&amp;", "&").replace("<strong>", "").replace("</strong>", "").replace("<code>", "").replace("</code>", "").split())
+
+    def legal_page(self):
+        page = (ROOT / "harness" / "project_manager_page.py").read_text(encoding="utf-8")
+        start = page.index('<section id="legal-page"')
+        return self.plain(page[start:page.index("</main>", start)])
+
+    def help_page(self):
+        page = (ROOT / "harness" / "project_manager_page.py").read_text(encoding="utf-8")
+        start = page.index('<section id="help-page"')
+        return self.plain(page[start:page.index('<section id="legal-page"', start)])
+
+    SENTENCES = (
+        "Antigravity CLI (which runs Gemini models)",
+        "Google accounts and API keys",
+        "that choice is yours, and {sw} never makes it for you",
+        "its prompts, the files it reads, command output and other content its sandbox lets it read, not only your project folder, can be sent to Google by that CLI under Google's terms and your choice",
+        "A free Google account has a small usage quota; Google's plans and billing are between you and Google",
+        "accepts no API key for Gemini",
+        "not affiliated with, sponsored by or endorsed by OpenAI, Anthropic or Google",
+        "names or trademarks of their respective owners",
+        "As sections 7 and 8 of the license state, and to the extent applicable law allows, unless a law or a written agreement says otherwise,",
+        "is not liable for bugs, defects, security flaws or lost data in {sw} or in what the agents produce",
+        "The license covers {sw}, not the projects you build with it",
+    )
+
+    def test_notice_and_legal_page_carry_the_same_google_and_liability_statements(self):
+        disclaimer = self.plain((ROOT / "DISCLAIMER.md").read_text(encoding="utf-8"))
+        legal = self.legal_page()
+        for text, name, sw in ((disclaimer, "DISCLAIMER.md", "the Software"), (legal, "Legal page", "this software")):
+            for sentence in self.SENTENCES:
+                wanted = sentence.format(sw=sw)
+                if wanted.startswith("that choice") and name == "DISCLAIMER.md":
+                    wanted = wanted.replace("{sw}", sw)
+                self.assertIn(wanted.replace("the Software never", "the Software never").replace("this software never", "this software never"), text, f"{name} is missing: {wanted}")
+            for binding in BINDING_PHRASES:
+                self.assertNotIn(binding, text.lower(), name)
+            self.assertNotIn("any other outcome", text, name)
+
+    def test_the_notice_and_the_legal_page_say_the_same_in_sections_two_and_three(self):
+        def norm(text):
+            return self.plain(text).lower().replace("this software", "the software").replace(",", "").replace("</p> <p>", " ")
+
+        def between(text, start, end):
+            text = norm(text)
+            start, end = norm(start), norm(end)
+            return text[text.index(start):text.index(end) + len(end)]
+
+        disclaimer = (ROOT / "DISCLAIMER.md").read_text(encoding="utf-8")
+        legal = self.legal_page()
+        two = ("inside the folders you designate", "unexpected charges.")
+        three = ("The Codex CLI, Claude Code CLI, the OpenAI API", "can work with.")
+        for start, end in (two, three):
+            self.assertEqual(between(disclaimer, start, end), between(legal, start, end), f"notice and Legal page differ at: {start}")
+
+    def test_readme_and_help_tell_the_owner_where_a_gemini_agents_content_can_go(self):
+        readme = self.plain((ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("can send what the agent reaches (not only the project folder) to Google", readme)
+        self.assertIn("not affiliated with or endorsed by OpenAI, Anthropic or Google", readme)
+        self.assertIn("not the responsibility of KpiMinds LLC to the extent applicable law allows", readme)
+        self.assertIn("travel to OpenAI, Anthropic or Google (for a Gemini agent)", self.help_page())
+        self.assertIn("are not the responsibility of KpiMinds LLC to the extent applicable law allows", self.help_page())
+        self.assertIn("can send what the agent reaches (prompts, files it reads, command output, not only your project folder) to Google", self.help_page())
+
+    def test_help_does_not_promise_gemini_appears_as_soon_as_it_is_installed(self):
+        help_text = self.help_page()
+        self.assertNotIn("as soon as agy is installed", help_text)
+        self.assertIn("once agy is installed and the app's own checks of that CLI pass", help_text)
+        self.assertIn("only confirms the sign-in and the model, it does not switch Gemini on", help_text)
+
+
 if __name__ == "__main__":
     unittest.main()
