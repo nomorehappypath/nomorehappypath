@@ -454,7 +454,7 @@ def _extract_cold_state(root: Path, state: dict[str, Any]) -> None:
         "review_wait_started_at", "review_wait_stopped_at", "reviewed_commit",
         "reviewed_tree_hash", "reviewed_files", "reviewed_base_commit",
         "mirror_ref", "mirror_commit", "mirror_tree_hash", "mirror_transaction_id",
-        "structure_revision",
+        "structure_revision", "enhanced_security",
     }
     for request in archived_requests:
         if request.get("id"):
@@ -2658,6 +2658,112 @@ def _context_task_names(state: dict[str, Any], agent: dict[str, Any]) -> list[st
     return sorted(name for name in names if name)
 
 
+# Owner 2026-10-12: one "Enhanced security" checkbox per task, Off by default,
+# locked for good at the task's first independent-review request. The board is
+# the authority: agents read it from poll's context bundle, never from memory.
+TASK_SECURITY_RULE = (
+    "When on, this task's app ships SECURITY.md (threat model, controls register) and S-SEC- Scenario Ledger "
+    "rows per the directive's Enhanced security section, before the first review request; the choice locks "
+    "at that request. The central error sink applies to every app, on or off."
+)
+TASK_SECURITY_LOCKED_MESSAGE = (
+    "This task's enhanced security choice is locked: its first review request has been made. "
+    "Start a new task for the security work, or cancel and restart this one."
+)
+
+
+def _task_has_review_history(state: dict[str, Any], task: str) -> bool:
+    """True once any independent-review request was ever made for the task.
+
+    A board upgraded with an already-reviewed task must read as locked, so
+    every place a request can live is consulted: live, archived (cold), the
+    index archival keeps, and Delivery attempts whose evidence failed.
+    """
+    def is_review(request: Any) -> bool:
+        return isinstance(request, dict) and request.get("task") == task and request.get("stage") == INDEPENDENT_REVIEW
+    if any(is_review(r) for r in (state.get("qa_requests") or {}).values()):
+        return True
+    if any(isinstance(e, dict) and e.get("kind") == "qa_request" and is_review(e.get("value")) for e in state.get("archive") or []):
+        return True
+    if any(is_review(r) for r in (state.get("qa_request_index") or {}).values()):
+        return True
+    return any(is_review(r) for r in state.get("delivery_attempt_failures") or [])
+
+
+def task_security_state(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """The effective enhanced-security record of a task (Off and unlocked when never set)."""
+    entry = (state.get("task_security") or {}).get(task) or {}
+    return {
+        "on": bool(entry.get("enhanced", False)),
+        "locked": bool(entry.get("locked")) or _task_has_review_history(state, task),
+        "revision": int(entry.get("revision", 0) or 0),
+        "updated_at": str(entry.get("updated_at") or ""),
+    }
+
+
+def _lock_and_freeze_task_security(state: dict[str, Any], task: str, at: str) -> dict[str, Any]:
+    """Lock the task's enhanced-security choice and return the value to freeze into a review request.
+
+    Every constructor of an independent-review request calls this in the same
+    transaction that writes the request, so the lock, the frozen value and the
+    review brief can never disagree (owner 2026-10-12; review finding on the
+    atomic request_independent_review path).
+    """
+    entry = state.setdefault("task_security", {}).setdefault(task, {"enhanced": False, "revision": 0, "updated_at": at})
+    entry["locked"] = True
+    return {"on": bool(entry.get("enhanced", False)), "revision": int(entry.get("revision", 0) or 0)}
+
+
+def set_task_security(root: Path, task: str, enhanced: Any) -> dict[str, Any]:
+    """Record the OWNER's enhanced-security choice for one task (board page checkbox)."""
+    if not isinstance(enhanced, bool):
+        raise ValueError("enhanced must be true or false")
+    task = str(task or "").strip()
+    if not task:
+        raise ValueError("a task is required")
+    session_id = ""
+    with locked_state(root) as state:
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError("this task was cancelled; its enhanced security choice can no longer change")
+        if task not in (state.get("task_owner_directions") or {}):
+            raise ValueError("no such task on this board")
+        current = task_security_state(state, task)
+        if current["locked"]:
+            raise ValueError(TASK_SECURITY_LOCKED_MESSAGE)
+        revision = current["revision"] + 1
+        entry = state.setdefault("task_security", {}).setdefault(task, {})
+        entry.update({"enhanced": enhanced, "locked": False, "revision": revision, "updated_at": now()})
+        event = _event(state, "enhanced_security_set", None, {
+            "task": task, "enhanced": enhanced, "revision": revision,
+            "message": f"owner turned enhanced security {'ON' if enhanced else 'OFF'} for {task} on the board",
+        })
+        delivery = next((
+            agent for agent in state.get("agents", {}).values()
+            if agent.get("task") == task and agent.get("role") in DEVELOPER_ROLES
+            and agent.get("active") and agent.get("session_id")
+        ), None)
+        session_id = str(delivery.get("session_id") or "") if delivery else ""
+        security = task_security_state(state, task)
+    notified = False
+    if session_id:
+        text = (
+            f"[OWNER DECISION] Enhanced security {'ON' if enhanced else 'OFF'} for task {task} (revision {revision}). "
+            "Read the current value from the board (poll: enhanced_security) before your first review request. "
+            + (TASK_SECURITY_RULE if enhanced else "When off, the Enhanced security deliverables are not required; the central error sink still is.")
+        )
+        try:
+            from harness import control
+            control.enqueue_instruction(root, session_id, text, source="owner-enhanced-security")
+            notified = True
+        except (OSError, ValueError) as error:
+            with locked_state(root) as state:
+                _event(state, "enhanced_security_notice_failed", None, {
+                    "task": task, "revision": revision,
+                    "message": f"the owner's enhanced security choice was saved but the Delivery terminal was not notified: {error}",
+                })
+    return {"event": event, "security": security, "notified": notified}
+
+
 def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
     """Compact, board-authoritative reconstruction state for one task.
 
@@ -2684,7 +2790,7 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
             "id", "status", "phase", "subtask", "chunk", "cycle",
             "reviewed_commit", "reviewed_tree_hash", "test_scope",
             "scope_reason", "result", "result_summary", "evidence",
-            "challenge_ledger_sha256", "repair_context",
+            "challenge_ledger_sha256", "repair_context", "enhanced_security",
         )
         if latest.get(key) not in (None, "", [], {})
     }
@@ -2720,6 +2826,7 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         "release": json.loads(json.dumps(release)),
         "owner_decision": json.loads(json.dumps(decision)),
         "next_action": next_action,
+        "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE},
     }
 
 
@@ -4460,6 +4567,7 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
             state.setdefault("owner_clarifications", {}).setdefault(task, []).extend(pending_clarifications)
         state.setdefault("task_baselines", {})[task] = baseline
         state.setdefault("task_owner_directions", {})[task] = contract.normalize_owner_direction(direction_text)
+        state.setdefault("task_security", {}).setdefault(task, {"enhanced": False, "locked": False, "revision": 0, "updated_at": now()})
         if workspace:
             state.setdefault("task_workspaces", {})[task] = str(workspace)
         inherited_count = len(baseline.get("dirty_files", []))
@@ -5146,6 +5254,7 @@ def _require_evidence_file(root: Path, value: str, label: str) -> str:
 def _execute_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
     certification: dict[str, Any] | None = None, live_board_root: Path | None = None,
+    reuse: bool = True,
 ) -> str:
     """Run Delivery's declared test command outside the board lock.
 
@@ -5156,7 +5265,7 @@ def _execute_internal_qa(
     runs the same check outside the sandbox.
     """
     try:
-        return _run_internal_qa(command, root, measurement=measurement, certification=certification, live_board_root=live_board_root)
+        return _run_internal_qa(command, root, measurement=measurement, certification=certification, live_board_root=live_board_root, reuse=reuse)
     except ValueError as error:
         if certification is None or browser_acceptance.SANDBOX_BLOCKED not in str(error):
             raise
@@ -5193,6 +5302,7 @@ def _execute_internal_qa(
 def _run_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
     certification: dict[str, Any] | None = None, live_board_root: Path | None = None,
+    reuse: bool = True,
 ) -> str:
     """The command itself; see _execute_internal_qa for the owner-card rule."""
     if not command.strip():
@@ -5216,6 +5326,7 @@ def _run_internal_qa(
             role=str(certification["role"]), gate=str(certification["gate"]),
             retry_reason=str(certification.get("retry_reason") or ""),
             browser=certification.get("browser"),
+            reuse=reuse,
         )
         if measurement is not None:
             measurement.update(result["measurement"])
@@ -5294,6 +5405,13 @@ def _execute_scenario_simulations(
     results = []
     failures = []
     command_results: dict[str, dict[str, Any]] = {}
+    # Owner 2026-10-12 (Enhanced security): a command any S-SEC- row names is
+    # executed fresh in every request (scanner databases and history move);
+    # the rows of one request still share that one fresh execution.
+    fresh_commands = {
+        scenario["command"] for scenario in scenarios
+        if contract.is_security_scenario_id(scenario.get("id", ""))
+    }
     for scenario in scenarios:
         result = scenario["result"].upper()
         if result.startswith(("N/A:", "DEFERRED:")):
@@ -5329,6 +5447,7 @@ def _execute_scenario_simulations(
             output = _execute_internal_qa(
                 scenario["command"], root, measurement=measurement,
                 certification=certification, live_board_root=live_board_root,
+                reuse=scenario["command"] not in fresh_commands,
             )
         except ValueError as error:
             output = str(error)
@@ -7831,6 +7950,7 @@ def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[
             "claimed_at": None, "result": None, "result_summary": None, "evidence": None,
             "completed_at": None, "review_wait_started_at": now(), "review_wait_stopped_at": None,
         }
+        request["enhanced_security"] = _lock_and_freeze_task_security(state, developer["task"], request["requested_at"])
         state["qa_requests"][request_id] = request
         developer.update({"status": "awaiting_independent_review", "status_note": f"independent review {cycle} requested", "last_status_at": now()})
         _event(state, "independent_review_requested", developer, {"task": developer["task"], "request_id": request_id, "stage": INDEPENDENT_REVIEW, "cycle": cycle, "ledger": latest_dev["ledger"], "message": summary})
@@ -8553,6 +8673,10 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "result_summary": None, "evidence": None, "completed_at": None,
             "lifecycle": {"review_queue": {"started_at": requested_at}},
         }
+        # Owner 2026-10-12: the first review request locks the task's
+        # enhanced-security choice for good and freezes it into the request,
+        # so what the reviewer reads is exactly what was chosen.
+        staged_request["enhanced_security"] = _lock_and_freeze_task_security(state, developer["task"], requested_at)
         staged_request["review_brief"] = review_brief_projection.build(
             root, state, staged_request, delivery_scenarios=planned_scenarios,
             include_delivery_evidence=False,
@@ -8744,7 +8868,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "route_transport_state", "route_instruction_id",
             "reviewer_initial_intents", "reviewer_intents_recorded_at",
             "reviewer_intent_amendments", "reviewer_authoring_overlap_started",
-            "delivery_wait_told",
+            "delivery_wait_told", "enhanced_security",
         ):
             if key in staged_existing:
                 request[key] = json.loads(json.dumps(staged_existing[key]))
@@ -10977,7 +11101,7 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
         for key in (
             "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
             "task_workspaces", "subtask_workspaces", "subtask_branches",
-            "task_owner_directions", "task_lineage",
+            "task_owner_directions", "task_lineage", "task_security",
             "owner_clarifications", "requirement_confirmations", "releases",
             "release_decisions", "release_repairs",
         ):

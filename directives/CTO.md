@@ -149,7 +149,11 @@ Release-blocking issues are limited to:
   candidate;
 - a material security, privacy, data-loss, availability, deployment, or
   recovery risk supported by evidence (a missing applicable item of the
-  Minimum security baseline in `directives/AGENT.md` is one);
+  Minimum security baseline in `directives/AGENT.md` is one; so is a missing
+  or broken Central error sink, or an Enhanced security deliverable missing
+  while the task's checkbox is on; a security check that could not run is
+  raised to you: pin the owner-action card with the failed command, the tool
+  or database, where to install it and the exact rerun);
 - missing required Delivery QA or independent final review;
 - a release candidate that differs from the independently reviewed candidate,
   is not pushed, or cannot be reproduced; or

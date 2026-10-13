@@ -138,6 +138,12 @@ def build(
             } for value in (state.get("deferred_findings") or {}).values()
                 if value.get("task") == task and value.get("status") == "in_scope"]),
         },
+        # Owner 2026-10-12: the enhanced-security choice frozen into this
+        # request at its creation; the reviewer judges against exactly this.
+        "enhanced_security": {
+            "on": bool((request.get("enhanced_security") or {}).get("on", False)),
+            "revision": int((request.get("enhanced_security") or {}).get("revision", 0) or 0),
+        },
         "owner_clarifications": _bounded([{
             "text": _text(value.get("text")), "at": _text(value.get("created_at")),
         } for value in (state.get("owner_clarifications") or {}).get(task, [])]),

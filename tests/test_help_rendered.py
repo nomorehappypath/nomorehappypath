@@ -36,6 +36,28 @@ PROBE = r"""
 """
 
 
+SECURITY_PROBE = r"""
+<script>
+(async () => {
+  document.querySelector('[data-page="help"]').click();
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const page = document.querySelector('#help-page');
+    if (page && !page.hidden) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const row = Array.from(document.querySelectorAll('#help-page .help-table tr'))
+    .find(node => node.textContent.includes('Enhanced security'));
+  const box = row ? row.getBoundingClientRect() : null;
+  await fetch('/__probe__', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: row ? row.innerText : null, visible: !!box && box.width > 0 && box.height > 0}),
+  });
+})();
+</script>
+"""
+
+
 LEGAL_PROBE = r"""
 <script>
 (async () => {
@@ -151,6 +173,16 @@ class RenderedHelpTests(unittest.TestCase):
         self.assertTrue(reading["visible"], "the first-time trust note is not visibly rendered in Help")
         shown = " ".join(reading["text"].split())
         for words in ("stay at your computer", "Do you trust this folder?", "Yes, I trust this folder", "Trust and continue", "View agent"):
+            self.assertIn(words, shown)
+
+    def test_help_explains_the_enhanced_security_checkbox_and_its_lock(self):
+        """Owner 2026-10-12: a checkbox per task, locked at the first review request."""
+        reading = self._render(SECURITY_PROBE)
+        self.assertTrue(reading, "Chrome reported nothing for the Help page")
+        self.assertTrue(reading["visible"], "the Enhanced security row is not visibly rendered in Help")
+        shown = " ".join(reading["text"].split())
+        for words in ("Enhanced security", "Off by default", "threat model", "security test pass", "controls register",
+                      "before Delivery's first review request", "locked at review", "error catch-all"):
             self.assertIn(words, shown)
 
     def test_readme_carries_the_same_first_time_note(self):

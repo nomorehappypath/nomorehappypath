@@ -21,6 +21,12 @@ ANSI_CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
 ANSI_SS3 = re.compile(r"(?:\x1bO|\x8f).")
 TERMINAL_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f-\x9f]")
 SCENARIO_ID = re.compile(r"^S-[A-Za-z0-9._-]+$")
+SECURITY_SCENARIO_PREFIX = "S-SEC-"
+
+
+def is_security_scenario_id(scenario_id: Any) -> bool:
+    """Owner 2026-10-12: Enhanced security rows carry ids S-SEC-<n>; the board never reuses their results."""
+    return str(scenario_id or "").upper().startswith(SECURITY_SCENARIO_PREFIX)
 # Environment-varied evidence (VAR=value cmd) is exactly what hostile-env and
 # recovery scenarios must record; the prefix form is plain POSIX, carries no
 # shell control operators, and is executed with the same safety as the bare

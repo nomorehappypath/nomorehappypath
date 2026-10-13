@@ -217,6 +217,7 @@ def run(
     retry_reason: str = "",
     browser: dict[str, str] | None = None,
     timeout_seconds: int = 300,
+    reuse: bool = True,
 ) -> dict[str, Any]:
     try:
         argv = shlex.split(command, posix=True)
@@ -227,7 +228,11 @@ def run(
         role=role, gate=gate, browser=browser,
     )
     with _identity_lock(board_root, identity["sha256"]):
-        decision = execution_identity.lookup(board_root, identity)
+        if reuse:
+            decision = execution_identity.lookup(board_root, identity)
+        else:
+            # Owner 2026-10-12: security evidence (S-SEC- rows) is never reused.
+            decision = {"status": "miss", "reason": "security_evidence_never_reused", "diverged_fields": []}
         execution_identity.audit_decision(board_root, identity, decision)
         cached = execution_identity.load_output(decision["entry"]) if decision["status"] == "hit" else ""
         if decision["status"] == "hit" and browser_acceptance.blocked_note(cached):
@@ -289,12 +294,22 @@ def run(
             exit_code = 2
             problem = "internal-QA output must report a positive executed-test count"
         digest = hashlib.sha256(output.encode()).hexdigest()
-        certified = execution_identity.certify(
-            board_root, identity, exit_code=exit_code,
-            output_sha256=digest, duration_seconds=duration,
-            retry_reason=retry_reason, output=output,
-            metadata={"process_audit": audit_manifest},
-        )
+        try:
+            certified = execution_identity.certify(
+                board_root, identity, exit_code=exit_code,
+                output_sha256=digest, duration_seconds=duration,
+                retry_reason=retry_reason, output=output,
+                metadata={"process_audit": audit_manifest},
+            )
+        except ValueError as conflict:
+            # Owner 2026-10-12 (review non-blocking finding): a security row runs
+            # fresh (reuse=False), so a scanner whose advisory changed can FAIL
+            # where the same identity once passed. The earlier certified success
+            # stays immutable; the new failure is reported with its real output
+            # instead of an append-only bookkeeping error.
+            if exit_code == 0 or "append-only conflict" not in str(conflict):
+                raise
+            certified = {"entry": {}}
         execution_identity.audit_decision(board_root, identity, {
             "status": "executed_and_certified" if exit_code == 0 else "executed_failed",
             "reason": retry_reason.strip() or problem,

@@ -58,6 +58,7 @@ class SecurityBaselineTests(unittest.TestCase):
             "may act on the record they ask for",  # access to records
             "Rate-limit any public endpoint that spends money",  # costly endpoints
             "never in a response",  # leaked errors
+            "Every error goes through the Central error sink below",  # 2026-10-12
             "standard audit once before delivery",  # dependencies
             "Limit uploads by type and size",  # uploads
             "Debug mode",  # delivered settings
@@ -83,7 +84,10 @@ class SecurityBaselineTests(unittest.TestCase):
         self.assertIn("only where the app has that feature", reviewer)
         self.assertIn("A missing or broken applicable item is material: FAIL on it.", reviewer)
         self.assertIn("Never demand an item for a feature the app does not have", reviewer)
-        self.assertIn("never fail an app for lacking enterprise-grade controls", reviewer)
+        # Owner 2026-10-12: enterprise controls are now the per-task Enhanced
+        # security checkbox; the reviewer never demands them while it is off.
+        self.assertNotIn("never fail an app for lacking enterprise-grade controls", reviewer)
+        self.assertIn("never fail an app for lacking Enhanced security deliverables while the task's checkbox is off", reviewer)
 
     def test_the_cto_release_gate_points_at_it(self):
         cto = flat(CTO.read_text(encoding="utf-8"))

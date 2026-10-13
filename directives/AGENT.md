@@ -158,6 +158,8 @@ delivery plan or implement until the confirmation is recorded.
    (a scaffolded project's `.harness` folder, or the project's data folder):
    it is harness-owned and your sandbox refuses it. Do not add governance artifacts
    to the product commit unless the owner explicitly included them in scope.
+   `SECURITY.md` and the app's error module (Central error sink below) are
+   product files, not governance artifacts: they belong in the product commit.
    `begin-task` automatically records the Git state that already existed at
    task start. Treat those files as an inherited baseline: inspect relevant
    overlap, assign it to a reviewable chunk or separate recovery work, and
@@ -282,7 +284,9 @@ review.
   to deliverables or to a team; a repair pass losing a requirement, or a split
   dropping requested scope; the owner's real files altered; the existing suite
   regressing; an applicable item of the Minimum security baseline below
-  missing or broken (the owner never sees security, but always receives it).
+  missing or broken (the owner never sees security, but always receives it);
+  the Central error sink below missing or broken; an Enhanced security
+  deliverable missing while the task's checkbox is on.
   Procedural, and never admitted unless the owner asked for it by
   name: git-tree and commit-identity bookkeeping; chunk-boundary and
   delivery-plan challenges; source-structure assertions (is this helper
@@ -391,9 +395,9 @@ review.
 ### Minimum security baseline
 
 Every app you build gets the security a professional applies by default:
-proportionate, not exaggerated. These are not top-secret systems, so no threat
-models, penetration-test rituals or compliance frameworks. **Apply an item only
-if the app has that feature.** An item that applies is material and always in
+proportionate, not exaggerated. These are not top-secret systems; threat
+models and security test passes belong to Enhanced security below, which the
+owner switches on per task. **Apply an item only if the app has that feature.** An item that applies is material and always in
 scope.
 
 - **Secrets.** No API keys, passwords or tokens in code, tests, logs or the
@@ -410,7 +414,8 @@ scope.
 - **Costly public endpoints.** Rate-limit any public endpoint that spends
   money, calls a paid API, or sends email or messages.
 - **Errors.** Users get a plain message. Stack traces and internal errors
-  stay in the server log, never in a response; secrets reach neither.
+  stay in the server log, never in a response; secrets reach neither. Every
+  error goes through the Central error sink below.
 - **Dependencies.** Use mainstream, maintained libraries. Run the ecosystem's
   standard audit once before delivery (`npm audit`, `pip-audit`, ...); upgrade
   past a high or critical finding, or name it with its reason in the review
@@ -424,6 +429,103 @@ Prove the applicable items with a few decisive Delivery Scenario Ledger rows
 markup is stored and shown inert; a secret scan of the commit finds nothing;
 the audit output). Not a row per item: the material-rows rule and row cap
 still hold.
+
+### Central error sink
+
+Every app, on or off the checkbox below, has one error module with one entry
+point (`report_error`, or the language's idiom) that every error the app can
+observe reaches: the framework's error handler, the process-level handlers for
+uncaught exceptions and unhandled rejections, threads, workers and jobs, and,
+where the app has pages and its own server, the browser (`error` and
+`unhandledrejection` posted to the app's own `/api/client-errors`). Serious
+handled errors (a failed job, a failed outbound call, a refused write) are
+reported by calling it. Say what it cannot cover: hard kills, resource
+exhaustion, failures before start-up. A fatal error is written synchronously,
+bounded, and the process still exits non-zero; never resume after one.
+
+Each report is one JSON event with the fixed fields and limits of
+`directives/ERROR_SINK_CONTRACT.md` (next to this directive in the harness
+root; read it before building the sink): `schema` `nmhp-error/1`, `id`, `app`,
+`version`, `env`, `source`, `time`, `level`, `kind`, `message`, `stack`, `where`,
+`request_id`, `reference` (short id also shown to the user where there is a
+response), `fingerprint`, `context` (allowlisted keys only). Destinations come
+from the environment, never from code: `ERROR_SINK_FILE` (append-only JSON
+lines, rotated, git-ignored, never in a served folder; `-` means standard
+error for read-only or ephemeral filesystems; always on), `ERROR_SINK_URL` with
+`ERROR_SINK_TOKEN` (one POST per event, bearer header, HTTPS except loopback,
+token server-side only; off until set: the owner's future error service plugs
+in here without an app change) and `ERROR_SINK_RATE`. Delivery is best effort
+and said so: bounded queue and retries, oldest dropped, redirects never
+followed, drops and suppressed repeats counted into the same stream. Reporting
+never raises, never blocks a request, never re-enters itself. Every field is
+scrubbed (passwords, tokens, cookies, authorization headers, request bodies).
+Browser reports are validated for shape and size, limited per source, and a
+rejected report never produces another. A static site posts browser failures
+straight to a build-time receiver URL (configuration, not a hardcoded
+destination) or reports nothing and says so; a CLI writes the file; a library
+exposes the hook. The README says where errors go, how to set forwarding and
+the rate, and how drops become visible.
+
+Prove it with a few decisive Delivery Scenario Ledger rows, each only where the
+app has that part (the contract lists all eight): an induced server failure
+yields one event with every field and a plain user message carrying the same
+reference and no stack; a fatal error leaves one event and a non-zero exit; a
+browser failure arrives as one `browser` event; with `ERROR_SINK_URL` set to a
+loopback receiver the test starts (settings from the test's fixtures, never
+inherited) the event arrives there; the test's planted secret appears in no
+event; a dead receiver, a denied write and floods of repeated and of distinct
+errors neither crash nor slow the app and the counters show what was lost.
+
+### Enhanced security (owner checkbox)
+
+Applies only when `enhanced_security.on` is true in your task's context bundle
+(`poll`) and, for the reviewer, in the review brief. The owner ticks it per
+task on the board; it locks at the task's first review request, so read it when
+the task begins and again before that request. When on, the app carries
+`SECURITY.md` at its root with: (1) a short threat model: what the app holds
+that matters, including personal data and why; every entry point (routes,
+forms, uploads, jobs, webhooks, outbound calls); trust boundaries; the top
+risks (at most ten) and the control covering each; refreshed in the same task
+when a change touches entry points, data, trust boundaries, privileges,
+dependencies or deployment. (2) A controls register: one row per baseline item
+and per control here (applies; met / not met / not applicable; evidence = the
+`S-SEC-` row id), residual risks and their owner, the assessment date and
+candidate commit, and "History scan: run by Delivery over <range> with <tool>
+<version>; independently repeated by the Reviewer: yes/no". (3) A security test
+pass as Scenario Ledger rows `S-SEC-1`, `S-SEC-2`, ... (the board executes and
+certifies them with the review request and never reuses an earlier result for
+their commands): a secret scan of the delivered tree (for example gitleaks,
+redacting); the ecosystem's standard static security scanner (bandit, semgrep,
+eslint-plugin-security, ...); the dependency audit; and an attack run in which,
+for each threat-model risk, Delivery tries the attack it names (injection
+strings, another user's record id, repeated wrong passwords, an oversize or
+wrong-type upload, a forged state-changing request) and records what the app
+did. Each row's command is a test in the app's own suite that resolves the
+scanner from inside the checkout (`node_modules/.bin`, a vendored binary or
+wheel; never an owner-home install: governed execution replaces `PATH` and
+runs in a disposable copy), fails on a high or critical finding without a
+documented disposition (in the scanner's own ignore or exceptions file, with a
+one-line reason and date; the reviewer checks its evidence), lists the
+dispositioned ones, and prints only a redacted summary (file, line, rule;
+never a value) on success and on failure. A check that does not apply (no
+dependencies, no server) is recorded as not applicable with the reason; a
+check that applies but could not run fails the row where it runs (Delivery's
+evidence run, or review) and is raised to the CTO, which pins an owner-action
+card naming the failed command, the tool or database, where to install it and
+the exact rerun; only a clean re-run clears it. The history scan runs where
+history exists: Delivery in its task workspace up to the candidate commit,
+recorded in the register (command, version, range, redacted result); the
+Reviewer repeats it when it has a copy with history. A secret found in history
+is rotated, not only deleted; a rotation only the owner can perform is an
+owner-action card the same way. When on, this stronger rule governs the
+dependency audit too. In an application in subtasks, the subtask that adds an
+entry point, data, a privilege or a dependency declares `SECURITY.md` (and the
+error module when it touches it) among its owned paths; the final-acceptance
+integration scope may refresh the register. These proofs are acceptance
+criteria of the task when the box is on. Plainly: a human penetration test and
+a compliance certification (SOC 2, ISO 27001) are outside services; this is
+security assessment and audit preparation and is never reported as either.
+Multi-factor login and other features nobody asked for are still not demanded.
 
 ### Scope control for newly discovered findings
 
@@ -525,8 +627,21 @@ the cap; running out of time means you are writing procedural rows.
 only where the app has that feature, with one or two decisive Challenge Ledger
 rows. A missing or broken applicable item is material: FAIL on it. Never
 demand an item for a feature the app does not have, and never fail an app for
-lacking enterprise-grade controls (threat models, penetration tests,
-compliance work, multi-factor login nobody asked for).
+lacking Enhanced security deliverables while the task's checkbox is off, nor
+for lacking multi-factor login or any feature nobody asked for.
+
+**Central error sink and Enhanced security (owner, 2026-10-12).** Every app:
+FAIL when an error path the app has bypasses the sink, when an event carries a
+secret or a stack reaches the user, or when a destination is hardcoded (a
+static site's build-time receiver URL is configuration). When
+`enhanced_security.on` is true in the review brief: FAIL when `SECURITY.md` is
+missing or stale (an entry point the threat model does not name), when the
+`S-SEC-` rows are missing, were not executed on the delivered candidate, show a
+secret value, or are not cited by the register, or when a high or critical
+finding is neither fixed nor shown not exploitable with evidence you can check
+(an unjustified disposition is a FAIL). Name the frozen On choice and the
+missing deliverable in the verdict. One or two decisive Challenge Ledger rows;
+say in the verdict whether you repeated the history scan.
 
 For a repair review, read the board-generated `repair_authoring` section from
 `review-brief` before writing the Challenge Ledger. When it identifies you as
