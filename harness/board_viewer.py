@@ -46,7 +46,7 @@ PAGE = r"""<!doctype html>
 <link rel="icon" type="image/png" href="favicon.png?v=2">
 <style>
 :root{--ink:#18212b;--muted:#687583;--line:#dce3e8;--paper:#f7f9fb;--card:#fff;--nav:#0d1728;--blue:#155eef;--blue-soft:#eaf1ff;--green:#067647;--green-soft:#e7f6ee;--amber:#b54708;--amber-soft:#fff1db;--red:#b42318;--red-soft:#ffebe9}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1360px;margin:auto;padding:34px 28px 56px}.top,.launch,.row,.task-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.top{border-bottom:1px solid var(--line);padding-bottom:24px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;color:var(--blue);text-transform:uppercase}.back-link{display:inline-block;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none;margin-bottom:10px}.back-link:hover{text-decoration:underline}#board-offline{position:fixed;inset:0;background:rgba(247,249,251,.97);display:none;align-items:center;justify-content:center;z-index:50}#board-offline.show{display:flex}#board-offline .panel{max-width:440px;text-align:center;padding:30px}#board-offline h2{margin:0 0 8px}h1{font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:5px 0 8px}h2{font-size:17px;margin:0}h3{font-size:16px;margin:0}.sub,#updated,.section>p,.launch p,small{color:var(--muted)}.live{display:inline-flex;gap:8px;align-items:center;background:var(--green-soft);color:var(--green);border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 2px #1018280a}.launch{align-items:center;margin-top:24px}.launch p,.section>p{margin:4px 0 0}.actions{display:flex;gap:9px;flex-wrap:wrap}button{appearance:none;border:0;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font:inherit;font-weight:700;cursor:pointer}button:hover{filter:brightness(.94)}button.secondary{background:var(--blue-soft);color:#174ea6}.actions a.conversation-link{display:inline-flex;align-items:center;box-sizing:border-box;border-radius:8px;background:var(--blue-soft);color:#174ea6;padding:7px 10px;font:inherit;font-size:13px;font-weight:700;text-decoration:none;line-height:normal}.actions a.conversation-link:hover{text-decoration:none;filter:brightness(.97)}button.stop{background:var(--red-soft);color:var(--red)}.task-actions{display:flex;gap:10px;align-items:center;margin-top:12px}.task-actions small{color:var(--muted)}button:disabled{background:#e4e8ec;color:#8994a0;cursor:not-allowed}.notice{margin-top:13px;color:var(--muted);min-height:22px}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1360px;margin:auto;padding:34px 28px 56px}.top,.launch,.row,.task-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.top{border-bottom:1px solid var(--line);padding-bottom:24px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;color:var(--blue);text-transform:uppercase}.back-link{display:inline-block;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none;margin-bottom:10px}.back-link:hover{text-decoration:underline}#board-offline{position:fixed;inset:0;background:rgba(247,249,251,.97);display:none;align-items:center;justify-content:center;z-index:50}#board-offline.show{display:flex}#board-offline .panel{max-width:440px;text-align:center;padding:30px}#board-offline h2{margin:0 0 8px}h1{font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:5px 0 8px}h2{font-size:17px;margin:0}h3{font-size:16px;margin:0}.sub,#updated,.section>p,.launch p,small{color:var(--muted)}.live{display:inline-flex;gap:8px;align-items:center;background:var(--green-soft);color:var(--green);border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 2px #1018280a}.launch{align-items:center;margin-top:24px}.launch p,.section>p{margin:4px 0 0}.actions{display:flex;gap:9px;flex-wrap:wrap}button{appearance:none;border:0;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font:inherit;font-weight:700;cursor:pointer}button:hover{filter:brightness(.94)}button.secondary{background:var(--blue-soft);color:#174ea6}.actions a.conversation-link{display:inline-flex;align-items:center;box-sizing:border-box;border-radius:8px;background:var(--blue-soft);color:#174ea6;padding:7px 10px;font:inherit;font-size:13px;font-weight:700;text-decoration:none;line-height:normal}.actions a.conversation-link:hover{text-decoration:none;filter:brightness(.97)}button.stop{background:var(--red-soft);color:var(--red)}.task-actions{display:flex;gap:10px;align-items:center;margin-top:12px}.security-choice{display:block;margin-top:12px;padding:10px 12px;border:1px solid var(--line,#dde3ee);border-radius:10px}.security-choice label{font-weight:650;display:flex;gap:8px;align-items:center;cursor:pointer}.security-choice input[type=checkbox]{width:16px;height:16px}.security-choice small{display:block;color:var(--muted);margin-top:4px}.security-choice .notice{margin-top:4px;min-height:0}.task-actions small{color:var(--muted)}button:disabled{background:#e4e8ec;color:#8994a0;cursor:not-allowed}.notice{margin-top:13px;color:var(--muted);min-height:22px}
 .waiting-banner{margin:14px 0 0;padding:16px 20px;border-radius:14px;background:var(--red);color:#fff;font-size:17px;font-weight:800;line-height:1.35;box-shadow:0 12px 32px rgba(180,35,24,.28);animation:waiting-blink 1.1s steps(2,start) infinite}
 .waiting-banner p{margin:6px 0 0;font-size:15px;font-weight:600}
 .waiting-banner small{display:block;margin-top:8px;font-size:13px;font-weight:500;opacity:.92}
@@ -534,8 +534,22 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${cancelTaskHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
+}
+
+// Owner 2026-10-12: one "Enhanced security" checkbox per task, Off by default,
+// locked for good at Delivery's first review request. Pending-save and notice
+// state live OUTSIDE the card DOM (the dynamic region is rebuilt on refresh)
+// and are rendered into every replacement card.
+const securityPending={},securityNotice={};
+function securityHtml(state,name){
+  const record=(state.task_security||{})[name]||{on:false,locked:false};
+  const pending=Boolean(securityPending[name]);
+  const note=securityNotice[name]||'';
+  const stateText=record.on?'On':'Off';
+  if(record.locked)return `<div class="security-choice" data-security-card="${esc(name)}"><strong>Enhanced security: ${stateText} (locked at review)</strong><small>Locked when Delivery made its first review request. For security work on a task that was reviewed without it, start a new task.</small></div>`;
+  return `<div class="security-choice" data-security-card="${esc(name)}"><label><input type="checkbox" data-security-task="${esc(name)}"${record.on?' checked':''}${pending?' disabled':''}> Enhanced security for this task${pending?' — saving…':''}</label><small>Adds a short threat model, a security test pass and a controls register to this task's app. Choose before Delivery's first review request; it then locks.</small><p class="notice" id="security-note-${esc(name)}" role="status" aria-live="polite">${esc(note)}</p></div>`;
 }
 
 // Backlog #10: abandoning a task is its own action on the task, never a side
@@ -1606,6 +1620,18 @@ document.addEventListener('click',async event=>{
   }
   openRequirementsModify(task);
 });
+document.addEventListener('change',async event=>{
+  const box=event.target.closest?event.target.closest('[data-security-task]'):null;
+  if(!box)return;
+  const task=box.dataset.securityTask,enhanced=Boolean(box.checked);
+  securityPending[task]=true;securityNotice[task]='';box.disabled=true;
+  try{
+    const result=await call(`/api/tasks/${encodeURIComponent(task)}/security`,{enhanced});
+    securityNotice[task]=result.notified?`Saved: enhanced security ${enhanced?'On':'Off'}. Delivery has been told.`:`Saved: enhanced security ${enhanced?'On':'Off'}. Delivery was not notified; it reads the board before its next step, or restart its agent.`;
+  }catch(error){securityNotice[task]='Could not save: '+error.message;}
+  delete securityPending[task];
+  await refresh();
+});
 let requirementsModifyTask='';
 function openRequirementsModify(task){
   requirementsModifyTask=task;
@@ -1785,6 +1811,9 @@ def _compact_dashboard_state(
             task: value for task, value in (state.get(key) or {}).items()
             if task in live
         }
+    # Owner 2026-10-12: the page shows the COMPUTED enhanced-security record
+    # (a task reviewed before this feature is locked even without an entry).
+    compact["task_security"] = {task: board.task_security_state(state, task) for task in live}
     # 2026-09-27: an accepted task is no longer live, so its decision is not in
     # the projection above; the Stop prompt still has to know its Delivery is
     # finished. Only tasks whose Delivery agent is still on the page.
@@ -3293,6 +3322,18 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(raw or b"{}")
                     response = board.record_release_decision(root, task, str(data.get("decision", "")), str(data.get("reason", "")))
                     self.send_json(201, {"decision": response}); return
+                security_prefix, security_suffix = "/api/tasks/", "/security"
+                if path.startswith(security_prefix) and path.endswith(security_suffix):
+                    # Owner 2026-10-12: the per-task Enhanced security checkbox.
+                    task = unquote(path[len(security_prefix):-len(security_suffix)])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError('send a JSON object with "enhanced": true or false')
+                    result = board.set_task_security(root, task, data.get("enhanced"))
+                    self.send_json(201, result); return
                 req_prefix, req_suffix = "/api/tasks/", "/requirements-decision"
                 if path.startswith(req_prefix) and path.endswith(req_suffix):
                     task = unquote(path[len(req_prefix):-len(req_suffix)])

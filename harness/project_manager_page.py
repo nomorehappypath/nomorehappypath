@@ -445,6 +445,7 @@ PAGE = r'''<!doctype html>
               <tr><td>CTO</td><td>Starts or attaches the monitoring role that keeps tasks routed, watches release gates, and reports owner action.</td></tr>
               <tr><td>View status</td><td>Shows the selected agent's current task, stage, last update, next step, and whether you need to act.</td></tr>
               <tr><td>Stop terminal / Stop all agents</td><td>Stops visible terminals. Use it when you intentionally want work to stop; saved board records remain.</td></tr>
+              <tr><td>Enhanced security (checkbox on a task card)</td><td>Off by default. Tick it to make that task's app also ship a short threat model, a security test pass and a controls register, which the Reviewer then checks. Choose before Delivery's first review request: the choice locks at that moment and shows "locked at review". Every app gets the central error catch-all regardless.</td></tr>
               <tr><td>Settings</td><td>Changes default provider, model, effort, and connection tests for new agent sessions.</td></tr>
               <tr><td>Help</td><td>Opens this guide.</td></tr>
             </tbody>
