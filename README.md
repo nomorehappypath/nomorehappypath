@@ -1,40 +1,25 @@
 # NoMoreHappyPath
 
-**Agents that prove it. An AI development-governance platform: AI agents do the
-work — the platform refuses every happy-path claim until the evidence exists.**
+**Build commercial software with AI agents, from a plain-English idea toward a release-ready product, with the governance built in.**
 
-NoMoreHappyPath (nomorehappypath.com) runs real AI coding agents (Codex CLI, Claude CLI, and optionally Gemini through Google's Antigravity CLI) as a governed
-delivery team — a Delivery Agent that builds, an Independent Reviewer from a
-*different vendor* that verifies by running the code, and a CTO watchtower
-that audits every claim against evidence. A human owner stays in charge of one
-thing only: saying what they want, and accepting the result.
+NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-built software. You describe what you want. A team of AI agents plans it, builds it, tests it and reviews it, inside a governed project board and a local control room (Mission Control). Nothing moves forward without recorded evidence, and "done" stays your word. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
+
+## What it is
+
+- **A team of agents.** A builder, an independent reviewer from a different AI company, and a CTO that watches the board. Claude, Codex or Gemini can take any role, and the reviewer is never from the builder's company.
+- **A contract before any code.** The agents propose the requirements for your approval (you press Go ahead, or change them), then plan the work and an evidence contract before anything is built.
+- **A board that agents cannot directly edit.** Tasks, contracts, reviews and their backups are written only by the platform's own software; agents change them only through its governed commands. A task advances only with evidence: executed tests, failure paths, and a walk through the finished product (in a real browser when the app has a screen).
+- **Security and quality by default.** Agents are required to build in, and the reviewer checks where they apply: secrets kept out of the code, user input checked, logins that hash passwords and slow down repeated guesses, rate-limited sending endpoints, no internal errors shown to users, and a dependency check before delivery. Every app also gets one central error catch-all. A per-task **Enhanced security** option adds a threat model, security tests and a controls register (security assessment and audit preparation, not a certification or a penetration test).
+- **A write sandbox around every agent**, enforced by the operating system on macOS and Linux: agents can write only to the project, their own CLI state, caches and temporary folders, not to your other files.
+- **Self-healing.** A stalled or unexpectedly ended agent session is restarted for you (up to three times an hour), sign-in problems are flagged in plain words, and agents resume their saved conversation after a pause or stop.
+- **Mission Control.** A local web app to watch every project, preview the finished app, ask questions about your project (project chat uses your own OpenAI API key), accept the result, and update itself with one click.
+- **Over 2,000 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
 
 ## Why
 
-AI agents are excellent at producing code and terrible at being believed.
-"Done" from an agent means nothing until someone runs the tests, renders the
-page, and checks the claim. NoMoreHappyPath turns that skepticism into
-infrastructure:
+AI is excellent at the happy path: the demo works. The failed login, the empty screen and the raw error message appear in front of customers. NoMoreHappyPath exists so software built by AI is built, checked and accepted like a product, not shown like a demo.
 
-- **Cross-vendor review** — the agent that wrote the code never reviews it,
-  and the reviewer is from a competing vendor with no incentive to agree.
-- **Evidence-gated status** — a task cannot become "done" by assertion. The
-  board accepts state transitions only with attached proof: test output,
-  rendered-page checks, executed failure paths.
-- **The owner speaks product, never plumbing** — plain-language directives in,
-  plain-language "ready for your test" out.
-
-## What you get
-
-- **Mission Control** — a local web app that shows every project, launches
-  visible agent terminal sessions with the correct role directives preloaded,
-  and tracks the delivery gate in real time.
-- **A per-project governance board** — tasks, review queue, holds, release
-  gates, all evidence-linked.
-- **Project chat** — ask "what is left?" and get answers grounded in board
-  facts, never model improvisation.
-- ~1,000 tests, including headless-browser tests that verify what the owner
-  actually sees rendered.
+Website: https://nomorehappypath.com . Releases: https://github.com/nomorehappypath/nomorehappypath/releases
 
 ## What you need
 
@@ -44,15 +29,16 @@ AI agents it governs run on **your own accounts**.
 | Requirement | Where to get it | Cost |
 |---|---|---|
 | **macOS 13+** with Python 3.9+, or **Linux** (tested on Ubuntu 24.04) with Python 3.9+, git, tmux and bubblewrap | `python3 --version` to check; on Ubuntu `sudo apt install git tmux bubblewrap` | free |
-| **Codex CLI** (the Delivery agent) | `npm install -g @openai/codex` — sign in with your OpenAI account | your OpenAI/ChatGPT plan |
-| **Claude Code CLI** (the Reviewer/CTO) | https://claude.com/claude-code — sign in with your Anthropic account | your Anthropic plan |
+| **Codex CLI** (any role) | `npm install -g @openai/codex` — sign in with your OpenAI account | your OpenAI/ChatGPT plan |
+| **Claude Code CLI** (any role) | https://claude.com/claude-code — sign in with your Anthropic account | your Anthropic plan |
 | **Antigravity CLI** (`agy`, optional — Gemini for any role) | https://antigravity.google/cli — sign in with your Google account; the agent asks once more inside its own window | a free Google account has a weekly quota; Google AI Pro/Ultra raise it (billing: one.google.com) |
 | **OpenAI API key** (project chat) | https://platform.openai.com/api-keys — entered under Settings, verified before storage, kept in a file only you can read | pay-per-use, cents |
 
-You can start with just one CLI, but the platform's core guarantee —
-**cross-vendor review, where a competing vendor's agent verifies the work** —
-needs both. No other dependencies: the platform is pure Python standard
-library. Windows is not supported.
+You can start with just one CLI, but cross-vendor review, where an agent
+from a different vendor verifies the work, needs **any two of Codex, Claude Code
+and Gemini**, so the reviewer is never the builder's vendor. No other
+dependencies: the platform is pure Python standard library. Windows is not
+supported directly; on Windows, run it inside a Linux VM (see below).
 
 **On Linux** the platform is built for a server with no desktop. The
 installer sets up a per-user systemd service and tells you if lingering is
