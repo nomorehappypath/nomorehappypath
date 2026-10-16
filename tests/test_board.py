@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from harness import board, board_viewer, contract, control
+from harness import board, board_viewer, contract, control, execution_identity
 from tests.requirements_support import agreed_requirements
 
 
@@ -1294,6 +1294,83 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertTrue(attempts[-1]["retry_reason"])
 
+    def _failing_challenge(self, task):
+        dev = self.delivery(task)
+        self.declare_chunks(dev["id"], [("core", "upgrade retry")])
+        reviewer = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic")
+        request = board.request_review(
+            self.root, dev["id"], self.ledger("upgrade-delivery.md"),
+            "upgrade retry", chunk="core", test_command=self.qa_command(),
+        )
+        (self.root / "test_retry_failure.py").write_text(
+            "import unittest\n\nclass Retry(unittest.TestCase):\n"
+            "    def test_failure(self): self.fail('expected failure')\n"
+        )
+        challenge = self.root / "docs" / "upgrade-challenge.md"
+        challenge.write_text(
+            "| ID | What was tested | Simulation command | Expected system response | Observed system response | QA result |\n"
+            "|---|---|---|---|---|---|\n"
+            "| S-UP | A failure from an older rule set can be retried. | `python3 -m unittest test_retry_failure` | The retry is disclosed | PASS: pending governed execution | PASS |\n"
+        )
+        board.claim_qa(self.root, reviewer["id"], request["id"], str(challenge.relative_to(self.root)))
+        with self.assertRaisesRegex(ValueError, "S-UP"):
+            board.execute_challenge(self.root, reviewer["id"], request["id"])
+        return reviewer, request
+
+    def test_failed_challenge_from_an_older_policy_retries_with_an_audited_reason(self):
+        reviewer, request = self._failing_challenge("TASK-UPGRADE-RETRY")
+        attempt = board.snapshot(self.root)["qa_requests"][request["id"]]["challenge_execution_attempts"][-1]
+        self.assertEqual(attempt["policy_version"], execution_identity.POLICY_VERSION)
+        with self.assertRaisesRegex(ValueError, "non-empty repair reason"):   # a current-policy failure still needs one
+            board.execute_challenge(self.root, reviewer["id"], request["id"])
+        with board.locked_state(self.root) as state:   # the failure predates the upgrade
+            state["qa_requests"][request["id"]]["challenge_execution_attempts"][-1].pop("policy_version")
+        with self.assertRaisesRegex(ValueError, "S-UP"):   # runs again (the test is still red) without a reason
+            board.execute_challenge(self.root, reviewer["id"], request["id"])
+        attempts = board.snapshot(self.root)["qa_requests"][request["id"]]["challenge_execution_attempts"]
+        self.assertEqual(len(attempts), 2)
+        self.assertIn("certified-run rules changed", attempts[-1]["retry_reason"])
+
+    def test_waiting_behind_an_identical_run_is_not_a_failed_attempt(self):
+        reviewer, request = self._failing_challenge("TASK-LOCK-NOT-FAILURE")
+        with board.locked_state(self.root) as state:
+            state["qa_requests"][request["id"]]["challenge_execution_attempts"].clear()
+        with patch.object(board.certified_execution, "run",
+                               side_effect=board.certified_execution.ExecutionInProgress("still in progress")):
+            with self.assertRaisesRegex(ValueError, "still in progress"):
+                board.execute_challenge(self.root, reviewer["id"], request["id"])
+        self.assertEqual(
+            board.snapshot(self.root)["qa_requests"][request["id"]].get("challenge_execution_attempts") or [], [])
+        # a normal retry needs no repair reason now: it runs and the (red) test is what fails
+        with self.assertRaisesRegex(ValueError, "S-UP"):
+            board.execute_challenge(self.root, reviewer["id"], request["id"])
+
+    def test_delivery_that_only_waited_behind_a_run_is_not_recorded_as_failed_evidence(self):
+        dev = self.delivery("TASK-DELIVERY-WAIT")
+        self.declare_chunks(dev["id"], [("core", "delivery contention")])
+        with patch.object(board.certified_execution, "run",
+                          side_effect=board.certified_execution.ExecutionInProgress("still in progress")):
+            with self.assertRaisesRegex(ValueError, "still in progress"):
+                board.request_review(self.root, dev["id"], self.ledger("wait-delivery.md"),
+                                     "delivery contention", chunk="core", test_command=self.qa_command())
+        state = board.snapshot(self.root)
+        self.assertEqual(state.get("delivery_attempt_failures") or [], [])
+        self.assertFalse([r for r in state.get("qa_requests", {}).values() if r.get("task") == "TASK-DELIVERY-WAIT"])
+        with patch.object(board.certified_execution, "run", side_effect=ValueError("tests failed")):
+            with self.assertRaisesRegex(ValueError, "tests failed"):
+                board.request_review(self.root, dev["id"], self.ledger("wait-delivery2.md"),
+                                     "delivery contention", chunk="core", test_command=self.qa_command())
+        self.assertEqual(len(board.snapshot(self.root).get("delivery_attempt_failures") or []), 1)
+
+    def test_a_second_request_behind_the_request_lock_times_out_plainly(self):
+        with patch.object(board.certified_execution, "_LOCK_WAIT_SECONDS", 0.3):
+            with board._challenge_execution_lock(self.root, "req-1"):
+                started = time.monotonic()
+                with self.assertRaisesRegex(ValueError, "identical certified run is still in progress"):
+                    with board._challenge_execution_lock(self.root, "req-1"):
+                        self.fail("must not acquire")
+                self.assertLess(time.monotonic() - started, 5)
+
     def test_reviewer_cannot_pass_a_copied_or_incomplete_challenge_ledger(self):
         dev = self.delivery("TASK-6B")
         reviewer = board.register(self.root, "qa", "REVIEW-QUEUE", vendor="Anthropic")
@@ -1604,7 +1681,9 @@ class BoardTests(unittest.TestCase):
                 files[kind] = {"path": str(path), "sha256": _hashlib.sha256(payload).hexdigest()}
             (directory / f"{check_id}.json").write_text(_json.dumps({
                 "id": check_id, "task": task, "agent_id": "x", "role": role, "url": "http://127.0.0.1:1/",
-                "expect": "mph", "expect_found": True, "blank": False, "evidence": files}), encoding="utf-8")
+                "expect": "mph", "expect_found": True, "blank": False, "evidence": files,
+                "listener": {"status": "unverified", "reason": "fixture"},
+                "candidate": {"status": "unverified", "reason": "fixture", "roots": []}}), encoding="utf-8")
             return files
 
         delivery_files = capture("screen-20261010T090000-d1d1d1d1", "engineering")

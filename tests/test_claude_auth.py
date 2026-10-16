@@ -83,6 +83,86 @@ class ClaudeAuthTests(unittest.TestCase):
             self.assertNotIn('synthetic-secret', repr(call.args[0]))
             self.assertEqual(call.kwargs['env'][claude_auth.TOKEN_ENV], 'synthetic-secret')
 
+    def _validate(self, runs=None, **patches):
+        ok = subprocess.CompletedProcess([], 0, '{"authMethod":"oauth_token"}', '')
+        with patch.object(claude_auth.global_settings, 'resolved_cli', return_value={'path': '/fake/claude'}), \
+                patch.object(claude_auth, '_probe_prefix', **(patches or {'return_value': []})), \
+                patch.object(claude_auth.subprocess, 'run', side_effect=runs or [ok]):
+            with self.assertRaises(claude_auth.ClaudeAuthRequired) as caught:
+                claude_auth.validate_token('synthetic-secret')
+        return caught.exception
+
+    def test_attach_deadline_covers_the_slow_sign_in_check_then_restarts_at_thirty_seconds(self):
+        from datetime import datetime, timezone
+        session = control.create(self.root, 'claude_cto')
+        seen = {}
+        def slow_check(token):
+            stored = control._read_state(self.root)['sessions'][session['id']]
+            seen['during'] = (datetime.fromisoformat(stored['launch_deadline']) - datetime.now(timezone.utc)).total_seconds()
+        with patch.object(claude_auth, 'resolve_token', return_value='synthetic-secret'), patch.object(claude_auth, 'validate_token', side_effect=slow_check), \
+                patch.dict(os.environ, {'HARNESS_CLAUDE_AUTH_TIMEOUT_SECONDS': '45'}):
+            claude_auth.prepare_launch(self.root, session)
+        self.assertGreater(seen['during'], 2 * 45, 'a 45-second probe must not be cut off by the 30-second attach deadline')
+        after = control._read_state(self.root)['sessions'][session['id']]
+        self.assertLessEqual((datetime.fromisoformat(after['launch_deadline']) - datetime.now(timezone.utc)).total_seconds(), 30)
+        control.fail_launch(self.root, session['id'], 'test over')
+
+    def test_a_failed_sign_in_check_does_not_leave_a_long_deadline_and_never_revives_a_failed_session(self):
+        from datetime import datetime, timezone
+        session = control.create(self.root, 'claude_cto')
+        with patch.object(claude_auth, 'resolve_token', side_effect=claude_auth.ClaudeAuthRequired()):
+            with self.assertRaises(claude_auth.ClaudeAuthRequired):
+                claude_auth.prepare_launch(self.root, session)
+        stored = control._read_state(self.root)['sessions'][session['id']]
+        self.assertLessEqual((datetime.fromisoformat(stored['launch_deadline']) - datetime.now(timezone.utc)).total_seconds(), 30)
+        control.fail_launch(self.root, session['id'], 'test over')
+        claude_auth._set_launch_deadline(self.root, session, 999)
+        self.assertEqual(control._read_state(self.root)['sessions'][session['id']]['status'], 'failed')
+
+    def test_every_staged_resume_role_waits_for_its_turn_and_gets_thirty_seconds_when_claimed(self):
+        from datetime import datetime, timezone
+        claude, codex = control.create(self.root, 'claude_cto'), control.create(self.root, 'codex_delivery')
+        for session in (claude, codex):
+            control.prepare_resume_sessions(self.root, [session['id']])
+        left = lambda item: (datetime.fromisoformat(item['launch_deadline']) - datetime.now(timezone.utc)).total_seconds()
+        stored = control._read_state(self.root)['sessions']
+        for session in (claude, codex):
+            self.assertGreater(left(stored[session['id']]), 2 * 45, 'a role behind a slow Claude check must not expire while it waits')
+        control.mark_resume_launch_requested(self.root, codex['id'])
+        self.assertLessEqual(left(control._read_state(self.root)['sessions'][codex['id']]), 30)
+        for session in (claude, codex):
+            control.fail_launch(self.root, session['id'], 'test over')
+
+    def test_missing_claude_program_is_a_cli_problem_not_a_token_problem(self):
+        with patch.object(claude_auth.global_settings, 'resolved_cli', return_value={'path': ''}):
+            with self.assertRaises(claude_auth.ClaudeAuthRequired) as caught:
+                claude_auth.validate_token('synthetic-secret')
+        self.assertEqual(caught.exception.reason, 'cli')
+
+    def test_failures_that_are_not_the_token_say_so_and_ask_for_no_new_token(self):
+        ok = subprocess.CompletedProcess([], 0, '{"authMethod":"oauth_token"}', '')
+        def turn(text):
+            return subprocess.CompletedProcess([], 1, json.dumps({'is_error': True, 'result': text}), '')
+        cases = [
+            ('confinement', self._validate(side_effect=agent_confinement.ConfinementUnavailable('no bubblewrap'))),
+            ('cli', self._validate(runs=[subprocess.CompletedProcess([], 2, '', 'error: unknown command auth')], return_value=[])),
+            ('quota', self._validate(runs=[ok, turn('Claude usage limit reached')], return_value=[])),
+            ('model', self._validate(runs=[ok, turn('model haiku not found for this account')], return_value=[])),
+            ('cli', self._validate(runs=[FileNotFoundError('claude')], return_value=[])),
+            ('confinement', self._validate(runs=[subprocess.CompletedProcess([], 1, '', 'bwrap: Creating new namespace failed: Operation not permitted')], return_value=[])),
+            ('confinement', self._validate(runs=[ok, subprocess.CompletedProcess([], 1, '', 'bwrap: Creating new namespace failed')], return_value=[])),
+            ('rejected', self._validate(runs=[ok, turn('401 invalid token')], return_value=[])),
+        ]
+        for reason, error in cases:
+            self.assertEqual(error.reason, reason)
+            card = claude_auth.action(reason)
+            if reason != 'rejected':
+                self.assertEqual(card['title'], 'Claude agents cannot start')
+                self.assertIn('not rejected', card['why'])
+                self.assertNotIn('setup-token', card['instructions'])
+            else:
+                self.assertIn('Generate a replacement', card['why'])
+
     def test_handoff_only_serves_registered_pid_once_without_persistence(self):
         session = control.create(self.root, 'claude_cto')
         path = claude_auth._handoff(self.root, session['id'], 'synthetic-secret')

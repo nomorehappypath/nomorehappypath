@@ -137,6 +137,40 @@ def build(
                 "title": _text(value.get("title")), "description": _text(value.get("description")),
             } for value in (state.get("deferred_findings") or {}).values()
                 if value.get("task") == task and value.get("status") == "in_scope"]),
+            # Owner 2026-10-14: findings the CTO set aside as not material to the
+            # owner's objective, with its reason; the reviewer judges the
+            # acceptance proof against this disposition, never repairs it.
+            # Owner 2026-10-14: deliverables the owner waived (recorded by the CTO
+            # from the owner's own words) are not required; the confirmed text
+            # above is history and stays as it was.
+            # Owner 2026-10-15: the documents the owner will read, frozen at this
+            # request (path and sha256); the reviewer reads what the owner gets.
+            "owner_documents": _bounded(list(request.get("owner_documents") or [])),
+            # Owner 2026-10-15: a task that changes no product code is judged on its
+            # attached proof files alone. When the mechanical check could not run, it
+            # says so here and is never presented as verified proof.
+            "no_product_code_evidence": {
+                "applies": bool(request.get("no_product_code_task")),
+                "check": _text(request.get("no_product_code_check")),
+                "pinned_files": _bounded(list(request.get("no_product_code_evidence_pins") or [])),
+                "pinned_total": len(request.get("no_product_code_evidence_pins") or []),
+                "pinned_omitted": max(0, len(request.get("no_product_code_evidence_pins") or []) - MAX_ITEMS),
+                "instruction": (
+                    "These files are the only proof of this task. Read each one against its deliverable; "
+                    "FAIL the review if a file reports a failed, missing or unsupported claim, even though the "
+                    "harness confirmed the file is present and unchanged."
+                ) if request.get("no_product_code_task") else "",
+            },
+            "owner_waived_deliverables": _bounded([{
+                "deliverable": _text(value.get("deliverable")), "part": _text(value.get("part")),
+                "owner_words": _text(value.get("owner_words")), "owner_message_at": _text(value.get("owner_message_at")),
+                "recorded_at": _text(value.get("recorded_at")),
+            } for value in (state.get("deliverable_waivers") or {}).get(task, [])]),
+            "routed_around_findings": _bounded([{
+                "title": _text(value.get("title")), "description": _text(value.get("description")),
+                "reason": _text(value.get("routed_around_reason")),
+            } for value in (state.get("deferred_findings") or {}).values()
+                if value.get("task") == task and value.get("status") == "routed_around"]),
         },
         # Owner 2026-10-12: the enhanced-security choice frozen into this
         # request at its creation; the reviewer judges against exactly this.
@@ -202,6 +236,13 @@ def build(
                 "hunt boundaries that never or only rarely happen - note them as non-blocking."
             ),
         }
+        if brief["risk_and_scope"]["owner_waived_deliverables"]:
+            brief["final_stage"]["owner_waivers"] = (
+                "The owner waived the deliverables listed under risk_and_scope.owner_waived_deliverables "
+                "(the owner's words and date are there). They are not required and take precedence over "
+                "the confirmed requirements text, which stays unchanged as history: judge TASK DONE on the "
+                "remaining deliverables and name the waiver in the verdict."
+            )
     encoded = json.dumps(brief, sort_keys=True, separators=(",", ":")).encode("utf-8")
     brief["sha256"] = hashlib.sha256(encoded).hexdigest()
     return brief

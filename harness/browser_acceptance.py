@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -40,7 +41,8 @@ def _safe_binary(candidate: str | os.PathLike[str] | None) -> str | None:
     if not path.is_file() or not os.access(path, os.X_OK):
         return None
     resolved = path.resolve()
-    if platform_support.browser_host().rejects_resolved(resolved):
+    host = platform_support.browser_host()
+    if host.rejects_resolved(resolved) or host.is_snap_stub_script(resolved):
         return None
     return str(resolved)
 
@@ -60,8 +62,10 @@ def resolve_binary() -> str:
         if selected:
             return selected
     raise FileNotFoundError(
-        "no process-isolated Chromium headless binary is available on this machine. A rendered test cannot run in a "
-        "governed command here; keep it out and capture the page with the screen-check board command"
+        "no process-isolated Chromium headless binary is available on this machine (a snap-packaged Chromium cannot be "
+        "used; set HARNESS_BROWSER_BIN to a native headless Chromium or Chrome executable, for example "
+        "/usr/bin/google-chrome). A rendered test cannot run in a governed command here; keep it out and capture the "
+        "page with the screen-check board command"
     )
 
 
@@ -201,7 +205,7 @@ def _is_browser_app_command(command: str) -> bool:
     marker = ".app/contents/macos/"
     marker_at = value.find(marker)
     if marker_at < 0:
-        return False
+        return _is_linux_browser_command(value)
     bundle_prefix = value[:marker_at]
     # Chrome/Safari helpers are nested app bundles below the owner app's
     # Contents directory. Tabs may create and retire these at any time; they
@@ -214,6 +218,81 @@ def _is_browser_app_command(command: str) -> bool:
     return any(name in bundle_name for name in (
         "chrome", "chromium", "safari", "firefox", "arc", "brave", "edge", "opera",
     ))
+
+
+# Printed in a failure so the board can tell owner-machine activity from a real failure.
+OWNER_MACHINE_ACTIVITY_MARKER = "OWNER-MACHINE-ACTIVITY:"
+
+_LINUX_BROWSER_NAMES = frozenset({
+    "chrome", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
+    "google-chrome-beta", "google-chrome-unstable", "firefox", "firefox-bin", "brave", "brave-browser",
+    "brave-browser-stable", "microsoft-edge", "microsoft-edge-stable", "msedge", "opera", "vivaldi",
+    "vivaldi-bin", "vivaldi-stable", "firefox-esr",
+})
+_LINUX_BROWSER_DIRECTORIES = (
+    "/usr/bin/", "/usr/local/bin/", "/usr/lib/", "/usr/lib64/", "/usr/local/lib/", "/opt/", "/snap/",
+    "/var/lib/flatpak/", "/var/lib/snapd/", "/nix/store/", "/run/current-system/sw/bin/",
+    "/home/linuxbrew/.linuxbrew/",
+)
+_LINUX_USER_BROWSER_PATH = re.compile(
+    r"^(?:/home/[^/]+|/root)/(?:\.cache|\.local/share|snap|\.var/app|\.nix-profile)/")
+# The owner's own browser profiles: an isolated headless launch must not use one.
+_LINUX_OWNER_PROFILE_PATH = re.compile(
+    r"/(?:\.config/(?:google-chrome[^/]*|chromium|brave[^/]*|microsoft-edge[^/]*|opera[^/]*|vivaldi[^/]*)"
+    r"|\.mozilla|\.var/app|snap/[^/]+/(?:common|current|\d+))/", re.I)
+
+
+def _is_isolated_headless_launch(name: str, tokens: list[str]) -> bool:
+    """The harness's own acceptance form: headless with a throwaway profile.
+
+    Paired with the browser family: Chromium-based browsers need --headless[=...]
+    and --user-data-dir=<absolute dir>; Firefox needs -headless and
+    -profile <absolute dir>. The directory must be absolute, free of ".." and
+    not one of the owner's real browser profile locations. This is a
+    launch-form rule, not proof that the profile is a harness-created
+    throwaway (nothing here resolves symlinks or checks ownership): what keeps
+    the owner's browser safe is the sandbox, and this only keeps the harness's
+    own isolated browser from being reported as the owner's."""
+    firefox = name.startswith("firefox")
+    if firefox:
+        headless = "-headless" in tokens or "--headless" in tokens
+    else:
+        headless = any(t == "--headless" or t.startswith("--headless=") for t in tokens)
+    profile = ""
+    for index, token in enumerate(tokens):
+        if not firefox and token.startswith("--user-data-dir="):
+            profile = token.split("=", 1)[1]
+        elif firefox and token in {"-profile", "--profile"} and index + 1 < len(tokens):
+            profile = tokens[index + 1]
+    return bool(
+        headless and profile.startswith("/") and ".." not in profile.split("/")
+        and not _LINUX_OWNER_PROFILE_PATH.search(profile + "/")
+    )
+
+
+def _is_linux_browser_command(value: str) -> bool:
+    """A top-level Linux-native browser executable, from a lowercase command line.
+
+    Exact executable-name match (never a substring, so "arcade" or a directory
+    called "chrome" is not a browser) in a standard install location, a
+    per-user cache/snap/flatpak folder or by bare name. Browser helper
+    processes are recognised by their real argument forms (--type=..., Firefox
+    -contentproc) and excluded, as are isolated headless launches (see
+    _is_isolated_headless_launch). Limits: matching is on the process command
+    line, so a renamed binary or altered argv[0] is not seen, a path with
+    spaces is not split, and the observer samples, so a very short-lived
+    launch can be missed."""
+    tokens = value.split()
+    if not tokens:
+        return False
+    path = tokens[0]
+    if any(token.startswith("--type=") or token == "-contentproc" for token in tokens[1:]):
+        return False
+    if path.rsplit("/", 1)[-1] not in _LINUX_BROWSER_NAMES:
+        return False
+    if "/" in path and not (path.startswith(_LINUX_BROWSER_DIRECTORIES) or _LINUX_USER_BROWSER_PATH.match(path)):
+        return False
+    return not _is_isolated_headless_launch(path.rsplit("/", 1)[-1], tokens[1:])
 
 
 def _app_processes(table: dict[int, dict[str, Any]]) -> dict[int, dict[str, str]]:
@@ -376,6 +455,10 @@ class BrowserProcess:
                 except ProcessLookupError:
                     pass
             after = _process_table()
+            # Any browser app that appeared since the baseline is a violation,
+            # whoever started it: a bypass launched beside the test cannot be
+            # told from one the owner opened (pinned by
+            # test_independent_process_observation_catches_nested_app_bypass).
             new_apps = {
                 pid: identity for pid, identity in _app_processes(after).items()
                 if pid not in self.baseline_apps
@@ -411,12 +494,12 @@ class BrowserProcess:
                         "an independently observed macOS app-bundle process was launched during browser acceptance: "
                         + detail
                     )
-                if owner_changes:
-                    raise RuntimeError(
-                        "owner browser baseline changed during acceptance; attribution is inconclusive"
-                    )
+                # owner_changes (the owner quit or restarted their own browser) stay
+                # in the audit as information: the acceptance browser never
+                # signals a baseline process, and the owner's activity is not a
+                # test failure.
                 if not audit["default_handlers_unchanged"]:
-                    raise RuntimeError("the default-browser handler changed during browser acceptance")
+                    raise RuntimeError(f"{OWNER_MACHINE_ACTIVITY_MARKER} the default-browser handler changed during browser acceptance")
             return audit
         finally:
             self.observer_stop.set()
@@ -504,7 +587,7 @@ def launch(
             try:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except OSError:
+            except BlockingIOError:   # only contention is waited out
                 if time.monotonic() >= give_up:
                     raise RuntimeError(
                         f"another process held the harness browser for more than {LAUNCH_LOCK_TIMEOUT_SECONDS} seconds; "
@@ -794,7 +877,7 @@ def _render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, A
         # With the screenshot and HTML already taken, those are removed from
         # layout and the text is read once more.
         seen = str(inspector.evaluate(VISIBLE_TEXT_EXPRESSION) or "")
-        return {"text": seen, "html": html, "png": png}
+        return {"text": seen, "html": html, "png": png, "url": str(inspector.evaluate("location.href") or url)}
     finally:
         if inspector is not None:
             inspector.close()

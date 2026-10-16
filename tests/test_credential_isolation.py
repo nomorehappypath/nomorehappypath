@@ -54,7 +54,7 @@ class ProfileShapeTests(unittest.TestCase):
             home = _fixture_home(Path(tmp))
             bubblewrap = linux._BwrapAgentConfinement(which=lambda name: "/usr/bin/bwrap")
             with patch.dict(os.environ, {"HARNESS_BWRAP_BIN": ""}):
-                self.assertEqual(bubblewrap.protected_read_paths(home), [str(home / ".claude" / ".credentials.json")],
+                self.assertEqual(bubblewrap.protected_read_paths(home), [str(home / ".claude" / ".credentials.json"), str(linux.claude_token_file().parent)],
                                  "setup-token agents must not refresh the shared Linux login")
                 command = agent_confinement.read_guard(
                     ["/bin/sh", "-c", "true"], home=home, store=Path(tmp) / "store", implementation=bubblewrap)
@@ -340,7 +340,8 @@ class RenderedSettingsTests(unittest.TestCase):
         environment = {key: value for key, value in os.environ.items() if key != "HARNESS_CLAUDE_BIN"}
         environment["PATH"] = os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"])
         with patch.dict(os.environ, environment, clear=True), \
-                patch.object(global_settings, "PROVIDER_SEARCH_DIRECTORIES", ()):
+                patch.object(global_settings, "PROVIDER_SEARCH_DIRECTORIES", ()), \
+                patch("harness.claude_auth.resolve_token", return_value="tok"), patch("harness.claude_auth.validate_token"):
             result = global_settings.test_connection(home, "claude", "opus", "high", workspace)
         self.assertEqual(result["cli_version"], "99.0.0")
         self.assertEqual(Path(result["cli_path"]).resolve(), fake.resolve())

@@ -120,6 +120,40 @@ the value in unit files, shell startup files, project settings, or the board.
 Never run `/login` inside a harness agent to repair a missing or expired setup-token;
 generate a replacement in your own terminal and follow the owner-action card.
 
+**Linux, simplest way:** the harness can keep the setup-token in an owner-only file so it
+survives a reboot and needs no systemd import. In your own terminal (the prompt is hidden
+and the value never goes to shell history):
+
+```bash
+claude setup-token
+python3 -m harness.claude_auth store-token
+```
+
+The token is saved in `~/.config/nmhp-harness/claude-setup-token` (folder `0700`, file `0600`).
+Then press **Test Claude connection** in Settings; it tests the same path the agents use and
+tells a rejected token apart from a missing Claude program, a refusing sandbox, a usage limit
+or an unavailable model. On Linux the agents (Claude and Gemini) are read-confined: they can
+read the project, their own CLI state, the system and tool folders, not the rest of your home.
+
+**Ubuntu with Chromium installed as a snap:** a snap launcher cannot run the harness's headless
+screen checks. Point the app at a native browser, for example
+`export HARNESS_BROWSER_BIN=/usr/bin/google-chrome` before starting the app.
+
+**A project is slow to open:** the app waits while the board is still making progress. To
+change the limit, set `HARNESS_WORKER_START_TIMEOUT` (seconds) or start the manager with
+`--worker-start-timeout`.
+
+**A red "Needs repair" hold you know is stale:** with the project resumed, run in your own
+terminal (roots are the project's code, data and workspace folders shown in Settings):
+
+```bash
+python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE \
+  clear-hold --task TASK --source SOURCE
+```
+
+It refuses if the task has no open hold or the source is not the hold's source, and it never
+changes a certified result.
+
 ### Gemini agent setup (optional)
 
 Gemini runs through Google's Antigravity CLI (`agy`) on your own Google account. No API key is used or accepted.
@@ -175,6 +209,12 @@ interchangeable labor — is the point; the code is how we prove it works.
 Serious products - that is the design center. This platform is for
 building software that might carry revenue, clients, and your name -
 everything the agents build in your folder is yours.
+
+**My task delivered a report, not a screen. Where do I read it?**
+On the task card and on its release card, under **Read what was delivered**:
+the **Open report** link opens the document Delivery attached for you (and
+the CTO's card carries the same link). View app starts the app itself; it
+does not show a document. Accepted work keeps its link in Task history.
 
 **Why not just Claude Code?**
 Claude Code is a superb builder — this platform launches it as one. But when

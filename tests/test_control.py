@@ -484,6 +484,7 @@ class ControlTests(unittest.TestCase):
                 control.create(root, "claude_cto")
             attached = control.attach(root, first["id"], 99999999)
             self.assertEqual(attached["status"], "running")
+            control.note_cli_exec(root, first["id"])                 # the CLI was started; only then is the exit "outside the viewer"
             session = control.snapshot(root)["sessions"][0]
             self.assertEqual(session["status"], "exited")
             self.assertIn("outside the viewer", session["reason"])
@@ -694,11 +695,12 @@ class ControlTests(unittest.TestCase):
             process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env={**os.environ, "HARNESS_CLAUDE_BIN": str(fake_claude)})
             try:
                 for _ in range(30):
-                    if control.snapshot(root)["sessions"][0]["status"] == "running":
+                    if control.snapshot(root)["sessions"][0].get("launch_exec_at"):
                         break
                     time.sleep(.1)
                 else:
-                    self.fail("runner did not attach")
+                    self.fail("runner did not start the CLI")
+                time.sleep(.3)                                       # past the exec of the fake CLI
                 process.terminate()
                 process.wait(timeout=3)
                 released = control.snapshot(root)["sessions"][0]

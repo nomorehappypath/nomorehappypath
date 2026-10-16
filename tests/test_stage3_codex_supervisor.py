@@ -269,7 +269,10 @@ class RunnerTests(unittest.TestCase):
         tui = next(argv for argv in launches if argv[:1] != ["app-server"])
         self.assertEqual(server[:3], ["app-server", "--listen", "stdio://"], "stdio: no socket for any agent to reach")
         self.assertIn("approval_policy=never", server)
-        self.assertIn("sandbox_mode=workspace-write", server, "the same sandbox flags as today's launch")
+        if sys.platform.startswith("linux"):  # Linux always carries the permission profile (saved-token folder denied)
+            self.assertIn('default_permissions="harness_agent"', server)
+        else:
+            self.assertIn("sandbox_mode=workspace-write", server, "the same sandbox flags as today's launch")
         self.assertEqual(tui[0], "--remote")
         self.assertTrue(tui[1].startswith(f"unix://{os.path.realpath(self.home)}/rt/"), tui[1])
         # The owner's first launch died on overrides in this line ("... not

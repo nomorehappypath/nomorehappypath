@@ -30,7 +30,12 @@ from harness.project_context import ProjectRoot, add_context_arguments, context_
 OWNER_MESSAGE_MAX_BYTES = 20_000
 OWNER_DIRECTIVE_EXTENSIONS = {".md", ".txt"}
 # Backlog #7: the Mission Control lines for what the harness did by itself.
-HARNESS_ACTION_EVENTS = {"agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up"}
+HARNESS_ACTION_EVENTS = {
+    "agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up",
+    "agent_stall_step", "agent_replacement_requested", "replacement_handoff_failed",
+    # 2026-10-15: the CTO acted instead of asking the owner, or its stated default was applied after the deadline
+    "cto_acted", "owner_default_applied",
+}
 HARNESS_ACTION_LINES = 5
 DASHBOARD_REVIEW_LIMIT_PER_TASK = 40
 
@@ -55,7 +60,7 @@ PAGE = r"""<!doctype html>
 .badge.tone-waiting{background:var(--red);color:#fff;animation:waiting-blink 1.1s steps(2,start) infinite}
 @media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
 .harness-actions{border:1px solid #b8c9e8;background:#f7faff}.harness-actions h2{margin:0 0 6px;font-size:16px}.harness-actions ul{margin:0;padding-left:20px}.harness-actions li{margin:4px 0}.harness-actions li.gave-up{color:#8a2c1f;font-weight:700}.harness-actions small{color:var(--muted)}.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
-.release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
+.delivered-documents{margin:0 0 12px;padding:12px 14px;border:1px solid #b6dfc8;border-radius:9px;background:var(--green-soft)}.delivered-documents strong{display:block;font-size:14px;color:var(--green);margin-bottom:6px}.delivered-documents ul{margin:0;padding-left:20px}.delivered-documents li{margin:5px 0;font-size:14px}.delivered-documents a{font-weight:700;color:#174ea6}.delivered-documents small{display:block;color:var(--muted);margin-top:6px}.delivered-documents .unavailable{color:#8a2c1f}.owner-action .card-links{margin:6px 0 8px}.owner-action .card-links a{font-weight:700;color:#174ea6;margin-right:12px}.owner-action .card-links small{display:block;color:#5b4a46;margin-top:4px}.release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
 .release-preview .view-app .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@keyframes view-app-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.release-preview .view-app .spin{animation-duration:2.4s}}.release-preview .preview-log-details{margin-top:6px}.release-preview .preview-log-details summary{cursor:pointer}
 .release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
 .modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}
@@ -294,7 +299,7 @@ function taskGate(state,name,contract,agent,reviews,total,done){
   if(released)return{status:'READY FOR YOUR TEST',progress:100,progressTone:'ready',ctoAction:'CTO: release approved',next:'The exact tested version is clean and pushed to main. Your visual test is now required.'};
   if(latest?.status==='failed'){const final=latest.phase==='final_acceptance';return{status:'REPAIR IN PROGRESS',progress:final?86:staged(.85),progressTone:'repair',ctoAction:'CTO: blocking release and routing repair',next:'Independent review found a defect. Delivery must repair it and submit a new review cycle. Your action: none.'};}
   if(agent?.broker_refusal)return{status:'BLOCKED — GIT WRITE REFUSED',progress:deliveryProgress,progressTone:'repair',ctoAction:'CTO: run recover-git and read the refusal reason',next:`The Delivery Agent's last Git write was refused by the broker: ${agent.broker_refusal.reason}. It is not stalled and retrying alone cannot help. The CTO must run recover-git. Your action: none.`};
-  if(agent?.liveness==='stalled'&&recentOutputActive(agent))return{status:'STATUS UPDATE OVERDUE',progress:deliveryProgress,progressTone:'active',ctoAction:'CTO: requesting a short status update',next:'The Delivery Agent is actively producing terminal output, but its board update is overdue. The harness has requested a short update. Your action: none.'};
+  if(agent?.liveness==='stalled'&&(recentOutputActive(agent)&&!agent.stall_exhausted))return{status:'STATUS UPDATE OVERDUE',progress:deliveryProgress,progressTone:'active',ctoAction:'CTO: requesting a short status update',next:'The Delivery Agent is actively producing terminal output, but its board update is overdue. The harness has requested a short update. Your action: none.'};
   if(agent?.liveness==='stalled')return{status:'REPAIR IN PROGRESS',progress:deliveryProgress,progressTone:'repair',ctoAction:'CTO: recovering automation',next:'The Delivery Agent stopped checking the board. The system must resume its saved work. Your action: none.'};
   if(currentReview?.status==='claimed'){const final=currentReview.phase==='final_acceptance';return{status:'INDEPENDENT REVIEW IN PROGRESS',progress:final?86:staged(.85),progressTone:'active',ctoAction:'CTO: monitoring independent review',next:`An Independent Reviewer is testing ${reviewScope(currentReview)} with a different scenario ledger. Your action: none.`};}
   if(currentReview?.status==='reserved'&&currentReview.delivery_state==='executing'){return{status:'DELIVERY TESTING / REVIEWER AUTHORING',progress:staged(.65),progressTone:'active',ctoAction:'CTO: monitoring bounded parallel work',next:`Delivery is executing its checks while the Independent Reviewer authors separate test intentions for ${reviewScope(currentReview)}. Reviewer execution remains blocked until Delivery succeeds. Your action: none.`};}
@@ -444,6 +449,24 @@ async function loadAccessPanel(){
     el('#access-codex-path').textContent=(data?.codex?.config_path||'Unavailable')+'  →  [projects."'+(data?.workspace_root||'')+'"]';
   }catch(error){}
 }
+// Owner 2026-10-15: a task whose deliverable is a document (a report, a
+// plan, an assessment) shows the owner where it is - the file Delivery marked
+// with contract-evidence --for-owner (or the CTO with deliverable-file).
+// View app is left exactly as it is; it starts the app, not the document.
+function documentLinksHtml(links,name,where){
+  const items=Array.isArray(links)?links.filter(Boolean):[];
+  if(!items.length)return'';
+  const latest=items.filter(item=>item.latest),earlier=items.filter(item=>!item.latest);
+  const line=item=>item.available
+    ?`<li><a href="${esc(apiPath(item.url))}" target="_blank" rel="noopener" data-deliverable-link="${esc(item.deliverable)}">${esc(item.label)}</a>: ${esc(item.title)}</li>`
+    :`<li class="unavailable">${esc(item.title)} — cannot be shown: ${esc(item.reason)}. ${esc(item.recovery||'')}</li>`;
+  const earlierBlock=earlier.length?`<details><summary>Earlier versions (${earlier.length})</summary><ul>${earlier.map(line).join('')}</ul></details>`:'';
+  const note=where==='release'?'<small>This task delivered a document. View app starts the app itself; it does not show the document.</small>':'';
+  return `<div class="delivered-documents" data-delivered-documents="${esc(name)}"><strong>Read what was delivered</strong><ul>${latest.map(line).join('')}</ul>${earlierBlock}${note}</div>`;
+}
+function deliveredDocumentsHtml(name,where){
+  return documentLinksHtml((lastBoard&&lastBoard.deliverable_links||{})[name],name,where);
+}
 function ownerTestPlanHtml(release){
   const fallback='Verify the released result against the final agreed requirements shown above.';
   const steps=Array.isArray(release?.owner_test_steps)&&release.owner_test_steps.length?release.owner_test_steps.slice(0,8):[fallback];
@@ -473,7 +496,7 @@ function releaseResponseHtml(state,name){
     return `<div class="release-response recorded" aria-live="polite"><strong>OWNER REJECTED / REPAIR REQUIRED</strong><div class="release-reason"><span>Reason</span><p>${reasonText}</p></div><p>Your explanation and ${files} are saved. Delivery will use them in a new repair, review, and release cycle.</p></div>`;
   }
   const task=esc(JSON.stringify(name));
-  return `<div class="release-response">${releasePreviewHtml(release)}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
+  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${releasePreviewHtml(release)}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
 }
 
 function taskLatestTimestamp(state,name){
@@ -517,6 +540,10 @@ function taskNames(state,contracts,directions,liveTasks){
 function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clarifications,inScopeFindings){
   const blockers=(Array.isArray(inScopeFindings)?inScopeFindings:[]).filter(finding=>finding.task===name&&finding.status==='in_scope');
   const scopeNotice=blockers.length?`<div class="next" style="border-left-color:var(--red);background:var(--red-soft);color:#7a271a"><strong>Required before this task can finish:</strong> ${esc(blockers.map(finding=>finding.title).join('; '))}. Delivery is fixing and re-testing this as part of the current task.</div>`:'';
+  const routed=(Array.isArray(inScopeFindings)?inScopeFindings:[]).filter(finding=>finding.task===name&&finding.status==='routed_around');
+  const waived=(Array.isArray(facts.contract?.deliverables)?facts.contract.deliverables:[]).filter(item=>item&&item.owner_waiver&&item.owner_waiver.owner_words);
+  const waivedNotice=waived.length?`<div class="next owner-waived" data-owner-waived="${esc(name)}"><strong>Waived by you:</strong> ${waived.map(item=>`${item.owner_waiver.part?`the part “${esc(item.owner_waiver.part)}” of `:''}${esc(item.owner_waiver.part?item.name:item.name)} — “${esc(item.owner_waiver.owner_words)}” (${esc(String(item.owner_waiver.owner_message_at||item.owner_waiver.recorded_at||'').slice(0,10))})`).join('; ')}. ${waived.some(item=>!item.owner_waiver.part)?'Not required any more; the review judges the remaining deliverables.':'The rest of that deliverable is still required.'}</div>`:'';
+  const routedNotice=routed.length?`<div class="next routed-around" data-routed-around="${esc(name)}"><strong>Set aside by the CTO as not material to your objective:</strong> ${routed.map(finding=>`${esc(finding.title)} — ${esc(finding.routed_around_reason||'no reason recorded')}`).join('; ')}. Delivery is not held on this.</div>`:'';
   const structureLabel=facts.mode==='application'?'Full application with product subtasks':facts.mode==='chunked'?'One task split into logical chunks':'One cohesive task with no artificial chunks';
   const structureChanges=Array.isArray(facts.plan.structure_changes)?facts.plan.structure_changes.slice(-3):[];
   const changeHistory=structureChanges.map(change=>{const retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}</small></div>`;}).join('');
@@ -531,10 +558,10 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
   const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div></div>${badge(gate.status)}</div>`;
-  const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}`;
+  const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} durable gates complete</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
 }
 
@@ -787,7 +814,7 @@ function renderHistory(entries,queryValue){
   if(!visible.length){out.innerHTML='<div class="history-empty">No history item matches this search.</div>';return;}
   const groups=new Map();
   for(const item of visible){const key=historyDateKey(item.completed_at||item.started_at);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
-  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
+  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${documentLinksHtml(item.deliverable_links,item.task,'history')}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
   if(typeof out.querySelectorAll==='function')out.querySelectorAll('.history-item').forEach(item=>{const directive=typeof item.querySelector==='function'?item.querySelector('.history-directive-body'):null;if(directive)directive.scrollTop=historyDirectiveScrollTops.get(item.dataset.historyKey)||0;});
   out.scrollTop=Math.min(previousScrollTop,Math.max(0,out.scrollHeight-out.clientHeight));
 }
@@ -844,7 +871,7 @@ function humanStage(agent,state,contracts){
   if(agent.task==='AWAITING_OWNER_DIRECTION')return'WAITING FOR YOUR TASK';
   if(agent.role==='qa'){
     const assignment=reviewerAssignment(agent,state);
-    return reviewExecutionActive(agent)?'INDEPENDENT REVIEW EXECUTION IN PROGRESS':agent.liveness==='stalled'&&recentOutputActive(agent)?'STATUS UPDATE OVERDUE':agent.liveness==='stalled'?'REPAIR IN PROGRESS':assignment?.status==='authoring'?'INDEPENDENT TEST AUTHORING READY':assignment?.status==='open'?'REVIEW ROUTED — RESERVE NOW':assignment?.status==='reserved'&&assignment.delivery_state==='executing'?'AUTHORING INDEPENDENT TESTS':assignment?.status==='reserved'?'PREPARING CHALLENGE LEDGER':assignment?'INDEPENDENT REVIEW IN PROGRESS':'MONITORING REVIEW QUEUE';
+    return reviewExecutionActive(agent)?'INDEPENDENT REVIEW EXECUTION IN PROGRESS':agent.liveness==='stalled'&&(recentOutputActive(agent)&&!agent.stall_exhausted)?'STATUS UPDATE OVERDUE':agent.liveness==='stalled'?'REPAIR IN PROGRESS':assignment?.status==='authoring'?'INDEPENDENT TEST AUTHORING READY':assignment?.status==='open'?'REVIEW ROUTED — RESERVE NOW':assignment?.status==='reserved'&&assignment.delivery_state==='executing'?'AUTHORING INDEPENDENT TESTS':assignment?.status==='reserved'?'PREPARING CHALLENGE LEDGER':assignment?'INDEPENDENT REVIEW IN PROGRESS':'MONITORING REVIEW QUEUE';
   }
   const facts=taskFacts(state,contracts,agent.task);
   return taskGate(state,agent.task,facts.contract,agent,facts.reviews,facts.total,facts.done).status;
@@ -887,12 +914,22 @@ function ctoTaskRowsHtml(state,contracts){
   return`<section aria-label="Tasks monitored by the CTO"><h3>Tasks under CTO monitoring</h3><div class="cto-task-list">${items}</div>${remainder}</section>`;
 }
 
+function routeObligationNote(agent,state){
+  // 2026-10-15: failures the CTO must route before it may report "waiting"; shown with whatever else applies to the CTO
+  if(agent.role!=='cto'||!Array.isArray(state.route_obligations)||!state.route_obligations.length)return'';
+  const first=state.route_obligations[0],more=state.route_obligations.length>1?` (+${state.route_obligations.length-1} more)`:'';
+  return `CTO must route: ${first.kind} on ${first.task} (since ${relativeUpdate(first.at)})${more}. The board refuses the CTO's waiting status until it routes this. `;
+}
 function agentStatusSummary(agent,state,contracts){
+  const wording=agentStatusSummaryCore(agent,state,contracts),note=routeObligationNote(agent,state);
+  return note?{...wording,summary:note+wording.summary}:wording;
+}
+function agentStatusSummaryCore(agent,state,contracts){
   if(deliveryTaskAccepted(agent,state))return{summary:agent.status==='stopped'?'Task accepted, Dev agent stopped.':'Task accepted. The work is in main; this Delivery terminal is closing.',next:'Nothing to do: the task is finished.'};
   if(agent.status==='paused')return{summary:'This agent and its exact next action are intentionally paused. The terminal is stopped and the board is read-only.',next:'Resume the project to continue from the saved gate. No work has been reset or re-queued.'};
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
-  if(agent.liveness==='stalled'&&recentOutputActive(agent))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
+  if(agent.liveness==='stalled'&&(recentOutputActive(agent)&&!agent.stall_exhausted))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
   if(agent.liveness==='needs_sign_in'&&agent.vendor==='Anthropic')return{summary:'Claude needs a new setup-token. Follow the Claude authentication card, then retry this agent.',next:'Generate the token in your own terminal and supply it to the harness.',ownerAction:'Follow the Claude authentication card.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('out of Gemini quota'))return{summary:agent.liveness_note,next:'Choose another provider for this role in Settings, or wait for the quota to refresh. The harness holds its messages until then and carries on by itself.',ownerAction:'Open Settings and choose another provider, or upgrade your Google plan.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('sign-in prompt'))return{summary:agent.liveness_note,next:'Follow the sign-in prompt in its window. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and follow the sign-in prompt.'};
@@ -1152,7 +1189,7 @@ function openAgents(state,contracts,sessionItems=[]){
     if(session){
       const conversation=document.createElement('a');conversation.className='secondary conversation-link';conversation.href=apiPath(`/api/transcripts/${encodeURIComponent(session.id)}`);conversation.target='_blank';conversation.rel='noopener';conversation.textContent='Conversation';conversation.title='The full transcript of this terminal, both sides, kept by the harness';actions.append(conversation);
     }
-    if((agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!recentOutputActive(agent))||agent.status==='blocked'){
+    if((agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!(recentOutputActive(agent)&&!agent.stall_exhausted))||agent.status==='blocked'){
       const recover=document.createElement('button');recover.type='button';recover.textContent='Recover agent';recover.onclick=()=>recoverAgent(agent.id,humanTask(agent,state));actions.append(recover);
     }
     if(session){
@@ -1221,9 +1258,15 @@ function renderClaudeAuthActions(managed){
   const actions=(managed.sessions||[]).filter(item=>item.claude_auth_action);
   section.hidden=!actions.length;
   if(actions.length)el('#sign-in-banner').hidden=true;
-  section.innerHTML=actions.length?'<h2>Claude needs your attention</h2>'+actions.map(item=>{
-    const card=item.claude_auth_action;
-    return `<div class="owner-action"><strong>${esc(card.title)}</strong><p>${esc(card.why)}</p><pre>${esc(card.instructions)}</pre><p>After setup, retry this agent from Mission Control.</p></div>`;
+  const roles={claude_cto:'CTO',claude_reviewer:'Reviewer'},groups=new Map();
+  actions.forEach(item=>{
+    const card=item.claude_auth_action,key=JSON.stringify([card.title,card.why,card.instructions]);
+    if(!groups.has(key))groups.set(key,{card,who:[]});
+    const who=roles[item.kind]||'Delivery agent';
+    if(!groups.get(key).who.includes(who))groups.get(key).who.push(who);
+  });
+  section.innerHTML=actions.length?'<h2>Claude needs your attention</h2>'+[...groups.values()].map(({card,who})=>{
+    return `<div class="owner-action"><strong>${esc(card.title)}</strong><p>${esc(card.why)}</p><p>Needed by: ${esc(who.sort().join(', '))}</p><pre>${esc(card.instructions)}</pre><p>After setup, retry the agent from Mission Control.</p></div>`;
   }).join(''):'';
 }
 
@@ -1235,7 +1278,9 @@ function renderOwnerActions(state){
   section.innerHTML=`<h2>${open.length===1?'One thing the CTO needs you to do':`${open.length} things the CTO needs you to do`}</h2>`+open.map(item=>{
     const id=esc(JSON.stringify(item.id));
     const command=item.command?`<pre id="command-${esc(item.id)}">${esc(item.command)}</pre><div class="actions"><button type="button" onclick="copyOwnerActionCommand(${id})">Copy</button><small>Paste it into Terminal and press Return.</small></div>`:'';
-    return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
+    const loc=item.location&&Array.isArray(item.location.urls)?item.location:null;const locLine=loc?`<small data-card-location="${esc(item.id)}">Checked by the board ${esc(String(loc.checked_at||'').slice(11,16))} UTC: ${loc.urls.map(u=>`${esc(u.url)} — ${esc(u.verdict==='owner'?'the owner\'s instance':u.reason)}`).join('; ')}${loc.verified_how?`. CTO: ${esc(loc.verified_how)}`:''}</small>`:'';
+    const links=Array.isArray(item.links)?item.links:[];const cardLinks=links.length?`<div class="card-links">${links.map(link=>link.available===false?`<span class="unavailable">${esc(link.label)}: cannot be shown (${esc(link.reason||'')})</span>`:`<a href="${esc(apiPath(link.url))}" target="_blank" rel="noopener" data-card-link="${esc(item.id)}">${esc(link.label)}</a>`).join('')}${item.links_note?`<small>${esc(item.links_note)}</small>`:''}</div>`:'';
+    return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
   }).join('');
 }
 
@@ -1370,7 +1415,7 @@ function render(data,managed){
   renderOwnerActions(state);
   renderHarnessActions(state);
   const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
-  const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!recentOutputActive(agent)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
+  const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!(recentOutputActive(agent)&&!agent.stall_exhausted)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
   if(unresponsive.length)el('#attention').innerHTML=`<h2>CTO is not responding - it may need /login</h2><p><strong>Your action:</strong> open the CTO terminal window. If it shows a login prompt, run <code>/login</code> and sign in; the CTO picks up where it left off once it checks the board again. Automatic wake-ups are paused until then.</p>`;
   else if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
   else el('#attention').innerHTML='<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
@@ -1524,8 +1569,8 @@ if(closeProjectButton){
 }
 el('#owner-message-text').oninput=editOwnerMessageText;
 el('#owner-message-directive-file').onchange=loadOwnerDirectiveFile;
-el('#history-search').addEventListener('input',async event=>{if(!historyLoaded)await loadHistory();renderHistory(historyEntries,event.target.value);});
-el('#history').addEventListener('toggle',event=>{if(event.target.open)loadHistory();});
+el('#history-search').addEventListener('input',async event=>{if(!historyLoaded||!historyLoading)await loadHistory(true);renderHistory(historyEntries,event.target.value);});
+el('#history').addEventListener('toggle',event=>{if(event.target.open)loadHistory(true);});
 window.addEventListener('resize',fitTaskScroller);
 el('#codex').onclick=()=>showColorDialog('codex_delivery');
 el('#claude').onclick=()=>showColorDialog('claude_reviewer');
@@ -1853,6 +1898,8 @@ def _compact_dashboard_state(
         value for value in (state.get("owner_messages") or [])
         if not value.get("task") or value.get("task") in live
     ]
+    # 2026-10-15: failures the CTO must route before it may report "waiting" (the CTO row shows them)
+    compact["route_obligations"] = [dict(item) for item in (state.get("route_obligations") or []) if isinstance(item, dict)]
     compact["archive"] = []
     compact.pop("qa_request_index", None)
     compact["deferred_findings"] = {}
@@ -2784,16 +2831,24 @@ def dashboard_payload(
     live_tasks = _live_task_names(data["state"], contracts)
     live_contracts = {task: value for task, value in contracts.items() if task in live_tasks}
     all_findings = board.list_findings(root)
-    in_scope_findings = [finding for finding in all_findings if finding.get("status") == "in_scope"]
+    # Owner 2026-10-14: routed-around findings ride in the same list so the task
+    # card can show the CTO's "set aside" line; the page filters by status.
+    in_scope_findings = [finding for finding in all_findings if finding.get("status") in {"in_scope", "routed_around"}]
     test_ledgers = {task: _live_task_test_ledger(root, data["state"], task) for task in live_tasks}
     visible_agents = {
         key: value for key, value in (data["state"].get("agents") or {}).items()
         if value.get("status") == "paused" or value.get("active") or value.get("session_id") in sessions_by_id
     }
     agent_checklists = _agent_checklists(root, data["state"], visible_agents)
+    # Owner 2026-10-15: the document the owner reads, per live task, validated
+    # on every read; and every open card's links re-projected (nothing written).
+    deliverable_links = {task: board.document_deliverable_links(root, task, data["state"]) for task in live_tasks}
+    for card in (data["state"].get("owner_actions") or {}).values():
+        card.update(board.project_owner_card_links(root, data["state"], card))
     result = {
         **data,
         "viewer_version": viewer_version(),
+        "deliverable_links": deliverable_links,
         **({"path": str(project_context(root).code_root)} if expose_path else {}),
         "contracts": live_contracts,
         "owner_direction": latest_owner_direction(data["state"]) if live_tasks or any(agent.get("active") for agent in data["state"].get("agents", {}).values()) else "",
@@ -2811,7 +2866,8 @@ def dashboard_payload(
         "history_version": f"{len(data['state'].get('release_decisions', {}))+len(data['state'].get('cancelled_tasks', {}))}:"
                            + max([value.get("recorded_at", "") for value in data["state"].get("release_decisions", {}).values()]
                                  + [value.get("cancelled_at", "") for value in data["state"].get("cancelled_tasks", {}).values()]
-                                 + [""]),
+                                 + [""])
+                           + ":" + _history_documents_signature(root, set(contracts) - set(live_tasks)),
     }
     live_session_ids = {
         session_id for session_id, session in sessions_by_id.items()
@@ -2819,6 +2875,32 @@ def dashboard_payload(
     }
     result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids)
     return result
+
+
+def serve_owner_document(root: Path, path: str) -> tuple[int, bytes, str]:
+    """GET /api/deliverables/<project ref>/<task>/<deliverable index>/<evidence index> -> (status, body, media type)."""
+    def refuse(reason: str) -> tuple[int, bytes, str]:
+        return 404, json.dumps({"error": reason}).encode("utf-8"), "application/json; charset=utf-8"
+    parts = path[len("/api/deliverables/"):].split("/")
+    if len(parts) != 4:
+        return refuse("not found")
+    ref, task, deliverable_index, evidence_index = (unquote(part) for part in parts)
+    if ref != board._project_ref(root):
+        return refuse("this link belongs to another project: open that project in Mission Control and use its card")
+    try:
+        deliverable_index, evidence_index = int(deliverable_index), int(evidence_index)
+        value = json.loads(project_context(root).storage_path("tasks", f"{task}.json").read_text(encoding="utf-8"))
+        item = value["deliverables"][deliverable_index]
+        entry = item["evidence"][evidence_index]
+    except (ValueError, OSError, KeyError, IndexError, TypeError):
+        return refuse("no such document is recorded for this task")
+    if not isinstance(entry, dict) or not entry.get("for_owner"):
+        return refuse("this file is evidence for the reviewer, not a document marked for the owner")
+    roots = board._document_roots(root, board.snapshot(root), task)
+    ok, reason, payload = contract.readable_document(entry.get("path"), entry.get("sha256"), roots)
+    if not ok:
+        return refuse(f"this document cannot be shown: {reason}; {board.DOCUMENT_RECOVERY}")
+    return 200, payload, "text/plain; charset=utf-8"
 
 
 def history_payload(root: Path) -> dict:
@@ -2836,10 +2918,32 @@ def history_payload(root: Path) -> dict:
     historical_tasks = _task_names_from_state(state, contracts) - set(live_tasks)
     test_ledgers = {task: _task_test_ledger(root, state, task) for task in historical_tasks}
     test_ledgers_all = {task: _task_test_ledgers(root, state, task) for task in historical_tasks}
+    rows = _task_history(state, contracts, live_tasks, test_ledgers, test_ledgers_all=test_ledgers_all)
+    for row in rows:
+        # Owner 2026-10-15: an accepted report stays one click away in History.
+        row["deliverable_links"] = board.document_deliverable_links(root, str(row.get("task") or ""), state)
     return {
         "updated": board.now(),
-        "task_history": _task_history(state, contracts, live_tasks, test_ledgers, test_ledgers_all=test_ledgers_all),
+        "task_history": rows,
     }
+
+
+def _history_documents_signature(root: Path, tasks: set[str]) -> str:
+    """Cheap change signature of the historical tasks' owner documents: the marks and each file's stat, no hashing."""
+    parts: list[str] = []
+    for task in sorted(tasks):
+        try:
+            value = json.loads(project_context(root).storage_path("tasks", f"{task}.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        for item in contract.owner_document_manifest(value):
+            try:
+                stat = os.lstat(str(item.get("path") or ""))
+                stamp = f"{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_mode}:{stat.st_nlink}:{stat.st_uid}:{stat.st_gid}"
+            except OSError as error:
+                stamp = error.__class__.__name__
+            parts.append(f"{task}|{item.get('deliverable')}|{item.get('path')}|{item.get('sha256')}|{item.get('marked_at')}|{item.get('title')}|{item.get('latest')}|{stamp}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16] if parts else "0"
 
 
 def settings_payload(root: Path, settings_home: Path | None = None) -> dict:
@@ -3179,6 +3283,19 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 self.send_response(200 if text is not None else 404)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path.startswith("/api/deliverables/"):
+                # Owner 2026-10-15: the document the owner reads, served read-only
+                # as text from the project's own record; indexes only, never a
+                # path from the browser; the same validator the page used.
+                status, body, media = serve_owner_document(root, path)
+                self.send_response(status)
+                self.send_header("Content-Type", media)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

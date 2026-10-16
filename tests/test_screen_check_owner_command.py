@@ -237,6 +237,22 @@ class StoredSuccessWithABlockedBrowserTests(unittest.TestCase):
                         mock.patch.object(execution_identity, "load_output", return_value=output), \
                         mock.patch.object(cto, "_clean_process_audit", return_value=True):
                     self.assertEqual(cto._certified_delivery_health(root, request)["verified"], verified)
+            # On Linux the version-3 detector could not see native browsers, so only current-policy evidence counts there.
+            old_linux = {"identity_fields": {**entry["identity_fields"], "policy_version": 3}}
+            with mock.patch.object(execution_identity.sys, "platform", "linux"), \
+                    mock.patch.object(execution_identity, "certified_success", return_value=old_linux), \
+                    mock.patch.object(execution_identity, "load_output", return_value="Ran 12 tests in 1.0s\nOK"), \
+                    mock.patch.object(cto, "_clean_process_audit", return_value=True):
+                self.assertFalse(cto._certified_delivery_health(root, request)["verified"])
+            # A success stored under the previous policy stays valid release health; an unknown older one does not.
+            for version, verified in ((3, True), (2, False)):
+                old_entry = {"identity_fields": {**entry["identity_fields"], "policy_version": version}}
+                with self.subTest(policy_version=version), \
+                        mock.patch.object(execution_identity.sys, "platform", "darwin"), \
+                        mock.patch.object(execution_identity, "certified_success", return_value=old_entry), \
+                        mock.patch.object(execution_identity, "load_output", return_value="Ran 12 tests in 1.0s\nOK"), \
+                        mock.patch.object(cto, "_clean_process_audit", return_value=True):
+                    self.assertEqual(cto._certified_delivery_health(root, request)["verified"], verified)
 
 
 class OwnerCardTests(unittest.TestCase):

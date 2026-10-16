@@ -89,7 +89,7 @@ class ViewerRefresh(unittest.TestCase):
 
     def _run(self, body: str) -> dict:
         script = _page_declarations() + "\n" + _FAKE_DOM + "\n" + body
-        result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+        result = subprocess.run(["node", "--input-type=commonjs", "-"], input=script, capture_output=True, text=True)  # stdin: Linux ARG_MAX
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

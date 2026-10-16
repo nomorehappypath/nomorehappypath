@@ -235,7 +235,14 @@ class ProjectWatchdog:
         self.notify = None  # set by serve_worker: sends one owner alert outside the page
 
     def tick(self) -> list[dict]:
-        self.last_report = control_plane.tick(self.root, self.stale_after)
+        try:
+            self.last_report = control_plane.tick(self.root, self.stale_after)
+        except (OSError, ValueError):
+            # An earlier control-plane failure must not take recovery down with it (plan check 2026-10-15
+            # finding 7): the stall ladder still runs, then the failure is reported as before.
+            if self.self_heal is not None and board.pause_state(self.root).get("status") == "active":
+                self.self_heal()
+            raise
         if self.self_heal is not None and self.last_report.get("status") == "active":
             # Backlog #7: the harness restarts stuck agents itself. It runs
             # here, in the worker, because only the worker may open terminals.
@@ -600,6 +607,10 @@ def serve(
     authority = SessionTokenAuthority(root)
     gateway = CommandGateway(root, authority)
     chat = ProjectChatService(root, settings_home, project_id)
+    if settings_home:
+        # the owner's owner_questions section (deadline and phrase lists for a
+        # CTO question to the owner) reaches the board once per worker start
+        board.configure_owner_questions(global_settings.load(settings_home).get("owner_questions"))
     watchdog = ProjectWatchdog(root)
     preview_supervisor = release_preview.ReleasePreviewSupervisor(root)
     chat_action_token = secrets.token_urlsafe(32)
@@ -658,9 +669,9 @@ def serve(
         )
         bootstrap_thread = threading.Thread(target=bootstrap_server.serve_forever, daemon=True)
         bootstrap_thread.start()
-        def self_heal_create(kind: str) -> dict:
+        def self_heal_create(kind: str, continues: str = "") -> dict:
             settings_override = global_settings.load(settings_home)["agent_settings"] if settings_home else None
-            return control.create(root, kind, settings_override=settings_override)
+            return control.create(root, kind, settings_override=settings_override, continues=continues)
 
         def self_heal_launch(session: dict) -> None:
             authority.prepare(session["id"])

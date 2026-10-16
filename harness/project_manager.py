@@ -19,6 +19,7 @@ import html
 import functools
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -50,7 +51,32 @@ PROJECT_ROUTE = "/project/"
 PROXY_HEADER = "X-Harness-Manager-Proxy"
 PROXY_TOKEN_ENV = "HARNESS_MANAGER_PROXY_TOKEN"
 PROXY_BODY_LIMIT = board.MAX_TOTAL_ATTACHMENT_BYTES + 512 * 1024
-WORKER_START_TIMEOUT = 5.0
+# Studio's board (45 MB of state, ~35k events) needs ~6 s to start on a busy Mac;
+# 5 s made every Open fail (2026-10-15). Adjust with HARNESS_WORKER_START_TIMEOUT
+# or --worker-start-timeout, in seconds.
+WORKER_START_TIMEOUT = 60.0
+WORKER_START_TIMEOUT_ENV = "HARNESS_WORKER_START_TIMEOUT"
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """A positive, finite number of seconds from the environment, else the default."""
+    raw = os.environ.get(name, "")
+    try:
+        value = float(raw) if raw != "" else default
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+# Waits on the open/start path (2026-10-15: no project, however large, may be failed
+# by a short fixed limit). Each can be raised with its environment variable.
+# The board start wait above is a NO-PROGRESS window: it restarts whenever the
+# worker's CPU time or memory changes.
+READY_PROBE_TIMEOUT = _env_seconds("HARNESS_READY_PROBE_TIMEOUT", 5.0)      # one /api/ready request
+RESUME_LAUNCH_TIMEOUT = _env_seconds("HARNESS_RESUME_LAUNCH_TIMEOUT", 300.0)  # one terminal relaunch request
+WORKER_STOP_TIMEOUT = _env_seconds("HARNESS_WORKER_STOP_TIMEOUT", 30.0)      # worker flushing state on stop
+PROXY_TIMEOUT = _env_seconds("HARNESS_PROXY_TIMEOUT", 120.0)                  # manager -> board request
+PROGRESS_SAMPLE_SECONDS = 1.0
 PAUSE_DRAIN_SECONDS = 1.0
 PAUSE_STOP_TIMEOUT = 3.0
 FOLDER_PROMPTS = {
@@ -473,6 +499,17 @@ def _one_lifecycle_step(method):
     """Run a project lifecycle step while holding the manager's lifecycle lock."""
     @functools.wraps(method)
     def serialized(self, *args, **kwargs):
+        starting = self.__dict__.get("worker_starting", "")
+        if starting and self.__dict__.get("_starting_thread") != threading.get_ident():
+            # Another thread's start is in flight (re-entrant calls from the same start,
+            # e.g. Open of a paused project resuming it, pass straight through).
+            target = args[0] if args else kwargs.get("project_id", "")
+            if method.__name__ in {"open_project", "resume_project"} and target == starting:
+                raise ValueError("this project is already starting; wait for it to finish")
+            # Close, Pause or opening another project must not wait behind a slow start.
+            if method.__name__ in {"close_project", "pause_project"} or (
+                    method.__name__ in {"open_project", "resume_project"} and target != starting):
+                self.__dict__.setdefault("_start_cancel", threading.Event()).set()
         with self.__dict__.setdefault("_lifecycle", threading.RLock()):
             return method(self, *args, **kwargs)
     return serialized
@@ -523,6 +560,10 @@ class ProjectManager:
         # first's activation and started a second worker, orphaning the first.
         # Opening, resuming, closing and pausing a project are one at a time.
         self._lifecycle = threading.RLock()
+        self.worker_starting = ""
+        self._starting_thread = None
+        self.worker_starting_since = 0.0
+        self._start_cancel = threading.Event()
 
     # -- render ------------------------------------------------------------
     def projects_payload(self) -> dict[str, Any]:
@@ -533,6 +574,8 @@ class ProjectManager:
             row = dict(entry)
             row.update(derive_status(entry))
             row["active"] = bool(active and active.get("project_id") == entry["id"])
+            row["starting"] = self.worker_starting == entry["id"]
+            row["starting_seconds"] = int(time.monotonic() - self.worker_starting_since) if row["starting"] else 0
             row["board_url"] = self._browser_board_url() if row["active"] else ""
             row["worker_error"] = (
                 self.worker_failure.get("message", "")
@@ -541,6 +584,11 @@ class ProjectManager:
             if row["worker_error"]:
                 row["latest_progress"] = row["worker_error"]
                 row["resume_available"] = True
+            row["reopen_restores"] = bool(
+                not row["active"] and not row.get("paused") and (
+                    row.get("resume_available")
+                    or (row.get("agent_counts") or {}).get("total")
+                    or (row.get("task_counts") or {}).get("open")))
             rows.append(row)
         rows.sort(key=lambda row: row["name"].casefold())
         rows.sort(key=lambda row: row.get("last_board_activity") or row.get("last_active_at") or "", reverse=True)
@@ -631,6 +679,23 @@ class ProjectManager:
             arguments.extend(["--ready-token", ready_token])
         return arguments
 
+    def _worker_progress(self):
+        """(cpu time, memory) of the starting worker, or None when it cannot be sampled.
+
+        A sampling failure is never read as the worker having exited (only
+        Popen.poll() says that); it just records no progress this time.
+        """
+        pid = getattr(self.worker, "pid", None)
+        if not isinstance(pid, int):
+            return None
+        try:
+            done = subprocess.run(["ps", "-o", "time=,rss=", "-p", str(pid)],
+                                  capture_output=True, text=True, timeout=3)
+            fields = done.stdout.split()
+        except Exception:
+            return None
+        return tuple(fields[:2]) if len(fields) >= 2 else None
+
     def _worker_board_url(self) -> str:
         return f"http://127.0.0.1:{self.board_port}/"
 
@@ -642,7 +707,7 @@ class ProjectManager:
         if worker and worker.poll() is None:
             worker.terminate()
             try:
-                worker.wait(timeout=10)
+                worker.wait(timeout=WORKER_STOP_TIMEOUT)
             except subprocess.TimeoutExpired:
                 worker.kill()
         self.worker, self.worker_project = None, ""
@@ -686,15 +751,30 @@ class ProjectManager:
             return
         deadline = time.monotonic() + self.worker_start_timeout
         last_error = "connection refused"
+        last_progress = self._worker_progress()
+        next_sample = time.monotonic() + PROGRESS_SAMPLE_SECONDS
         while time.monotonic() < deadline:
+            if self._start_cancel.is_set():
+                raise ValueError("opening was cancelled because the project was closed or paused, or another project was opened")
             if not self.worker or self.worker.poll() is not None:
                 status = None if not self.worker else self.worker.poll()
                 raise ValueError(
                     f"project board worker exited before serving on port "
                     f"{self.board_port} (status {status})"
                 )
+            if time.monotonic() >= next_sample:
+                next_sample = time.monotonic() + PROGRESS_SAMPLE_SECONDS
+                progress = self._worker_progress()
+                if progress is not None and progress != last_progress:
+                    # The worker is visibly working (CPU time or memory moved):
+                    # a big board loading is not a stall.
+                    last_progress = progress
+                    deadline = time.monotonic() + self.worker_start_timeout
             try:
-                with urlopen(self._worker_request("/api/ready"), timeout=0.25) as response:
+                # Short probes inside the loop (it retries, and must notice a worker that
+                # exited while another service holds the port); the single probes of an
+                # already-running board use the generous READY_PROBE_TIMEOUT.
+                with urlopen(self._worker_request("/api/ready"), timeout=min(READY_PROBE_TIMEOUT, 1.0)) as response:
                     payload = json.loads(response.read())
                 if payload.get("ready") is not True or payload.get("ready_token") != ready_token:
                     last_error = "another service answered the readiness check"
@@ -723,8 +803,19 @@ class ProjectManager:
                     continue
                 return
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
-                last_error = str(error) or type(error).__name__
+                # Nothing listening yet (refused / no answer) is "still starting";
+                # classified by type, not by the platform's message text.
+                reason = getattr(error, "reason", error)
+                if isinstance(reason, (ConnectionRefusedError, TimeoutError)):
+                    last_error = "connection refused"
+                else:
+                    last_error = str(error) or type(error).__name__
             time.sleep(0.05)
+        if last_error == "connection refused":
+            raise ValueError(
+                f"the project board made no progress for {self.worker_start_timeout:g} seconds "
+                "(the computer may be busy, or the board is stuck); it was stopped, press Open again"
+            )
         raise ValueError(
             f"project board worker did not begin serving on port {self.board_port}: "
             f"{last_error}"
@@ -737,7 +828,7 @@ class ProjectManager:
         request = self._worker_request(
             f"/api/sessions/{session['id']}/resume-launch", data=b"{}", method="POST",
         )
-        with urlopen(request, timeout=5) as response:
+        with urlopen(request, timeout=max(RESUME_LAUNCH_TIMEOUT, 5, control.claude_launch_budget_seconds())) as response:  # the worker checks the Claude sign-in first
             value = json.loads(response.read())
         if value.get("status") != "launch_requested":
             raise ValueError("project worker did not accept the resume launch")
@@ -748,7 +839,7 @@ class ProjectManager:
             return None
         if self.board_port != 0:
             try:
-                with urlopen(self._worker_request("/api/ready"), timeout=.5) as response:
+                with urlopen(self._worker_request("/api/ready"), timeout=READY_PROBE_TIMEOUT) as response:
                     value = json.loads(response.read())
                 if (
                     value.get("ready") is not True
@@ -770,6 +861,18 @@ class ProjectManager:
 
     @_one_lifecycle_step
     def open_project(self, project_id: str, _from_resume: bool = False) -> dict[str, Any]:
+        outer = not self.worker_starting
+        if outer:
+            self.worker_starting, self.worker_starting_since = project_id, time.monotonic()
+            self._starting_thread = threading.get_ident()
+            self._start_cancel.clear()
+        try:
+            return self._open_project(project_id, _from_resume)
+        finally:
+            if outer:
+                self.worker_starting, self._starting_thread = "", None
+
+    def _open_project(self, project_id: str, _from_resume: bool = False) -> dict[str, Any]:
         self._reconcile_worker()
         entry = registry._find(registry.load(self.home), project_id)
         # The owner's rule: any registered project opens at any time. Health
@@ -849,14 +952,14 @@ class ProjectManager:
             )
             self.worker_project = project_id
             self._wait_for_worker(ready_token, board_surface.project_id(context))
-        except Exception:
+        except Exception as error:
             self._stop_worker()
             registry.deactivate(self.home, project_id)
             self.worker_failure = {
                 "project_id": project_id,
                 "message": (
-                    "Project board could not start. Resume the project after "
-                    "the worker error is corrected."
+                    f"Project board could not start: {str(error)[:300]}. "
+                    "Open the project again once that is corrected."
                 ),
             }
             raise
@@ -923,7 +1026,7 @@ class ProjectManager:
         }
         if self.worker and self.worker.poll() is None:
             try:
-                with urlopen(self._worker_request("/api/ready"), timeout=.5) as response:
+                with urlopen(self._worker_request("/api/ready"), timeout=READY_PROBE_TIMEOUT) as response:
                     worker = json.loads(response.read())
                 value["worker"] = worker
                 value["ready"] = bool(
@@ -1192,13 +1295,15 @@ def make_handler(manager: ProjectManager):
                 self._send(403, {"error": reason})
             return bool(reason)
 
-        def _send(self, code: int, value: Any, content_type="application/json"):
+        def _send(self, code: int, value: Any, content_type="application/json", extra_headers: dict[str, str] | None = None):
             body = (value if isinstance(value, (bytes, str)) else json.dumps(value))
             if isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
+            for name, header_value in (extra_headers or {}).items():
+                self.send_header(name, header_value)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1276,18 +1381,28 @@ def make_handler(manager: ProjectManager):
                 internal_origin + internal_path, data=body, headers=headers, method=self.command,
             )
             try:
-                with urlopen(request, timeout=40) as response:
+                with urlopen(request, timeout=PROXY_TIMEOUT) as response:
                     status = response.status
                     content_type = response.headers.get("Content-Type", "application/octet-stream")
+                    content_type_options = response.headers.get("X-Content-Type-Options", "")
                     response_body = response.read(PROXY_BODY_LIMIT + 1)
             except HTTPError as error:
                 status = error.code
                 content_type = error.headers.get("Content-Type", "application/json")
+                content_type_options = error.headers.get("X-Content-Type-Options", "")
                 response_body = error.read(PROXY_BODY_LIMIT + 1)
-            except OSError:
+            except OSError as error:
+                if isinstance(getattr(error, "reason", error), TimeoutError):
+                    return self._send(504, {"error": (
+                        f"the open project's board did not answer within {PROXY_TIMEOUT:g} seconds; "
+                        "the operation may still complete, check the board before repeating it")})
                 return self._send(502, {"error": "the open project's worker is unavailable"})
             if len(response_body) > PROXY_BODY_LIMIT:
                 return self._send(502, {"error": "project worker response is too large"})
+            if content_type_options:
+                # a delivered document is shown as text, never rendered (owner 2026-10-15)
+                self._send(status, response_body, content_type, extra_headers={"X-Content-Type-Options": content_type_options})
+                return None
             return self._send(status, response_body, content_type)
 
         def do_GET(self):
@@ -1490,11 +1605,22 @@ def make_handler(manager: ProjectManager):
     return Handler
 
 
+def parse_start_timeout(value) -> float:
+    """A finite, positive number of seconds; anything else is refused plainly."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"worker start timeout must be a number of seconds, got {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"worker start timeout must be a positive, finite number of seconds, got {value!r}")
+    return seconds
+
+
 def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
-          board_port: int = BOARD_PORT) -> None:
+          board_port: int = BOARD_PORT, worker_start_timeout: float = WORKER_START_TIMEOUT) -> None:
     if port == board_port:
         raise ValueError("manager and private worker ports must be different")
-    manager = ProjectManager(home, board_port=board_port)
+    manager = ProjectManager(home, board_port=board_port, worker_start_timeout=worker_start_timeout)
     manager.keep_held_project_open()
     server = ThreadingHTTPServer((host, port), make_handler(manager))
     manager.manager_url = f"http://{host}:{server.server_address[1]}/"
@@ -1527,11 +1653,18 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=MANAGER_PORT)
     parser.add_argument("--board-port", type=int, default=BOARD_PORT)
     parser.add_argument("--migrate-root", default="", help="register this existing single-root harness as the default project")
+    parser.add_argument("--worker-start-timeout", default=None,
+                        help="seconds to wait for a project board to start (default 60; env %s)" % WORKER_START_TIMEOUT_ENV)
     args = parser.parse_args(argv)
+    raw_timeout = args.worker_start_timeout if args.worker_start_timeout is not None else os.environ.get(WORKER_START_TIMEOUT_ENV)
+    try:
+        start_timeout = parse_start_timeout(raw_timeout) if raw_timeout not in (None, "") else WORKER_START_TIMEOUT
+    except ValueError as error:
+        parser.error(str(error))
     home = Path(args.home).expanduser()
     if args.migrate_root:
         registry.migrate_single_root(home, Path(args.migrate_root).expanduser())
-    serve(home, args.host, args.port, args.board_port)
+    serve(home, args.host, args.port, args.board_port, start_timeout)
     return 0
 
 

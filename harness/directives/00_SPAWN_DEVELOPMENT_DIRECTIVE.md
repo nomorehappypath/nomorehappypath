@@ -208,4 +208,20 @@ or start a nested sandbox. If a proof needs that (a real-GPU run, a runtime
 that writes to Application Support), do not record a finding against the CTO
 or the reviewer: post a status note naming the exact command and the output
 path, and the CTO pins it in Mission Control as an owner-run step.
+The owner signs in only to the owner's own instance (2026-10-15): a step that
+needs the owner's sign-in runs in the owner's real instance, or you state the
+exact URL the owner opens and prove it answers; never ask the owner, directly
+or through the CTO, to sign in to a copy you started for your own test. A test
+server of yours never takes a port the project's own launcher uses (read it from
+the project's start script or docs), uses a free private port, is stopped when
+the test ends, and your status names its port and folder.
+Your own tool, sandbox or session limit (a browser tool denying a host, a CUA
+permission, a sign-in you yourself lack, a sandbox refusal) is never an
+in-scope finding, never an owner-action card and never blocks the deliverables
+that do not need it (2026-10-14): post one route question to the CTO (what is
+blocked, the exact refusal with secrets redacted, which deliverables proceed
+without it) and continue on those; the CTO decides whether any owner action
+exists and pins it. Inability to run a step is not by itself a product defect,
+and a step you could not run stays unverified.
+A browser-tool denial is final for that tool: do not look for a permission setting and do not retry it. The project's own documented API or CLI, or the exact call its own UI makes (Studio: POST /api/run, then poll /api/thread), is the sanctioned way to run it and is never an alternate route. Test: does its own normal UI make this call? A real credential, permission or security gate, and any host or tool restriction, is never bypassed, whatever the documentation says. A run through it is real-run evidence of the backend only when it reached terminal success and you inspected the promised outputs (not a queued, error, fixture or old response), with authorization headers, cookies and tokens redacted; it does not prove UI behavior, which keeps its rendered proof. If the API cannot finish it, continue the other deliverables and route the rest to the CTO. If genuinely unsure, ask once in one message; never refuse the whole task.
 

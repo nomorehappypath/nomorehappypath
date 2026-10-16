@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -236,7 +237,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(state.get("agents"), "the worker's registration survives; the agent's '{}' overwrite did not land")
         self.assertFalse((data / "tasks" / "forged.json").exists())
 
-    def _codex_flags(self, scaffold: bool) -> list[str]:
+    def _codex_flags(self, scaffold: bool, extra: dict | None = None) -> list[str]:
         home = self._project(scaffold=scaffold)
         capture = self.base / "codex-argv.json"
         fake = self.base / "fake-codex"
@@ -245,12 +246,37 @@ class RunnerTests(unittest.TestCase):
             f"json.dump(sys.argv[1:], open({str(capture)!r}, 'w'))\n", encoding="utf-8")
         fake.chmod(0o755)
         completed = self._run("codex_delivery", home, {"HARNESS_CODEX_BIN": str(fake),
-                                                        "CODEX_HOME": str(self.base / "codex-home")})
+                                                        "CODEX_HOME": str(self.base / "codex-home"), **(extra or {})})
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         argv = json.loads(capture.read_text(encoding="utf-8"))
         return [argv[index + 1] for index, item in enumerate(argv) if item == "-c"]
 
+    def test_codex_on_linux_cannot_read_the_saved_claude_token_folder_even_when_the_project_is_adopted(self):
+        if not sys.platform.startswith("linux"):
+            self.skipTest("the saved-token folder is a Linux feature; the profile is built by the runner on Linux")
+        fake_home = self.base / "owner-home"
+        fake_home.mkdir()
+        flags = self._codex_flags(scaffold=False, extra={"HOME": str(fake_home)})
+        folder = fake_home / ".config" / "nmhp-harness"
+        self.assertTrue(folder.is_dir(), "the folder exists before the agent starts, so a token saved later is covered")
+        table = next(f for f in flags if f.startswith("permissions.harness_agent.filesystem=")).split("=", 1)[1]
+        self.assertIn(f'"{folder}" = "none"', table)
+        codex = shutil.which("codex")
+        if codex and platform_support.agent_confinement().available():
+            codex_home = self.base / "codex-token-home"; codex_home.mkdir()
+            sandbox = [codex, "sandbox"]
+            for flag in flags:
+                if flag.startswith(("default_permissions", "permissions.")):
+                    sandbox += ["-c", flag]
+            (folder / "claude-setup-token").write_text("synthetic-token\n")  # saved after the profile was chosen
+            completed = subprocess.run(sandbox + ["--", "/bin/sh", "-c", f"cat '{folder}/claude-setup-token' || echo DENIED_TOKEN"],
+                                       cwd=self.context.code_root, env={**os.environ, "CODEX_HOME": str(codex_home)},
+                                       capture_output=True, text=True, timeout=60)
+            self.assertNotIn("synthetic-token", completed.stdout + completed.stderr)
+
     def test_codex_on_an_adopted_project_keeps_workspace_write_without_the_data_root(self):
+        if sys.platform.startswith("linux"):
+            self.skipTest("on Linux every Codex launch uses the permission profile (saved-token folder denial); see the test above")
         flags = self._codex_flags(scaffold=False)
         self.assertIn("sandbox_mode=workspace-write", flags)
         roots = json.loads(next(f for f in flags if f.startswith("sandbox_workspace_write.writable_roots=")).split("=", 1)[1])

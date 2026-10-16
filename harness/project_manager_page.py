@@ -341,6 +341,8 @@ PAGE = r'''<!doctype html>
             <li><strong>Setting up Gemini (optional):</strong> install Google's Antigravity CLI with <code>curl -fsSL https://antigravity.google/cli | bash</code> (it installs <code>agy</code> into <code>~/.local/bin</code>), run <code>agy</code> once in your own terminal, choose <em>Google OAuth</em>, open the link, approve and paste the code back. It then shows a <em>Terms of Service &amp; Data Use</em> checkbox about letting Google use your interactions data; that choice is yours, the app never makes it for you. A Gemini agent's CLI can send what the agent reaches (prompts, files it reads, command output, not only your project folder) to Google under Google's terms and that choice. A free Google account runs out of quota quickly; a Google AI Pro or Ultra plan is recommended. In <strong>Settings</strong> pick <em>Gemini (Antigravity CLI)</em> for a role and click <strong>Test Gemini connection</strong>. The app records folder trust for you, and each agent window may ask for its own sign-in once because the agent's sandbox keeps its own copy.</li>
             <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
             <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
+            <li><strong>Linux Claude sign-in and browser:</strong> in your own terminal run <code>claude setup-token</code> and then <code>python3 -m harness.claude_auth store-token</code> (a hidden prompt). The token is kept in <code>~/.config/nmhp-harness/claude-setup-token</code>, owner-only, and survives a reboot; press <strong>Test Claude connection</strong> in Settings. On Ubuntu where Chromium is a snap, set <code>HARNESS_BROWSER_BIN</code> to a native browser such as <code>/usr/bin/google-chrome</code> for screen checks.</li>
+            <li><strong>A project is slow to open, or shows a stale red hold:</strong> the app waits while the board makes progress (set <code>HARNESS_WORKER_START_TIMEOUT</code> in seconds, or <code>--worker-start-timeout</code>, to change it). To close a stale hold yourself, with the project resumed, run in your terminal <code>python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE clear-hold --task TASK --source SOURCE</code>; it refuses a wrong source and never changes a certified result.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
@@ -373,10 +375,11 @@ PAGE = r'''<!doctype html>
           <p>These agents run on your own machine, as you. Here is exactly where that stops, without softening:</p>
           <ul class="help-list">
             <li><strong>An agent cannot change files outside your project.</strong> It is launched with write access limited to the project folder and the app&rsquo;s own working folders. A write anywhere else &mdash; your Documents, your keys, another project &mdash; is refused by the operating system, not merely discouraged.</li>
-            <li><strong>An agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI, Anthropic or Google (for a Gemini agent) as part of doing the work.</li>
+            <li><strong>On Linux, a Claude or Gemini agent (and the test commands the app runs for it) can read only what it needs.</strong> It is launched in a sandbox that holds the system programs and settings (<code>/usr</code>, <code>/etc</code>, the libraries), the project, the app&rsquo;s working folders, the agent&rsquo;s own settings and caches, and the tools it runs with (node, python, the CLI, the app&rsquo;s own install). Your home folder, other projects, ssh keys and tokens are not there at all &mdash; a read fails as &ldquo;no such file&rdquo; &mdash; except the folders of programs found on your PATH (that folder only) and anything you list below. Still visible to it: the shared <code>/tmp</code> and <code>/var/tmp</code>, the shared caches and settings folders of its own CLI, and everything in the system folders above (including any file of yours kept in <code>/etc</code> or <code>/usr</code>, and the install folders of the tools it runs) &mdash; so these are limits, not a guarantee that nothing outside the project can be read. If an agent genuinely needs another folder (for example an ssh key), list it in <code>HARNESS_AGENT_READ_PATHS</code> (folders separated by a colon) before starting the app. This applies to agents started after this update: an agent that was already running keeps its old, wider access until you restart it.</li>
+            <li><strong>On macOS, and for Codex agents on any system, an agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: macOS and the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI, Anthropic or Google (for a Gemini agent) as part of doing the work.</li>
             <li><strong>The app&rsquo;s own Git work is sandboxed too</strong>, to the paths that operation needs.</li>
           </ul>
-          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project, but not from being <em>read</em>. If there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Read confinement is not available today &mdash; judge the app on what it does now, not on what may come.</p>
+          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project everywhere, and from being <em>read</em> by Claude and Gemini agents on Linux. On macOS, and for Codex agents, they are not safe from being <em>read</em>: if there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Judge the app on what it does now, not on what may come.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-key-title">
@@ -663,10 +666,11 @@ PAGE = r'''<!doctype html>
       return new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}).format(date);
     };
     const row = (project) => {
+      const starting = Boolean(project.starting);
       const workerStopped = Boolean(project.worker_error);
       const held = Boolean(project.control_plane_hold);
-      const state = !project.health.ok || held ? 'unhealthy' : project.paused ? 'paused' : workerStopped ? 'stopped' : project.active ? 'active' : project.running ? 'running' : 'idle';
-      const stateLabel = !project.health.ok ? 'Needs repair' : held ? 'Needs repair' : project.paused ? (project.active ? 'Paused · open' : 'Paused') : workerStopped ? 'Board stopped' : project.active ? 'Open' : project.running ? 'Running' : 'Idle';
+      const state = !project.health.ok || held ? 'unhealthy' : project.paused ? 'paused' : starting ? 'running' : workerStopped ? 'stopped' : project.active ? 'active' : project.running ? 'running' : 'idle';
+      const stateLabel = !project.health.ok ? 'Needs repair' : held ? 'Needs repair' : project.paused ? (project.active ? 'Paused · open' : 'Paused') : starting ? 'Starting' : workerStopped ? 'Board stopped' : project.active ? 'Open' : project.running ? 'Running' : 'Idle';
       const health = project.health.ok ? '' : `<span class="badge bad" title="${esc(project.health.reasons.join('; '))}">Needs repair</span>`;
       // The open project cannot be removed (see Remove below); a paused one
       // looked identical to the closed paused ones, so it says why.
@@ -682,9 +686,13 @@ PAGE = r'''<!doctype html>
       // active, or unhealthy - unless it was deleted. One button, one verb.
       // A paused project's Open resumes it; an active unpaused project's
       // Open goes straight to its board.
-      const primary = project.active && !project.paused
+      const primary = starting
+        ? `<button class="button" disabled data-starting="1">Starting · loading the board${project.starting_seconds ? ' (' + project.starting_seconds + 's)' : ''}</button>`
+        : project.active && !project.paused
         ? `<button class="button" data-act="view" data-id="${esc(project.id)}">Open Mission Control</button><button class="button secondary" data-act="pause" data-id="${esc(project.id)}">Pause project</button>`
         : `<button class="button" data-act="open" data-id="${esc(project.id)}">${project.paused ? 'Resume project' : 'Open project'}</button>`;
+      const reopen = project.reopen_restores
+        ? '<p class="description" data-reopen-restores="1">Open it and your agents come back with their saved work.</p>' : '';
       const remove = project.active ? '' : `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Remove</button>`;
       return `<article class="project ${state}" data-project-id="${esc(project.id)}">
         <div>
@@ -698,6 +706,7 @@ PAGE = r'''<!doctype html>
             <span class="metric"><strong>${agents.total || 0}</strong> active agents</span>
           </div>
           <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) ? esc(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>
+          ${reopen}
           <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
         </div>
         <div class="project-side">
@@ -814,11 +823,12 @@ PAGE = r'''<!doctype html>
         const availability = value.provider_availability?.[selected.provider] || {};
         // Versions only: the same CLI can be spelled by two paths (/tmp and /private/tmp), a version change is what matters.
         const cliChanged = !!result && !!(result.cli_version && availability.version) && String(availability.version) !== String(result.cli_version);
-        const stale = !!result && (!sameSetting || cliChanged);
+        const legacyClaude = !!result && selected.provider === 'claude' && result.method !== 'agent-token';
+        const stale = !!result && (!sameSetting || cliChanged || legacyClaude);
         const resultClass = result && !stale ? (result.ok ? 'ok' : 'bad') : '';
         const when = result?.tested_at ? ` (tested ${String(result.tested_at).slice(0, 16).replace('T', ' ')} with ${result.effective_model || result.model || 'its default'}${result.cli_version ? `, CLI ${result.cli_version}` : ''})` : '';
         const resultText = !result ? 'Not tested yet. The test makes a real request to the provider (Gemini uses a little of your plan quota) from inside the agents\' sandbox.'
-          : stale ? `The last test was made with another ${!sameSetting ? 'model or effort' : 'CLI version'}${when}. Press Test to check this setting.`
+          : stale ? `The last test was made ${legacyClaude && sameSetting && !cliChanged ? 'with an older check that did not use the agent Claude sign-in' : `with another ${!sameSetting ? 'model or effort' : 'CLI version'}`}${when}. Press Test to check this setting.`
           : `${result.message || ''}${when}`;
         return `<section class="settings-card" data-settings-role="${role.id}">
           <div><h2>${esc(role.label)}</h2><p class="settings-card-copy">${esc(role.copy)}</p></div>

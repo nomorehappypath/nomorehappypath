@@ -58,6 +58,30 @@ class CertifiedProcessObservationTests(unittest.TestCase):
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
         self.assertTrue(audit["forbidden_owner_browser_descendants"])
 
+    def test_owner_quitting_their_browser_meanwhile_does_not_fail_a_green_run(self):
+        import subprocess, time
+        browser = self.root / "OwnerChrome.app" / "Contents" / "MacOS" / "Chrome"
+        browser.parent.mkdir(parents=True)
+        browser.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+        browser.chmod(0o755)
+        owner = subprocess.Popen([str(browser)])
+        self.addCleanup(lambda: (owner.poll() is None and owner.kill(), owner.wait()))
+        time.sleep(0.3)
+        def owner_quits():
+            time.sleep(0.4)
+            owner.kill()
+            owner.wait()   # reaped, so it really leaves the process table
+
+        import threading
+        quitter = threading.Thread(target=owner_quits)
+        quitter.start()
+        self.addCleanup(quitter.join)
+        command = "python3 -c \"import time; time.sleep(1.2); print('Ran 1 test in 0.001s'); print('OK')\""
+        result = self.execute(command)
+        audit = json.loads(Path(result["measurement"]["process_audit"]["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(audit["problems"], [])
+        self.assertEqual([change["pid"] for change in audit["owner_browser_baseline_changes"]], [owner.pid])
+
 
 if __name__ == "__main__":
     unittest.main()

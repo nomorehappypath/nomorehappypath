@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -281,7 +282,10 @@ def launch_problem() -> str:
     else:
         try:
             timeout = float(os.environ.get("HARNESS_SANDBOX_PROBE_TIMEOUT_SECONDS", "15"))
-            probe = subprocess.run([binary, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc", "--", "/bin/true"], capture_output=True, text=True, timeout=timeout, check=False)
+            # The shape agents are really launched in (read-confined: empty root plus the system folders), so a host
+            # that cannot build it is reported here, before any agent starts.
+            shape = AGENT_CONFINEMENT.wrap(["/bin/true"], [], store=Path("/nonexistent"), confine_reads=True, read_roots=[])
+            probe = subprocess.run(shape, capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             sandbox = True
             problems.append(f"The required Bubblewrap sandbox could not be checked: {error}")
@@ -338,7 +342,7 @@ class _TmuxTerminalHost:
             environment += ["-e", "HARNESS_BWRAP_BIN=" + binary]
         command = ["tmux", "new-session", "-d", "-s", name, *environment, "--", *self.keep_failure_visible(argv)]
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
         except subprocess.CalledProcessError as error:
             # A paused or stopped agent ends with a non-zero code, so its window
             # is held open for the owner to read (keep_failure_visible) and the
@@ -506,6 +510,8 @@ class _BwrapAgentConfinement(_AgentConfinement):
     def temp_paths(self) -> list[str]:
         return ["/tmp", "/var/tmp"]
 
+    confines_reads = True
+
     def binary(self) -> str | None:
         named = os.environ.get("HARNESS_BWRAP_BIN")
         if named:
@@ -523,8 +529,8 @@ class _BwrapAgentConfinement(_AgentConfinement):
         return list(dict.fromkeys(paths))
 
     def protected_read_paths(self, home, claude_config_dir=None) -> list[str]:
-        """Setup-token agents may never fall back to shared refresh credentials."""
-        return self.login_file_paths(home, claude_config_dir)
+        """Setup-token agents may never fall back to shared refresh credentials, nor read the saved setup-token itself."""
+        return list(dict.fromkeys([*self.login_file_paths(home, claude_config_dir), str(claude_token_file().parent)]))
 
     def read_guard(self, argv, protected: list[str], *, store) -> list[str]:
         """Mask the owner's login files with an empty file; every other read and write is as before.
@@ -536,20 +542,55 @@ class _BwrapAgentConfinement(_AgentConfinement):
             return list(argv)
         command = [bwrap, "--die-with-parent", "--bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
         for path in protected:
+            _ensure_token_directory(path)
             if Path(path).is_file():
                 command += ["--ro-bind", "/dev/null", str(Path(path))]
+            elif Path(path).is_dir():
+                command += ["--tmpfs", str(Path(path))]
         return command + ["--", *list(argv)]
+
+    # READ CONFINEMENT (task 2026-08-28_read-confinement-linux). With `confine_reads` the sandbox starts from an EMPTY
+    # root and gets only these system folders (read-only), the granted/readable roots and the device files: the owner's
+    # home, other projects, ssh keys and tokens are simply not there. /etc is bound whole (system configuration the
+    # tools need: resolver, certificates, passwd, the dynamic linker cache; nothing of the owner's lives there).
+    READ_SYSTEM_PATHS: tuple[str, ...] = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc")
 
     def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
              protected_writes: list[str] | None = None,
-             denied_executables: list[str] | None = None) -> list[str]:
+             denied_executables: list[str] | None = None, confine_reads: bool = False,
+             read_roots: list[str] | None = None) -> list[str]:
         bwrap = self.binary()
         if not bwrap:
             raise AgentConfinementUnavailable(
                 "confinement requires bubblewrap; install it (apt install bubblewrap). "
                 "Refusing to launch the agent unconfined."
             )
-        command = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+        if confine_reads:
+            # No --unshare-pid: the Claude inbox relay authenticates its supervisor as an ancestor in the host process
+            # table. Measured (Ubuntu 24.04, kernel 6.8): inside the user namespace /proc/<other pid>/{environ,root,cwd}
+            # are permission denied anyway, so the host processes' environments and filesystems are not readable.
+            command = [bwrap, "--die-with-parent"]
+            for path in self.READ_SYSTEM_PATHS:
+                if Path(path).is_symlink():
+                    # /bin -> usr/bin, /lib64 -> usr/lib64: recreated as links, so the loader's relative links resolve.
+                    command += ["--symlink", os.readlink(path), path]
+                elif Path(path).exists():
+                    command += ["--ro-bind", path, path]
+            command += ["--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+            # /etc/resolv.conf is usually a link into /run (systemd-resolved, NetworkManager): its target's folder is
+            # bound too, or name resolution fails inside the sandbox while everything else works.
+            try:
+                resolver = Path("/etc/resolv.conf").resolve()
+                if not str(resolver).startswith(("/etc/", "/usr/")) and resolver.parent != Path("/"):
+                    command += ["--ro-bind-try", str(resolver.parent), str(resolver.parent)]
+            except OSError:
+                pass
+            for path in sorted({self._real(item) for item in read_roots or []}):
+                # -try: evaluated by bwrap when it starts, so a folder the supervisor creates after this command was
+                # built (the session's runtime directory) is bound too.
+                command += ["--ro-bind-try", path, path]
+        else:
+            command = [bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
         for path in writable:
             real = Path(self._real(path))
             if real.is_file() and real.suffix == ".json" and real.stat().st_size == 0:
@@ -581,9 +622,12 @@ class _BwrapAgentConfinement(_AgentConfinement):
                     real.mkdir(parents=True, exist_ok=True)
             command += ["--ro-bind", str(real), str(real)]
         for path in protected_reads or []:
+            _ensure_token_directory(path)
             real = Path(self._real(path))
             if real.is_file():
                 command += ["--ro-bind", "/dev/null", str(real)]
+            elif real.is_dir():
+                command += ["--tmpfs", str(real)]  # a protected folder (the saved Claude token) is emptied, temporary files included
         # Tells the browser helper it is already confined (it then leaves Chrome's own inner sandbox off). The helper
         # only trusts it together with the kernel's NoNewPrivs flag; no security decision reads it.
         command += ["--setenv", "HARNESS_OS_SANDBOX", "1"]
@@ -593,20 +637,99 @@ class _BwrapAgentConfinement(_AgentConfinement):
 AGENT_CONFINEMENT = _BwrapAgentConfinement()
 
 
+def claude_token_file() -> Path:
+    """The one place the saved Claude setup-token lives: the service user's own home, outside every workspace.
+
+    A fixed path (no environment override) so the owner's terminal and the service always agree on it."""
+    return Path.home() / ".config" / "nmhp-harness" / "claude-setup-token"
+
+
+def _folder_is_linked(folder: Path) -> bool:
+    """True when the token folder or its parent is a link, so the real location is not where the card says it is."""
+    expected = os.path.join(os.path.realpath(folder.parent.parent), folder.parent.name, folder.name)
+    return os.path.realpath(folder) != expected
+
+
+def _ensure_token_directory(path) -> None:
+    """The saved-token folder exists before any agent starts, so one started before setup cannot read a token saved later."""
+    if str(path) == str(claude_token_file().parent):
+        try:
+            Path(path).mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as error:  # unprotected is worse than refused: a token saved later would be readable
+            raise AgentConfinementUnavailable(f"cannot create the protected folder {path} ({error}); fix its permissions and retry") from None
+
+
+def _valid_token(token: str) -> bool:
+    return bool(token) and len(token) <= 2048 and all(32 < ord(c) < 127 for c in token)
+
+
 class _ClaudeCredentials:
     uses_keychain = False
+    uses_file = True
 
     def read_token(self, environment) -> str:
-        return environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        token = environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        # A value the manager copied from the saved file into its worker is not an owner override: reread the file,
+        # so a replaced token reaches a project that is already open.
+        if environment.get("HARNESS_CLAUDE_TOKEN_SOURCE") == "file":
+            token = ""
+        return token or self.read_file()[0]
+
+    def read_file(self) -> tuple[str, str]:
+        """(token, problem). The problem is a secret-free sentence the owner can act on; empty when the file is usable or absent."""
+        path = claude_token_file()
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # nonblocking: a FIFO there must not stall the launch
+        except FileNotFoundError:
+            return "", ""
+        except OSError:
+            return "", f"The saved Claude token at {path} cannot be opened (a link or a permission problem). Save it again."
+        try:
+            with os.fdopen(descriptor, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                parent = path.parent.lstat()
+                if _folder_is_linked(path.parent):
+                    return "", f"The folder {path.parent} must be a real folder inside your own home, not a link to somewhere else. Replace the link with a real folder (move nothing else), then save the token again."
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    return "", f"The saved Claude token at {path} must be a plain file only you can read (mode 600). Save it again."
+                if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid() or parent.st_mode & 0o022:
+                    return "", f"The folder {path.parent} must belong to you and not be writable by others. Save the token again."
+                token = handle.read(4097).decode("utf-8").strip()
+        except (OSError, ValueError):
+            return "", f"The saved Claude token at {path} is unreadable. Save it again."
+        return (token, "") if _valid_token(token) else ("", f"The saved Claude token at {path} is not a valid setup-token. Save it again.")
+
+    def store_token(self, token: str) -> Path:
+        token = token.strip()
+        if not _valid_token(token):
+            raise ValueError("That is not a setup-token.")
+        path = claude_token_file()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if _folder_is_linked(path.parent):
+            raise ValueError(f"{path.parent} is a link; refusing to store the token through it.")
+        path.parent.chmod(0o700)
+        temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(token + "\n")
+            os.replace(temporary, path)  # the previous token stays if anything above failed
+        finally:
+            temporary.unlink(missing_ok=True)
+        return path
 
     def instructions(self) -> str:
-        return ("Run claude setup-token in your own terminal. Supply its token to the harness service without a token file:\n"
-                "read -rsp 'Claude setup-token: ' CLAUDE_CODE_OAUTH_TOKEN; printf '\\n'\n"
-                "export CLAUDE_CODE_OAUTH_TOKEN\n"
-                "systemctl --user import-environment CLAUDE_CODE_OAUTH_TOKEN\n"
-                "unset CLAUDE_CODE_OAUTH_TOKEN\n"
-                "Restart the harness service when your project is safely paused, then retry. "
-                "For foreground use, export the token before starting the harness. Repeat after reboot. "
+        script = Path(__file__).resolve().parents[1] / "claude_auth.py"
+        problem = self.read_file()[1]
+        return ((problem + "\n" if problem else "") +
+                "Run claude setup-token in your own terminal, then save it once so it survives a reboot:\n"
+                f"python3 '{script}' store-token\n"
+                f"(the prompt hides what you paste; it is kept in {claude_token_file()}, readable only by you, and is never shown to agents; "
+                "'Saved' means stored, not yet checked: press Test Claude connection in Settings). "
+                "Then retry the agent from Mission Control (an agent that is already running keeps its old token until it is restarted). "
+                "Survives a reboot: this saved file. Does not survive a reboot: systemctl --user import-environment CLAUDE_CODE_OAUTH_TOKEN, "
+                "or exporting the token in a terminal. An exported CLAUDE_CODE_OAUTH_TOKEN in the service environment overrides the file; "
+                "if it is stale, remove it from the service environment and restart the harness service when your project is safely paused. "
                 "Do not run /login inside a harness agent.")
 
 

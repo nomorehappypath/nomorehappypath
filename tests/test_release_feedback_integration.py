@@ -88,7 +88,7 @@ globalThis.document={querySelector(){return null;}};
 const state=%s;
 process.stdout.write(JSON.stringify({gate:taskGate(state,%s,{},null,[],0,0),panel:releaseResponseHtml(state,%s)}));
 """ % (json.dumps(state), json.dumps(task), json.dumps(task))
-        completed = subprocess.run(["node", "-e", script + "\n" + invocation], capture_output=True, text=True)
+        completed = subprocess.run(["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True)  # stdin: Linux ARG_MAX
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)
 

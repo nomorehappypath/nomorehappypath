@@ -172,8 +172,14 @@ delivery plan or implement until the confirmation is recorded.
    "<exact objective>" --deliverable "<deliverable>"` (repeat `--deliverable`),
    and attach each deliverable's proof with `board.py ... contract-evidence
    --deliverable "<deliverable>" --evidence <file>` (one file per call; the board
-   uploads and keeps it). The contract is harness-owned storage: never write it
-   with `contract.py` or by hand — your sandbox refuses that.
+   uploads and keeps it). When the deliverable is itself something the owner
+   reads (a report, a plan, an assessment, a specification), attach that
+   document with `--for-owner`: Mission Control then shows the owner an Open
+   report link on the task card and the release card; a newer `--for-owner`
+   file is a new version of the same document, and a deliverable that is
+   several documents attaches each under its own `--document "<name>"` (one
+   current document per name). The contract is harness-owned storage:
+   never write it with `contract.py` or by hand — your sandbox refuses that.
    Immediately publish a two-line human-facing task brief with `board.py
    ... task-brief`: (a) in one or two plain sentences, what you will do; and
    (b) a short current update naming the next milestone. This is for Mission
@@ -298,6 +304,43 @@ review.
   test how it looks. Fewer rows that each decide something beat many rows
   that decide nothing, and a ledger you cannot finish inside a review window
   is a ledger full of rows that decide nothing.
+- **The owner signs in only to the owner's own instance, and your test
+  servers never take the project's port (2026-10-15).** A step that needs the
+  owner's sign-in runs in the owner's real instance (the project's own
+  launcher, on its documented port, with the owner's settings and credential
+  stores), or you state the exact URL the owner opens and prove it answers
+  before anyone is asked; never ask the owner, directly or through the CTO,
+  to sign in to a copy you started for your own test. A server you start for
+  your own testing (a private copy of the app, a preview, a fixture) never
+  takes a port the project's own launcher uses — read that port from the
+  project's start script or docs (Studio: 8900) — picks a free private port,
+  is stopped when the test ends, and your status says which port and folder
+  it used so the CTO can tell the owner what is yours and what is theirs.
+  The same holds for a Reviewer's test servers.
+- **Your own tool, sandbox or session limit is never a finding, never an
+  owner card, and never a reason to stop the rest (2026-10-14).** When a tool
+  of your own session refuses a step (a browser tool denying a host, a CUA
+  permission, a sign-in you yourself lack, a sandbox refusal), that is a limit
+  of your session, not a defect of the product and not the owner's chore:
+  never record it as an in-scope finding ("fix before the task can be
+  completed"), never ask for or pin an owner-action card for it, and never
+  let it block the deliverables that do not need the refused step. Post it to
+  the CTO as a route question in one brief update: what is blocked, the exact
+  refusal (tool, host and message, with any secret redacted; never raw output
+  that carries a credential), which Completion Contract deliverables proceed
+  without it, and whether every remaining deliverable needs it; then continue
+  on those deliverables. The CTO's triage decides whose limit it is and
+  whether an owner-only action exists (sign-in and token creation, a
+  host-only step, installing a security tool) and pins that card itself; from
+  there its bounded attempts and disposition rules apply. Inability to execute
+  a step is not by itself evidence of a product defect; a finding supported by
+  evidence that the product or the harness failed a required outcome stays a
+  finding, and a step you could not run stays unverified, never claimed. On
+  2026-10-14 a Delivery filed nine in-scope findings and asked for owner cards
+  about its own browser tool, then an HTTP 500 of its own fresh run, then a
+  sign-in it lacked; each steered the task back to a step the owner had
+  declared not required while the diagnosis it already held went unposted.
+  **The project's own API is not an alternate route (2026-10-15).** A browser-tool denial is final for that tool: do not look for a permission setting and do not retry it. The project's own documented API or CLI, or the exact call its own UI makes (Studio: POST /api/run, then poll /api/thread), is the sanctioned way to run it and is never an alternate route. Test: does its own normal UI make this call? A real credential, permission or security gate, and any host or tool restriction, is never bypassed, whatever the documentation says. A run through it is real-run evidence of the backend only when it reached terminal success and you inspected the promised outputs (not a queued, error, fixture or old response), with authorization headers, cookies and tokens redacted; it does not prove UI behavior, which keeps its rendered proof. If the API cannot finish it, continue the other deliverables and route the rest to the CTO. If genuinely unsure, ask once in one message; never refuse the whole task.
 - **A user-facing change is proven on the rendered surface, and every command the board runs stays hermetic (owner's rule, every project).**
   Commands the board runs for you (`--test-command`, every Scenario Ledger and
   Challenge Ledger `Simulation command`, and everything a test starts) run in
@@ -319,13 +362,27 @@ review.
   id (a real, unmodified capture of this task), and the Reviewer's ledger must
   cite the Reviewer's own capture, not only Delivery's.
   A screen-check shows one page at one moment from a loopback server; it does
-  not prove clicking, typing or a sequence of steps, and the board does not
-  verify which candidate or server it came from. Say that in your summary,
+  not prove clicking, typing or a sequence of steps. The board records which
+  folder the server runs from and fingerprints your work folder at capture, and
+  refuses a citation after the code changed ("run screen-check again on the
+  current tree", then replace the old id in the ledger); it cannot see a
+  long-running server that loaded older code. Say that in your summary,
   and exercise interactions with the project's own tooling when it runs in the
   sandbox. If part of the owner's path cannot be proven either way, do not write
   an N/A or DEFERRED row (the board refuses it) and never present it as
   covered: raise an owner-action card naming the unproven scope, so the owner
-  decides. A project with no web page needs no screen-check. If a browser your test starts is refused with a message saying the host denies the browser's network inside the sandbox (some Linux machines do, for the installed Chrome), that test cannot run in a governed command there: keep it out and use screen-check for the rendered proof and cite its id. The one exception to "never run `board.py`" is a test of the board CLI itself: it runs the CLI against its own disposable fixture board, created inside the test, and never against the live board or with live-board credentials; the board refuses any call aimed at the live board.
+  decides. When the owner's path needs clicking or typing, write a JSON step
+  list (at most 12 steps: `{"open": "/path"}`, `{"click": {"text": "Add"}}` or
+  `{"click": {"selector": "#add"}}`, `{"type": {"selector": "#name", "text":
+  "Buy milk"}}`, `{"expect": "Buy milk"}`; the last step must be an expect) and
+  run `screen-script --url http://127.0.0.1:<port>/ --steps <file>` against a
+  disposable copy of the app with test data, because the clicks are real. The
+  harness runs it in its browser, only against your own server, and saves each
+  step's text and a screenshot under a `screen-...` id; cite that id in the
+  ledger's observed column like a screen-check id. It does not replace the
+  hermetic test command a ledger row still needs. If you cite one, the
+  Reviewer must run its own screen-script and cite that id.
+  A project with no web page needs no screen-check. If a browser your test starts is refused with a message saying the host denies the browser's network inside the sandbox (some Linux machines do, for the installed Chrome), that test cannot run in a governed command there: keep it out and use screen-check for the rendered proof and cite its id. The one exception to "never run `board.py`" is a test of the board CLI itself: it runs the CLI against its own disposable fixture board, created inside the test, and never against the live board or with live-board credentials; the board refuses any call aimed at the live board.
 - **User-facing means usable, not just rendered.** A surface the owner will
   see is judged as a product surface: readable at the size it ships, affected
   interactions work with keyboard and pointer, relevant empty/loading/error
@@ -542,6 +599,18 @@ owner decision, wake the CTO, alter the current contract, or delay the current
 task. If it later becomes a reproducible defect in a required outcome, treat it
 as an in-scope failure with normal repair and regression proof.
 
+`impacts_current_task` is for a defect of the product under test. A limit of
+your own tool, sandbox or session (the quality-bar rule above) is not one,
+however untestable it leaves a step: it is a route question to the CTO, never
+a finding and never a card; a finding already on the board whose subject is
+that limit is the CTO's to resolve (the board gives you no `finding-resolved`),
+and your route question is its evidence. The existing
+card paths stay as written and name what they name, not your tool: the
+unproven owner-path scope card of the rendered-proof rule, the CTO-pinned card
+for a security check that could not run, and the sanctioned token routes. The
+Reviewer's twin: a step it cannot run for a limit of its own makes the verdict
+`TASK DONE: NOT TESTED` (the final-stage rule), never a finding or a card.
+
 Behavior an Independent Reviewer has already accepted — including anything it
 marked non-blocking — is out of scope for the rounds that follow. Repairing a
 verdict is not an invitation to redesign what the verdict approved, and a
@@ -616,6 +685,18 @@ The material-only rule limits what blocks; it never limits how thoroughly the
 owner-visible result is checked. A missing or unusable promised result is always
 material.
 
+Text deliverables: for text a human reads (deck, copy, strategy, report) the
+substance is the product, and reading it is the evidence. A quoted passage that
+is ungrounded (a claim presented as fact or research with no source), generic,
+off-brief or unclear, or a requested part that is missing, is a material finding
+when it misleads the reader or fails the brief's purpose; prove it by quoting
+the passage (or naming the missing part) against the brief, the sources and the
+deliverable's purpose, with the fix. Required fixes are BLOCKING and need a
+fresh judgment after correction; optional ones are summary notes. Labeled
+hypotheses and deliberate recaps are fine. This overrides the wording and style
+exclusions and the executable-proof rule for such content; punctuation and
+cosmetic polish stay non-material.
+
 The Challenge Ledger admits material rows only: every row names the
 acceptance criterion it challenges, the procedural classes named in the
 Delivery quality bar are not written, and the ledger stays within the row cap
@@ -679,7 +760,12 @@ will. Start the whole app from the candidate — its own ports and data, never
 the owner's running copy — and walk the path the owner asked for from start to
 finish on the running or rendered surface (the project's UI tooling, or the
 board's `screen-check` as a board command you run yourself), then compare what
-actually happens with the expected result in the confirmed requirements. Make
+actually happens with the expected result in the confirmed requirements. A
+deliverable the brief lists under `risk_and_scope.owner_waived_deliverables`
+was waived by the owner (the owner's words and date are there): it is not
+required, it takes precedence over the confirmed requirements text, which
+stays unchanged as history, and you judge TASK DONE on the remaining
+deliverables and name the waiver in the verdict. Make
 that walk a Challenge Ledger row whose command is a hermetic check the board can
 execute and certify (never one that runs `board.py` or `screen-check`), capture
 the rendered result yourself with `screen-check` before you attach the ledger,

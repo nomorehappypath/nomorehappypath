@@ -10,6 +10,78 @@ if [[ -n "${HARNESS_AGENT_HOME:-}" ]]; then
   unset HARNESS_AGENT_HOME
 fi
 
+# A runner that ends before it starts the CLI used to vanish: the terminal window closed with its message
+# inside it, and the control panel only knew "exited" (2026-10-10, an idle reviewer's first restart launch).
+# Every step names itself in runner_step; an EXIT trap reports a failed attempt to the session record with a
+# bounded, redacted copy of the runner's last stderr; the CLI exec replaces the shell, so the trap never fires
+# after a real launch. The report is best effort and bounded; the control registry also notices an attempt
+# that died without reporting (SIGKILL, shutdown).
+runner_step="checking the launch arguments"
+runner_signal=""
+launch_err_file=""
+if launch_err_file="$(mktemp "${TMPDIR:-/tmp}/harness-launch.XXXXXX" 2>/dev/null)"; then
+  exec 3>&2
+  exec 2> >(tee -a "$launch_err_file" >&3)
+else
+  launch_err_file=""
+fi
+launch_retries="${HARNESS_LAUNCH_RETRIES:-4}"
+[[ "$launch_retries" =~ ^[1-8]$ ]] || launch_retries=4
+launch_retry_seconds="${HARNESS_LAUNCH_RETRY_SECONDS:-2}"
+[[ "$launch_retry_seconds" =~ ^([0-9]|10)$ ]] || launch_retry_seconds=2
+
+restore_stderr() {
+  # The CLI must get the terminal's own stderr, not the capture pipe.
+  if [[ -n "$launch_err_file" ]]; then
+    exec 2>&3 3>&-
+    rm -f "$launch_err_file" 2>/dev/null || true
+    launch_err_file=""
+  fi
+}
+
+report_launch_failure() {
+  local code="$1" diagnostic="" signal_args=()
+  [[ -n "${session_id:-}" && -n "${python_bin:-}" && -n "${target_root:-}" && -x "${python_bin:-}" ]] || return 0
+  if [[ -n "$launch_err_file" && -r "$launch_err_file" ]]; then
+    diagnostic="$(tail -c 600 "$launch_err_file" 2>/dev/null | tr -d '\000' || true)"
+  fi
+  [[ -n "$runner_signal" ]] && signal_args=(--signal="$runner_signal")
+  local context=(--root "$target_root")
+  if [[ -n "${data_root:-}" && -n "${workspace_root:-}" ]]; then context+=(--data-root "$data_root" --workspace-root "$workspace_root"); fi
+  # If the registry cannot be reached in time nothing more is attempted here (a second write to the same
+  # stalled storage could hang the closing terminal); the registry's own reconciliation records an unknown cause.
+  "$python_bin" -E "${harness_root:-$(dirname "${BASH_SOURCE[0]}")/..}/harness/control.py" "${context[@]}" launch-failed \
+      --session-id "$session_id" --pid "$$" --code "$code" --step="$runner_step" --diagnostic="$diagnostic" \
+      ${signal_args[@]+"${signal_args[@]}"} >/dev/null 2>&1 || true
+}
+
+on_runner_exit() {
+  local code="$1"
+  trap - EXIT HUP INT TERM
+  if [[ "$code" != "0" ]]; then
+    report_launch_failure "$code"
+    if [[ -n "$runner_signal" ]]; then
+      echo "The terminal was closed by ${runner_signal} while ${runner_step}, before the CLI started." >&2
+    else
+      echo "The terminal stopped while ${runner_step}, before the CLI started (exit code ${code})." >&2
+    fi
+    # 2 and 3 are the runner's own refusals and keep their meaning; anything else unexpected is 75.
+    if [[ "$code" != "2" && "$code" != "3" && -z "$runner_signal" ]]; then
+      exit 75
+    fi
+  fi
+}
+
+on_runner_signal() {
+  runner_signal="$1"
+  exit "$((128 + $2))"
+}
+
+trap 'on_runner_exit $?' EXIT
+trap 'on_runner_signal SIGHUP 1' HUP
+trap 'on_runner_signal SIGINT 2' INT
+trap 'on_runner_signal SIGTERM 15' TERM
+
 target_root=""
 data_root=""
 workspace_root=""
@@ -119,35 +191,56 @@ execution_root="${HARNESS_EXECUTION_ROOT:-$target_root}"
 execution_root="$(cd "$execution_root" && pwd)"
 cd "$execution_root"
 
+runner_step="attaching to the control panel"
 "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" attach --id "$session_id" --pid "$$" >/dev/null
+runner_step="signing in to the board"
 
 # Projects mode obtains the raw session credential once from an OS-authenticated
 # Unix-socket peer after the control registry has attached this shell PID. The
 # token travels only in response bytes and then the provider environment.
 if [[ -n "$board_bootstrap" ]]; then
-  board_environment_json="$("$python_bin" -E - "$board_bootstrap" "$session_id" <<'PY'
+  board_environment_json="$("$python_bin" -E - "$board_bootstrap" "$session_id" "$launch_retries" "$launch_retry_seconds" <<'PY'
 import json
 import socket
 import sys
+import time
 
-bootstrap, session_id = sys.argv[1:]
-try:
-    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.settimeout(5)
-    connection.connect(bootstrap)
-    connection.sendall(json.dumps({"session_id": session_id, "protocol": "1"}, separators=(",", ":")).encode("utf-8") + b"\n")
-    value = json.loads(connection.makefile("rb").readline())
-    connection.close()
-    if "error" in value:
-        raise ValueError(value["error"])
-    environment = value["environment"]
-    required = {"HARNESS_BOARD_TOKEN", "HARNESS_BOARD_ENDPOINT", "HARNESS_BOARD_PROTOCOL"}
-    if set(environment) != required or not all(isinstance(environment[key], str) and environment[key] for key in required):
-        raise ValueError("worker returned an invalid session environment")
-    print(json.dumps(environment, separators=(",", ":")))
-except Exception as error:
-    print(f"authenticated board bootstrap failed: {error}", file=sys.stderr)
-    raise SystemExit(2)
+bootstrap, session_id, attempts, pause = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+last = None
+for attempt in range(1, attempts + 1):
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(5)
+        connection.connect(bootstrap)
+        connection.sendall(json.dumps({"session_id": session_id, "protocol": "1"}, separators=(",", ":")).encode("utf-8") + b"\n")
+        line = connection.makefile("rb").readline()
+        connection.close()
+        if not line:
+            raise ConnectionResetError("the board closed the connection without answering")
+    except (OSError, ConnectionError) as error:
+        # The board is starting, busy or restarting: the only failures worth waiting for.
+        last = error
+        if attempt < attempts:
+            time.sleep(pause)
+            continue
+        print(f"authenticated board bootstrap failed after {attempt} attempts: {error}", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        value = json.loads(line)
+        if "error" in value:
+            raise ValueError(value["error"])
+        environment = value["environment"]
+        required = {"HARNESS_BOARD_TOKEN", "HARNESS_BOARD_ENDPOINT", "HARNESS_BOARD_PROTOCOL"}
+        if set(environment) != required or not all(isinstance(environment[key], str) and environment[key] for key in required):
+            raise ValueError("worker returned an invalid session environment")
+        print(json.dumps(environment, separators=(",", ":")))
+        raise SystemExit(0)
+    except SystemExit:
+        raise
+    except Exception as error:
+        # A definite answer (a refusal, an invalid reply) is never retried.
+        print(f"authenticated board bootstrap failed: {error}", file=sys.stderr)
+        raise SystemExit(2)
 PY
 )" || exit 2
   export HARNESS_BOARD_TOKEN="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["HARNESS_BOARD_TOKEN"])' <<<"$board_environment_json")"
@@ -157,12 +250,41 @@ PY
 fi
 
 register_agent() {
-  local board_role="$1" board_task="$2" board_name="$3" board_vendor="$4" registered
-  registered="$("$python_bin" -E "$harness_root/harness/board.py" "${context_args[@]}" register --role "$board_role" --task "$board_task" --name "$board_name" --vendor "$board_vendor" --session-id "$session_id")"
+  local board_role="$1" board_task="$2" board_name="$3" board_vendor="$4" registered attempt=1 register_err register_status
+  register_err="$(mktemp "${TMPDIR:-/tmp}/harness-register.XXXXXX")"
+  while true; do
+    if registered="$("$python_bin" -E "$harness_root/harness/board.py" "${context_args[@]}" register --role "$board_role" --task "$board_task" --name "$board_name" --vendor "$board_vendor" --session-id "$session_id" 2>"$register_err")"; then
+      break
+    else
+      register_status=$?
+    fi
+    # Only a worker that is busy or not reachable yet is worth waiting for; any other answer is final.
+    if (( attempt < launch_retries )) && grep -q "unavailable or temporarily busy" "$register_err"; then
+      attempt=$((attempt + 1))
+      sleep "$launch_retry_seconds"
+      continue
+    fi
+    cat "$register_err" >&2
+    rm -f "$register_err"
+    return "$register_status"
+  done
+  rm -f "$register_err"
   "$python_bin" -E -c 'import json,sys; print(json.loads(sys.stdin.read())["id"])' <<<"$registered"
 }
 
+require_runnable() {
+  # A failed exec ends a bash 3.2 shell without running its EXIT trap, so a missing CLI is refused here, where it is reported.
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "REFUSED: the CLI program '$1' was not found or is not executable." >&2
+    exit 127
+  fi
+}
+
 launch_visible_cli() {
+  runner_step="starting the CLI"
+  if [[ "$provider" == "gemini" ]]; then require_runnable "${HARNESS_AGY_BIN:-agy}"; else require_runnable "$1"; fi
+  # From the next line on, a death is the CLI's own; until the registry hears this, an ended runner is a failed launch.
+  "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-exec --session-id "$session_id" >/dev/null 2>&1 || true
   credential_prefix=()
   if [[ "$provider" == "claude" ]]; then
     if [[ -z "$claude_auth_bootstrap" ]]; then
@@ -182,11 +304,14 @@ launch_visible_cli() {
       supervisor_args+=(--close-terminal-on-exit)
     fi
     supervisor_args+=(${stage3_supervisor_args[@]+"${stage3_supervisor_args[@]}"})
+    restore_stderr
     exec ${credential_prefix[@]+"${credential_prefix[@]}"} "$python_bin" -E "$harness_root/harness/interactive_supervisor.py" "${supervisor_args[@]}" -- "$@"
   fi
+  restore_stderr
   exec ${credential_prefix[@]+"${credential_prefix[@]}"} "$@"
 }
 
+runner_step="reading the role's launch settings"
 launch_settings_json="$("$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" resolve --kind "$kind" --session-id "$session_id")"
 provider="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["provider"])' <<<"$launch_settings_json")"
 model="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<<"$launch_settings_json")"
@@ -199,6 +324,7 @@ vendor="$("$python_bin" -E -c 'import sys; sys.path.insert(0, sys.argv[1]); from
 # newest of the copies it can find), launches exactly that file, and puts its
 # folder first on PATH so every `claude`/`codex` the agent itself runs is the
 # same one. The launch line in the transcript names the path and version.
+runner_step="finding the CLI program"
 resolved_cli_json="$("$python_bin" -E -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -224,6 +350,7 @@ fi
 # transcript so nobody has to guess). The recovery message replaces the full
 # directive on a resume: the agent already has the directive in its memory.
 plan_cli_launch() {
+  runner_step="planning the CLI launch"
   local plan_json
   plan_json="$("$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" plan-cli-launch --session-id "$session_id" --provider "$provider")" || {
     echo "REFUSED: could not plan the CLI launch for $session_id" >&2; exit 2; }
@@ -280,6 +407,7 @@ PY
 launch_agent_cli() {
   local directive_text="$1" kickoff_text="$2" prompt
   plan_cli_launch
+  runner_step="preparing the launch (rules, permissions and confinement)"
   # PLUMBING STAGE 4 (docs/specs/PLUMBING_MODERNIZATION.md): the rules move to
   # the system layer (Claude --append-system-prompt, Codex
   # developer_instructions) on EVERY launch, fresh or resume, so compaction or
@@ -386,20 +514,36 @@ print(json.dumps(agent_protected_roots(sys.argv[2], sys.argv[3], sys.argv[4])))
   # launch flags are exactly today's, minus the data root.
   codex_access=(-c "sandbox_mode=workspace-write" -c "sandbox_workspace_write.writable_roots=${writable_roots_json}" -c "sandbox_workspace_write.network_access=true")
   if [[ "$provider" == "codex" ]]; then
+    # Linux: the saved Claude setup-token folder is invisible to Codex (access "none"), even one saved after launch.
+    # Codex does not run inside the harness's bubblewrap, so its own permission profile must carry the denial.
+    claude_token_dir=""
+    if [[ "$(uname -s)" == "Linux" && -n "${HOME:-}" ]]; then
+      claude_token_dir="$HOME/.config/nmhp-harness"
+      mkdir -p -m 700 "$claude_token_dir" 2>/dev/null || {
+        echo "REFUSED: cannot create $claude_token_dir, the folder that keeps the Claude sign-in hidden from this agent. Fix its permissions and retry." >&2; exit 3; }
+    fi
     codex_profile_table="$("$python_bin" -E -c '
 import json, sys
-writable = json.loads(sys.argv[1]); protected = json.loads(sys.argv[2])
+writable = json.loads(sys.argv[1]); protected = json.loads(sys.argv[2]); hidden = sys.argv[3]
 def inside(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
-if any(inside(p, w) for p in protected for w in writable):
+if hidden or any(inside(p, w) for p in protected for w in writable):
     entries = {":root": "read", ":slash_tmp": "write", ":tmpdir": "write"}
     entries.update({root: "write" for root in writable})
     entries.update({path: "read" for path in protected})
+    if hidden:
+        entries[hidden] = "none"
     print("{" + ", ".join(json.dumps(k) + " = " + json.dumps(v) for k, v in entries.items()) + "}")
-' "$writable_roots_json" "$protected_writes_json")"
+' "$writable_roots_json" "$protected_writes_json" "$claude_token_dir")"
     if [[ -n "$codex_profile_table" ]]; then
       codex_access=(-c 'default_permissions="harness_agent"' -c "permissions.harness_agent.filesystem=${codex_profile_table}" -c "permissions.harness_agent.network.enabled=true")
     fi
+  fi
+  if [[ "$provider" == "codex" ]]; then
+    # Folder trust travels with the launch, never only in a config file: a private test or review copy
+    # of the app must not have to write its throwaway folder into the owner's Codex configuration
+    # (2026-10-15). Verified with the real Codex: without it a fresh git project asks, with it it never does.
+    case "$execution_root" in *\"*|*\\*) ;; *) codex_access+=(-c "projects.\"${execution_root}\".trust_level=\"trusted\"") ;; esac
   fi
   if [[ "$provider" == "codex" && -n "$system_directive" ]]; then
     # Stage 4, Codex: the rules as developer instructions, on every launch.
@@ -618,12 +762,16 @@ sys.path.insert(0, sys.argv[1])
 from harness import agent_confinement
 try:
     wrapped = agent_confinement.wrap([], json.loads(sys.argv[2]), store=sys.argv[3], home=os.path.expanduser("~"),
-                                     protected_writes=json.loads(sys.argv[4]), provider="gemini")
+                                     protected_writes=json.loads(sys.argv[4]), provider="gemini", read_confined=True,
+                                     readable_roots=agent_confinement.tool_read_roots(
+                                         [os.environ.get("HARNESS_AGY_BIN", "agy")], home=os.path.expanduser("~"),
+                                         extra=[sys.argv[1], sys.argv[5]]) +
+                                     agent_confinement.session_runtime_roots(sys.argv[6], sys.argv[7], sys.argv[8]))
 except agent_confinement.ConfinementUnavailable as error:
     print(error, file=sys.stderr)
     raise SystemExit(3)
 sys.stdout.write("\0".join(wrapped) + "\0")
-' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json"
+' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json" "$python_bin" "$manager_home" "$data_root" "$session_id"
     )
     if [[ ${#gemini_confined[@]} -eq 0 ]]; then
       echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2
@@ -752,12 +900,16 @@ from harness import agent_confinement
 try:
     wrapped = agent_confinement.wrap([], json.loads(sys.argv[2]), store=sys.argv[3], home=os.path.expanduser("~"),
                                      claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None,
-                                     protected_writes=json.loads(sys.argv[4]))
+                                     protected_writes=json.loads(sys.argv[4]), read_confined=True,
+                                     readable_roots=agent_confinement.tool_read_roots(
+                                         [os.environ.get("HARNESS_CLAUDE_BIN", "claude")], home=os.path.expanduser("~"),
+                                         extra=[sys.argv[1], sys.argv[5]]) +
+                                     agent_confinement.session_runtime_roots(sys.argv[6], sys.argv[7], sys.argv[8]))
 except agent_confinement.ConfinementUnavailable as error:
     print(error, file=sys.stderr)
     raise SystemExit(3)
 sys.stdout.write("\0".join(wrapped) + "\0")
-' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json"
+' "$harness_root" "$writable_roots_json" "$data_root/control" "$protected_writes_json" "$python_bin" "$manager_home" "$data_root" "$session_id"
     )
     if [[ ${#claude_confined[@]} -eq 0 ]]; then
       echo "REFUSED: this computer cannot confine the agent's writes (see the message above); the agent is not launched open." >&2
@@ -807,6 +959,7 @@ ${claude_system_layer}"
   fi
 }
 
+runner_step="registering with the board"
 case "$kind" in
   codex_delivery)
     agent_id="$(register_agent engineering AWAITING_OWNER_DIRECTION 'Delivery Agent' "$vendor")"

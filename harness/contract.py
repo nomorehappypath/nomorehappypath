@@ -69,11 +69,45 @@ def _root(root: ProjectRoot): return project_context(root).code_root
 def _task_path(root: ProjectRoot, task): return project_context(root).storage_path("tasks", f"{task}.json")
 def _load(path): return json.loads(path.read_text(encoding="utf-8"))
 def _save(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True); temp=path.with_suffix(".tmp")
+    import os, secrets
+    path.parent.mkdir(parents=True, exist_ok=True); temp=path.with_name(f"{path.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True)+"\n", encoding="utf-8"); temp.replace(path)
 
 def _immutable_projection(value):
     return {"objective":value.get("objective"),"exclusions":json.loads(json.dumps(value.get("exclusions",[]))),"deliverables":[{"name":item.get("name"),"acceptance_proof":item.get("acceptance_proof")} for item in value.get("deliverables",[])]}
+
+EXCLUSION_ACTIONS = ("lift", "replace", "add")
+
+
+def _amendment_problem(item, original_count):
+    """Why one recorded exclusion amendment is not a valid, owner-approved one ('' when it is)."""
+    if not isinstance(item, dict): return "an exclusion amendment is malformed"
+    label=f"exclusion amendment {item.get('id') or '?'}"
+    if item.get("action") not in EXCLUSION_ACTIONS: return f"{label} has no valid action"
+    if not str(item.get("owner_message_id") or "").strip() or not str(item.get("owner_words") or "").strip():
+        return f"{label} has no owner approval reference"
+    if not str(item.get("reason") or "").strip(): return f"{label} has no reason"
+    if item["action"] in ("lift","replace"):
+        index=item.get("index")
+        if not isinstance(index,int) or isinstance(index,bool) or not 1 <= index <= original_count: return f"{label} names an exclusion that does not exist"
+    if item["action"] in ("replace","add") and not str(item.get("text") or "").strip(): return f"{label} has no text"
+    return ""
+
+def effective_exclusions(value):
+    """What is in force now: the original exclusions with each owner-approved amendment applied beside them.
+
+    The original list (and ``immutable_scope``) is never rewritten; an amendment is a separate dated record.
+    """
+    originals=list((value.get("immutable_scope") or {}).get("exclusions", value.get("exclusions",[])))
+    amendments=[a for a in value.get("exclusion_amendments",[]) if not _amendment_problem(a,len(originals))]
+    result=[]
+    for position, original in enumerate(originals, 1):
+        change=next((a for a in amendments if a["action"] in ("lift","replace") and a["index"]==position),None)
+        if change is None: result.append({"index":position,"exclusion":original,"status":"in force"})
+        elif change["action"]=="lift": result.append({"index":position,"exclusion":original,"status":"lifted","amendment":change["id"]})
+        else: result.append({"index":position,"exclusion":original,"status":"replaced","replaced_by":change["text"],"amendment":change["id"]})
+    result.extend({"index":None,"exclusion":a["text"],"status":"added","amendment":a["id"]} for a in amendments if a["action"]=="add")
+    return result
 
 def _immutable_problems(value):
     immutable=value.get("immutable_scope")
@@ -81,7 +115,22 @@ def _immutable_problems(value):
     current=_immutable_projection(value)
     expected={"objective":immutable.get("objective"),"exclusions":immutable.get("exclusions",[]),"deliverables":immutable.get("deliverables",[])}
     current["deliverables"]=current.get("deliverables",[])[:len(expected["deliverables"])]
-    return ["original contract objective, exclusions, and deliverable names/proofs/order are immutable"] if current != expected else []
+    problems=["original contract objective, exclusions, and deliverable names/proofs/order are immutable"] if current != expected else []
+    # The originals above must be untouched; every amendment beside them must carry the owner's approval.
+    count=len(expected["exclusions"])
+    problems.extend(problem for problem in (_amendment_problem(a,count) for a in value.get("exclusion_amendments",[])) if problem)
+    return problems
+
+def amend_exclusions(root, task, amendment):
+    """Append one owner-approved, dated exclusion amendment beside the immutable originals (idempotent by id)."""
+    path=_task_path(root,task); value=_load(path)
+    problem=_amendment_problem(amendment,len((value.get("immutable_scope") or {}).get("exclusions",value.get("exclusions",[]))))
+    if problem: raise ValueError(problem)
+    existing=value.setdefault("exclusion_amendments",[])
+    if any(a.get("id")==amendment["id"] for a in existing): return value
+    if amendment["action"] in ("lift","replace") and any(a.get("action") in ("lift","replace") and a.get("index")==amendment["index"] for a in existing):
+        raise ValueError(f"exclusion {amendment['index']} was already amended; amendments are recorded once per exclusion")
+    existing.append(json.loads(json.dumps(amendment))); value["updated_at"]=_now(); _save(path,value); return value
 
 def normalize_owner_direction(text):
     """Return only owner-authored direction, without terminal protocol bytes."""
@@ -155,28 +204,268 @@ def expand_contract(root, task, additions, actor="Product Management"):
         if name in existing: raise ValueError(f"deliverable already exists: {name}")
         item={"name":name,"acceptance_proof":proof,"evidence":[],"verified":False,"added_by":actor,"added_at":_now()}
         value["deliverables"].append(item); existing.add(name); added.append(item)
-    value["remaining_work"]=[item["name"] for item in value["deliverables"] if not item.get("verified")]
+    value["remaining_work"]=_remaining(value)
     value["status"]="partial" if value["remaining_work"] else "complete"; value["updated_at"]=_now(); _save(path,value)
     return {"contract":value,"added":added}
 
-def add_evidence(root, task, deliverable, files):
+def _wholly_waived(item):
+    """An owner waiver without a named part removes the whole deliverable's obligation (owner 2026-10-14)."""
+    waiver=item.get("owner_waiver")
+    return isinstance(waiver,dict) and bool(waiver.get("owner_words")) and not str(waiver.get("part") or "").strip()
+
+def _remaining(value):
+    return [d["name"] for d in value.get("deliverables",[]) if not d.get("verified") and not _wholly_waived(d)]
+
+def waive_deliverable(root, task, deliverable, waiver):
+    """Record (or reconcile, on an identical retry) the owner's waiver on one deliverable.
+
+    The board is the authority for the waiver record; this is its projection onto the
+    contract so completeness reads it. Name and acceptance proof are untouched, so the
+    immutable scope (what a PASS certified) is unchanged.
+    """
     path=_task_path(root,task); value=_load(path)
     target=next((d for d in value["deliverables"] if d["name"]==deliverable),None)
     if not target: raise ValueError("unknown deliverable")
+    existing=target.get("owner_waiver")
+    if existing and existing.get("id")!=waiver.get("id"): raise ValueError("deliverable already waived")
+    target["owner_waiver"]=json.loads(json.dumps(waiver))
+    value["remaining_work"]=_remaining(value)
+    value["status"]="complete" if not value["remaining_work"] else "partial"; value["updated_at"]=_now(); _save(path,value); return value
+
+def add_evidence(root, task, deliverable, files, for_owner=False, document=""):
+    """Attach evidence files; ``for_owner`` marks each as the document the owner reads (owner 2026-10-15).
+
+    ``document`` names the document within the deliverable (default: the
+    deliverable itself); a deliverable that is several documents (a report and
+    a plan) marks each under its own name, and files marked under one name are
+    versions of that document.
+    """
+    path=_task_path(root,task); value=_load(path)
+    target=next((d for d in value["deliverables"] if d["name"]==deliverable),None)
+    if not target: raise ValueError("unknown deliverable")
+    explicit_document=" ".join(str(document or "").split())[:MAX_DOCUMENT_TITLE]
+    document=explicit_document or deliverable
     manifest=[]
     for raw in files:
         file=Path(raw); file = file if file.is_absolute() else _root(root)/file
         if not file.is_file(): raise ValueError(f"evidence missing: {file}")
-        manifest.append({"path":str(file),"sha256":hashlib.sha256(file.read_bytes()).hexdigest()})
+        payload=file.read_bytes()
+        entry={"path":str(file),"sha256":hashlib.sha256(payload).hexdigest(),"attached_at":_now()}
+        if for_owner:
+            entry.update({"for_owner":True,"marked_at":entry["attached_at"],"title":document_title(payload),"document":document})
+        elif explicit_document:
+            entry["document"]=explicit_document     # an independent named proof (the evidence gate for tasks without product code)
+        manifest.append(entry)
     target["evidence"].extend(manifest); target["verified"]=True
-    value["remaining_work"]=[d["name"] for d in value["deliverables"] if not d["verified"]]
+    value["remaining_work"]=_remaining(value)
     value["status"]="complete" if not value["remaining_work"] else "partial"; value["updated_at"]=_now(); _save(path,value); return value
+
+
+# ---------------------------------------------------------------------------
+# The document the owner reads (owner 2026-10-15, Studio: a diagnostic's only
+# deliverable was a report; the release card said "read the report" and no
+# surface led to it). Delivery marks the document at attach time
+# (contract-evidence --for-owner); the CTO can mark an already attached file
+# (deliverable-file). The NEWEST mark per deliverable is the owner's current
+# document; earlier marks are versions. Nothing here guesses from names.
+# ---------------------------------------------------------------------------
+MAX_OWNER_DOCUMENT_BYTES = 1024 * 1024          # the governed upload limit (board_surface.MAX_ARTIFACT_BYTES)
+MAX_DOCUMENT_TITLE = 80
+DOCUMENT_TITLE_WITHHELD = "Document (title withheld)"
+_CLAUDE_TOKEN_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9]{2,6}\d{2}-[A-Za-z0-9_-]{20,}")
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def document_title(payload):
+    """The first Markdown heading, else the first non-empty line, of a text document; safe to display."""
+    try:
+        text=payload.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return DOCUMENT_TITLE_WITHHELD
+    first=""
+    for line in text.splitlines():
+        stripped=line.strip()
+        if not stripped or stripped in {"---","+++"}:
+            continue
+        first=stripped.lstrip("#").strip() if stripped.startswith("#") else stripped
+        break
+    first=_CONTROL_CHARACTERS.sub("", " ".join(first.split()))
+    if not first or _CLAUDE_TOKEN_SHAPE.search(first):
+        return DOCUMENT_TITLE_WITHHELD
+    return first[:MAX_DOCUMENT_TITLE].rstrip()
+
+
+def mark_owner_file(root, task, deliverable, evidence_path, document=""):
+    """The CTO marks an already attached evidence file as the document the owner reads.
+
+    Ordering is by ``marked_at``: marking the current latest is a no-op (idempotent);
+    marking an earlier file again re-selects it as the latest (Codex plan check 2026-10-15
+    round 4, finding 3). ``document`` names the document within the deliverable
+    (default: the deliverable). Returns (contract, entry, changed).
+    """
+    path=_task_path(root,task); value=_load(path)
+    target=next((d for d in value["deliverables"] if d["name"]==deliverable),None)
+    if not target: raise ValueError("unknown deliverable")
+    document=" ".join(str(document or "").split())[:MAX_DOCUMENT_TITLE] or deliverable
+    wanted=str(evidence_path or "").strip()
+    candidates=[e for e in target.get("evidence",[]) if isinstance(e,dict) and (e.get("path")==wanted or Path(str(e.get("path") or "")).name==wanted)]
+    if not candidates:
+        raise ValueError(f"{wanted!r} is not an evidence file recorded on deliverable {deliverable!r}; Delivery attaches it first with contract-evidence")
+    if len(candidates)>1 and not any(e.get("path")==wanted for e in candidates):
+        raise ValueError(f"{wanted!r} names more than one recorded evidence file; give the full recorded path")
+    entry=next((e for e in candidates if e.get("path")==wanted), candidates[0])
+    latest=current_owner_document(target, document)
+    if latest is entry:
+        return value, entry, False
+    entry["for_owner"]=True; entry["marked_at"]=_now(); entry["document"]=document
+    if document in retired_documents(target):
+        target["retired_documents"]=sorted(retired_documents(target)-{document})
+    if not entry.get("title"):
+        try:
+            entry["title"]=document_title(Path(entry["path"]).read_bytes())
+        except OSError:
+            entry["title"]=DOCUMENT_TITLE_WITHHELD
+    value["updated_at"]=_now(); _save(path,value)
+    return value, entry, True
+
+
+def _document_name(item, entry):
+    return str(entry.get("document") or item.get("name") or "")
+
+
+def retired_documents(item):
+    return set(item.get("retired_documents") or [])
+
+
+def retire_owner_document(root, task, deliverable, document):
+    """The CTO retires a mistaken document name: its files stop counting as the owner's current document.
+
+    The deliverable and its evidence are untouched (no waiver); marking a file
+    under that name again revives it. Returns (contract, changed).
+    """
+    path=_task_path(root,task); value=_load(path)
+    target=next((d for d in value["deliverables"] if d["name"]==deliverable),None)
+    if not target: raise ValueError("unknown deliverable")
+    document=" ".join(str(document or "").split())[:MAX_DOCUMENT_TITLE] or deliverable
+    names={_document_name(target,e) for e in (target.get("evidence") or []) if isinstance(e,dict) and e.get("for_owner")}
+    if document not in names:
+        raise ValueError(f"{document!r} is not a document marked for the owner on deliverable {deliverable!r}")
+    if document in retired_documents(target):
+        return value, False
+    target["retired_documents"]=sorted(retired_documents(target)|{document})
+    value["updated_at"]=_now(); _save(path,value)
+    return value, True
+
+
+def owner_documents(item, document=None):
+    """A deliverable's marked files, newest mark first; ``document`` narrows to one named document; retired names are left out."""
+    retired=retired_documents(item)
+    marked=[e for e in (item.get("evidence") or []) if isinstance(e,dict) and e.get("for_owner")
+            and _document_name(item,e) not in retired
+            and (document is None or _document_name(item,e)==document)]
+    return sorted(marked, key=lambda e: (str(e.get("marked_at") or e.get("attached_at") or ""), ), reverse=True)
+
+
+def current_owner_document(item, document=None):
+    documents=owner_documents(item, document)
+    return documents[0] if documents else None
+
+
+def owner_document_manifest(value):
+    """Every deliverable's documents (newest mark per document name first), waived deliverables excluded."""
+    manifest=[]
+    for index,item in enumerate(value.get("deliverables") or []):
+        if not isinstance(item,dict) or _wholly_waived(item):
+            continue
+        seen_documents=set()
+        for entry in owner_documents(item):
+            name=_document_name(item,entry)
+            manifest.append({
+                "deliverable": item.get("name"), "deliverable_index": index, "document": name,
+                "evidence_index": (item.get("evidence") or []).index(entry),
+                "path": entry.get("path"), "sha256": entry.get("sha256"),
+                "title": entry.get("title") or DOCUMENT_TITLE_WITHHELD,
+                "marked_at": entry.get("marked_at") or entry.get("attached_at") or "",
+                "attached_at": entry.get("attached_at") or "",
+                "latest": name not in seen_documents,
+            })
+            seen_documents.add(name)
+    return manifest
+
+
+def readable_document(path_value, sha256, roots):
+    """Can this recorded document be shown to the owner right now? -> (ok, reason, bytes).
+
+    The read is the one ``board_client._read_artifact`` already does for uploads:
+    lstat, no-follow non-blocking open, fstat agreement, bounded read from the
+    descriptor; then containment under ``roots``, the recorded SHA-256, UTF-8 and
+    the Claude-token shape. Every failure is a plain reason; nothing here blocks.
+    """
+    import os, stat as _stat
+    path=Path(str(path_value or ""))
+    if not str(path_value or "").strip():
+        return False, "no file is recorded", b""
+    try:
+        resolved=Path(os.path.realpath(path))
+    except OSError as error:
+        return False, f"the document's storage is not reachable ({error.__class__.__name__})", b""
+    allowed=False
+    for base in roots or []:
+        try:
+            base_resolved=Path(os.path.realpath(str(base)))
+        except OSError:
+            continue
+        if resolved==base_resolved or base_resolved in resolved.parents:
+            allowed=True; break
+    if not allowed:
+        return False, "the file is outside this project's folders", b""
+    try:
+        before=os.lstat(path)
+    except FileNotFoundError:
+        return False, "the file is gone", b""
+    except OSError as error:
+        return False, f"the document's storage is not reachable ({error.__class__.__name__})", b""
+    if not _stat.S_ISREG(before.st_mode) or before.st_nlink!=1:
+        return False, "the file is not a regular single-link file", b""
+    if before.st_size>MAX_OWNER_DOCUMENT_BYTES:
+        return False, f"the file is larger than {MAX_OWNER_DOCUMENT_BYTES//1024} KiB, more than Mission Control shows", b""
+    flags=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0)
+    try:
+        descriptor=os.open(path, flags)
+    except OSError as error:
+        return False, f"the file could not be opened ({error.__class__.__name__})", b""
+    try:
+        opened=os.fstat(descriptor)
+        if (not _stat.S_ISREG(opened.st_mode) or opened.st_nlink!=1
+                or (opened.st_dev,opened.st_ino)!=(before.st_dev,before.st_ino) or opened.st_size!=before.st_size):
+            return False, "the file changed while it was being opened", b""
+        chunks=[]; remaining=MAX_OWNER_DOCUMENT_BYTES+1
+        while remaining:
+            chunk=os.read(descriptor, min(64*1024, remaining))
+            if not chunk: break
+            chunks.append(chunk); remaining-=len(chunk)
+    except OSError as error:
+        return False, f"the file could not be read ({error.__class__.__name__})", b""
+    finally:
+        os.close(descriptor)
+    payload=b"".join(chunks)
+    if len(payload)>MAX_OWNER_DOCUMENT_BYTES:
+        return False, f"the file is larger than {MAX_OWNER_DOCUMENT_BYTES//1024} KiB, more than Mission Control shows", b""
+    if hashlib.sha256(payload).hexdigest()!=str(sha256 or ""):
+        return False, "the file changed since it was attached (its content no longer matches the record)", b""
+    try:
+        text=payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, "the file is not a text document", b""
+    if _CLAUDE_TOKEN_SHAPE.search(text):
+        return False, "the file contains what looks like a Claude login token and is not shown", b""
+    return True, "", payload
 
 def contract_complete(root, task):
     value=_load(_task_path(root,task)); problems=[]
     if not REQUIRED_CONTRACT.issubset(value): problems.append("contract fields missing")
     if value.get("remaining_work"): problems.append("remaining work is not empty")
-    if any(not d.get("verified") or not d.get("evidence") for d in value.get("deliverables",[])): problems.append("deliverables lack verified evidence")
+    if any((not d.get("verified") or not d.get("evidence")) and not _wholly_waived(d) for d in value.get("deliverables",[])): problems.append("deliverables lack verified evidence")
     if any(not e.get("approved_by") or not e.get("reason") for e in value.get("exclusions",[])): problems.append("exclusion lacks approval/reason")
     problems.extend(_immutable_problems(value))
     return (not problems, problems, value)
@@ -189,16 +478,23 @@ def owner_test_steps(root, task, limit=8):
     except (OSError, TypeError, json.JSONDecodeError):
         value = {}
     steps = []
+    waived = 0
     deliverables = value.get("deliverables") if isinstance(value, dict) else []
     if isinstance(deliverables, list):
         for item in deliverables:
             if not isinstance(item, dict):
+                continue
+            if _wholly_waived(item):
+                # Owner 2026-10-14: never ask the owner to verify what they waived.
+                waived += 1
                 continue
             name = " ".join(str(item.get("name", "")).split())[:500].strip(" .")
             if name and name not in steps:
                 steps.append(name)
             if len(steps) >= max(1, min(int(limit), 8)):
                 break
+    if not steps and waived:
+        return ["Every deliverable of this task was waived by you; nothing is left to verify."]
     if not steps:
         return ["Verify the released result against the final agreed requirements shown above."]
     return [f"Verify {step}." for step in steps]

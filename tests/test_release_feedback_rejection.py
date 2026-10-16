@@ -81,7 +81,7 @@ globalThis.document={querySelector(){return null;}};
 const state=%s;
 process.stdout.write(JSON.stringify({gate:taskGate(state,%s,{},null,[],0,0),panel:releaseResponseHtml(state,%s)}));
 """ % (json.dumps(state), json.dumps(task), json.dumps(task))
-        completed = subprocess.run(["node", "-e", script + "\n" + invocation], capture_output=True, text=True)
+        completed = subprocess.run(["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)
 
@@ -131,7 +131,7 @@ const state=%s;
 process.stdout.write(JSON.stringify({gate:taskGate(state,'TASK',{},null,[],0,0),panel:releaseResponseHtml(state,'TASK')}));
 """ % json.dumps(state)
         completed = subprocess.run(
-            ["node", "-e", script + "\n" + invocation], capture_output=True, text=True,
+            ["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         value = json.loads(completed.stdout)
@@ -157,7 +157,7 @@ const state=%s;
 process.stdout.write(JSON.stringify({gate:taskGate(state,'TASK',{},null,[],0,0),panel:releaseResponseHtml(state,'TASK')}));
 """ % json.dumps(state)
         completed = subprocess.run(
-            ["node", "-e", script + "\n" + invocation], capture_output=True, text=True,
+            ["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         value = json.loads(completed.stdout)

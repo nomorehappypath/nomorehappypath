@@ -15,9 +15,44 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 from typing import Any, Iterator, Mapping
 
 from harness import browser_acceptance, child_process, execution_identity, agent_confinement
+
+
+_POSITIVE_COUNT_PATTERNS = (
+    re.compile(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", re.I),   # unittest, pytest, jest, vitest, cargo summary
+    re.compile(r"^\s*(?:#|\u2139)\s*tests\s+(\d+)", re.I | re.M),            # node --test / TAP
+    re.compile(r"\brunning\s+(\d+)\s+tests?\b", re.I),                       # cargo test
+    re.compile(r"\bTests\s+run:\s*(\d+)", re.I),                             # JUnit / Maven
+)
+_GO_PASS_LINE = re.compile(r"^\s*---\s+PASS:", re.M)
+_GO_OK_LINE = re.compile(r"^ok\s+\S+\s+[\d.]+s\b(?!.*\((?:cached)\))", re.M)   # a cached Go result ran nothing now
+_GRADLE_PASSED_LINE = re.compile(r"^.*>.*\bPASSED\b", re.M)
+_ZERO_MARKERS = re.compile(
+    r"\bNO TESTS RAN\b|\[no tests to run\]|\bno test files\b|Task\s+:\S*test\s+NO-SOURCE", re.I,
+)
+
+
+def executed_test_count(output: str) -> int | None:
+    """How many tests did this command report running? None when it says nothing.
+
+    One recogniser for every gate (certified runs, the review request, the
+    release-health check): Python (unittest, pytest), node --test, jest,
+    vitest, Go (-v PASS lines, plain "ok pkg"), Cargo, Gradle (PASSED lines)
+    and JUnit. Explicit zero markers count as zero; Gradle UP-TO-DATE is not a run.
+    """
+    counts: list[int] = []
+    for pattern in _POSITIVE_COUNT_PATTERNS:
+        counts.extend(int(value) for found in pattern.findall(output)
+                      for value in (found if isinstance(found, tuple) else (found,)) if value)
+    go = len(_GO_PASS_LINE.findall(output)) or len(_GO_OK_LINE.findall(output))
+    gradle = len(_GRADLE_PASSED_LINE.findall(output))
+    counts.extend(value for value in (go, gradle) if value)
+    if counts:
+        return max(counts)
+    return 0 if _ZERO_MARKERS.search(output) else None
 
 
 def _reports_zero_executed_tests(output: str) -> bool:
@@ -27,22 +62,86 @@ def _reports_zero_executed_tests(output: str) -> bool:
     while 3.9 exits 0, so keying off the exit status alone gives a different
     answer on each interpreter for identical output.
     """
-    counts = [
-        int(value)
-        for pair in re.findall(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I)
-        for value in pair if value
-    ]
-    if counts and max(counts) == 0:
-        return True
-    return bool(re.search(r"\bNO TESTS RAN\b", output, re.I))
+    count = executed_test_count(output)
+    return count == 0 or bool(re.search(r"\bNO TESTS RAN\b", output, re.I))
+
+
+class RetryableInterruption(ValueError):
+    """The run was not certified and did not fail: ask again, no repair reason.
+
+    Callers must not record it as a failed attempt (no stored failure, no
+    failed Delivery evidence, no failed Reviewer attempt)."""
+
+
+class ExecutionInProgress(RetryableInterruption):
+    """Another run of the same identity holds the lock past the wait limit."""
+
+
+class OwnerMachineActivity(RetryableInterruption):
+    """The tests passed, but the owner's machine changed in a way the command
+    cannot be proven to have caused (a permission prompt or default-browser
+    change appeared while it ran). Nothing is certified; the owner's activity
+    is not a test failure."""
+
+
+# How long a duplicate request waits behind another run of the same identity
+# (the command's own timeout starts only after the lock is held).
+_LOCK_WAIT_SECONDS = 120.0
+_LOCK_POLL_SECONDS = 0.1
+
+
+def in_progress_message(limit: float, holder: str = "") -> str:
+    return (
+        "an identical certified run is still in progress, so this request did not wait any longer "
+        f"(waited {int(limit)} seconds). No test failed. "
+        + (f"{holder} " if holder else "")
+        + "Ask again when it has finished; if it never does, end the harness process named above "
+        "(the lock is released the moment that process exits) and ask again."
+    )
+
+
+def _read_holder(handle_path: Path) -> str:
+    try:
+        info = json.loads(handle_path.read_text(encoding="utf-8") or "{}")
+        pid = int(info["pid"])
+        os.kill(pid, 0)
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    return f"It is held by harness process {pid} (lock taken {info.get('since', 'earlier')})."
+
+
+def acquire_flock(handle: Any, path: Path, wait_seconds: float, *, holder_info: bool) -> None:
+    """Take an exclusive flock, waiting at most wait_seconds; ExecutionInProgress on timeout.
+
+    Only contention is retried: any other OS error (a filesystem without
+    locking, say) propagates as itself instead of posing as a busy run."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise ExecutionInProgress(in_progress_message(wait_seconds, _read_holder(path))) from None
+            time.sleep(_LOCK_POLL_SECONDS)
+    if holder_info:
+        try:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(json.dumps({"pid": os.getpid(), "since": datetime.now(timezone.utc).isoformat()}))
+            handle.flush()
+        except OSError:
+            pass
 
 
 @contextmanager
-def _identity_lock(root: Any, identity_sha256: str) -> Iterator[None]:
+def _identity_lock(root: Any, identity_sha256: str, wait_seconds: float | None = None) -> Iterator[None]:
+    limit = _LOCK_WAIT_SECONDS if wait_seconds is None else wait_seconds
     directory = execution_identity.board.board_dir(root) / "execution-locks"
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / f"{identity_sha256}.lock").open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    path = directory / f"{identity_sha256}.lock"
+    with path.open("a+") as handle:
+        acquire_flock(handle, path, limit, holder_info=True)
         try:
             yield
         finally:
@@ -54,14 +153,7 @@ def _at() -> str:
 
 
 def _test_count(output: str) -> int | None:
-    counts = [
-        int(value)
-        for pair in re.findall(
-            r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I,
-        )
-        for value in pair if value
-    ]
-    return max(counts) if counts else None
+    return executed_test_count(output)
 
 
 def _protected_prompt_processes(table: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -91,6 +183,12 @@ def _owner_home() -> Path:
     Deliberately not taken from the command's environment, which a ledger
     author controls; tests patch this function to point at a fixture home."""
     return Path.home()
+
+
+_AMBIENT_PROBLEMS = (
+    "a Keychain or permission prompt appeared during the certified command",
+    "the default-browser handler changed during the certified command",
+)
 
 
 def _run_observed(
@@ -193,10 +291,12 @@ def _run_observed(
         problems.append("an owner-browser application bundle was launched below the certified command")
     if new_prompts:
         problems.append("a Keychain or permission prompt appeared during the certified command")
-    if owner_changes:
-        problems.append("the owner-browser process baseline changed during the certified command")
+    # owner_changes (the owner quit or relaunched their own browser meanwhile)
+    # stay in the audit as information only: the harness never signals a
+    # baseline process, so the command cannot have caused it (P2c).
     if not audit["default_handlers_unchanged"]:
         problems.append("the default-browser handler changed during the certified command")
+    audit["ambient_problems"] = [p for p in problems if p in _AMBIENT_PROBLEMS]
     if timed_out:
         problems.append(f"internal-QA test command timed out after {timeout_seconds} seconds")
     audit["problems"] = problems
@@ -276,6 +376,29 @@ def run(
         finished_at = _at()
         duration = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
         problem = ""
+        real_problems = [p for p in process_audit["problems"] if p not in _AMBIENT_PROBLEMS]
+        if process_audit["problems"] and not real_problems and exit_code == 0 and not browser_acceptance.blocked_note(output):
+            # Only owner-machine activity the command cannot be shown to have
+            # caused (a prompt, a handler change), and the command itself
+            # succeeded: nothing is certified, nothing failed, ask again.
+            execution_identity.audit_decision(board_root, identity, {
+                "status": "interrupted_by_owner_machine_activity", "reason": "; ".join(process_audit["problems"]),
+            })
+            raise OwnerMachineActivity(
+                "the tests passed, but the machine showed activity this run cannot be proven not to have caused ("
+                + "; ".join(process_audit["problems"]).replace(" during the certified command", "")
+                + "). Nothing was certified and nothing failed; ask again once the machine is idle."
+            )
+        if (
+            exit_code != 0 and not real_problems
+            and browser_acceptance.OWNER_MACHINE_ACTIVITY_MARKER in output
+        ):
+            # The acceptance browser inside the tests saw owner-machine activity
+            # (a default-browser handler change) it cannot attribute: retryable.
+            raise OwnerMachineActivity(
+                "the screen check inside the tests saw the default-browser setting change while it ran. "
+                "Nothing was certified and nothing failed; ask again once the machine is idle."
+            )
         if process_audit["problems"]:
             exit_code = exit_code or 3
             problem = "; ".join(process_audit["problems"])
