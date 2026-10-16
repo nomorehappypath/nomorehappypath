@@ -42,7 +42,7 @@ def restart_allowed(projects_payload: Any) -> bool:
     return not any(_blocks_restart(project) for project in projects)
 
 
-def fetch_projects(manager_url: str, timeout: float = 3.0) -> Any:
+def fetch_projects(manager_url: str, timeout: float = 30.0) -> Any:
     with urlopen(manager_url.rstrip("/") + "/api/projects", timeout=timeout) as response:
         return json.loads(response.read())
 
@@ -55,8 +55,15 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         payload = fetch_projects(arguments.manager_url)
-    except (OSError, ValueError):
-        return EXIT_RESTART_ALLOWED
+    except (OSError, ValueError) as error:
+        # A manager that refuses the connection is gone: restarting loses nothing.
+        # One that is up but slow (a timeout) or answers garbage may be holding an
+        # open project, so the restart waits (2026-10-15: a busy manager read as dead).
+        reason = getattr(error, "reason", error)
+        if isinstance(reason, ConnectionRefusedError):
+            return EXIT_RESTART_ALLOWED
+        print("manager_busy=restart deferred until it answers")
+        return EXIT_RESTART_DEFERRED
     if restart_allowed(payload):
         return EXIT_RESTART_ALLOWED
     active = [

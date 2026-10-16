@@ -19,21 +19,26 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
+import stat as stat_module
 import subprocess
 import sys
 import tarfile
 import tempfile
 import threading
+import time
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote, urlsplit
 from typing import Any, Iterator
 
 # Support the no-configuration form used by pasted directives:
 # ``python3 /path/to/dev_harness/harness/board.py ...``.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
+from harness import screen_script as screen_script_runner
+from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -340,7 +345,7 @@ def _snapshot_board(root: Path, state: dict[str, Any]) -> None:
 
 
 def _initial_state() -> dict[str, Any]:
-    return {"next_event": 1, "role_counters": {}, "agents": {}, "qa_requests": {}, "qa_request_index": {}, "repair_packages": {}, "control_plane_holds": {}, "delivery_attempt_failures": [], "task_chunks": {}, "delivery_plans": {}, "task_briefs": {}, "task_baselines": {}, "task_workspaces": {}, "task_owner_directions": {}, "task_lineage": {}, "owner_directions": {}, "owner_messages": [], "owner_clarifications": {}, "pending_owner_clarifications": {}, "requirement_confirmations": {}, "releases": {}, "release_lifecycle": {}, "release_attempts": [], "release_decisions": {}, "release_repairs": {}, "deferred_findings": {}, "cancelled_tasks": {}, "reviewer_needed": None, "project_pause": {"status": "active"}, "events": [], "archive": [], "last_event_exported": 0}
+    return {"next_event": 1, "role_counters": {}, "agents": {}, "qa_requests": {}, "qa_request_index": {}, "repair_packages": {}, "control_plane_holds": {}, "delivery_attempt_failures": [], "task_chunks": {}, "delivery_plans": {}, "task_briefs": {}, "task_baselines": {}, "task_workspaces": {}, "task_owner_directions": {}, "task_lineage": {}, "owner_directions": {}, "owner_messages": [], "owner_clarifications": {}, "pending_owner_clarifications": {}, "requirement_confirmations": {}, "releases": {}, "release_lifecycle": {}, "release_attempts": [], "release_decisions": {}, "release_repairs": {}, "deferred_findings": {}, "deliverable_waivers": {}, "cancelled_tasks": {}, "reviewer_needed": None, "project_pause": {"status": "active"}, "events": [], "archive": [], "last_event_exported": 0}
 
 
 def _cold_dir(root: Path) -> Path:
@@ -537,6 +542,12 @@ def _render_board(state: dict[str, Any]) -> str:
     lines += ["", "## Findings outside the current task", "", "| ID | Found while working on | Classification | Status | Next action |", "|---|---|---|---|---|"]
     for finding in sorted(state.get("deferred_findings", {}).values(), key=lambda value: value.get("created_at", "")):
         lines.append("| {id} | {task} | {classification} | {status} | {next_action} |".format(**finding))
+    lines += ["", "## Owner-waived deliverables", "", "| Task | Deliverable | Part | Owner's words | Owner message | Recorded by | Recorded |", "|---|---|---|---|---|---|---|"]
+    for task, waivers in sorted((state.get("deliverable_waivers") or {}).items()):
+        for waiver in waivers:
+            cells = [task, waiver.get("deliverable", ""), waiver.get("part", "") or "whole deliverable", waiver.get("owner_words", ""),
+                     f"{waiver.get('owner_message_id', '')} at {waiver.get('owner_message_at', '')}", waiver.get("recorded_by", ""), waiver.get("recorded_at", "")]
+            lines.append("| " + " | ".join(str(cell).replace("|", "\\|").replace("\n", " ") for cell in cells) + " |")
     lines += ["", "## Recent events", ""]
     for event in state.get("events", [])[-20:]:
         lines.append(f"- {event['at']} | {event['kind']} | {event['agent_id']} ({event['role']}) | {event.get('task', '')} | {event.get('message', event.get('result', ''))}")
@@ -578,7 +589,7 @@ def locked_state(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         path = _state_path(root)
         try:
-            state = _upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=True))
+            state = _seed_route_obligations(_upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=True)), root)
             pause = state.setdefault("project_pause", {"status": "active"})
             saved_resume_session = bool(
                 pause.get("status") == "resuming"
@@ -661,7 +672,7 @@ def _read_state(root: Path) -> dict[str, Any]:
         fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
         try:
             path = _state_path(root)
-            return _upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=False))
+            return _seed_route_obligations(_upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=False)), root)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -714,6 +725,8 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
         _settle_owner_actions(state, event, agent)
     if kind in _HOLD_ENDING_EVENTS and state.get("control_plane_holds"):
         _resolve_concluded_hold(state, event)
+    if kind in CTO_ROUTE_REQUIRED_EVENTS or kind in CTO_ROUTING_EVENTS or kind in TASK_PROGRESS_EVENTS or kind == "status_update":
+        _track_route_obligation(state, event, agent)
     if agent is not None and kind in PROGRESS_EVENTS:
         agent["last_progress_at"] = event["at"]
         if agent.get("liveness") in {"stalled", "recovering"}:
@@ -782,10 +795,45 @@ def finish_project_pause(root: ProjectRoot) -> dict[str, Any]:
             raise ValueError("project pause must begin with a drain window")
 
         saved_agents: dict[str, Any] = {}
+        from harness import control
+        try:
+            control_sessions = control._read_state(root).get("sessions", {})
+        except (OSError, ValueError):
+            control_sessions = {}
+        saved_sessions = {
+            str(agent.get("session_id", "")) for agent in state.get("agents", {}).values() if agent.get("active")
+        }
+        superseded = {
+            str(record.get("continues_session")) for session_id, record in control_sessions.items()
+            if session_id in saved_sessions and record.get("continues_session")
+            and record.get("status") != "failed" and record.get("kind") == (control_sessions.get(str(record.get("continues_session"))) or {}).get("kind")
+            and record.get("provider") == (control_sessions.get(str(record.get("continues_session"))) or {}).get("provider")
+        }
+        claimed_by = {
+            str(request.get("claimed_by")) for request in state.get("qa_requests", {}).values()
+            if request.get("status") == "claimed" and request.get("claimed_by")
+        }
         for agent_id, agent in state.get("agents", {}).items():
             if not agent.get("active"):
                 continue
+            if str(agent.get("session_id", "")) in superseded and agent_id not in claimed_by:
+                # Its successor carries the conversation; resume would revive
+                # an agent with no terminal beside it (P2e). An agent that
+                # still holds a review claim is kept so the claim is not orphaned.
+                agent.update({"active": False, "status": "offline", "liveness": "offline",
+                              "status_note": "replaced by a later session on the same conversation"})
+                continue
+            session_record = control_sessions.get(str(agent.get("session_id", ""))) or {}
+            capture = {
+                key: session_record[key]
+                for key in ("kind", "provider", "model", "effort", "cli_session_id", "cli_session_provider", "cli_launches", "continues_session")
+                if session_record.get(key) not in (None, "")
+            } if session_record else {}
             saved_agents[agent_id] = {
+                # What the session ran as, so a resume with a missing control
+                # record restores the same provider, model, effort and
+                # conversation instead of today's settings (P2d).
+                **({"session_capture": capture} if capture else {}),
                 "session_id": agent.get("session_id", ""),
                 "task": agent.get("task", ""),
                 "status": agent.get("status", ""),
@@ -1259,6 +1307,11 @@ def record_finding(
             )
             if existing_fingerprint != fingerprint:
                 continue
+            if existing.get("status") == "routed_around" and existing.get("task") != task:
+                # The CTO set it aside against ONE owner objective. The same
+                # defect reported on another task is a fresh blocker that gets
+                # its own judgment (Codex plan check 2026-10-14, finding 2).
+                continue
             existing["fingerprint"] = existing_fingerprint
             observed = existing.setdefault("observed_in_tasks", [existing.get("task", "")])
             if task not in observed:
@@ -1266,7 +1319,12 @@ def record_finding(
             # Identical evidence for an already decided finding is historical
             # repetition, not another owner decision card. A materially
             # different recurrence must be recorded with a description that
-            # explains what changed.
+            # explains what changed. The repetition is still a CTO routing
+            # action for the task (it settles a route obligation).
+            _event(state, "finding_reobserved", None, {
+                "task": task, "finding_id": existing.get("id", ""),
+                "message": f"finding observed again on {task}: {existing.get('title', '')}",
+            })
             return dict(existing)
         finding_id = f"finding-{secrets.token_hex(8)}"
         finding["id"] = finding_id
@@ -1290,6 +1348,7 @@ FINDING_NEXT_STEP = {
     "fix_requested": "use finding-resolved once the fix is re-tested",
     "fix_in_progress": "use finding-resolved once the fix is re-tested",
     "deferred": "it waits for the owner's finding-decision (fix or do_not_fix)",
+    "routed_around": "the CTO set it aside as not material; finding-resolved still closes it if Delivery fixes it anyway",
 }
 
 
@@ -1369,6 +1428,11 @@ def triage_finding(
                     "refusing to merge into a closed finding: a recurrence of a "
                     "resolved defect is a regression — triage it as distinct"
                 )
+            if target.get("status") == "routed_around":
+                raise ValueError(
+                    "refusing to merge into a routed-around finding: it was set aside "
+                    "against one owner objective only — triage this one as distinct"
+                )
             observed = target.setdefault("observed_in_tasks", [target.get("task", "")])
             if finding.get("task") and finding["task"] not in observed:
                 observed.append(finding["task"])
@@ -1410,6 +1474,64 @@ def triage_finding(
                        + (f" Recommends {recommend.replace('_', ' ')}: {recommend_reason}" if recommend else "")
                        + (f" Note: {note}" if note else ""),
         })
+        return dict(finding)
+
+
+def route_around_finding(root: Path, finding_id: str, reason: str) -> dict[str, Any]:
+    """CTO judgment: an in-scope finding is not material to the owner's objective.
+
+    Directive "What must never block the work" (2026-10-14): a finding recorded
+    as impacts_current_task that would not change what the owner receives is
+    non-blocking. Until this command existed the board kept steering Delivery
+    back to repair it on every poll (Studio, nine such findings, 2026-10-14).
+    The finding is kept, with the reason and the time, under ``routed_around``:
+    it no longer drives the task's next action, the pause/resume Delivery slot,
+    the CTO wake check, the release gate or the review brief's unresolved list.
+    Only an ``in_scope`` finding qualifies; the owner's Fix / Do-not-fix path
+    for deferred findings and the owner's approved fixes are untouched.
+    """
+    finding_id = _finding_text(finding_id, "id")
+    reason = " ".join(str(reason or "").split())
+    if not reason:
+        raise ValueError("route-around requires --reason: one line naming the owner objective the finding does not change")
+    if len(reason) > MAX_FINDING_TEXT_LENGTH:
+        raise ValueError(f"route-around reason must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
+    with locked_state(root) as state:
+        finding = (state.setdefault("deferred_findings", {})).get(finding_id)
+        if not finding:
+            raise ValueError(f"unknown finding: {finding_id}")
+        if finding.get("status") != "in_scope":
+            raise _finding_refusal(finding_id, finding, "only an in-scope finding can be routed around")
+        routed_at = now()
+        finding.update({
+            "status": "routed_around",
+            "routed_around_at": routed_at,
+            "routed_around_reason": reason,
+            "next_action": (
+                f"Set aside by the CTO as not material to the owner's objective: {reason.rstrip('.')}. "
+                "No Delivery repair is due; finding-resolved still closes it if it is fixed anyway."
+            ),
+        })
+        task = str(finding.get("task") or "")
+        _event(state, "finding_routed_around", None, {
+            "task": task,
+            "finding_id": finding_id,
+            "message": f"Routed around by the CTO (not material to the owner's objective): {reason}",
+        })
+        # A hold opened by the CTO hammering finding-triage / finding-resolved
+        # against this task's in-scope findings is the wedge this command
+        # resolves; any other hold is left alone (Codex plan check, finding 4).
+        hold = (state.get("control_plane_holds") or {}).get(task)
+        if (
+            isinstance(hold, dict) and hold.get("status") == "open"
+            and str(hold.get("source") or "").startswith("repeated_refusal:finding-")
+        ):
+            outcome = f"Resolved: finding {finding_id} was routed around by the CTO"
+            hold.update({"status": "resolved", "resolved_at": routed_at, "resolved_by": "finding_routed_around", "outcome": outcome})
+            _event(state, "control_plane_hold_resolved", None, {
+                "task": task, "source": "finding_routed_around", "outcome": outcome,
+                "message": f"control-plane hold closed: {outcome}",
+            })
         return dict(finding)
 
 
@@ -1542,8 +1664,8 @@ def resolve_finding(root: Path, finding_id: str, evidence: str = "") -> dict[str
         finding = (state.setdefault("deferred_findings", {})).get(finding_id)
         if not finding:
             raise ValueError(f"unknown finding: {finding_id}")
-        if finding.get("status") not in {"in_scope", "fix_requested", "fix_in_progress"}:
-            raise _finding_refusal(finding_id, finding, "only an in-scope or owner-approved finding can be resolved")
+        if finding.get("status") not in {"in_scope", "routed_around", "fix_requested", "fix_in_progress"}:
+            raise _finding_refusal(finding_id, finding, "only an in-scope, routed-around or owner-approved finding can be resolved")
         finding.update({"status": "resolved", "resolved_at": now(), "resolution_evidence": evidence, "next_action": "Resolved and included in the current task evidence."})
         _event(state, "finding_resolved", None, {"task": finding.get("task", ""), "finding_id": finding_id, "message": finding["next_action"]})
         return dict(finding)
@@ -2421,6 +2543,79 @@ def _role_label(agent: dict[str, Any]) -> str:
     return "The CTO" if role == "cto" else "The Reviewer" if role == "qa" else "The Delivery Agent"
 
 
+# 2026-10-15 (Studio, jls-studio-honesty-fix): a stalled agent must be recovered by
+# the harness itself, never by the owner or the CTO. self_heal runs the ladder
+# (wake, relaunch, replace, one owner card); these are its two settings.
+STALL_WINDOW_DEFAULT_SECONDS = 240
+STALL_WINDOW_MIN_SECONDS = 60
+STALL_STEP_DEFAULT_SECONDS = 150
+STALL_STEP_MIN_SECONDS = 30
+
+
+def stall_settings(environ: dict[str, str] | None = None) -> tuple[int, int]:
+    """(silence window, wait per ladder step) in seconds, from the environment.
+
+    HARNESS_STALL_WINDOW_SECONDS / HARNESS_STALL_STEP_SECONDS. A missing,
+    non-numeric, zero or too-small value falls back to the default: the ladder
+    can be tuned but never switched off or made to fire on every tick.
+    """
+    import os
+    source = os.environ if environ is None else environ
+
+    def read(name: str, default: int, minimum: int) -> int:
+        try:
+            value = int(str(source.get(name, "")).strip())
+        except ValueError:
+            return default
+        return value if value >= minimum else default
+
+    return (
+        read("HARNESS_STALL_WINDOW_SECONDS", STALL_WINDOW_DEFAULT_SECONDS, STALL_WINDOW_MIN_SECONDS),
+        read("HARNESS_STALL_STEP_SECONDS", STALL_STEP_DEFAULT_SECONDS, STALL_STEP_MIN_SECONDS),
+    )
+
+
+def real_heartbeat(agent: dict[str, Any]) -> datetime | None:
+    """The agent's last durable board heartbeat: a poll or a progress record
+    (the CTO's heartbeat is its poll alone, as in mark_stalled)."""
+    values = [agent.get("last_poll_at")] if agent.get("role") == "cto" else [agent.get("last_poll_at"), agent.get("last_progress_at")]
+    parsed = [item for item in (_parsed_timestamp(value) for value in values) if item is not None]
+    return max(parsed) if parsed else None
+
+
+def bind_replacement(root: Path, session_id: str, source_agent_id: str, task: str) -> None:
+    """Tie a terminal the harness opened to the ONE stalled agent and task it replaces."""
+    with locked_state(root) as state:
+        state.setdefault("replacement_bindings", {})[session_id] = {
+            "source_agent_id": source_agent_id, "task": task, "bound_at": now(),
+        }
+
+
+def request_agent_replacement(root: Path, agent_id: str, reason: str) -> dict[str, Any]:
+    """The harness retires a stalled agent so a NEW terminal of the role carries its task.
+
+    Not an owner stop: the marker is stopped_by_harness_at, which the existing
+    task pick-up (_stopped_task_to_resume) honours, so a new Delivery terminal
+    carries the same task on from its preserved owner direction.
+    """
+    reason = str(reason or "").strip()[:240]
+    with locked_state(root) as state:
+        agent = _require_agent(state, agent_id)
+        if agent.get("replacement_requested_at"):
+            return dict(agent)
+        stamp = now()
+        agent.update({
+            "replacement_requested_at": stamp, "stopped_by_harness_at": stamp, "replacement_reason": reason,
+            "active": False, "status": "offline", "status_note": "the harness is replacing this stalled terminal",
+            "liveness": "offline", "liveness_note": "the harness is replacing this stalled terminal",
+        })
+        _event(state, "agent_replacement_requested", agent, {
+            "task": agent.get("task", ""), "reason": reason,
+            "message": f"The harness is replacing {'t' + _role_label(agent)[1:]}: {reason}",
+        })
+        return dict(agent)
+
+
 def request_agent_restart(root: Path, agent_id: str, reason: str) -> dict[str, Any]:
     """Mark an agent so that its terminal's relaunch reattaches it (backlog #7).
 
@@ -2568,17 +2763,31 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
                     "message": "unconsumed owner direction transferred to the replacement Delivery terminal",
                 })
         result = dict(agent)
-        resume_source, resume_target = "", ""
+        resume_source, resume_target, bound = "", "", False
         if role in DEVELOPER_ROLES and task == AWAITING_OWNER_DIRECTION and session_id and not recovered_direction:
-            resume_source, resume_target = _stopped_task_to_resume(state, agent_id)
+            binding = (state.get("replacement_bindings") or {}).get(session_id) or {}
+            if binding.get("source_agent_id") and binding.get("task"):
+                # The harness opened this terminal to carry ONE stalled agent's task: never guess another.
+                resume_source, resume_target, bound = str(binding["source_agent_id"]), str(binding["task"]), True
+            else:
+                resume_source, resume_target = _stopped_task_to_resume(state, agent_id)
     if resume_target:
         # Backlog #10: the owner stopped a task's Delivery and started a new
         # one; it carries the same task on instead of waiting for direction.
         try:
             resume_task(root, result["id"], resume_source, resume_target)
             result = dict(snapshot(root)["agents"][result["id"]])
-        except ValueError:
-            pass  # nothing to carry on after all; the agent waits for direction
+            if bound:
+                with locked_state(root) as state:
+                    (state.get("replacement_bindings") or {}).pop(session_id, None)
+        except ValueError as error:
+            if bound:
+                # A failed hand-off is said out loud, never swallowed (plan check 2026-10-15 finding 2).
+                with locked_state(root) as state:
+                    _event(state, "replacement_handoff_failed", state["agents"].get(result["id"]), {
+                        "task": resume_target, "message": f"The replacement terminal could not take over {resume_target}: {str(error)[:160]}",
+                    })
+            # else: nothing to carry on after all; the agent waits for direction
     if recovered_direction:
         try:
             from harness import control
@@ -2801,6 +3010,28 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         finding for finding in state.get("deferred_findings", {}).values()
         if finding.get("task") == task and finding.get("status") == "in_scope"
     ]
+    routed_around_findings = [
+        {
+            "id": finding.get("id", ""), "title": finding.get("title", ""),
+            "reason": finding.get("routed_around_reason", ""), "routed_around_at": finding.get("routed_around_at", ""),
+            "rule": "Not material to the owner's objective by CTO judgment; do not repair it as part of this task.",
+        }
+        for finding in sorted(state.get("deferred_findings", {}).values(), key=lambda value: str(value.get("routed_around_at") or ""))
+        if finding.get("task") == task and finding.get("status") == "routed_around"
+    ]
+    owner_waived_deliverables = [
+        {
+            "id": waiver.get("id", ""), "deliverable": waiver.get("deliverable", ""), "part": waiver.get("part", ""),
+            "owner_words": waiver.get("owner_words", ""), "owner_message_id": waiver.get("owner_message_id", ""),
+            "owner_message_at": waiver.get("owner_message_at", ""), "recorded_at": waiver.get("recorded_at", ""),
+            "rule": (
+                "This part of the deliverable is not required; prove the rest."
+                if waiver.get("part") else
+                "This deliverable is not required (waived by the owner); judge and prove the remaining deliverables."
+            ),
+        }
+        for waiver in (state.get("deliverable_waivers") or {}).get(task, [])
+    ]
     if in_scope_findings:
         next_action = "Delivery repairs the recorded in-scope finding and submits the affected scope for re-review."
     elif release.get("status") == "VISUAL_TEST_REQUIRED" and not decision:
@@ -2826,6 +3057,8 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         "release": json.loads(json.dumps(release)),
         "owner_decision": json.loads(json.dumps(decision)),
         "next_action": next_action,
+        "routed_around_findings": routed_around_findings,
+        "owner_waived_deliverables": owner_waived_deliverables,
         "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE},
     }
 
@@ -2875,6 +3108,8 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                 })
                 rejection = "managed session is inactive; board heartbeat refused"
         if not rejection:
+            if state.get("control_plane_holds"):
+                _end_stale_brief_hold(state, str(agent.get("task") or ""))
             raw_unseen = [e for e in state["events"] if e["sequence"] > agent["cursor"]]
             unseen = _scoped_events(agent, raw_unseen)
             first_available = int(state.get("event_window_start") or (state["events"][0]["sequence"] if state.get("events") else state.get("next_event", 1)))
@@ -2893,6 +3128,8 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                     "message": "Earlier board events were moved out of hot state; read the durable event log before acting so failures are not silently skipped",
                 })
             recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered", "answered_without_poll"}
+            if agent.pop("stall_exhausted", None):
+                recovered = True  # the stall ladder's owner card clears itself on this event
             agent["poll_counter"] += 1
             agent["last_poll_at"] = now()
             agent.update({"liveness": "healthy", "liveness_note": "board heartbeat is current"})
@@ -3203,12 +3440,26 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             if item.get("status") in control.ACTIVE_STATUSES and attention.needs_owner(item)
         }
         signed_out_session_ids = set(signed_out_sessions)
+        menu_session_ids = {
+            item.get("id") for item in sessions_snapshot
+            if item.get("status") in control.ACTIVE_STATUSES and attention.holds_harness_input(item.get("attention_reason"))
+        }
     except (OSError, ValueError):
         live_session_ids = None
         signed_out_sessions = {}
         signed_out_session_ids = set()
+        menu_session_ids = set()
+    due_defaults: list[dict[str, Any]] = []
+    cto_session_id = ""
     with locked_state(root) as state:
         _expire_owner_actions(state, current)
+        due_defaults = _due_owner_defaults(state, current)
+        for candidate in state["agents"].values():
+            if candidate.get("role") == "cto" and candidate.get("active") and candidate.get("session_id"):
+                if candidate["session_id"] in signed_out_session_ids or candidate["session_id"] in menu_session_ids:
+                    continue  # signed out, or a trust / permission menu on screen: nothing typed reaches it
+                if live_session_ids is None or candidate["session_id"] in live_session_ids:
+                    cto_session_id = str(candidate["session_id"])
         for agent in state["agents"].values():
             if not agent.get("active"):
                 continue
@@ -3442,6 +3693,8 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                 "requested_at": requested_at,
                 "instruction": instruction,
             })
+    if due_defaults:
+        _dispatch_owner_defaults(root, due_defaults, cto_session_id)
     for route in recovery_routes:
         try:
             queued = control.enqueue_instruction(
@@ -3823,14 +4076,105 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
         })
 
 
+# 2026-10-15 (Studio): a Delivery whose own browser tool was denied localhost read the no-alternate-route
+# rule as also forbidding the project's own documented API and reported "will not mark complete". The board
+# answers that status itself, so the CTO does not re-explain it every time.
+_OWN_BROWSER_WORDS = ("browser", " cua", "cua ", "localhost", "127.0.0.1")
+_OWN_BROWSER_DENIAL_WORDS = ("blocked", "denied", "denies", "refused", "refuses", "forbidden")
+OWN_API_IS_NOT_AN_ALTERNATE_ROUTE = (
+    "A browser-tool denial is final for that tool: do not look for a permission setting and do not retry it. "
+    "The project's own documented API or CLI, or the exact call its own UI makes (Studio: POST /api/run, then poll "
+    "/api/thread), is the sanctioned way to run it and is never an alternate route. Test: does its own normal UI make this "
+    "call? A real credential, permission or security gate, and any host or tool restriction, is never bypassed. A run through "
+    "it is real-run evidence of the backend only at terminal success with the promised outputs inspected (secrets redacted); "
+    "it does not prove UI behavior. If it cannot finish, continue the other deliverables and route the rest to the CTO."
+)
+# a real gate in the same status (the API also answered 401, a sign-in is missing) is a genuine blocker: no clarification
+_OWN_BROWSER_REAL_GATE_WORDS = ("401", "403", "unauthor", "credential", "password", "sign-in", "sign in", "signed out", "token", "api also")
+
+
+def _browser_denial_hint(note: str) -> str:
+    """The clarification for a non-CTO status that blames its own browser tool's denial; '' for any other status.
+
+    The status is always stored (the report and its routing to the CTO stay intact); the board only adds the answer
+    the CTO had to give by hand three times on 2026-10-15."""
+    lowered = " " + " ".join(str(note or "").lower().split())
+    if not any(word in lowered for word in _OWN_BROWSER_WORDS) or not any(word in lowered for word in _OWN_BROWSER_DENIAL_WORDS):
+        return ""
+    if any(word in lowered for word in _OWN_BROWSER_REAL_GATE_WORDS):
+        return ""
+    return OWN_API_IS_NOT_AN_ALTERNATE_ROUTE
+
+
 def status(root: Path, agent_id: str, note: str, state_name: str = "working") -> dict[str, Any]:
     note = note.strip()
     if not note or len(note) > 240:
         raise ValueError("status note is required and must be 240 characters or fewer")
+    verdict: dict[str, Any] = {"refusal": ""}
+    card_links: list[dict[str, Any]] = []
+    card_location: dict[str, Any] | None = None
+    if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX):
+        # the documented "OWNER ACTION:" note becomes a card, so it passes the
+        # same document check as owner-action, on a snapshot before the lock
+        before = snapshot(root)
+        poster = (before.get("agents") or {}).get(agent_id) or {}
+        if poster.get("role") == "cto":
+            card_task = str(poster.get("task") or "")
+            classified = _classify_owner_action(before, {
+                "title": note[len(OWNER_ACTION_NOTE_PREFIX):].strip(), "command": "", "why": "",
+                "task": card_task if card_task not in {"", "GLOBAL_MONITOR"} else "", "for_agent": "",
+            })
+            card_links, refusal = _owner_card_links(root, before, classified["task"], note[len(OWNER_ACTION_NOTE_PREFIX):].strip(), "")
+            if refusal:
+                raise ValueError(refusal)
+            card_location, refusal = _owner_card_location(root, before, note[len(OWNER_ACTION_NOTE_PREFIX):].strip(), "", "", "",
+                                                          about_agent=bool(classified.get("for_agent")))
+            if refusal:
+                raise ValueError(refusal)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if not agent.get("active") or agent.get("status") == "offline" or agent.get("liveness") == "offline":
             raise ValueError("inactive/offline agent cannot post status updates")
+        browser_hint = _browser_denial_hint(note) if agent.get("role") != "cto" else ""
+        if browser_hint:
+            _event(state, "own_browser_denial_answered", agent, {
+                "task": str(agent.get("task") or ""), "message": "a status blaming the agent's own browser tool was stored and answered with the API clarification"})
+        if agent.get("role") == "cto":
+            owner_text = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) else note
+            verdict = _owner_question_verdict(owner_text)
+            if not verdict["refusal"] and state_name.strip().lower() in CTO_WAITING_STATES:
+                failures = _unrouted_failures(state)
+                if failures:
+                    verdict = {**verdict, "refusal": _waiting_refusal(failures)}
+                    _event(state, "cto_waiting_refused", agent, {
+                        "task": str(failures[0].get("task") or ""), "failure_kind": failures[0].get("kind"),
+                        "failure_at": failures[0].get("at"),
+                        "message": f"a waiting status was refused: {failures[0].get('kind')} on {failures[0].get('task')} has no routed action",
+                    })
+            if verdict["refusal"]:
+                if verdict.get("handed_back"):
+                    _hand_back_owner_question(state, agent, owner_text)
+            elif agent.get("handed_back_question"):
+                # the report after a handed-back question: the owner sees that
+                # the CTO acted instead of asking (its own report, labelled so)
+                agent.pop("handed_back_question", None)
+                _event(state, "cto_acted", agent, {"task": agent["task"], "message": f"CTO acted: {note} (its own report after the board handed back a question)"})
+        if verdict["refusal"]:
+            event = None
+        else:
+            event = _store_status(state, agent, note, state_name, verdict, card_links, card_location)
+            if browser_hint:
+                event = {**event, "hint": browser_hint}
+    if verdict["refusal"]:
+        # the refusal events above are committed; the note was never stored
+        raise ValueError(verdict["refusal"])
+    return event
+
+
+def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state_name: str, verdict: dict[str, Any],
+                  card_links: list[dict[str, Any]] | None = None, card_location: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Store an accepted status note (same transaction as its checks, so no failure slips between them)."""
+    if True:
         agent.update({"status": state_name, "status_note": note, "last_status_at": now()})
         wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
@@ -3848,12 +4192,19 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
                 "task": agent["task"],
                 "message": CTO_STATUS_WITHOUT_POLL_NOTE + "; automatic cycles continue",
             })
-        if agent.get("role") == "cto" and note.upper().startswith(OWNER_ACTION_NOTE_PREFIX):
+        if agent.get("role") == "cto" and (note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) or verdict.get("default_action")):
             # Defect #22: the agreed "OWNER ACTION:" note never reached the
             # owner. It becomes a pinned card; the CTO clears it with
-            # owner-action-done once the owner has acted.
-            title = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() or note
-            _record_owner_action(state, agent, title, "", "", agent.get("task", ""))
+            # owner-action-done once the owner has acted. A question with a
+            # default is a card too: it carries the deadline the board applies.
+            title = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) else note
+            if verdict.get("default_action"):
+                title = verdict.get("question") or title  # the card is the question; the default is on the card itself
+            _record_owner_action(
+                state, agent, title or note, "", "", agent.get("task", ""),
+                default_action=verdict.get("default_action", ""), default_minutes=verdict.get("default_minutes", 0),
+                links=card_links, location=card_location,
+            )
         return event
 
 
@@ -3887,6 +4238,7 @@ _OWNER_ACTION_AGENT_EVENTS = {
     "agent_resume_session_attached": "Resolved: agent restarted",
     "project_resume_session_replaced": "Resolved: agent session replaced",
     "agent_signed_in": "Resolved: agent signed in again",
+    "agent_recovered": "Resolved: the agent answered",
 }
 _OWNER_ACTION_DECISION_EVENTS = {
     "requirements_go_ahead": "Resolved: you chose Go ahead",
@@ -3896,7 +4248,333 @@ _OWNER_ACTION_REVIEWER_EVENTS = {"agent_registered", "agent_resume_session_attac
 OWNER_ACTION_TRIGGER_EVENTS = frozenset(
     set(_OWNER_ACTION_TASK_EVENTS) | set(_OWNER_ACTION_AGENT_EVENTS)
     | set(_OWNER_ACTION_DECISION_EVENTS) | _OWNER_ACTION_REVIEWER_EVENTS
+    # an owner message to the CTO is noted on every open question card (never closes one)
+    | {"owner_cto_message_received"}
 )
+
+
+# 2026-10-15 (Studio): the CTO ended an explanation to the owner with "Want me
+# to do that now?" although its directive ordered the action; nothing moved
+# until the owner, at the screen by chance, answered. Every CTO-to-owner board
+# surface (the status note and the owner-action card) now goes through one
+# classifier: a question inside the CTO's own authority is handed back, any
+# other question must state a default and a deadline, and the default is
+# applied when the deadline passes with no owner reply. Phrase lists, no AI
+# call; the lists come from the owner's global settings (owner_questions).
+OWNER_QUESTION_DEFAULT_MINUTES = 15
+OWNER_QUESTION_MAX_MINUTES = 1440
+OWNER_DEFAULT_CLAIM_SECONDS = 120  # a sweep's claim on a due card; a crashed sweep releases it by time
+# Request leads only: "Delivery is waiting for your answer" is a report about
+# Delivery (an existing card), so "waiting for your answer" is not one.
+OWNER_QUESTION_LEADS = (
+    "want me to", "should i", "shall i", "do you want", "may i", "ok to", "okay to", "would you like",
+    "let me know if", "waiting for your permission", "need your permission", "need your ok", "need your go",
+    "awaiting your go", "awaiting your permission",
+)
+# Regular expressions naming the CTO's own operations (routing an agent, the
+# requirement after a recorded waiver, cards, findings, holds). A bare noun
+# ("the finding", "the requirement") is NOT authority: "reproduce the finding
+# on the physical GPU" is the owner's, so it only ever gets the default rule.
+OWNER_QUESTION_AUTHORITY = (
+    r"\b(route|routing|push|nudge|wake|restart|redirect|steer)\b[^.?]*\b(delivery|reviewer|the agent|the cto)\b",
+    r"\b(unstick|unblock|recover)\b[^.?]*\bstalled (delivery|reviewer)\b",
+    r"\b(file|amend|update|record)\b[^.?]*\b(requirements?|amendment)\b",
+    r"\bclear (the|that|this|its|my)\b[^.?]*\bcard\b",
+    r"\bowner-action-done\b",
+    r"\b(resolve|dispose of|triage|route around|set aside|close|clear|mark)\b[^.?]*\bfindings?\b",
+    r"\b(lift|drop|resolve|clear|release)\b[^.?]*\bhold\b",
+)
+OWNER_QUESTION_WHAT_MARKERS = (
+    "which", "prefer", "accept", "reject", "send feedback", "approve", "go ahead", "modify the requirements", "choose modify", "scope", "budget",
+    "deadline", "priority", "release", "publish", "ship", "cancel the task", "abandon", "sign in", "/login",
+    "setup-token", "oauth token", "password", "screen check", "visual test",
+)
+# A default is applied without the owner: it may never be one of these.
+OWNER_QUESTION_OWNER_ONLY = (
+    "accept", "reject", "approve", "go ahead", "modify the requirements", "release", "publish", "ship", "deploy", "production",
+    "sign in", "/login", "setup-token", "oauth token", "password", "credential", "credentials", "install a security tool", "install the security tool",
+    "security tool", "sudo", "delete the project", "delete the repository", "cancel the task", "abandon", "setup-token", "oauth token",
+    "your machine", "your mac", "your computer", "your account", "your terminal", "your browser",
+)
+_OWNER_QUESTION_RULES: dict[str, Any] = {}
+_OWNER_DEFAULT_CLAUSE = re.compile(
+    r"if (?:there is )?no (?:answer|reply|response)(?: from you)? (?:in|within) (\d+) ?(?:min|mins|minute|minutes|m)\b[,:;]?\s*"
+    r"(?:i will|i'll|i am going to|i'm going to|the cto will)\s+(.+)",
+    re.IGNORECASE,
+)
+_OWNER_QUESTION_NOISE = re.compile(r'"[^"]*"|https?://\S+|\S+\?\S*=\S*')
+
+
+def configure_owner_questions(section: dict[str, Any] | None) -> None:
+    """Install the owner_questions settings section (project_worker, once at start); None restores the defaults."""
+    _OWNER_QUESTION_RULES.clear()
+    if section:
+        _OWNER_QUESTION_RULES.update(json.loads(json.dumps(section)))
+
+
+def owner_question_rules() -> dict[str, Any]:
+    rules = _OWNER_QUESTION_RULES
+    return {
+        "default_minutes": int(rules.get("default_minutes") or OWNER_QUESTION_DEFAULT_MINUTES),
+        "question_markers": tuple(rules.get("question_markers") or OWNER_QUESTION_LEADS),
+        "authority_patterns": tuple(rules.get("authority_patterns") or OWNER_QUESTION_AUTHORITY),
+        "what_markers": tuple(rules.get("what_markers") or OWNER_QUESTION_WHAT_MARKERS),
+        "owner_only_markers": tuple(rules.get("owner_only_markers") or OWNER_QUESTION_OWNER_ONLY),
+    }
+
+
+def _phrase_in(text: str, phrases: tuple[str, ...]) -> str:
+    for phrase in phrases:
+        if phrase and re.search(rf"(?<![\w/-]){re.escape(phrase)}(?![\w-])", text):
+            return phrase
+    return ""
+
+
+def _pattern_in(text: str, patterns: tuple[str, ...]) -> str:
+    """The first authority pattern (a regular expression) that matches; the matched words are returned."""
+    for pattern in patterns:
+        try:
+            found = re.search(pattern, text, re.IGNORECASE)
+        except re.error:
+            found = re.search(rf"(?<![\w/-]){re.escape(pattern)}(?![\w-])", text)
+        if found:
+            return found.group(0)
+    return ""
+
+
+# "do not publish anything": a prohibition right before the word is not a
+# proposed action (one word between at most, so "without delay and publish the
+# result" still proposes publishing). "leave the release to you": an explicit
+# hand-back to the owner is not one either; "leave and publish" is.
+_OWNER_DEFAULT_NEGATION = re.compile(r"\b(do not|don't|never|without|not)\b(\s+\S+){0,1}\s*$", re.IGNORECASE)
+_OWNER_DEFAULT_HANDBACK = re.compile(r"\b(leave|leaving)\b[^.;,]*?\bto (you|the owner)\b", re.IGNORECASE)
+
+
+def classify_owner_question(text: str, rules: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Is this CTO text a question to the owner, and what does the board do with it?
+
+    Quoted text and URLs are ignored (a report that quotes a question is a
+    report). A WHAT marker (the owner's own decisions) wins over an authority
+    match. The default clause is "if no answer in N minutes I will <X>".
+    """
+    rules = rules or owner_question_rules()
+    plain = " ".join(str(text or "").split())
+    scan = _OWNER_QUESTION_NOISE.sub(" ", plain).lower()
+    if not scan.strip():
+        # a note that is nothing but a quotation is the CTO's own words
+        scan = plain.lower()
+    # The CTO's own default clause is never inside quotation marks (a quoted
+    # clause is reported speech), but a quoted phrase INSIDE the clause is part
+    # of the action: the clause is located on a quote-masked copy of the same
+    # length and read back from the original text.
+    masked = re.sub(r'"[^"]*"', lambda found: " " * len(found.group(0)), plain)
+    if not masked.strip():
+        masked = plain
+    default_action, default_minutes, default_error = "", 0, ""
+    clause = _OWNER_DEFAULT_CLAUSE.search(masked)
+    if clause and len(re.findall(r"\bif (?:there is )?no (?:answer|reply|response)\b", masked, re.IGNORECASE)) > 1:
+        default_error = "state one default: the note carries two 'if no answer in N minutes I will' clauses"
+    if clause:
+        default_minutes = int(clause.group(1))
+        default_action = plain[clause.start(2):].strip().rstrip(" .")
+        scan = _OWNER_DEFAULT_CLAUSE.sub(" ", scan)
+        if not default_error and not 1 <= default_minutes <= rules["default_minutes"]:
+            default_error = f"the deadline must be a whole number of minutes from 1 to {rules['default_minutes']} (your settings), not {default_minutes}"
+    is_question = "?" in scan or bool(_phrase_in(scan, rules["question_markers"]))
+    # the owner's words decide ownership even inside quotes ('route Delivery to "publish the result"?')
+    whole = _OWNER_DEFAULT_CLAUSE.sub(" ", plain).lower()
+    question = " ".join(plain[:clause.start()].split()) if clause else plain
+    return {
+        "question": question or plain,
+        "is_question": is_question,
+        "authority": _pattern_in(scan, rules["authority_patterns"]),
+        # a question that names an owner-only step is the owner's question, whatever else it mentions
+        "what_marker": _phrase_in(whole, rules["what_markers"]) or _phrase_in(whole, rules["owner_only_markers"]),
+        "default_action": default_action,
+        "default_minutes": default_minutes,
+        "default_error": default_error,
+    }
+
+
+def _owner_question_verdict(text: str, default_action: str = "", default_minutes: int = 0) -> dict[str, Any]:
+    """Decide hand-back / refusal / accepted-with-default for one CTO text (raises nothing)."""
+    rules = owner_question_rules()
+    found = classify_owner_question(text, rules)
+    if default_action and found["default_action"]:
+        found["default_error"] = "state the default once: either in the text or with --default, not both"
+    elif default_minutes and found["default_minutes"] and int(default_minutes) != found["default_minutes"]:
+        found["default_error"] = "the text and --default-minutes name different deadlines; state one"
+    action = " ".join(str(default_action or "").split()).rstrip(" .") or found["default_action"]
+    minutes = int(default_minutes or found["default_minutes"] or rules["default_minutes"])
+    if found["default_error"]:
+        return {**found, "refusal": found["default_error"]}
+    if not found["is_question"] and not action:
+        return {**found, "refusal": "", "default_action": "", "default_minutes": 0}
+    if found["is_question"] and found["authority"] and not found["what_marker"]:
+        # inside the CTO's authority: handed back whether or not it offers a default
+        # (review 2026-10-14, blocking 2)
+        return {
+            **found, "handed_back": True,
+            "refusal": (
+                f"act, then report: '{found['authority']}' is inside your authority (your directive and your board commands); "
+                "do it now and post a status note saying what you did. The owner is not asked."
+            ),
+        }
+    if not action:
+        return {
+            **found,
+            "refusal": (
+                "act, then report, or state the default: a question to the owner must end with "
+                f"'if no answer in N minutes I will <X>' (N at most {rules['default_minutes']} minutes) or carry --default \"<X>\"; "
+                "the board applies X when the deadline passes without an answer"
+            ),
+        }
+    if not 1 <= minutes <= rules["default_minutes"]:
+        return {**found, "refusal": f"the deadline must be a whole number of minutes from 1 to {rules['default_minutes']} (your settings), not {minutes}"}
+    # a governed CTO operation is not the owner's release: its two spellings are not "release" here
+    proposed = _OWNER_DEFAULT_HANDBACK.sub(" ", re.sub(r"record-release|release readiness|release-ready", " ", action.lower()))
+    owner_only = ""
+    for phrase in rules["owner_only_markers"]:
+        for hit in re.finditer(rf"(?<![\w/-]){re.escape(phrase)}(?![\w-])", proposed):
+            if _OWNER_DEFAULT_NEGATION.search(proposed[:hit.start()]):
+                continue
+            owner_only = phrase
+            break
+        if owner_only:
+            break
+    if owner_only:
+        return {
+            **found,
+            "refusal": (
+                f"the default must be something you may do yourself: '{owner_only}' is the owner's decision. "
+                "Make the default the work that does not depend on the answer, and leave that decision to the owner."
+            ),
+        }
+    return {**found, "refusal": "", "default_action": action, "default_minutes": minutes}
+
+
+# 2026-10-15 01:33Z (Studio): Delivery's evidence failed and its staged review
+# was cancelled; nothing routed it; the CTO posted "waiting ... Watching for
+# its retry" and the board accepted it. The directive calls that a defect; the
+# board now refuses a waiting-shaped CTO status while a failure has no routed
+# action: "route the next action, then report". The obligations are a durable
+# list kept by the event writer (not a scan of the trimmed hot window, not a
+# timestamp cut-off), cleared by the CTO's board actions on the task, by the
+# task's own progress, or by the task ending (Codex plan check 2026-10-14).
+CTO_WAITING_STATES = ("waiting", "watching", "monitoring", "standby", "blocked", "idle")
+# failures that need a routed next action (the CTO's own stall or failed recovery is the harness's)
+CTO_ROUTE_REQUIRED_EVENTS = (
+    "staged_review_cancelled", "challenge_execution_failed", "agent_stalled", "agent_recovery_failed",
+    "git_acceptance_failed", "git_acceptance_reintegration_required", "remote_push_failed", "qa_pass_invalidated",
+)
+# what the CTO can do about one (its board actions on the task)
+CTO_ROUTING_EVENTS = (
+    "finding_classified", "finding_triaged", "finding_routed_around", "finding_resolved", "finding_dispatched",
+    "owner_action_recorded", "candidate_scope_reopened", "subtask_superseded", "control_plane_hold_recorded",
+    "finalization_coverage_reevaluated", "final_review_repinned", "release_recorded", "visual_test_required",
+    "finding_reobserved", "reintegration_routed",
+)
+# the task's own progress, or its end, settles the obligation without the CTO
+TASK_PROGRESS_EVENTS = (
+    "qa_requested", "independent_review_requested", "completion_contract_evidence", "qa_result", "challenge_executed",
+    "review_routed", "repair_package_resolved", "development_complete", "git_acceptance_completed", "remote_push_completed",
+    "task_cancelled", "task_closed_administratively", "owner_release_decision_recorded",
+)
+
+
+def _track_route_obligation(state: dict[str, Any], event: dict[str, Any], agent: dict[str, Any] | None) -> None:
+    """Keep the durable list of failures the CTO must route; settle them on routing, progress or the task's end."""
+    kind = str(event.get("kind") or "")
+    task = str(event.get("task") or "")
+    obligations = state.setdefault("route_obligations", [])
+    if kind in CTO_ROUTE_REQUIRED_EVENTS:
+        if (agent or {}).get("role") == "cto" or not task or task == "GLOBAL_MONITOR":
+            return
+        for open_one in obligations:
+            if open_one.get("task") == task and open_one.get("kind") == kind:
+                open_one.update({"at": event.get("at"), "sequence": event.get("sequence"), "count": int(open_one.get("count") or 1) + 1})
+                return
+        obligations.append({"task": task, "kind": kind, "at": event.get("at"), "sequence": event.get("sequence"), "count": 1})
+        return
+    if kind == "owner_release_decision_recorded" and event.get("decision") != "accepted":
+        return  # a rejection opens repair work; it settles nothing
+    settles = (
+        kind in CTO_ROUTING_EVENTS or kind in TASK_PROGRESS_EVENTS
+        or (kind == "status_update" and (agent or {}).get("role") != "cto" and str(event.get("state") or "") == "working")
+    )
+    if settles and task:
+        kept = [open_one for open_one in obligations if open_one.get("task") != task]
+        if len(kept) != len(obligations):
+            state["route_obligations"] = kept
+
+
+def _unrouted_failures(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [dict(open_one) for open_one in state.get("route_obligations") or []]
+
+
+def _seed_route_obligations(state: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    """A board saved before the waiting guard: build the list once from the durable event log (events.jsonl,
+    every event ever exported), falling back to the retained hot window; open failures only, settled ones stay settled."""
+    if "route_obligations" in state or not isinstance(state.get("events"), list):
+        return state
+    state["route_obligations"] = []
+    agents = state.get("agents") or {}
+    history: list[dict[str, Any]] = []
+    log = board_dir(root) / "events.jsonl" if root is not None else None
+    if log is not None and log.exists():
+        try:
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                history.append(json.loads(line))
+            except ValueError:
+                continue  # one damaged line never discards the valid history around it
+    exported = {int(item.get("sequence") or 0) for item in history if isinstance(item, dict)}
+    history.extend(event for event in state["events"] if isinstance(event, dict) and int(event.get("sequence") or 0) not in exported)
+    history.sort(key=lambda item: int(item.get("sequence") or 0))
+    for event in history:
+        if not isinstance(event, dict):
+            continue
+        agent = agents.get(event.get("agent_id")) if isinstance(agents, dict) else None
+        if agent is None and event.get("role") == "cto":
+            agent = {"role": "cto"}
+        _track_route_obligation(state, event, agent)
+    return state
+
+
+def _waiting_refusal(failures: list[dict[str, Any]]) -> str:
+    first = failures[0]
+    at = _parsed_timestamp(first.get("at"))
+    when = at.strftime("%H:%M UTC") if at else "just now"
+    more = f" (+{len(failures) - 1} more)" if len(failures) > 1 else ""
+    return (
+        f"route the next action, then report: {first.get('kind')} on {first.get('task')} at {when}{more} has no routed action since "
+        "(record-finding --affects-current-task or finding-triage for the task's agent, owner-action, finding-route-around, "
+        "reopen-candidate-scope, or the agent's own progress). Post a waiting status only after that."
+    )
+
+
+def _question_key(text: str) -> str:
+    """One question is one card on every surface (review 2026-10-14, blocking 1, rounds 1 and 2).
+
+    The identity is the question SENTENCE(S) wherever they occur in the text
+    (a status note, a card title, a card reason), never the default clause and
+    never an incidental heading such as "Layout decision".
+    """
+    plain = " ".join(str(text or "").split())
+    clause = _OWNER_DEFAULT_CLAUSE.search(re.sub(r'"[^"]*"', lambda found: " " * len(found.group(0)), plain))
+    if clause:
+        plain = plain[:clause.start()]
+    leads = owner_question_rules()["question_markers"]
+    sentences = [part.strip() for part in re.split(r"(?<=[.?!])\s+", plain) if part.strip()]
+    questions = [part for part in sentences if "?" in part or _phrase_in(part.lower(), leads)]
+    chosen = " ".join(questions) if questions else plain
+    return " ".join(chosen.split()).lower().rstrip(" .")
 
 
 def _mentions(text: str, name: str) -> bool:
@@ -3942,7 +4620,7 @@ def _classify_owner_action(state: dict[str, Any], action: dict[str, Any]) -> dic
 
 def owner_action_expires_at(action: dict[str, Any]) -> datetime | None:
     """Only a card no event can clear expires; the others wait for their event."""
-    if action.get("kind", "other") != "other":
+    if action.get("kind", "other") != "other" or action.get("default_action"):
         return None
     try:
         return datetime.fromisoformat(str(action.get("recorded_at"))) + OWNER_ACTION_TTL
@@ -3953,6 +4631,18 @@ def owner_action_expires_at(action: dict[str, Any]) -> datetime | None:
 def owner_action_clears_when(action: dict[str, Any], current: datetime | None = None) -> str:
     """The plain line under a card telling the owner what will clear it."""
     kind = action.get("kind", "other")
+    if action.get("default_action"):
+        due = _parsed_timestamp(action.get("default_due_at"))
+        when = due.strftime("%H:%M UTC") if due else "the deadline"
+        replied = _parsed_timestamp(action.get("owner_replied_at"))
+        if replied is not None:
+            return f"Owner message received at {replied.strftime('%H:%M UTC')}; the CTO reads it on its next cycle and clears this card if it answers the question"
+        error = str((action.get("default_dispatch") or {}).get("last_error") or "")
+        if error:
+            return f"No answer by {when}: the CTO could not be reached ({error}); the harness retries every tick"
+        if due is not None and due <= (current or datetime.now(timezone.utc)):
+            return f"No answer by {when}: the CTO is being routed to {action['default_action']}"
+        return f"If you do not answer by {when}, the CTO will {action['default_action']}"
     if kind == "task":
         return "Clears when the task is accepted"
     if kind == "agent":
@@ -4003,11 +4693,19 @@ def _settle_owner_actions(state: dict[str, Any], event: dict[str, Any], agent: d
             target = card.get("for_agent") or ""
             if target == agent_id or (not target and role != "cto" and card.get("task", "") in {"", task}):
                 outcome = _OWNER_ACTION_AGENT_EVENTS[kind]
-        if not outcome and kind in _OWNER_ACTION_DECISION_EVENTS and card["kind"] == "decision":
+        if not outcome and kind in _OWNER_ACTION_DECISION_EVENTS and card["kind"] == "decision" and not card.get("default_action"):
+            # a question card is not answered by a requirements decision
             if not card.get("task") or card["task"] == task:
                 outcome = _OWNER_ACTION_DECISION_EVENTS[kind]
         if not outcome and kind in _OWNER_ACTION_REVIEWER_EVENTS and card["kind"] == "reviewer" and role == "qa":
             outcome = "Resolved: a Reviewer is running"
+        if not outcome and kind == "owner_cto_message_received" and card.get("default_action") and not card.get("owner_replied_at"):
+            # The board cannot tell which question a message answers (Codex plan
+            # check 2026-10-14, round 2 finding 2), so it never guesses: the
+            # reply is noted on every open question, the CTO reads it and
+            # clears the card it answers with owner-action-done; a default that
+            # still falls due tells the CTO to follow the owner's answer.
+            card["owner_replied_at"] = str(event.get("at") or now())
         if outcome:
             _resolve_owner_action(state, card, outcome, kind)
 
@@ -4025,18 +4723,215 @@ def _expire_owner_actions(state: dict[str, Any], current: datetime) -> list[str]
     return expired
 
 
+# Owner 2026-10-15 (Studio): a card told the owner to "read the report" and
+# nothing led to it; the CTO repeated "awaiting owner" for hours. A card that
+# tells the owner to read a document must carry the link the board can serve.
+_DOCUMENT_NOUN = (r"(?:report|document|memo|brief|write-?up|diagnostic|assessment|analysis|findings|recommendations"
+                  r"|audit|summary|plan|spec(?:ification)?)")
+_DOCUMENT_CONSUME_VERB = r"\b(?:read|open|review|inspect|see|look at|check|find)\b"
+_DOCUMENT_DETERMINED = re.compile(
+    _DOCUMENT_CONSUME_VERB + r"[^.;:,]{0,60}?\b(?:the|this|that|its|your|my|a|an)\s+(?:[\w-]+\s+){0,3}" + _DOCUMENT_NOUN + r"\b", re.I)
+_DOCUMENT_FILE = re.compile(r"(?P<file>(?:~?/|\./)?[\w.~/-]*[\w-]\.(?:md|txt|markdown|rst|log|json))\b", re.I)
+_DOCUMENT_SENTENCE_SPLIT = re.compile(r"\.(?=\s|$)|;|:(?=\s)")   # a dot inside results.txt never splits
+_DOCUMENT_CLAUSE_SPLIT = re.compile(r"\.(?=\s|$)|[;,]|:(?=\s)|\s+and\s+", re.I)
+_DOCUMENT_URL = re.compile(r"https?://\S+", re.I)
+_URL_PLACEHOLDER = "URLPLACEHOLDER"
+_DOCUMENT_AT_URL = re.compile(_DOCUMENT_NOUN + r"\b\s*(?:\(|at|in|from|under|:)?\s*\(?" + _URL_PLACEHOLDER, re.I)
+
+
+def _document_references(title: str, why: str) -> list[dict[str, str]]:
+    """What a card tells the owner to read: generic ("the report"), a file name, or a path.
+
+    A document the card places at a URL ("the report at https://…") is the
+    owner's to open and is not a board document; a URL elsewhere in the clause
+    does not excuse an unreachable document (plan check 2026-10-15 r5, 2).
+    """
+    references: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    text = _DOCUMENT_URL.sub(" " + _URL_PLACEHOLDER + " ", f"{title}. {why}")
+    # Files: every file named in the sentence after a consume verb, across
+    # commas and "and" ("Read a.txt, b.txt and c.txt" names three files; review
+    # 2026-10-15 round 1, blocking 2: the second of "Read a.txt and b.txt" was lost).
+    for sentence in _DOCUMENT_SENTENCE_SPLIT.split(text):
+        verb = re.search(_DOCUMENT_CONSUME_VERB, sentence, re.I)
+        if not verb:
+            continue
+        for match in _DOCUMENT_FILE.finditer(sentence[verb.end():]):
+            token = match.group("file")
+            kind = "path" if "/" in token else "name"
+            if (kind, token) not in seen:
+                seen.add((kind, token)); references.append({"kind": kind, "text": token})
+    # Generic ("the report"): per clause, so a document placed at a URL in its
+    # own clause is the owner's and an unrelated URL excuses nothing.
+    for clause in _DOCUMENT_CLAUSE_SPLIT.split(text):
+        clause = clause.strip()
+        if clause and _DOCUMENT_DETERMINED.search(clause) and not _DOCUMENT_AT_URL.search(clause) and ("generic", "") not in seen:
+            seen.add(("generic", "")); references.append({"kind": "generic", "text": clause})
+    return references
+
+
+def _owner_card_links(root: Path, state: dict[str, Any], task: str, title: str, why: str) -> tuple[list[dict[str, Any]], str]:
+    """Resolve every document a card names to a link the board serves, or say why it cannot.
+
+    Runs OUTSIDE the board lock (the files are read and hashed here). Returns
+    (links, refusal); an empty refusal with no links means the card names no
+    document and is untouched.
+    """
+    references = _document_references(title, why)
+    if not references:
+        return [], ""
+    tasks = [task] if task else sorted({
+        *(state.get("task_repositories") or {}), *(state.get("releases") or {}), *(state.get("task_workspaces") or {}),
+        *(path.stem for path in project_context(root).storage_path("tasks").glob("*.json")),
+    })
+    documents: list[dict[str, Any]] = []
+    for name in tasks:
+        documents.extend(document_deliverable_links(root, name, state, validate=False))
+        if len(documents) > MAX_OWNER_CARD_DOCUMENTS * 4:
+            break
+    links: list[dict[str, Any]] = []
+    for reference in references:
+        if reference["kind"] == "path":
+            wanted = str(Path(reference["text"]).expanduser())
+            found = [d for d in documents if d["path"] == wanted or str(Path(d["path"])) == wanted]
+            what = reference["text"]
+        elif reference["kind"] == "name":
+            found = [d for d in documents if Path(str(d["path"])).name == reference["text"]]
+            what = reference["text"]
+        else:
+            if task:
+                found = [d for d in documents if d["task"] == task and d["latest"]]
+            else:
+                # no task on the card: only an unambiguous board resolves it
+                found = [d for d in documents if d["latest"]]
+                if len({d["task"] for d in found}) > 1:
+                    return [], ("give the owner a link they can open: the card asks the owner to read a document but names no task, "
+                                "and more than one task has a document; pin it with --task, or name the file")
+                if not found:
+                    return [], ("give the owner a link they can open: the card asks the owner to read a document but names no task, "
+                                "so Mission Control cannot tell which document; pin it with --task, or name the file")
+            what = "the document this card asks the owner to read"
+        if len(found) > 1 and reference["kind"] != "generic":
+            return [], (f"give the owner a link they can open: {what} names more than one recorded document "
+                        f"({', '.join(sorted({d['task'] for d in found}))}); give the full recorded path or the task")
+        if not found:
+            alternatives = "; ".join(f"{d['title']} ({Path(str(d['path'])).name})" for d in documents if d.get("latest"))[:400]
+            return [], (f"give the owner a link they can open: {what} is not a document Mission Control can show "
+                        f"(no Completion Contract deliverable file is marked for the owner"
+                        + (f"; the marked documents are: {alternatives}" if alternatives else "")
+                        + "); mark the attached file with deliverable-file, or route Delivery to attach it with "
+                        "contract-evidence --for-owner, then pin the card again; or name the screen, control or command the owner must use")
+        several = len(found) > 1
+        for document in found[:MAX_OWNER_CARD_DOCUMENTS]:
+            ok, reason, _ = contract.readable_document(document["path"], document["sha256"], _document_roots(root, state, document["task"]))
+            if not ok:
+                return [], (f"give the owner a link they can open: {what} is not a document Mission Control can show "
+                            f"({reason}); {DOCUMENT_RECOVERY}, then pin the card again")
+            label = ("Open " + Path(str(document["path"])).name) if reference["kind"] != "generic" \
+                else (f"Open report: {document['document']}" if several else document["label"])
+            links.append({
+                "label": label, "url": document["url"], "path": document["path"], "sha256": document["sha256"],
+                "title": document["title"], "task": document["task"], "deliverable": document["deliverable"],
+                "document": document.get("document") or document["deliverable"], "reference": reference["kind"],
+            })
+        if len(links) > MAX_OWNER_CARD_DOCUMENTS:
+            return [], f"give the owner a link they can open: the card names more than {MAX_OWNER_CARD_DOCUMENTS} documents; name the one to read"
+    return links, ""
+
+
+def project_owner_card_links(root: Path, state: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    """What the page shows under one open card, computed at read time, nothing written.
+
+    A stored generic link follows the task's current latest document (and says
+    so when it changed); an explicit file link keeps its file; a card recorded
+    before this change gets links only when its own words resolve; every link's
+    availability is re-checked (Codex plan check 2026-10-15, rounds 2-4).
+    """
+    stored = [dict(link) for link in (card.get("links") or []) if isinstance(link, dict)]
+    task = str(card.get("task") or "")
+    if not stored:
+        references = _document_references(str(card.get("title") or ""), str(card.get("why") or ""))
+        if not references:
+            return {}
+        try:
+            resolved, refusal = _owner_card_links(root, state, task, str(card.get("title") or ""), str(card.get("why") or ""))
+        except (OSError, ValueError):
+            resolved, refusal = [], "unresolved"
+        if refusal:
+            return {}
+        stored = [{**link, "projected": True} for link in resolved]
+    current_by_task: dict[str, list[dict[str, Any]]] = {}
+    shown: list[dict[str, Any]] = []
+    for link in stored:
+        link_task = str(link.get("task") or task)
+        if link_task not in current_by_task:
+            current_by_task[link_task] = document_deliverable_links(root, link_task, state)
+        documents = current_by_task[link_task]
+        if link.get("reference") == "generic":
+            # the latest version of the SAME document (deliverable + document
+            # name), never a different document (review 2026-10-15 round 1,
+            # blocking 1: two documents on one deliverable collapsed to one)
+            name = link.get("document")
+            latest = next((d for d in documents if d["latest"] and d["deliverable"] == link.get("deliverable")
+                           and (name is None or d.get("document") == name)), None)
+            if latest is None:
+                shown.append({**link, "available": False, "reason": "this document is no longer marked for the owner on this task"})
+                continue
+            changed = latest["sha256"] != link.get("sha256")
+            shown.append({**link, "url": latest["url"], "path": latest["path"], "sha256": latest["sha256"], "title": latest["title"],
+                          "label": (link.get("label", "Open report") + " (updated to the latest version)") if changed else link.get("label", "Open report"),
+                          "available": latest["available"], "reason": latest["reason"]})
+        else:
+            match = next((d for d in documents if d["path"] == link.get("path")), None)
+            if match is None:
+                shown.append({**link, "available": False, "reason": "the file is no longer recorded for this task"})
+            else:
+                shown.append({**link, "url": match["url"], "available": match["available"], "reason": match["reason"],
+                              "label": link.get("label") or ("Open " + Path(str(match["path"])).name + ("" if match["latest"] else " (earlier version)"))})
+    if not shown:
+        return {}
+    note = ""
+    if re.search(r"view app", f"{card.get('title', '')} {card.get('why', '')}", re.I):
+        note = "Use the Open report link; View app starts the app and does not show a document."
+    return {"links": shown, **({"links_note": note} if note else {})}
+
+
+def _links_identity(links: list[dict[str, Any]] | None) -> tuple:
+    return tuple(sorted((str(l.get("path")), str(l.get("sha256"))) for l in (links or [])))
+
+
 def _record_owner_action(
     state: dict[str, Any], agent: dict[str, Any], title: str, command: str, why: str, task: str,
-    kind: str = "", for_agent: str = "",
+    kind: str = "", for_agent: str = "", default_action: str = "", default_minutes: int = 0,
+    links: list[dict[str, Any]] | None = None, location: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     actions = state.setdefault("owner_actions", {})
     card = _classify_owner_action(state, {
         "title": title, "command": command, "why": why,
         "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "for_agent": for_agent,
-        **({"kind": kind} if kind else {}),
+        **({"kind": "decision"} if default_action else {"kind": kind} if kind else {}),
     })
     for existing in actions.values():
         if existing.get("status") != "open":
+            continue
+        if default_action or existing.get("default_action"):
+            # A question card is the same card only as the same question, read
+            # from the title AND the reason (Codex plan check 2026-10-14,
+            # finding 4; review rounds 1-2); a repost never extends the
+            # deadline, a different question is a second card.
+            if (
+                _question_key(f"{existing.get('title', '')}. {existing.get('why', '')}") == _question_key(f"{title}. {why}")
+                and str(existing.get("task") or "") == card["task"]
+            ):
+                if default_action and (
+                    existing.get("default_action") != default_action or int(existing.get("default_minutes") or 0) != int(default_minutes)
+                ):
+                    raise ValueError(
+                        f"this question is already pinned with the default '{existing.get('default_action')}' until "
+                        f"{existing.get('default_due_at', '')[:16]}; a repost cannot change it: clear {existing['id']} with "
+                        "owner-action-done first, or repeat the same default"
+                    )
+                return existing
             continue
         # Backlog #9: the same request about the same task or agent is one
         # card. A card that names neither is only ever the same word for word:
@@ -4045,15 +4940,52 @@ def _record_owner_action(
         same_target = all(known.get(key, "") == card[key] for key in ("task", "for_agent"))
         if not same_target:
             continue
-        if existing.get("title") == title and existing.get("command") == command:
+        same_words = existing.get("title") == title and existing.get("command") == command
+        # a document link or a checked location on either side: the card must
+        # show exactly what was checked, so a differing repost replaces it
+        links_involved = bool(links or existing.get("links") or location or existing.get("location"))
+        if same_words and not links_involved:
             return existing
-        if (card["task"] or card["for_agent"]) and known.get("kind") == card["kind"]:
+        same_target_kind = (card["task"] or card["for_agent"]) and known.get("kind") == card["kind"]
+        if not links_involved:
+            if same_target_kind:
+                return existing  # backlog #9: the same request about the same task or agent is one card
+            continue
+        same_location = [u["url"] for u in (existing.get("location") or {}).get("urls", [])] == [u["url"] for u in (location or {}).get("urls", [])]
+        if same_words and existing.get("why", "") == why and _links_identity(existing.get("links")) == _links_identity(links) and same_location:
+            if location:
+                existing["location"] = location   # the fresh check replaces the old one
             return existing
+        if same_words or same_target_kind or (location and existing.get("location") and known.get("kind") == card["kind"]):
+            # Owner 2026-10-15 (Codex plan check rounds 2-4): a card about a
+            # document, reposted with other words or another document, is
+            # replaced in place so the owner never sees old words with new
+            # links; the event keeps the previous wording.
+            previous = {key: existing.get(key, "") for key in ("title", "command", "why")}
+            existing.update({"title": title, "command": command, "why": why, "links": list(links or []), "refreshed_at": now()})
+            if location:
+                existing["location"] = location
+            else:
+                existing.pop("location", None)
+            _event(state, "owner_action_refreshed", agent, {
+                "task": existing.get("task", ""), "action_id": existing["id"], "title": title, "previous": previous,
+                "message": f"owner action updated: {title}",
+            })
+            return existing
+    recorded_at = now()
     action = {
         "id": f"action-{secrets.token_hex(6)}", "title": title, "command": command, "why": why,
         "task": card["task"], "for_agent": card["for_agent"], "kind": card["kind"],
-        "agent_id": agent["id"], "status": "open", "recorded_at": now(), "outcome": "", "done_at": "",
+        "agent_id": agent["id"], "status": "open", "recorded_at": recorded_at, "outcome": "", "done_at": "",
+        **({"links": list(links)} if links else {}),
+        **({"location": location} if location else {}),
     }
+    if default_action:
+        action.update({
+            "question": _question_key(f"{title}. {why}"),  # the heading is its own sentence; the question is the identity
+            "default_action": default_action, "default_minutes": int(default_minutes),
+            "default_due_at": (datetime.fromisoformat(recorded_at) + timedelta(minutes=int(default_minutes))).isoformat(),
+        })
     actions[action["id"]] = action
     _event(state, "owner_action_recorded", agent, {
         "task": action["task"], "action_id": action["id"], "title": title,
@@ -4064,7 +4996,7 @@ def _record_owner_action(
 
 def record_owner_action(
     root: Path, agent_id: str, title: str, command: str = "", why: str = "", task: str = "",
-    kind: str = "", for_agent: str = "",
+    kind: str = "", for_agent: str = "", default: str = "", default_minutes: int = 0, location_verified: str = "",
 ) -> dict[str, Any]:
     """Pin something the owner must do (usually a Terminal command) in Mission Control.
 
@@ -4081,18 +5013,457 @@ def record_owner_action(
         raise ValueError("an owner action needs a title of at most 240 characters")
     if len(command) > MAX_OWNER_ACTION_COMMAND or len(why) > MAX_REASON_LENGTH:
         raise ValueError("the command or reason is too long")
+    if default_minutes and not isinstance(default_minutes, int):
+        raise ValueError("--default-minutes must be a whole number of minutes")
+    verdict = _owner_question_verdict(f"{title} {why}".strip(), default, int(default_minutes or 0))
+    # The document check reads and hashes files, so it runs on a snapshot
+    # BEFORE the lock; the designation is re-checked inside it (plan check
+    # 2026-10-15 round 4, finding 9).
+    links, manifest_before = _owner_card_documents_before_lock(root, title, command, why, task, for_agent, kind, default != "" or bool(default_minutes))
+    classified = _classify_owner_action(snapshot(root), {"title": title, "command": command, "why": why,
+                                                        "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "for_agent": for_agent, **({"kind": kind} if kind else {})})
+    location, location_refusal = _owner_card_location(root, snapshot(root), title, why, command, location_verified,
+                                                      about_agent=bool(classified.get("for_agent")))
+    if location_refusal:
+        raise ValueError(location_refusal)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent.get("role") != "cto" or not agent.get("active"):
             raise ValueError("only the active CTO records owner actions")
         if for_agent and for_agent not in state.get("agents", {}):
             raise ValueError("unknown agent for this owner action")
-        return dict(_record_owner_action(state, agent, title, command, why, task, kind, for_agent))
+        if verdict["refusal"]:
+            if verdict.get("handed_back"):
+                _hand_back_owner_question(state, agent, title)
+        else:
+            _require_same_documents(root, state, links, manifest_before)
+            card_title = verdict.get("question") if verdict["default_action"] and _OWNER_DEFAULT_CLAUSE.search(title) else title
+            card = dict(_record_owner_action(
+                state, agent, card_title or title, command, why, task, kind, for_agent,
+                verdict["default_action"], verdict["default_minutes"], links=links, location=location,
+            ))
+    if verdict["refusal"]:
+        # raised after the transaction commits, so the hand-back event and
+        # marker persist (Codex plan check 2026-10-14, finding 6)
+        raise ValueError(verdict["refusal"])
+    return card
+
+
+def _owner_card_location(root: Path, state: dict[str, Any], title: str, why: str, command: str, verified_how: str,
+                         about_agent: bool = False) -> tuple[dict[str, Any] | None, str]:
+    """Where a sign-in / act-inside card sends the owner, checked before the card exists (Part 2).
+
+    Returns (location record or None, refusal). A card that names no place
+    the owner can reach is refused; a harness control (a terminal, Mission
+    Control, the authentication card) is a place. cannot_verify is refused
+    unless the CTO states how it knows (--location-verified), which the card
+    then shows to the owner.
+    """
+    from harness import owner_location
+    # A URL on a card is a destination: it is checked whatever the wording says
+    # (review 2026-10-15 round 3: "Open http://... and approve" slipped past the verb list).
+    urls = owner_location.urls_in(title, why, command)
+    known_names = {
+        *(state.get("task_repositories") or {}), *(state.get("releases") or {}), *(state.get("task_workspaces") or {}),
+        *(state.get("requirement_proposals") or {}), *(state.get("task_chunks") or {}), *(state.get("delivery_plans") or {}),
+        *(state.get("agents") or {}), *(str(a).rsplit("-", 1)[0] for a in (state.get("agents") or {})),
+    }
+    need = owner_location.names_a_location_need(title, why, known_names) or ("act_inside" if urls else "")
+    if need == "act_inside" and command and not urls:
+        need = ""   # a Terminal command is an instruction for the owner's own machine, not a place an agent could fake
+    if not need:
+        return None, ""
+    if not urls:
+        # Review round 4: "Settings" somewhere in the text is not a place when the
+        # card also names an app the board knows nothing about ("inside Studio",
+        # "Studio's Settings"); such a card needs the app's URL.
+        unresolved = owner_location.unresolved_places(title, why, known_names)
+        if not unresolved and (about_agent or owner_location.names_a_harness_control(title, why, command)):
+            return None, ""   # a card naming one of the harness's own agents, a Mission Control control or the owner's own machine app
+        return None, ("name where the owner goes: this card asks the owner to " + ("sign in" if need == "sign_in" else "act inside an app")
+                      + " but names no URL and no Mission Control control; give the exact URL the owner opens (or the agent's terminal in Mission Control); "
+                      "a copy an agent started for its own test is never the owner's")
+    if len(urls) > owner_location.MAX_CARD_LOCATIONS:
+        return None, f"name where the owner goes: the card names {len(urls)} URLs; name the one the owner opens"
+    context = project_context(root)
+    project_roots = [context.code_root, context.data_root]
+    copy_roots = [Path(str(w)) for w in (state.get("task_workspaces") or {}).values() if w] + [context.workspace_root]
+    try:
+        from harness import control
+        sessions = control.snapshot(root)["sessions"]
+        session_pids = {int(s["pid"]) for s in sessions if s.get("pid") and s.get("status") in {*control.ACTIVE_STATUSES, "paused"}}
+    except Exception:  # noqa: BLE001
+        session_pids = set()
+    deadline = __import__("time").monotonic() + owner_location.TOTAL_DEADLINE_SECONDS
+    checks = [owner_location.check(url, project_roots=project_roots, agent_copy_roots=copy_roots, agent_session_pids=session_pids, deadline=deadline) for url in urls]
+    verified_how = " ".join(str(verified_how or "").split())
+    for item in checks:
+        if item["verdict"] == "private_copy":
+            return None, (f"the owner cannot act there: {item['url']} is {item['reason']}; clear this card if it is open, route the agent to use "
+                          f"the owner's real instance or to name a reachable URL it has proved, and never send the owner to an agent's copy")
+        if item["verdict"] == "unanswering":
+            return None, f"the owner cannot act there: {item['url']} does not answer ({item['reason']}); open it yourself first, then pin the card"
+        if item["verdict"] == "cannot_verify" and not verified_how:
+            return None, (f"the board could not verify that {item['url']} is the owner's instance ({item['reason']}); open it yourself and pin again "
+                          f"with --location-verified \"<how you know it is the owner's instance, e.g. the project's own launcher on its documented port>\"")
+    return {"urls": checks, "verified_how": verified_how, "checked_at": now()}, ""
+
+
+def _owner_card_documents_before_lock(
+    root: Path, title: str, command: str, why: str, task: str, for_agent: str, kind: str, is_question: bool,
+) -> tuple[list[dict[str, Any]], tuple]:
+    """Resolve the documents a card names on a read-only snapshot; refuse before anything is written."""
+    state = snapshot(root)
+    card = _classify_owner_action(state, {
+        "title": title, "command": command, "why": why,
+        "task": task if task not in {"", "GLOBAL_MONITOR"} else "", "for_agent": for_agent, **({"kind": kind} if kind else {}),
+    })
+    links, refusal = _owner_card_links(root, state, card["task"], title, why)
+    if refusal:
+        raise ValueError(refusal)
+    return links, _links_identity(_current_documents(root, state, links))
+
+
+def _current_documents(root: Path, state: dict[str, Any], links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The recorded (path, sha256) of every link's document as the contract says now (no lock taken: state is given)."""
+    current = []
+    for name in sorted({str(l.get("task")) for l in links}):
+        current.extend(document_deliverable_links(root, name, state, validate=False))
+    return [d for d in current if any(d["path"] == l.get("path") for l in links)]
+
+
+def _require_same_documents(root: Path, state: dict[str, Any], links: list[dict[str, Any]], manifest_before: tuple) -> None:
+    if links and _links_identity(_current_documents(root, state, links)) != manifest_before:
+        raise ValueError("give the owner a link they can open: the document marks changed while the card was being pinned; pin it again")
+
+
+def _hand_back_owner_question(state: dict[str, Any], agent: dict[str, Any], question: str) -> None:
+    agent["handed_back_question"] = {"text": question, "at": now()}
+    _event(state, "cto_question_handed_back", agent, {
+        "task": agent.get("task", ""), "question": question,
+        "message": "a CTO question inside its own authority was handed back: act, then report",
+    })
+
+
+def _due_owner_defaults(state: dict[str, Any], current: datetime) -> list[dict[str, Any]]:
+    """Open question cards whose deadline passed with no owner answer; marked due, kept OPEN until routed."""
+    due = []
+    for action in state.get("owner_actions", {}).values():
+        if action.get("status") != "open" or not action.get("default_action"):
+            continue
+        deadline = _parsed_timestamp(action.get("default_due_at"))
+        if deadline is None or deadline > current:
+            continue
+        dispatch = action.setdefault("default_dispatch", {"status": "due", "attempts": 0, "due_seen_at": now()})
+        claimed = _parsed_timestamp(dispatch.get("claimed_at"))
+        if dispatch.get("status") == "queueing" and claimed is not None and (current - claimed).total_seconds() < OWNER_DEFAULT_CLAIM_SECONDS:
+            continue  # another sweep (a manual watchdog beside the worker) holds the claim
+        dispatch["attempts"] = int(dispatch.get("attempts") or 0) + 1
+        dispatch.update({"status": "queueing", "claimed_at": current.isoformat(), "claim": secrets.token_hex(4)})
+        due.append(json.loads(json.dumps(action)))
+    return due
+
+
+def _still_claimed(action: dict[str, Any] | None, card: dict[str, Any]) -> bool:
+    """The card is still open and still held by THIS sweep's claim (not cleared or re-claimed meanwhile)."""
+    return bool(
+        action and action.get("status") == "open"
+        and (action.get("default_dispatch") or {}).get("claim") == (card.get("default_dispatch") or {}).get("claim")
+    )
+
+
+def _default_instruction_marker(card_id: str) -> str:
+    return f"[default {card_id}]"
+
+
+def _existing_default_instruction(root: Path, card_id: str) -> dict[str, Any] | None:
+    """The live instruction an earlier tick queued for this card, if the worker crashed before closing it."""
+    from harness import control
+    try:
+        return control.find_instruction_receipt(root, "owner-default", _default_instruction_marker(card_id))
+    except (OSError, ValueError):
+        return None
+
+
+def _dispatch_owner_defaults(root: Path, due: list[dict[str, Any]], cto_session_id: str) -> None:
+    """Route each due default to the current CTO session; close the card only once the instruction is queued.
+
+    A refused queue (inactive, superseded or signed-out session) leaves the
+    card open for the next tick (Codex plan check 2026-10-14, finding 2).
+    """
+    from harness import control
+    for card in due:
+        minutes = int(card.get("default_minutes") or 0)
+        replied = _parsed_timestamp(card.get("owner_replied_at"))
+        instruction = (
+            f'OWNER DEFAULT APPLIED {_default_instruction_marker(card["id"])}: no owner answer in {minutes} minutes to "{card.get("title", "")}". '
+            + (
+                f"The owner wrote to you at {replied.strftime('%H:%M UTC')}: read that message; if it answers this question, do what the owner said, otherwise do the default: {card['default_action']}. "
+                if replied else
+                f"Do now: {card['default_action']}. "
+            )
+            + "First read the board: if the task, its requirements, its agents or the owner's direction changed since you asked, act on the current state and record it instead. "
+            "Then post a status note saying what you did, and clear this card's question with owner-action-done if it is still open."
+        )
+        try:
+            queued = _existing_default_instruction(root, card["id"])
+            if queued is None:
+                if not cto_session_id:
+                    raise ValueError("no active, signed-in CTO session (or its terminal shows a menu the owner must answer)")
+                queued = control.enqueue_instruction(root, cto_session_id, instruction, source="owner-default")
+        except (ValueError, OSError) as error:
+            with locked_state(root) as state:
+                action = state.get("owner_actions", {}).get(card["id"])
+                if _still_claimed(action, card):
+                    action["default_dispatch"].update({"status": "retry", "last_error": str(error)[:200]})
+            continue
+        with locked_state(root) as state:
+            action = state.get("owner_actions", {}).get(card["id"])
+            if not _still_claimed(action, card):
+                continue  # cleared by the owner or the CTO, or re-claimed, while this sweep was queueing
+            action["default_dispatch"] = {**action.get("default_dispatch", {}), "status": "queued", "instruction_id": queued["id"]}
+            action["default_instruction_id"] = queued["id"]
+            outcome = f"default applied: {card['default_action']}"
+            action.update({"status": "done", "outcome": outcome, "done_at": now(), "resolved_by": "owner_default_applied"})
+            _event(state, "owner_default_applied", None, {
+                "task": action.get("task", ""), "action_id": action["id"], "outcome": outcome,
+                "instruction_id": queued["id"],
+                "message": f"Default applied (no answer in {minutes} minutes): the CTO was routed to {card['default_action']}",
+            })
 
 
 SCREEN_CHECK_TIMEOUT_SECONDS = 60
 SCREEN_CHECK_TEXT_LIMIT = 20_000
 SCREEN_CHECK_ID = re.compile(r"\bscreen-\d{8}T\d{6}-[0-9a-f]{8}\b")
+
+
+SCREEN_CHECK_FINGERPRINT_LIMIT = 20_000
+SCREEN_CHECK_FINGERPRINT_BYTES = 500 * 1024 * 1024
+SCREEN_CHECK_GIT_SECONDS = 60
+SCREEN_CHECK_MAX_LISTENERS = 8
+SCREEN_CHECK_LIMIT_NOTE = (
+    "one page at one moment. Bound to: the files git lists in the task's work folder (git object id and executable bit; "
+    "ignored build output, symlink targets and submodule contents are not compared) and the folder the listening process "
+    "runs from. Not detected: a long-running server that loaded older code from the right folder, or one that serves a "
+    "folder chosen by its command-line arguments; a copy run from a temp folder is recorded but its files are not compared"
+)
+
+
+def _fingerprint_excludes(root: Path) -> list[str]:
+    """Harness-owned storage by resolved location (never project content)."""
+    context = project_context(root)
+    return [os.path.realpath(str(folder)) for folder in (context.data_root, context.workspace_root)]
+
+
+def _tree_fingerprint(folder: Path, excludes: list[str] | None = None) -> tuple[dict[str, Any] | None, str]:
+    """A content fingerprint of a work folder: a git object id per file, the same before and after a commit.
+
+    Returns (None, reason) when it cannot be taken (not a git tree, git failed or timed out, too big); callers then
+    record the capture as unverified and never refuse on it.
+    """
+    folder = Path(folder)
+    real = os.path.realpath(str(folder))
+    try:
+        listing = git_process.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=folder, capture_output=True, timeout=SCREEN_CHECK_GIT_SECONDS,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, "the work folder could not be listed with git in time"
+    if listing.returncode != 0:
+        return None, "the work folder is not a git tree"
+    skipped = [item for item in (excludes or []) if item == real or item.startswith(real + os.sep)]
+    names = []
+    for raw in sorted({entry for entry in listing.stdout.split(b"\0") if entry}):
+        name = raw.decode("utf-8", errors="surrogateescape")
+        if name == ".harness" or name.startswith(".harness/") or "/__pycache__/" in f"/{name}":
+            continue
+        full = os.path.join(real, name)
+        if any(full == item or full.startswith(item + os.sep) for item in skipped):
+            continue
+        names.append(name)
+    if len(names) > SCREEN_CHECK_FINGERPRINT_LIMIT:
+        return None, f"the work folder has more than {SCREEN_CHECK_FINGERPRINT_LIMIT} files"
+    files: dict[str, str] = {}
+    hashable: list[tuple[str, bool]] = []
+    total = 0
+    for name in names:
+        path = Path(real) / name
+        try:
+            info = path.lstat()
+        except OSError:
+            continue  # deleted since git listed it
+        if stat.S_ISLNK(info.st_mode):
+            files[name] = "link"
+        elif stat.S_ISREG(info.st_mode):
+            total += info.st_size
+            if total > SCREEN_CHECK_FINGERPRINT_BYTES:
+                return None, "the work folder is larger than 500 MB"
+            if "\n" in name:
+                files[name] = "unhashed-name"
+            else:
+                hashable.append((name, bool(info.st_mode & 0o111)))
+        # directories (submodules), pipes and sockets are not content
+    if hashable:
+        try:
+            hashed = git_process.run(
+                ["git", "hash-object", "--stdin-paths"], cwd=folder, capture_output=True,
+                input="".join(name + "\n" for name, _ in hashable).encode("utf-8", "surrogateescape"),
+                timeout=SCREEN_CHECK_GIT_SECONDS,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None, "the work folder's files could not be hashed in time"
+        ids = hashed.stdout.decode("ascii", "replace").split()
+        if hashed.returncode != 0 or len(ids) != len(hashable):
+            return None, "the work folder's files could not be hashed"
+        for (name, executable), blob in zip(hashable, ids):
+            files[name] = blob + (":x" if executable else "")
+    digest = hashlib.sha256("".join(f"{name}\0{sha}\n" for name, sha in sorted(files.items())).encode("utf-8", "surrogateescape"))
+    return {"digest": digest.hexdigest(), "files": files}, ""
+
+
+def _commit_files(folder: Path, commit: str) -> dict[str, str] | None:
+    """The same name-to-id map for a commit's tree (the reviewed candidate), or None when unreadable."""
+    if not commit:
+        return None
+    try:
+        listing = git_process.run(
+            ["git", "ls-tree", "-r", "-z", commit], cwd=folder, capture_output=True, timeout=SCREEN_CHECK_GIT_SECONDS,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    files: dict[str, str] = {}
+    for raw in listing.stdout.split(b"\0"):
+        if not raw or b"\t" not in raw:
+            continue
+        meta, name = raw.split(b"\t", 1)
+        mode, kind, blob = meta.decode("ascii", "replace").split()[:3]
+        if kind != "blob":
+            continue  # submodules
+        files[name.decode("utf-8", errors="surrogateescape")] = "link" if mode == "120000" else blob + (":x" if mode == "100755" else "")
+    return files
+
+
+def _task_execution_roots(root: Path, state: dict[str, Any], task: str) -> list[Path]:
+    """The folders a task's candidate can live in: its work folder (or the project code folder) and each subtask's."""
+    values = [(state.get("task_workspaces") or {}).get(task, "")]
+    values += list(((state.get("subtask_workspaces") or {}).get(task) or {}).values())
+    roots: list[Path] = []
+    for value in values:
+        folder = Path(value) if value else None
+        if folder is not None and folder.is_dir() and folder not in roots:
+            roots.append(folder)
+    return roots or [project_context(root).code_root]
+
+
+def _screen_check_listener(port: int, roots: list[Path]) -> dict[str, Any]:
+    """Who listens on the port and where that process runs from.
+
+    Refuses only a server that is provably elsewhere: every listener we can see runs from a folder that is neither
+    one of the task's work folders nor a temp folder. Anything we cannot see or read is recorded as unverified.
+    """
+    pids, reason = owner_location.listeners(port)
+    if not pids:
+        return {"status": "unverified", "reason": reason or "no listener could be seen"}
+    pids = pids[:SCREEN_CHECK_MAX_LISTENERS]
+    folders = {pid: owner_location.process_cwd(pid) for pid in pids}
+    served = None
+    for cwd in folders.values():
+        match = next((folder for folder in roots if cwd and owner_location._under(cwd, [Path(os.path.realpath(str(folder)))])), None)
+        if match is not None:
+            served = str(Path(os.path.realpath(str(match))))
+            break
+    temp = [cwd for cwd in folders.values() if cwd and owner_location._under(cwd, owner_location.temp_folders())]
+    outside = {pid: cwd for pid, cwd in folders.items() if cwd and cwd != "/"}
+    base = {"pids": sorted(pids), "cwd": sorted({cwd for cwd in folders.values() if cwd})}
+    if served is not None:
+        return {"status": "verified", "reason": "the process runs from the task's work folder", "served_root": served, **base}
+    if temp:
+        return {"status": "temp_copy", "reason": "the process runs from a temp folder; its files were not compared with the work folder", **base}
+    if outside:
+        pid, cwd = sorted(outside.items())[0]
+        raise ValueError(
+            f"the server on port {port} (process {pid}) runs from {cwd}, which is not this task's work folder "
+            f"({roots[0]}) or a temp copy of it, so a capture of it says nothing about your code; start the candidate "
+            f"from your work folder and run screen-check again"
+        )
+    return {"status": "unverified", "reason": "the folder the listener runs from could not be read", **base}
+
+
+def _screen_check_candidate(roots: list[Path], excludes: list[str]) -> dict[str, Any]:
+    entries, reasons = [], []
+    for folder in roots:
+        fingerprint, reason = _tree_fingerprint(folder, excludes)
+        if fingerprint is not None:
+            entries.append({"root": str(Path(os.path.realpath(folder))), **fingerprint})
+        else:
+            reasons.append(f"{folder}: {reason}")
+    return {"status": "bound" if entries else "unverified", "reason": "; ".join(reasons), "roots": entries}
+
+
+def _ledger_blob_ids(folder: Path, ledger_paths: list[Path]) -> set[str]:
+    """Git object ids of the ledger files being cited.
+
+    The gateway runs the board command against an UPLOADED COPY of the agent's ledger, so the copy's path says
+    nothing about which file in the work folder is the ledger. The copy is byte-identical to the file the agent
+    committed, so that file is recognised by its content: only a file whose current bytes ARE the cited ledger is
+    exempt from the 'code changed after capture' comparison (adding the capture id to the ledger is not a code change).
+    """
+    ids: set[str] = set()
+    for path in ledger_paths:
+        try:
+            payload = Path(path).read_bytes()
+            hashed = git_process.run(
+                ["git", "hash-object", "--stdin"], cwd=folder, capture_output=True, input=payload,
+                timeout=SCREEN_CHECK_GIT_SECONDS,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        if hashed.returncode == 0 and hashed.stdout.strip():
+            ids.add(hashed.stdout.decode("ascii", "replace").strip())
+    return ids
+
+
+def _candidate_problem(
+    check_id: str, record: dict[str, Any], candidate_root: Path, ignore: set[str], cache: dict[str, Any],
+    expected: dict[str, str] | None, excludes: list[str], ledger_blobs: frozenset[str] = frozenset(),
+) -> str:
+    """Why a capture does not belong to the candidate being cited ('' when it does or cannot be compared)."""
+    if "candidate" not in record:
+        return (f"{check_id}: it was captured before captures were tied to the code and cannot be cited for a new request; "
+                f"run screen-check again on the current tree and cite the new id")
+    resolved = str(Path(os.path.realpath(candidate_root)))
+    candidate = record.get("candidate") or {}
+    served = (record.get("listener") or {}).get("served_root", "")
+    if served and served != resolved:
+        return (f"{check_id}: that capture was of a server running from {served}, not the candidate's folder {resolved}; "
+                f"start the candidate from {resolved} and run screen-check again")
+    recorded = next((entry for entry in candidate.get("roots") or [] if entry.get("root") == resolved), None)
+    if recorded is None:
+        return ""
+    if expected is not None:
+        current, compare_only = expected, set(expected)
+    else:
+        if resolved not in cache:
+            cache[resolved] = _tree_fingerprint(Path(resolved), excludes)[0]
+        current = (cache[resolved] or {}).get("files")
+        compare_only = None
+    if current is None:
+        return ""
+    before = recorded.get("files") or {}
+    names = (set(before) | set(current)) if compare_only is None else compare_only
+    changed = sorted(
+        name for name in names
+        if before.get(name) != current.get(name) and os.path.realpath(os.path.join(resolved, name)) not in ignore
+        and str(current.get(name) or "").split(":")[0] not in ledger_blobs
+    )
+    if not changed:
+        return ""
+    shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+    return (f"{check_id}: the code changed after this capture ({shown}); run screen-check again on the current tree "
+            f"and replace this id in the ledger with the new one")
 
 
 def _screen_check_problems(root: Path, task: str, check_id: str) -> tuple[dict[str, Any] | None, str]:
@@ -4105,6 +5476,10 @@ def _screen_check_problems(root: Path, task: str, check_id: str) -> tuple[dict[s
         return None, f"{check_id}: it belongs to another task"
     if record.get("blank") or not record.get("expect_found"):
         return None, f"{check_id}: that capture was blank or did not find its expected text; capture again with --expect"
+    if record.get("kind") == "screen-script":
+        steps = record.get("steps") or []
+        if not record.get("all_passed") or not steps or not all(step.get("ok") for step in steps) or "expect" not in (steps[-1].get("step") or {}):
+            return None, f"{check_id}: that screen script did not pass every step, or did not end by checking what the page shows; fix the page or the steps and run screen-script again"
     for kind, meta in (record.get("evidence") or {}).items():
         try:
             actual = hashlib.sha256(Path(meta["path"]).read_bytes()).hexdigest()
@@ -4115,12 +5490,28 @@ def _screen_check_problems(root: Path, task: str, check_id: str) -> tuple[dict[s
     return record, ""
 
 
-def _cited_screen_checks(root: Path, task: str, ledger_path: Path, *, require_role: str = "") -> list[dict[str, Any]]:
-    """Every screen-check id a ledger cites must be a real, successful, unmodified capture of the same task."""
+def _cited_screen_checks(
+    root: Path, task: str, ledger_path: Path, *, require_role: str = "", candidate_root: Path | None = None,
+    ledger_paths: tuple[Path, ...] = (), candidate_files: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Every screen-check id a ledger cites must be a real, successful, unmodified capture of the same task.
+
+    With ``candidate_root`` (a new citation) the capture must also match that candidate: the folder's files now, or
+    ``candidate_files`` (the reviewed commit's tree) when the caller computed them outside the board lock.
+    """
     ids = sorted(set(SCREEN_CHECK_ID.findall(ledger_path.read_text(encoding="utf-8", errors="replace"))))
     records, problems = [], []
+    # The ledger is edited to add its citation, so it is not a change to the code being shown.
+    ignore = {os.path.realpath(str(item)) for item in (ledger_path, *ledger_paths)}
+    fingerprints: dict[str, Any] = {}
+    excludes = _fingerprint_excludes(root) if candidate_root is not None else []
+    ledger_blobs = frozenset(
+        _ledger_blob_ids(candidate_root, [ledger_path, *ledger_paths]) if candidate_root is not None and ids else ()
+    )
     for check_id in ids:
         record, problem = _screen_check_problems(root, task, check_id)
+        if not problem and candidate_root is not None:
+            problem = _candidate_problem(check_id, record, candidate_root, ignore, fingerprints, candidate_files, excludes, ledger_blobs)
         if problem:
             problems.append(problem)
         else:
@@ -4133,8 +5524,12 @@ def _cited_screen_checks(root: Path, task: str, ledger_path: Path, *, require_ro
             "screen-check as a board command before attaching the ledger and cites that id"
         )
     return [
-        {"id": r["id"], "role": r.get("role", ""), "agent_id": r.get("agent_id", ""),
-         "hashes": {kind: meta.get("sha256", "") for kind, meta in (r.get("evidence") or {}).items()}}
+        {"id": r["id"], "role": r.get("role", ""), "agent_id": r.get("agent_id", ""), "kind": r.get("kind", "screen-check"),
+         "hashes": {kind: meta.get("sha256", "") for kind, meta in (r.get("evidence") or {}).items()},
+         "listener": (r.get("listener") or {}).get("status", "not recorded"),
+         "candidate": (r.get("candidate") or {}).get("status", "not recorded"),
+         # bound = the files were compared with the candidate AND the listening process runs from that work folder
+         "bound": bool((r.get("candidate") or {}).get("roots")) and (r.get("listener") or {}).get("status") == "verified"}
         for r in records
     ]
 
@@ -4143,6 +5538,43 @@ def _verify_recorded_screen_checks(root: Path, task: str, recorded: list[dict[st
     problems = [problem for item in recorded or [] for _, problem in [_screen_check_problems(root, task, item.get("id", ""))] if problem]
     if problems:
         raise ValueError("cited screen-check evidence changed after it was accepted: " + " | ".join(problems))
+
+
+def _screen_stability_check(
+    url: str, final_url: Any, port: int, roots: list[Path], listener: dict[str, Any],
+    candidate: dict[str, Any], excludes: list[str],
+) -> None:
+    """The page must still be what was inspected: same origin after any redirect, same listener, same files."""
+    final = urlsplit(str(final_url or url))
+    wanted = urlsplit(url)
+    if (final.hostname, final.port) != (wanted.hostname, wanted.port):
+        raise ValueError(
+            f"{url} redirected to {final_url}, which was not inspected; run screen-check on the address that "
+            f"actually serves your page"
+        )
+    again = _screen_check_listener(port, roots) if listener.get("pids") else listener
+    if sorted(again.get("pids") or []) != sorted(listener.get("pids") or []):
+        raise ValueError("the server on that port changed while the page was being captured; run screen-check again")
+    for entry in candidate["roots"]:
+        later, _ = _tree_fingerprint(Path(entry["root"]), excludes)
+        if later is not None and later["digest"] != entry["digest"]:
+            raise ValueError("the code changed while the page was being captured; run screen-check again on the current tree")
+
+
+def _browser_failure_advice(error: Exception, url: str) -> ValueError:
+    detail = str(error)[:300]
+    lowered = detail.lower()
+    if "refused" in lowered or "connection" in lowered or "unreachable" in lowered:
+        advice = "nothing answered at that address: verify the candidate server is running (it stops when the project is paused) and use its actual port"
+    elif "did not finish" in lowered or "timed out" in lowered:
+        advice = "the page did not finish loading in time: check the candidate server responds and the page does not wait forever"
+    elif "another browser check" in lowered or "another process held" in lowered:
+        advice = "the harness browser was busy: run the screen check again in a moment"
+    elif "browser" in lowered and ("find" in lowered or "no usable" in lowered or "not found" in lowered):
+        advice = "the harness has no usable browser on this machine: tell the owner (Settings shows the browser status)"
+    else:
+        advice = "run the screen check again; if it repeats, tell the owner what this message says"
+    return ValueError(f"the harness browser could not render {url}: {detail} | {advice}")
 
 
 def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[str, Any]:
@@ -4160,7 +5592,13 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         if agent.get("role") not in DEVELOPER_ROLES | {"qa"} or not agent.get("active"):
             raise ValueError("only an active Delivery or Reviewer agent can ask for a screen check")
         task = str(agent.get("task") or "")
-    browser_acceptance.validate_url(url)
+        roots = _task_execution_roots(root, state, task)
+    port = browser_acceptance.validate_url(url)
+    # The slow inspection (listener lookup, hashing the work folder) runs outside the board lock.
+    excludes = _fingerprint_excludes(root)
+    listener = _screen_check_listener(port, roots)
+    candidate = _screen_check_candidate(roots, excludes)
+    candidate["served_root"] = listener.get("served_root", "")
     check_id = f"screen-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
     directory = board_dir(root) / "evidence" / "screen-checks"
     directory.mkdir(parents=True, exist_ok=True)
@@ -4169,21 +5607,10 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         try:
             page = browser_acceptance.render_page(url, runtime, timeout=SCREEN_CHECK_TIMEOUT_SECONDS)
         except (OSError, RuntimeError, ValueError) as error:
-            detail = str(error)[:300]
-            lowered = detail.lower()
-            if "refused" in lowered or "connection" in lowered or "unreachable" in lowered:
-                advice = "nothing answered at that address: verify the candidate server is running (it stops when the project is paused) and use its actual port"
-            elif "did not finish" in lowered or "timed out" in lowered:
-                advice = "the page did not finish loading in time: check the candidate server responds and the page does not wait forever"
-            elif "another browser check" in lowered or "another process held" in lowered:
-                advice = "the harness browser was busy: run the screen check again in a moment"
-            elif "browser" in lowered and ("find" in lowered or "no usable" in lowered or "not found" in lowered):
-                advice = "the harness has no usable browser on this machine: tell the owner (Settings shows the browser status)"
-            else:
-                advice = "run the screen check again; if it repeats, tell the owner what this message says"
-            raise ValueError(f"the harness browser could not render {url}: {detail} | {advice}") from error
+            raise _browser_failure_advice(error, url) from error
     finally:
         shutil.rmtree(runtime, ignore_errors=True)
+    _screen_stability_check(url, page.get("url"), port, roots, listener, candidate, excludes)
     # What a person sees: the browser's rendered body text, never markup that
     # is hidden, closed, or only in the document head (review r1).
     text = "\n".join(line.strip() for line in page["text"].splitlines() if line.strip())
@@ -4201,6 +5628,12 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         "id": check_id, "task": task, "url": url, "blank": not text,
         "expect": expect, "expect_found": bool(expect) and expect.casefold() in text.casefold(),
         "visible_text": text[:SCREEN_CHECK_TEXT_LIMIT], "evidence": evidence,
+        "listener": listener["status"], "candidate": candidate["status"],
+        "unproven": [item for item in (
+            "" if listener["status"] == "verified" else f"server: {listener['reason']}",
+            "" if candidate["status"] == "bound" else f"files: {candidate['reason']}",
+        ) if item],
+        "note": SCREEN_CHECK_LIMIT_NOTE,
     }
     outcome = (
         "rendered a blank page" if not text
@@ -4211,7 +5644,8 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
         "id": check_id, "task": task, "agent_id": agent_id, "role": str(agent.get("role") or ""),
         "url": url, "expect": expect, "expect_found": result["expect_found"], "blank": result["blank"],
         "captured_at": datetime.now(timezone.utc).isoformat(), "evidence": evidence,
-        "note": "one page at one moment; the candidate and the server's identity are not verified",
+        "listener": listener, "candidate": candidate,
+        "note": SCREEN_CHECK_LIMIT_NOTE,
     }
     (directory / f"{check_id}.json").write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
     with locked_state(root) as state:
@@ -4222,6 +5656,122 @@ def screen_check(root: Path, agent_id: str, url: str, expect: str = "") -> dict[
             "message": f"harness screen check of {url}: {outcome} (evidence {check_id})",
         })
     return result
+
+
+SCREEN_SCRIPT_TIMEOUT_SECONDS = screen_script_runner.WALL_SECONDS
+
+
+def screen_script(root: Path, agent_id: str, url: str, steps_path: str) -> dict[str, Any]:
+    """Run a click/type step list against the project's own loopback page in the harness browser.
+
+    Owner order 2026-10-15: a required click/type path could not be proven in the sandbox. The steps are data (see
+    harness/screen_script.py); the harness browser runs them outside the agent's sandbox and the page's own server is
+    the only place it may reach. The result is recorded like a screen-check (same id pattern, same candidate binding)
+    with every step's visible text and a screenshot hashed. A failed run is recorded too, with the failing step, but
+    can never be cited.
+    """
+    url = url.strip()
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") not in DEVELOPER_ROLES | {"qa"} or not agent.get("active"):
+            raise ValueError("only an active Delivery or Reviewer agent can ask for a screen script")
+        task = str(agent.get("task") or "")
+        roots = _task_execution_roots(root, state, task)
+    try:
+        payload = Path(steps_path).read_bytes()[: screen_script_runner.MAX_STEPS_BYTES + 1]
+        steps = screen_script_runner.parse_steps(payload)
+    except OSError:
+        raise ValueError("the steps file could not be read; pass --steps with the path of a JSON step list") from None
+    except screen_script_runner.ScriptError as error:
+        raise ValueError(f"screen-script steps refused: {error}") from None
+    port = browser_acceptance.validate_url(url)
+    excludes = _fingerprint_excludes(root)
+    listener = _screen_check_listener(port, roots)
+    candidate = _screen_check_candidate(roots, excludes)
+    candidate["served_root"] = listener.get("served_root", "")
+
+    def still_allowed() -> bool:
+        with locked_state(root) as current:
+            who = (current.get("agents") or {}).get(agent_id) or {}
+            return (
+                bool(who.get("active")) and who.get("write_authority") is not False
+                and not who.get("superseded_by_agent_id") and str(who.get("task") or "") == task
+            )
+
+    check_id = f"screen-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
+    directory = board_dir(root) / "evidence" / "screen-checks"
+    directory.mkdir(parents=True, exist_ok=True)
+    runtime = Path(tempfile.mkdtemp(prefix="harness-screen-script-"))
+    try:
+        try:
+            run = screen_script_runner.run_script(url, steps, runtime, timeout=SCREEN_SCRIPT_TIMEOUT_SECONDS, authorized=still_allowed)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise _browser_failure_advice(error, url) from error
+    finally:
+        shutil.rmtree(runtime, ignore_errors=True)
+    # Clicking can make the app write files of its own (a database, a log), so for a script the files are bound
+    # as they are AFTER the run; the server must still be the same one. Edits during the run are not detected.
+    again = _screen_check_listener(port, roots) if listener.get("pids") else listener
+    if sorted(again.get("pids") or []) != sorted(listener.get("pids") or []):
+        raise ValueError("the server on that port changed while the script ran; run screen-script again")
+    candidate = _screen_check_candidate(roots, excludes)
+    candidate["served_root"] = listener.get("served_root", "")
+    evidence_files: dict[str, Path] = {}
+    results = []
+    for item, picture in zip(run["steps"], run["pictures"] + [b""] * len(run["steps"])):
+        if picture:
+            path = directory / f"{check_id}.step{item['index']:02d}.png"
+            path.write_bytes(picture)
+            evidence_files[f"step{item['index']:02d}-screenshot"] = path
+        results.append({key: item[key] for key in ("index", "kind", "step", "ok", "reason", "text_sha256") if key in item})
+    last_picture = next((p for p in reversed(run["pictures"]) if p), b"")
+    if last_picture:
+        evidence_files["screenshot"] = directory / f"{check_id}.png"
+        evidence_files["screenshot"].write_bytes(last_picture)
+    texts = directory / f"{check_id}.txt"
+    texts.write_text("\n".join(f"[step {item['index']} {item['kind']}] {item.get('text', '')}" for item in run["steps"]), encoding="utf-8")
+    evidence_files["text"] = texts
+    steps_file = directory / f"{check_id}.steps.json"
+    steps_file.write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
+    evidence_files["steps"] = steps_file
+    evidence = {
+        kind: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for kind, path in evidence_files.items()
+    }
+    expects = [item["step"]["expect"] for item in run["steps"] if "expect" in item["step"]]
+    failed = next((item for item in run["steps"] if not item["ok"]), None)
+    passed = bool(run["all_passed"])
+    record = {
+        "id": check_id, "kind": "screen-script", "task": task, "agent_id": agent_id, "role": str(agent.get("role") or ""),
+        "url": url, "expect": expects[-1] if expects else "", "expect_found": passed, "blank": not run["final_text"],
+        "all_passed": passed, "steps": results, "notes": run["notes"], "error": run["error"],
+        "seconds": run["seconds"], "captured_at": datetime.now(timezone.utc).isoformat(), "evidence": evidence,
+        "listener": listener, "candidate": candidate, "note": SCREEN_CHECK_LIMIT_NOTE,
+    }
+    (directory / f"{check_id}.json").write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    outcome = (
+        f"ran {len(run['steps'])} step(s), all passed" if passed
+        else f"stopped at step {failed['index']} ({failed['kind']}): {failed['reason']}" if failed
+        else f"did not finish: {run['error']}"
+    )
+    with locked_state(root) as state:
+        who = _require_writable_agent(state, agent_id)
+        _event(state, "screen_script", who, {
+            "task": task, "check_id": check_id, "url": url, "all_passed": passed, "evidence": evidence,
+            "message": f"harness screen script on {url}: {outcome} (evidence {check_id})",
+        })
+    return {
+        "id": check_id, "kind": "screen-script", "task": task, "url": url, "all_passed": passed, "outcome": outcome,
+        "steps": [{key: item[key] for key in ("index", "kind", "ok", "reason") if key in item} for item in run["steps"]],
+        "visible_text": run["final_text"][:SCREEN_CHECK_TEXT_LIMIT], "evidence": evidence,
+        "listener": listener["status"], "candidate": candidate["status"],
+        "unproven": [item for item in (
+            "" if listener["status"] == "verified" else f"server: {listener['reason']}",
+            "" if candidate["status"] == "bound" else f"files: {candidate['reason']}",
+        ) if item],
+        "notes": run["notes"], "note": SCREEN_CHECK_LIMIT_NOTE,
+        "citable": passed,
+    }
 
 
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
@@ -4321,6 +5871,7 @@ def task_brief(root: Path, agent_id: str, plan: str, update: str) -> dict[str, A
         value = {"plan": plan, "update": update, "updated_at": now(), "agent_id": agent_id}
         state.setdefault("task_briefs", {})[developer["task"]] = value
         _event(state, "task_brief_updated", developer, {"task": developer["task"], "message": update})
+        _end_stale_brief_hold(state, developer["task"])
         return json.loads(json.dumps(value))
 
 
@@ -4426,26 +5977,138 @@ def create_contract(root: Path, agent_id: str, objective: str, deliverables: lis
         return {"contract": value, "audit_event": event}
 
 
-def attach_contract_evidence(root: Path, agent_id: str, deliverable: str, evidence: str) -> dict[str, Any]:
+def attach_contract_evidence(root: Path, agent_id: str, deliverable: str, evidence: str, for_owner: bool = False, document: str = "") -> dict[str, Any]:
     """Attach one evidence file to a deliverable of the active Delivery task's contract.
 
     Through the authenticated surface the file is the agent's own, uploaded and
     stored by the worker (the same ingestion `qa-result --evidence` uses), so
-    the contract records a copy the agent cannot later change.
+    the contract records a copy the agent cannot later change. ``for_owner``
+    (owner 2026-10-15) marks the file as the document the owner reads: Mission
+    Control then links it on the task card and the release card.
     """
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("only an active Delivery Agent may attach Completion Contract evidence")
         task = agent["task"]
-    value = contract.add_evidence(root, task, deliverable, [evidence])
-    with locked_state(root) as state:
-        agent = _require_writable_agent(state, agent_id)
+        # The contract write happens under the board lock, like the CTO's
+        # deliverable-file, so the two never race (plan check 2026-10-15 r5, 5).
+        value = contract.add_evidence(root, task, deliverable, [evidence], for_owner=bool(for_owner), document=document)
         event = _event(state, "completion_contract_evidence", agent, {
-            "task": task, "message": f"evidence attached to Completion Contract deliverable: {deliverable}",
-            "deliverable": deliverable,
+            "task": task, "message": f"evidence attached to Completion Contract deliverable: {deliverable}"
+                                     + (" (the document the owner reads)" if for_owner else ""),
+            "deliverable": deliverable, "for_owner": bool(for_owner),
         })
         return {"contract": value, "audit_event": event}
+
+
+def retire_deliverable_document(root: Path, agent_id: str, task: str, deliverable: str, document: str) -> dict[str, Any]:
+    """The CTO retires a mistaken document name (plan check 2026-10-15 round 10, finding 5); audited, no waiver."""
+    task = str(task or "").strip(); deliverable = str(deliverable or "").strip(); document = " ".join(str(document or "").split())
+    if not task or not deliverable or not document:
+        raise ValueError("--task, --deliverable and --document (the document name to retire) are required")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO may retire a document name")
+        try:
+            value, changed = contract.retire_owner_document(root, task, deliverable, document)
+        except (OSError, json.JSONDecodeError):
+            raise ValueError(f"task {task} has no Completion Contract") from None
+        event = _event(state, "deliverable_file_retired", agent, {
+            "task": task, "deliverable": deliverable, "document": document,
+            "message": f"the document name '{document}' on '{deliverable}' is retired: its files no longer count as the owner's current document",
+        }) if changed else None
+        return {"contract": value, "changed": changed, "audit_event": event}
+
+
+def mark_deliverable_file(root: Path, agent_id: str, task: str, deliverable: str, evidence: str, document: str = "") -> dict[str, Any]:
+    """The CTO marks an already attached evidence file as the document the owner reads.
+
+    Owner 2026-10-15 (Studio): the diagnostic's report was attached as plain
+    evidence, so nothing on the board led the owner to it. For every project
+    recorded before the ``--for-owner`` flag existed, and for a wrong mark, the
+    CTO points at the right recorded file; the newest mark is the owner's
+    current document. Only recorded evidence paths are accepted.
+    """
+    task = str(task or "").strip(); deliverable = str(deliverable or "").strip(); evidence = str(evidence or "").strip()
+    if not task or not deliverable or not evidence:
+        raise ValueError("--task, --deliverable (the exact contract deliverable name) and --evidence (a recorded evidence path) are required")
+    try:
+        contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError):
+        raise ValueError(f"task {task} has no Completion Contract") from None
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO may mark the document the owner reads")
+        value, entry, changed = contract.mark_owner_file(root, task, deliverable, evidence, document=document)
+        if changed:
+            event = _event(state, "deliverable_file_marked", agent, {
+                "task": task, "deliverable": deliverable, "path": entry.get("path"), "sha256": entry.get("sha256"),
+                "message": f"the document the owner reads for '{deliverable}' is now {Path(str(entry.get('path'))).name}",
+            })
+        else:
+            event = None
+        return {"contract": value, "document": entry, "changed": changed, "audit_event": event}
+
+
+def _project_ref(root: Path) -> str:
+    from harness import board_surface
+    try:
+        return board_surface.project_id(root)
+    except (ValueError, OSError):
+        return "local"
+
+
+def _document_roots(root: Path, state: dict[str, Any], task: str) -> list[Path]:
+    context = project_context(root)
+    roots = [context.data_root, context.code_root]
+    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
+    if workspace:
+        roots.append(Path(workspace))
+    return roots
+
+
+def document_link_url(project_ref: str, task: str, deliverable_index: int, evidence_index: int) -> str:
+    return f"/api/deliverables/{quote(project_ref, safe='')}/{quote(task, safe='')}/{int(deliverable_index)}/{int(evidence_index)}"
+
+
+def document_deliverable_links(root: Path, task: str, state: dict[str, Any] | None = None, *, validate: bool = True) -> list[dict[str, Any]]:
+    """The owner's documents of one task, as the page shows them: newest mark first per deliverable.
+
+    Computed on read from the contract record and the files; never stored.
+    ``available`` and ``reason`` come from the same validator the route uses,
+    so a link the page shows is a link the route serves, and a gone or
+    changed file is listed with its reason, never dropped or replaced by an
+    older version (Codex plan check 2026-10-15, rounds 2-3).
+    """
+    try:
+        value = contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    state = state if state is not None else snapshot(root)
+    roots = _document_roots(root, state, task)
+    ref = _project_ref(root)
+    links = []
+    for item in contract.owner_document_manifest(value):
+        ok, reason = (True, "")
+        if validate:
+            ok, reason, _ = contract.readable_document(item["path"], item["sha256"], roots)
+        links.append({
+            **item, "task": task,
+            "url": document_link_url(ref, task, item["deliverable_index"], item["evidence_index"]),
+            "label": "Open report" if item["latest"] else "Open earlier version",
+            "document": item.get("document") or item.get("deliverable"),
+            "available": bool(ok), "reason": reason,
+            "recovery": "" if ok else DOCUMENT_RECOVERY,
+        })
+    return links
+
+
+DOCUMENT_RECOVERY = ("ask the CTO to mark the right attached file with deliverable-file (or retire a mistaken document name with "
+                     "deliverable-file --retire), or route Delivery to attach the document again with contract-evidence --for-owner")
+MAX_OWNER_CARD_DOCUMENTS = 16
 
 
 def expand_contract(root: Path, agent_id: str, additions: list[tuple[str, str]]) -> dict[str, Any]:
@@ -4478,6 +6141,177 @@ def migrate_contract_scope(root: Path, agent_id: str) -> dict[str, Any]:
         agent = _require_writable_agent(state, agent_id)
         event = _event(state, "completion_contract_scope_migrated", agent, {"task": task, "message": "legacy Completion Contract immutable scope was recorded for append-only governance"})
         return {"contract": value, "audit_event": event}
+
+
+def _collapse_words(text: Any) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+WAIVER_HOLD_SOURCES = ("propose-requirements", "confirm-requirements", "expand-contract", "create-contract")
+
+
+def waive_deliverable(
+    root: Path, agent_id: str, task: str, deliverable: str, owner_message_id: str,
+    owner_words: str, part: str = "", note: str = "",
+) -> dict[str, Any]:
+    """The CTO records that the owner waived a Completion Contract deliverable.
+
+    Owner 2026-10-14/15 (Studio): the confirmed requirements mandated a fresh
+    run that became impossible; the owner said it was not required; the
+    Reviewer rightly FAILed against the written requirement and the board
+    refused to amend confirmed requirements. The waiver lives BESIDE them: the
+    confirmed text, the owner direction and the contract's immutable scope are
+    never changed. Only the active CTO records it, only from one identified
+    owner message (a message to the CTO, or a direction/clarification of this
+    task) whose text contains the quoted words; the full message is kept with
+    the record. ``part`` names the waived part of a compound deliverable, in
+    which case the rest still needs evidence. An identical retry returns the
+    existing record and re-applies its projection to the contract.
+    """
+    task = str(task or "").strip()
+    deliverable = str(deliverable or "").strip()
+    owner_message_id = str(owner_message_id or "").strip()
+    owner_words = " ".join(str(owner_words or "").split())
+    part = " ".join(str(part or "").split())
+    note = " ".join(str(note or "").split())
+    if not task or not deliverable:
+        raise ValueError("--task and --deliverable (the exact contract deliverable name) are required")
+    if len(owner_words) < 8:
+        raise ValueError("--owner-words must quote the owner's own words (at least 8 characters) that waive this deliverable")
+    if not owner_message_id:
+        raise ValueError("--owner-message must name the recorded owner message (its id) that says so")
+    for value, label in ((owner_words, "owner words"), (part, "part"), (note, "note")):
+        if len(value) > MAX_FINDING_TEXT_LENGTH:
+            raise ValueError(f"{label} must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
+    try:
+        contract_value = contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError):
+        raise ValueError(f"task {task} has no Completion Contract to waive a deliverable of") from None
+    if not any(item.get("name") == deliverable for item in contract_value.get("deliverables", [])):
+        raise ValueError(f"unknown deliverable for {task}: {deliverable}")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO may record an owner's waiver of a deliverable")
+        message = next((m for m in state.get("owner_messages", []) if m.get("id") == owner_message_id), None)
+        if not message:
+            raise ValueError(f"no recorded owner message {owner_message_id}; the owner must say so on the board first")
+        if message.get("type") != "cto_message" and str(message.get("task") or "") != task:
+            raise ValueError(f"owner message {owner_message_id} is not addressed to the CTO and belongs to another task")
+        if _collapse_words(owner_words) not in _collapse_words(message.get("text")):
+            raise ValueError(f"the quoted owner words are not in owner message {owner_message_id}; quote that message exactly")
+        waivers = state.setdefault("deliverable_waivers", {}).setdefault(task, [])
+        existing = next((w for w in waivers if w.get("deliverable") == deliverable), None)
+        if existing:
+            if existing.get("owner_message_id") == owner_message_id and existing.get("owner_words") == owner_words and existing.get("part", "") == part:
+                record = dict(existing)
+            else:
+                raise ValueError(f"deliverable already waived for {task} (waiver {existing.get('id')}); a waiver is recorded once")
+        else:
+            recorded_at = now()
+            record = {
+                "id": f"waiver-{secrets.token_hex(6)}", "task": task, "deliverable": deliverable, "part": part,
+                "owner_words": owner_words, "owner_message_id": owner_message_id,
+                "owner_message_at": str(message.get("created_at") or ""), "owner_message_text": str(message.get("text") or ""),
+                "recorded_by": agent["id"], "recorded_at": recorded_at, "note": note,
+            }
+            waivers.append(record)
+            scope = f"part \"{part}\" of deliverable" if part else "deliverable"
+            _event(state, "deliverable_waived_by_owner", agent, {
+                "task": task, "deliverable": deliverable, "waiver_id": record["id"], "owner_message_id": owner_message_id,
+                "message": f"Owner waived {scope} \"{deliverable}\" — owner's words: \"{owner_words}\" (message {owner_message_id} at {record['owner_message_at']})",
+            })
+            hold = (state.get("control_plane_holds") or {}).get(task)
+            if (
+                isinstance(hold, dict) and hold.get("status") == "open"
+                and any(str(hold.get("source") or "") == f"repeated_refusal:{source}" for source in WAIVER_HOLD_SOURCES)
+            ):
+                outcome = f"Resolved: the owner waived the deliverable (waiver {record['id']}); no requirements change is needed"
+                hold.update({"status": "resolved", "resolved_at": recorded_at, "resolved_by": "deliverable_waived_by_owner", "outcome": outcome})
+                _event(state, "control_plane_hold_resolved", None, {
+                    "task": task, "source": "deliverable_waived_by_owner", "outcome": outcome,
+                    "message": f"control-plane hold closed: {outcome}",
+                })
+    projection = {key: record[key] for key in ("id", "part", "owner_words", "owner_message_id", "owner_message_at", "recorded_by", "recorded_at")}
+    contract_value = contract.waive_deliverable(root, task, deliverable, projection)
+    return {"waiver": record, "contract": json.loads(json.dumps(contract_value))}
+
+
+def amend_exclusions(
+    root: Path, agent_id: str, task: str, action: str, exclusion: int | str, text: str, reason: str,
+    owner_message_id: str, owner_words: str,
+) -> dict[str, Any]:
+    """The CTO records an owner-approved change to a contract's exclusions, beside the immutable originals.
+
+    Same authority model as ``waive_deliverable``: only the active CTO, only from one identified recorded owner message
+    (to the CTO or of this task) that contains the quoted words; the original exclusions and the contract's immutable
+    scope are never edited. ``action`` is ``lift`` (the exclusion no longer applies), ``replace`` (it is narrowed to
+    ``text``) or ``add`` (a new exclusion the owner approved). An identical retry returns the existing record. The
+    amendment changes the contract revision, so earlier PASSes are not reused for the amended scope.
+    """
+    task, action = str(task or "").strip(), str(action or "").strip().lower()
+    text, reason = " ".join(str(text or "").split()), " ".join(str(reason or "").split())
+    owner_message_id, owner_words = str(owner_message_id or "").strip(), " ".join(str(owner_words or "").split())
+    if not task:
+        raise ValueError("--task (the task whose contract is amended) is required")
+    if action not in contract.EXCLUSION_ACTIONS:
+        raise ValueError("--action must be lift, replace or add")
+    if len(reason) < 8:
+        raise ValueError("--reason must say why the exclusion changes (at least 8 characters)")
+    if len(owner_words) < 8:
+        raise ValueError("--owner-words must quote the owner's own words (at least 8 characters) that approve this change")
+    if not owner_message_id:
+        raise ValueError("--owner-message must name the recorded owner message (its id) that says so; the owner must approve on the board first")
+    if action in ("replace", "add") and not text:
+        raise ValueError("--text (the new exclusion wording) is required for replace and add")
+    for value, label in ((owner_words, "owner words"), (text, "text"), (reason, "reason")):
+        if len(value) > MAX_FINDING_TEXT_LENGTH:
+            raise ValueError(f"{label} must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
+    index: int | None = None
+    if action in ("lift", "replace"):
+        try:
+            index = int(exclusion)
+        except (TypeError, ValueError):
+            raise ValueError("--exclusion must be the number (starting at 1) of an original exclusion") from None
+    try:
+        contract_value = contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError):
+        raise ValueError(f"task {task} has no Completion Contract to amend") from None
+    count = len((contract_value.get("immutable_scope") or {}).get("exclusions", contract_value.get("exclusions", [])))
+    if index is not None and not 1 <= index <= count:
+        raise ValueError(f"task {task} has {count} exclusion(s); --exclusion {index} does not exist")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO may record an owner-approved change to a contract's exclusions")
+        message = next((m for m in state.get("owner_messages", []) if m.get("id") == owner_message_id), None)
+        if not message:
+            raise ValueError(f"no recorded owner message {owner_message_id}; the owner must approve this on the board first")
+        if message.get("type") != "cto_message" and str(message.get("task") or "") != task:
+            raise ValueError(f"owner message {owner_message_id} is not addressed to the CTO and belongs to another task")
+        if _collapse_words(owner_words) not in _collapse_words(message.get("text")):
+            raise ValueError(f"the quoted owner words are not in owner message {owner_message_id}; quote that message exactly")
+        amendments = state.setdefault("exclusion_amendments", {}).setdefault(task, [])
+        existing = next((a for a in amendments if a.get("action") == action and a.get("index") == index and a.get("text", "") == text), None)
+        if existing and existing.get("owner_message_id") == owner_message_id and existing.get("owner_words") == owner_words:
+            record = dict(existing)
+        elif existing or (index is not None and any(a.get("index") == index for a in amendments)):
+            raise ValueError(f"exclusion {index} of {task} was already amended; an exclusion is amended once")
+        else:
+            record = {
+                "id": f"amend-{secrets.token_hex(6)}", "task": task, "action": action, "index": index, "text": text,
+                "reason": reason, "owner_words": owner_words, "owner_message_id": owner_message_id,
+                "owner_message_at": str(message.get("created_at") or ""), "recorded_by": agent["id"], "recorded_at": now(),
+            }
+            amendments.append(record)
+            what = {"lift": f"lifted exclusion {index}", "replace": f"narrowed exclusion {index} to \"{text}\"", "add": f"added the exclusion \"{text}\""}[action]
+            _event(state, "exclusions_amended_by_owner", agent, {
+                "task": task, "amendment_id": record["id"], "owner_message_id": owner_message_id,
+                "message": f"Owner approved: {what} — owner's words: \"{owner_words}\" (message {owner_message_id}); reason: {reason}",
+            })
+    value = contract.amend_exclusions(root, task, {key: record[key] for key in (
+        "id", "action", "index", "text", "reason", "owner_words", "owner_message_id", "owner_message_at", "recorded_by", "recorded_at")})
+    return {"amendment": record, "effective_exclusions": contract.effective_exclusions(value)}
 
 
 def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
@@ -5358,7 +7192,7 @@ def _run_internal_qa(
             cache_decision="executed_no_cache_store",
         ))
     output = (completed.stdout + completed.stderr).strip()
-    counts = [int(value) for pair in re.findall(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I) for value in pair if value]
+    executed = certified_execution.executed_test_count(output)
 
     # ZERO EXECUTED TESTS IS ITS OWN REFUSAL, checked BEFORE the exit code.
     #
@@ -5369,7 +7203,7 @@ def _run_internal_qa(
     # 3.9 the same command exits 0 and the precise refusal was reached. The
     # protection held on both; only the diagnosis was wrong, and a gate that
     # cannot say why it refused is most of the way to a gate nobody trusts.
-    ran_nothing = (counts and max(counts) == 0) or re.search(r"\bNO TESTS RAN\b", output, re.I)
+    ran_nothing = executed == 0 or re.search(r"\bNO TESTS RAN\b", output, re.I)
     if ran_nothing:
         raise ValueError(browser_acceptance.with_blocked_note(
             "internal-QA test command reported zero executed tests", output,
@@ -5380,7 +7214,7 @@ def _run_internal_qa(
         raise ValueError(browser_acceptance.with_blocked_note(
             f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}", output,
         ))
-    if not counts:
+    if executed is None:
         raise ValueError(browser_acceptance.with_blocked_note(
             "internal-QA output must report a positive executed-test count", output,
         ))
@@ -5449,6 +7283,8 @@ def _execute_scenario_simulations(
                 certification=certification, live_board_root=live_board_root,
                 reuse=scenario["command"] not in fresh_commands,
             )
+        except certified_execution.RetryableInterruption:
+            raise   # nothing was certified and nothing failed: waiting behind a run, or owner-machine activity
         except ValueError as error:
             output = str(error)
             failures.append(f"{scenario['id']}: {error}")
@@ -6076,7 +7912,12 @@ def _contract_revision(root: ProjectRoot, task: str) -> dict[str, str]:
         return {"path": str(path), "sha256": legacy, "legacy_sha256": legacy, "revision": "unreadable"}
     scope = value.get("immutable_scope") if isinstance(value, dict) else None
     if isinstance(scope, dict) and scope:
-        canonical = json.dumps(scope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        amendments = [
+            {key: item.get(key) for key in ("id", "action", "index", "text", "owner_message_id")}
+            for item in value.get("exclusion_amendments") or [] if isinstance(item, dict)
+        ]
+        # Owner-approved amendments are part of the scope a review certified; without any, the hash is unchanged.
+        canonical = json.dumps({**scope, "exclusion_amendments": amendments} if amendments else scope, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return {
             "path": str(path),
             "sha256": hashlib.sha256(canonical).hexdigest(),
@@ -6182,6 +8023,7 @@ def _incomplete_identity_check(label: str, problem: str) -> dict[str, Any]:
 
 def _evidence_reuse_checks(
     root: ProjectRoot, state: dict[str, Any], request: dict[str, Any],
+    proof_problems_by_request: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Mechanically compare one saved PASS with the identities it reviewed."""
     identity = request.get("evidence_reuse_identity")
@@ -6259,6 +8101,17 @@ def _evidence_reuse_checks(
                 ),
             ])
 
+    if request.get("no_product_code_task"):
+        # A PASS recorded before this gate has no such field and is neither verified nor discarded by it.
+        if proof_problems_by_request is not None and str(request.get("id")) in proof_problems_by_request:
+            proof_problems = proof_problems_by_request[str(request.get("id"))]
+        else:
+            proof_problems, _ = _no_product_code_evidence(root, task, request.get("no_product_code_evidence_pins"))
+        checks.append(_reuse_check(
+            "proof files of a task with no product code", "intact",
+            "intact" if not proof_problems else "; ".join(proof_problems)[:300],
+        ))
+
     labels = {
         "delivery_ledger": "delivery-ledger hash",
         "challenge_ledger": "challenge-ledger hash",
@@ -6328,6 +8181,15 @@ def reconcile_evidence_reuse(root: ProjectRoot, resume_id: str = "") -> dict[str
     """Reuse intact PASSes and reopen any gate whose reviewed identity changed."""
     reused: list[dict[str, Any]] = []
     invalidated: list[dict[str, Any]] = []
+    # Proof files of tasks that change no product code are read from a lock-free snapshot: no file is hashed under the board lock.
+    proof_problems_by_request: dict[str, list[str]] = {}
+    try:
+        for saved in _read_state(root).get("qa_requests", {}).values():
+            if saved.get("status") == "passed" and saved.get("no_product_code_task"):
+                proof_problems_by_request[str(saved.get("id"))] = _no_product_code_evidence(
+                    root, str(saved.get("task") or ""), saved.get("no_product_code_evidence_pins"))[0]
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
     with locked_state(root, allow_paused=True, operation="reconcile saved PASS evidence") as state:
         latest_by_scope: dict[tuple[str, str, str, str, int], dict[str, Any]] = {}
         for request in state.get("qa_requests", {}).values():
@@ -6373,7 +8235,8 @@ def reconcile_evidence_reuse(root: ProjectRoot, resume_id: str = "") -> dict[str
                         reused.append({"request_id": request.get("id", ""), "status": "reused", "checks": checks, "event": event})
                 continue
             prior = request.get("evidence_reuse_validation", {})
-            if resume_id and prior.get("resume_id") == resume_id:
+            stale_proof = bool(proof_problems_by_request.get(str(request.get("id")))) and prior.get("status") == "reused"
+            if resume_id and prior.get("resume_id") == resume_id and not stale_proof:
                 target = reused if prior.get("status") == "reused" else invalidated
                 target.append({
                     "request_id": request.get("id", ""),
@@ -6381,7 +8244,7 @@ def reconcile_evidence_reuse(root: ProjectRoot, resume_id: str = "") -> dict[str
                     "status": prior.get("status", ""),
                 })
                 continue
-            checks = _evidence_reuse_checks(root, state, request)
+            checks = _evidence_reuse_checks(root, state, request, proof_problems_by_request)
             failures = [item for item in checks if not item["matched"]]
             validation = {
                 "resume_id": resume_id,
@@ -6686,6 +8549,67 @@ def _resolve_concluded_hold(state: dict[str, Any], event: dict[str, Any]) -> Non
         "task": task, "source": kind, "outcome": outcome,
         "message": f"control-plane hold closed: {outcome}",
     })
+
+
+TASK_BRIEF_LIMIT_MESSAGE = "task brief needs a plan (1-420 chars) and update (1-240 chars)"
+_BRIEF_LENGTH_HOLD_REASON = re.compile(
+    r"The same operation was refused \d+ times: " + re.escape(TASK_BRIEF_LIMIT_MESSAGE)
+)
+
+
+def _end_stale_brief_hold(state: dict[str, Any], task: str) -> None:
+    """End a hold that only a too-long task brief opened, once a newer brief is accepted.
+
+    The evidence is in the hold itself: source repeated_refusal:task-brief AND
+    a reason that is exactly the gateway's wrapper around the length refusal.
+    Any other reason or operation stays open. Both timestamps must parse and
+    the brief must be strictly newer; unknown chronology keeps the hold.
+    """
+    hold = (state.get("control_plane_holds") or {}).get(task)
+    brief = (state.get("task_briefs") or {}).get(task)
+    if (
+        not isinstance(hold, dict) or hold.get("status") != "open" or not isinstance(brief, dict)
+        or hold.get("source") != "repeated_refusal:task-brief"
+        or not _BRIEF_LENGTH_HOLD_REASON.fullmatch(str(hold.get("reason") or ""))
+    ):
+        return
+    held_at = _parsed_timestamp(hold.get("recorded_at"))
+    briefed_at = _parsed_timestamp(brief.get("updated_at"))
+    if held_at is None or briefed_at is None or briefed_at <= held_at:
+        return
+    outcome = "Resolved: the brief was only over its length limit and a corrected brief was accepted"
+    hold.update({"status": "resolved", "resolved_at": now(), "resolved_by": "task_brief_updated", "outcome": outcome})
+    _event(state, "control_plane_hold_resolved", None, {
+        "task": task, "source": "task_brief_updated", "outcome": outcome,
+        "message": f"control-plane hold closed: {outcome}",
+    })
+
+
+def owner_clear_hold(root: ProjectRoot, task: str, source: str) -> dict[str, Any]:
+    """The owner (never an agent) closes one open control-plane hold by its source.
+
+    Refused when the task has no open hold, or when its source is not exactly
+    the one named, so a typo or a different hold is never cleared by accident.
+    Certified PASS records are not touched.
+    """
+    task, source = task.strip(), source.strip()
+    if not task or not source:
+        raise ValueError("clear-hold needs --task and --source")
+    with locked_state(root) as state:
+        hold = (state.get("control_plane_holds") or {}).get(task)
+        if not isinstance(hold, dict) or hold.get("status") != "open":
+            raise ValueError(f"task {task} has no open hold; nothing was changed")
+        if str(hold.get("source") or "") != source:
+            raise ValueError(
+                f"the open hold on {task} comes from {hold.get('source')!r}, not {source!r}; nothing was changed"
+            )
+        outcome = "Resolved: cleared by the owner (clear-hold)"
+        hold.update({"status": "resolved", "resolved_at": now(), "resolved_by": "owner_clear_hold", "outcome": outcome})
+        _event(state, "control_plane_hold_resolved", None, {
+            "task": task, "source": "owner_clear_hold", "outcome": outcome,
+            "message": f"control-plane hold closed: {outcome}",
+        })
+    return {"task": task, "cleared": source, "message": f"Cleared the {source} hold on {task}. Certified results were not changed."}
 
 
 def clear_control_plane_hold(root: ProjectRoot, task: str, source: str) -> dict[str, Any] | None:
@@ -7675,6 +9599,12 @@ def route_reintegration(root: ProjectRoot, task: str, reason: str, *, source: st
             if marker is not None:
                 marker["delivery_notified_at"] = now() if queued.get("id") else ""
                 marker["instruction_id"] = queued.get("id", "")
+                if queued.get("id"):
+                    # the concrete repair instruction reached Delivery's inbox: a routed action for the task
+                    _event(state, "reintegration_routed", None, {
+                        "task": task, "instruction_id": queued["id"], "source": source,
+                        "message": f"Delivery routed to merge main into {task} and re-test",
+                    })
                 if not queued.get("id"):
                     marker["delivery"] = "relaunch_required"
                     marker["owner_line"] = (
@@ -7885,6 +9815,17 @@ def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: st
     return dict(snapshot(root)["qa_requests"].get(request_id, created))
 
 
+def _owner_documents_now(root: Path, task: str) -> list[dict[str, Any]]:
+    """The documents marked for the owner at this moment (what a final review certifies)."""
+    try:
+        value = contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    return [{"deliverable": d["deliverable"], "document": d["document"], "path": d["path"], "sha256": d["sha256"],
+             "marked_at": d["marked_at"], "attached_at": d["attached_at"], "latest": d["latest"]}
+            for d in contract.owner_document_manifest(value)]
+
+
 def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[str, Any]:
     """Queue a second, independent execution review after development QA passes."""
     if not summary.strip():
@@ -7946,6 +9887,7 @@ def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[
             "reviewed_worktree_digest": review_artifact.get("working_tree_digest", ""),
             "contract_revision": contract_revision,
             "environment_identity": environment_identity,
+            "owner_documents": _owner_documents_now(root, developer["task"]),
             "changes_summary": "", "status": "open", "requested_at": now(), "claimed_by": None,
             "claimed_at": None, "result": None, "result_summary": None, "evidence": None,
             "completed_at": None, "review_wait_started_at": now(), "review_wait_stopped_at": None,
@@ -8280,12 +10222,33 @@ def resolve_repair_package(
             raise ValueError("only Delivery may resolve an existing repair package")
         if package.get("task") != delivery.get("task"):
             raise ValueError("repair package belongs to a different task")
+        # Owner 2026-10-14: a member whose deliverable the owner waived gets an
+        # audited disposition naming the board's waiver record instead of an
+        # invented repair; every other member still needs a real repair.
+        waivers = {w.get("id"): w for w in (state.get("deliverable_waivers") or {}).get(package["task"], [])}
+        waived_members = 0
+        for row in resolutions:
+            resolution = str(row.get("resolution") or "").strip()
+            if not resolution.lower().startswith("waived:"):
+                continue
+            waiver = waivers.get(resolution.split(":", 1)[1].strip())
+            if not waiver:
+                raise ValueError(f"repair member {row.get('id')} names an unknown waiver {resolution!r}; use the id from deliverable-waived")
+            row["resolution"] = (
+                f"Waived by the owner: \"{waiver.get('owner_words')}\" (deliverable \"{waiver.get('deliverable')}\""
+                + (f", part \"{waiver.get('part')}\"" if waiver.get("part") else "")
+                + f"; waiver {waiver.get('id')} recorded {waiver.get('recorded_at')})"
+            )
+            row["regression_check"] = "Not required: the owner waived this deliverable; see the board waiver record"
+            waived_members += 1
         repair_package_model.resolve(package, resolutions, delivery["id"])
         _event(state, "repair_package_resolved", delivery, {
             "task": package["task"], "package_id": package_id,
             "member_count": len(package.get("members") or []),
             "required_test_scope": package.get("required_test_scope"),
-            "message": "Every grouped failure has a recorded repair and regression check",
+            "waived_members": waived_members,
+            "message": "Every grouped failure has a recorded repair and regression check"
+                       + (f" ({waived_members} disposed of by an owner waiver)" if waived_members else ""),
         })
         return json.loads(json.dumps(package))
 
@@ -8404,8 +10367,242 @@ def _repair_context(
 TEST_SCOPES = {"focused", "affected", "integration", "full", "health"}
 
 
+EVIDENCE_READ_SECONDS = 30.0
+EVIDENCE_TOTAL_SECONDS = 90.0
+EVIDENCE_MAX_BYTES = 512 * 1024 * 1024
+EVIDENCE_MAX_STALLED_READERS = 4
+_evidence_reader_slots = threading.BoundedSemaphore(EVIDENCE_MAX_STALLED_READERS)
+
+
+def _evidence_file_problem(path_text: str, recorded_sha256: str) -> str:
+    """Why one recorded evidence file is no longer proof ("" when intact).
+
+    The read is bounded: a stalled disk or network share releases the caller
+    after EVIDENCE_READ_SECONDS with a plain message, and a file over
+    EVIDENCE_MAX_BYTES is named instead of read.
+    """
+    outcome: list[str] = []
+    if not _evidence_reader_slots.acquire(blocking=False):
+        return "earlier reads of unavailable storage are still waiting; check that the storage is available and try again"
+
+    def read() -> None:
+        try:
+            outcome.append(_evidence_file_problem_unbounded(path_text, recorded_sha256))
+        finally:
+            _evidence_reader_slots.release()
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    worker.join(EVIDENCE_READ_SECONDS)
+    if worker.is_alive():
+        return f"the file could not be read within {int(EVIDENCE_READ_SECONDS)} seconds (is its storage available?)"
+    return outcome[0] if outcome else "the file could not be checked"
+
+
+def _evidence_file_problem_unbounded(path_text: str, recorded_sha256: str) -> str:
+    """Descriptor based: the file hashed is the regular file that was checked; every filesystem error is named."""
+    try:
+        resolved = os.path.realpath(str(path_text))
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(resolved, flags)
+    except FileNotFoundError:
+        return "the file is missing"
+    except PermissionError:
+        return "the file cannot be read (permission denied)"
+    except OSError as error:
+        return f"the file cannot be opened ({error.__class__.__name__})"
+    try:
+        opened = os.fstat(descriptor)
+        if not stat_module.S_ISREG(opened.st_mode):
+            return "it is not a regular file"
+        if opened.st_size > EVIDENCE_MAX_BYTES:
+            return f"the file is larger than {EVIDENCE_MAX_BYTES // (1024 * 1024)} MiB, more than can be verified"
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > EVIDENCE_MAX_BYTES:
+                return f"the file grew past {EVIDENCE_MAX_BYTES // (1024 * 1024)} MiB while it was read"
+            digest.update(chunk)
+    except OSError as error:
+        return f"the file cannot be read ({error.__class__.__name__})"
+    finally:
+        os.close(descriptor)
+    if size == 0:
+        return "the file is empty"
+    if digest.hexdigest() != str(recorded_sha256 or ""):
+        return "the file changed after it was attached (its content no longer matches the record)"
+    return ""
+
+
+def _evidence_obligations(contract_value: dict[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Per deliverable that is not wholly waived, the CURRENT evidence entries.
+
+    Three kinds of series, each judged by its newest version: a document marked
+    for the owner (selected by the owner page's own rule, retired names left
+    out), a file attached with --document NAME (independent proofs), and every
+    other attachment, which are versions of the deliverable's default proof
+    (attaching a corrected file replaces the stale one). Legacy entries without
+    a recorded hash are ignored.
+    """
+    obligations = []
+    for item in contract_value.get("deliverables", []) or []:
+        if not isinstance(item, dict) or contract._wholly_waived(item):
+            continue
+        current: list[dict[str, Any]] = []
+        for name in sorted({contract._document_name(item, entry) for entry in contract.owner_documents(item)}):
+            entry = contract.current_owner_document(item, name)
+            if entry and entry.get("path") and entry.get("sha256"):
+                current.append(entry)
+        named: dict[str, dict[str, Any]] = {}
+        default: dict[str, Any] | None = None
+        for entry in item.get("evidence") or []:
+            if not isinstance(entry, dict) or entry.get("for_owner") or not entry.get("path") or not entry.get("sha256"):
+                continue
+            if entry.get("document"):
+                named[str(entry["document"])] = entry
+            else:
+                default = entry
+        current.extend(named.values())
+        if default is not None:
+            current.append(default)
+        obligations.append((str(item.get("name") or ""), current))
+    return obligations
+
+
+def _obligation_identity(root: Path, task: str) -> tuple[Any, ...]:
+    """The current proof selection (no file is read): compared under the lock with the one that was verified."""
+    try:
+        value = contract._load(contract._task_path(root, task))
+    except (OSError, ValueError, TypeError):
+        return ("unreadable",)
+    return tuple(sorted(
+        (name, str(entry["path"]), str(entry["sha256"]))
+        for name, entries in _evidence_obligations(value) for entry in entries
+    )) + (("deliverables", tuple(sorted(
+        str(item.get("name")) for item in value.get("deliverables", []) or []
+        if isinstance(item, dict) and not contract._wholly_waived(item)))),)
+
+
+def _no_product_code_evidence(root: Path, task: str, pins: list[dict[str, Any]] | None = None) -> tuple[list[str], list[dict[str, str]]]:
+    """Plain problems with the proof of a task that changes no product code, and the current pins.
+
+    Without ``pins`` this is the request-time check. With the pins recorded on
+    the reviewed request it also requires the current obligations to be exactly
+    what was reviewed: a file attached or selected afterwards, or a reviewed
+    file that is gone or changed, is named. Restoring the exact reviewed bytes
+    satisfies it; a deliverable the owner has since waived needs nothing.
+    """
+    try:
+        value = contract._load(contract._task_path(root, task))
+    except (OSError, ValueError, TypeError):
+        return ["the Completion Contract could not be read"], []
+    problems: list[str] = []
+    current: list[dict[str, str]] = []
+    waived = {
+        str(item.get("name") or "") for item in value.get("deliverables", []) or []
+        if isinstance(item, dict) and contract._wholly_waived(item)
+    }
+    reviewed = {(str(pin.get("deliverable", "")), str(pin.get("path", "")), str(pin.get("sha256", ""))) for pin in pins or []}
+    deadline = time.monotonic() + EVIDENCE_TOTAL_SECONDS
+
+    def check(path_text: str, recorded: str) -> str:
+        if time.monotonic() > deadline:
+            return f"not checked: the {int(EVIDENCE_TOTAL_SECONDS)}-second limit for verifying the proof files was reached"
+        return _evidence_file_problem(path_text, recorded)
+
+    for name, entries in _evidence_obligations(value):
+        if not entries:
+            problems.append(f'deliverable "{name}" has no attached proof file')
+        for entry in entries:
+            path_text, recorded = str(entry["path"]), str(entry["sha256"])
+            current.append({"deliverable": name, "path": path_text, "sha256": recorded})
+            reason = check(path_text, recorded)
+            if reason:
+                problems.append(f'deliverable "{name}": {Path(path_text).name} - {reason}')
+            elif pins is not None and (name, path_text, recorded) not in reviewed:
+                problems.append(
+                    f'deliverable "{name}": {Path(path_text).name} was attached or selected after the review '
+                    "was requested, so the reviewer did not judge it")
+    for pin in pins or []:
+        if str(pin.get("deliverable", "")) in waived:
+            continue
+        reason = check(pin.get("path", ""), pin.get("sha256", ""))
+        if reason:
+            message = f'deliverable "{pin.get("deliverable", "")}": {Path(str(pin.get("path", ""))).name} - {reason} since the review was requested'
+            if not any(message.split(" - ")[0] == other.split(" - ")[0] for other in problems):
+                problems.append(message)
+    return problems, current
+
+
+def _no_product_code_message(problems: list[str]) -> str:
+    return (
+        "This task changes no product code (no tracked file outside the harness's own storage), so its proof is "
+        "the files attached to its deliverables, and they must exist, not be empty and still match what was "
+        "attached and reviewed: " + "; ".join(problems)
+        + f". Delivery Agent: attach the proof again - {CONTRACT_EVIDENCE_GUIDANCE} (a document the owner "
+        "reads: add --for-owner; --document NAME keeps independent proofs apart). If a review is already open or passed on "
+        "stale proof, the Reviewer fails it or Delivery requests a new review (a passed review whose proof has "
+        "changed no longer blocks a new request for the same commit), or the owner waives that deliverable"
+    )
+
+
+def _task_changes_no_product_code(root: Path, review_artifact: dict[str, Any], baseline_commit: str) -> tuple[bool | None, str]:
+    """True when the candidate touches no tracked file outside the harness's own storage.
+
+    None means it cannot be told (no Git history or no recorded baseline); the
+    caller then records that the check was skipped instead of guessing.
+    """
+    if not review_artifact.get("available"):
+        return None, "Git history was not available"
+    if not baseline_commit:
+        return None, "no task baseline was recorded"
+    if review_artifact.get("base_commit") == baseline_commit:
+        return True, ""
+    context = project_context(root)
+    owned = [".harness"]
+    try:
+        owned.append(str(context.data_root.resolve().relative_to(context.code_root.resolve())))
+    except (OSError, ValueError):
+        pass
+    for path in review_artifact.get("files") or []:
+        normalized = str(path).strip().strip('"')
+        if not any(normalized == prefix or normalized.startswith(prefix.rstrip("/") + "/") for prefix in owned):
+            return False, ""
+    return True, ""
+
+
+def _last_final_pass(state: dict[str, Any], task: str) -> dict[str, Any] | None:
+    passes = [
+        request for request in _task_requests(state, task)
+        if request.get("stage") == INDEPENDENT_REVIEW
+        and request.get("phase", "legacy") in {"final_acceptance", "legacy"}
+        and request.get("status") == "passed"
+    ]
+    return max(passes, key=lambda request: int(request.get("cycle", 0)), default=None)
+
+
+def _proof_check_before_lock(root: Path, agent_id: str) -> tuple[str, list[str], tuple[Any, ...]] | None:
+    """The proof check of a no-product-code task, read from a lock-free snapshot so no file is hashed under the board lock."""
+    try:
+        state = _read_state(root)
+        task = str((state.get("agents", {}).get(agent_id) or {}).get("task") or "")
+        last = _last_final_pass(state, task) if task else None
+        if last and last.get("no_product_code_task"):
+            identity = _obligation_identity(root, task)
+            return (str(last.get("id") or ""),
+                    _no_product_code_evidence(root, task, last.get("no_product_code_evidence_pins"))[0], identity)
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    return None
+
+
 def _completion_gate_problems(
     root: Path, state: dict[str, Any], task: str, developer_id: str,
+    proof_check: tuple[str, list[str], tuple[Any, ...]] | None = None,
 ) -> list[str]:
     """Return the deterministic gates that used to run only after final PASS."""
     problems: list[str] = []
@@ -8414,6 +10611,17 @@ def _completion_gate_problems(
         remedy = (f" — {CONTRACT_EVIDENCE_GUIDANCE}"
                   if any("evidence" in problem or "remaining work" in problem for problem in contract_problems) else "")
         problems.append("Completion Contract is incomplete: " + "; ".join(contract_problems) + remedy)
+    last_pass = _last_final_pass(state, task)
+    if last_pass and last_pass.get("no_product_code_task"):
+        if proof_check is None:
+            proof_problems, _ = _no_product_code_evidence(root, task, last_pass.get("no_product_code_evidence_pins"))
+        elif proof_check[0] != str(last_pass.get("id") or "") or proof_check[2] != _obligation_identity(root, task):
+            # Delivery attached, or the CTO selected, a proof file while it was being checked: nothing is hashed under the lock.
+            proof_problems = ["the proof files of this task changed while completion was being checked; run complete again"]
+        else:
+            proof_problems = proof_check[1]
+        if proof_problems:
+            problems.append(_no_product_code_message(proof_problems))
     owner_direction = owner_direction_for_task(state, developer_id, task)
     if not owner_direction:
         problems.append("recorded owner direction is missing")
@@ -8465,6 +10673,17 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     # Authenticate and reject obviously invalid requests before invoking a
     # command.  The command itself is deliberately outside the state lock: a
     # slow test suite must never block board polling or the watchdog.
+    proof_changed_since_pass = False
+    if phase == "final_acceptance":
+        try:
+            earlier = _read_state(root)
+            owner_agent = earlier.get("agents", {}).get(agent_id) or {}
+            last = _last_final_pass(earlier, str(owner_agent.get("task") or ""))
+            if last and last.get("no_product_code_task"):
+                proof_changed_since_pass = bool(
+                    _no_product_code_evidence(root, str(last.get("task") or ""), last.get("no_product_code_evidence_pins"))[0])
+        except (OSError, ValueError, TypeError, KeyError):
+            proof_changed_since_pass = False
     if phase == "final_acceptance":
         # Defect #17: a stale base is refused before any review effort is
         # spent, whether the marker already exists or main moved unnoticed.
@@ -8580,6 +10799,22 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             root, request_state, execution_root, task_name,
             str(review_artifact.get("commit") or ""),
         )
+    no_product_code_task = False
+    no_product_code_check = ""
+    no_product_code_pins: list[dict[str, str]] = []
+    if phase == "final_acceptance":
+        # Owner 2026-10-15: a task that changes no product code still shows
+        # proof before its review can pass - the recorded evidence files must
+        # exist, be non-empty and match what was attached. Runs outside the
+        # board lock; recorded on the request and checked again at PASS.
+        changes_no_code, unknown_reason = _task_changes_no_product_code(root, review_artifact, baseline_commit)
+        if changes_no_code is None:
+            no_product_code_check = f"skipped: {unknown_reason}"
+        elif changes_no_code:
+            proof_problems, no_product_code_pins = _no_product_code_evidence(root, task_name)
+            if proof_problems:
+                raise ValueError(_no_product_code_message(proof_problems))
+            no_product_code_task = True
     assert ledger_path is not None
     ledger_sha256 = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
     simulation_valid, simulation_problems, planned_scenarios = contract.scenario_simulations(ledger_path)
@@ -8590,7 +10825,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         [test_command, *[scenario["command"] for scenario in planned_scenarios]],
         environment=child_process.execution_environment(),
     )
-    cited_screen_checks = _cited_screen_checks(root, developer["task"], ledger_path)
+    cited_screen_checks = _cited_screen_checks(root, developer["task"], ledger_path, candidate_root=execution_root)
     delivery_scope = {
         "task": task_name, "structure_revision": structure_revision,
         "phase": phase, "subtask": subtask, "chunk": chunk,
@@ -8640,7 +10875,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             if int(request.get("structure_revision", 0)) == current_revision
         ]
         latest = max(current_reviews, key=lambda request: int(request["cycle"]), default=None)
-        if latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit"):
+        if (latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit")
+                and not proof_changed_since_pass):
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
         if cycle > 1 and not changes.strip():
@@ -8663,6 +10899,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "reviewed_worktree_digest": review_artifact.get("working_tree_digest", ""),
             "accepted_byte_manifest": accepted_byte_manifest,
             "finalization_diff": finalization_diff,
+            "no_product_code_task": no_product_code_task,
+            "no_product_code_check": no_product_code_check,
+            "no_product_code_evidence_pins": no_product_code_pins,
             "repair_package": selected_repair_package,
             "repair_package_id": (selected_repair_package or {}).get("id", ""),
             "contract_revision": contract_revision, "environment_identity": environment_identity,
@@ -8734,11 +10973,17 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     })
                 _event(state, "staged_review_cancelled", developer, {
                     "task": staged["task"], "request_id": request_id,
-                    "message": "Delivery evidence failed; staged Reviewer execution and verdict remain blocked",
+                    "message": (
+                        "Delivery evidence did not run (" + str(error)[:200] + "); no test failed, ask for the review again"
+                        if isinstance(error, certified_execution.RetryableInterruption)
+                        else "Delivery evidence failed; staged Reviewer execution and verdict remain blocked"),
                 })
                 failures = state.setdefault("delivery_attempt_failures", [])
-                failures.append(json.loads(json.dumps(staged)))
-                del failures[:-200]
+                if not isinstance(error, certified_execution.RetryableInterruption):
+                    # A run that was only waiting behind an identical one, or
+                    # held off by owner-machine activity, did not fail.
+                    failures.append(json.loads(json.dumps(staged)))
+                    del failures[:-200]
                 state["qa_requests"].pop(request_id, None)
                 cancelled_wake = {
                     "request_id": request_id, "task": staged.get("task", ""),
@@ -8784,7 +11029,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         current_revision = int(state.get("delivery_plans", {}).get(developer["task"], {}).get("structure_revision", 0))
         current_reviews = [request for request in scope_reviews if int(request.get("structure_revision", 0)) == current_revision]
         latest = max(current_reviews, key=lambda request: int(request["cycle"]), default=None)
-        if latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit"):
+        if (latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit")
+                and not proof_changed_since_pass):
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
         if cycle > 1 and not changes.strip():
@@ -8842,6 +11088,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "reviewed_worktree_digest": review_artifact.get("working_tree_digest", ""),
             "accepted_byte_manifest": accepted_byte_manifest,
             "finalization_diff": finalization_diff,
+            "no_product_code_task": no_product_code_task,
+            "no_product_code_check": no_product_code_check,
+            "no_product_code_evidence_pins": no_product_code_pins,
             "repair_package": selected_repair_package,
             "repair_package_id": (selected_repair_package or {}).get("id", ""),
             "subtask_base_commit": (
@@ -9135,6 +11384,17 @@ def record_review_intents(
         return json.loads(json.dumps(request))
 
 
+def _reviewed_candidate_files(root: Path, request_id: str) -> tuple[str, dict[str, str] | None]:
+    """The reviewed commit and its files' ids, read without holding the board lock (None when unreadable)."""
+    state = _read_state(root)
+    request = (state.get("qa_requests") or {}).get(request_id) or {}
+    commit = str(request.get("reviewed_commit", ""))
+    task = str(request.get("task", ""))
+    if not commit or not task:
+        return commit, None
+    return commit, _commit_files(_task_execution_roots(root, state, task)[0], commit)
+
+
 def attach_challenge_ledger(
     root: Path, agent_id: str, request_id: str, challenge_ledger: str,
     correction_reason: str = "",
@@ -9142,6 +11402,8 @@ def attach_challenge_ledger(
     """Validate an initial ledger or explicitly correct one after failed execution."""
     if not challenge_ledger.strip():
         raise ValueError("reviewer Challenge Ledger path is required")
+    # Reading the reviewed commit's tree is git work: done here, outside the board lock, and re-checked inside it.
+    reviewed_commit, reviewed_files = _reviewed_candidate_files(root, request_id)
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state.get("qa_requests", {}).get(request_id)
@@ -9191,7 +11453,21 @@ def attach_challenge_ledger(
         challenge_scenarios = contract.scenario_fingerprints(challenge)
         if not challenge_scenarios - source_scenarios:
             raise ValueError("reviewer Challenge Ledger must introduce at least one scenario command beyond the delivery ledger")
-        request["challenge_cited_screen_checks"] = _cited_screen_checks(root, request["task"], challenge, require_role="qa")
+        if str(request.get("reviewed_commit", "")) != reviewed_commit:
+            raise ValueError("the review request changed while the Challenge Ledger was being checked; attach it again")
+        request["challenge_cited_screen_checks"] = _cited_screen_checks(
+            root, request["task"], challenge, require_role="qa",
+            candidate_root=_task_execution_roots(root, state, request["task"])[0], ledger_paths=(source,),
+            candidate_files=reviewed_files if reviewed_files is not None else {},  # unreadable: nothing to compare, never a slow scan under the lock
+        )
+        if (
+            any(item.get("kind") == "screen-script" for item in request.get("cited_screen_checks") or [])
+            and not any(item.get("kind") == "screen-script" and item.get("role") == "qa" for item in request["challenge_cited_screen_checks"])
+        ):
+            raise ValueError(
+                "Delivery proved a click/type path with a screen script; the Reviewer must run its own screen-script on "
+                "the candidate and cite that id in the Challenge Ledger (a plain screen-check does not satisfy it)"
+            )
         attached_at = now()
         challenge_digest = hashlib.sha256(challenge.read_bytes()).hexdigest()
         if correction:
@@ -9318,7 +11594,8 @@ def _challenge_execution_lock(root: Path, request_id: str) -> Iterator[None]:
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_name = hashlib.sha256(request_id.encode("utf-8")).hexdigest() + ".lock"
     with (lock_dir / lock_name).open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        certified_execution.acquire_flock(
+            handle, lock_dir / lock_name, certified_execution._LOCK_WAIT_SECONDS, holder_info=True)
         try:
             yield
         finally:
@@ -9339,6 +11616,15 @@ def _challenge_retry_reason(prior_attempts: list[dict[str, Any]], retry_reason: 
     if retry_reason:
         return retry_reason
     last_attempt = prior_attempts[-1]
+    if last_attempt.get("status") == "failed" and int(last_attempt.get("policy_version") or 0) < execution_identity.POLICY_VERSION:
+        # The failure was recorded under an older execution policy (before the
+        # certified-run rules were corrected). Its identity no longer applies,
+        # so a retry is an auditable upgrade retry, not an unexplained repeat.
+        return (
+            f"retried after the certified-run rules changed (attempt recorded under policy "
+            f"{int(last_attempt.get('policy_version') or 0)}, now {execution_identity.POLICY_VERSION}) at "
+            f"{last_attempt.get('recorded_at', '')}"
+        )[:300]
     if last_attempt.get("status") == "interrupted":
         return (
             f"resumed after recorded system interruption at "
@@ -9451,12 +11737,14 @@ def _execute_challenge_locked(
                 if hashlib.sha256(candidate_ledger.read_bytes()).hexdigest() != simulation_digest:
                     raise ValueError("reviewer Scenario Ledger changed while its simulations were executing; rerun execute-challenge")
             bundle = _simulation_bundle(root, "reviewer Challenge Ledger", simulations)
+    except certified_execution.RetryableInterruption:
+        raise   # waiting behind a run or owner-machine activity is not a failed attempt and needs no repair reason
     except Exception as error:
         with locked_state(root) as state:
             current_request = state.get("qa_requests", {}).get(request_id)
             if current_request and current_request.get("claimed_by") == agent_id:
                 current_request.setdefault("challenge_execution_attempts", []).append({
-                    "status": "failed", "recorded_at": now(),
+                    "status": "failed", "recorded_at": now(), "policy_version": execution_identity.POLICY_VERSION,
                     "ledger_sha256": simulation_digest,
                     "retry_reason": retry_reason.strip(),
                     "reason": str(error)[:1000],
@@ -9608,6 +11896,16 @@ def qa_result(
             review_state = json.loads(json.dumps(state))
             review_request = json.loads(json.dumps(request))
             simulation_digest = hashlib.sha256(simulation_path.read_bytes()).hexdigest()
+    proof_identity: tuple[Any, ...] | None = None
+    if result == "passed" and (review_request or {}).get("no_product_code_task"):
+        # The proof of a task with no product code must still be intact at PASS (outside the board lock).
+        proof_identity = _obligation_identity(root, str((review_request or {}).get("task") or ""))
+        proof_problems, _ = _no_product_code_evidence(
+            root, str((review_request or {}).get("task") or ""),
+            (review_request or {}).get("no_product_code_evidence_pins"),
+        )
+        if proof_problems:
+            raise ValueError("cannot record PASS: " + _no_product_code_message(proof_problems))
     if result == "passed":
         # Every PASS path, certified or not: what the ledgers cited must still be intact.
         _verify_recorded_screen_checks(
@@ -9653,6 +11951,8 @@ def qa_result(
         request = state["qa_requests"].get(request_id)
         if qa["role"] != "qa" or not request or request["claimed_by"] != qa["id"] or request["status"] != "claimed":
             raise ValueError("only the QA agent that claimed this request may submit its result")
+        if proof_identity is not None and proof_identity != _obligation_identity(root, str(request.get("task") or "")):
+            raise ValueError("cannot record PASS: the proof files of this task changed while they were being checked; submit the verdict again")
         if result == "passed":
             current_value = request["challenge_ledger"] if simulation_field == "reviewer_simulations" else request["ledger"]
             current_path = _task_path_from_state(root, state, request["task"], current_value)
@@ -9855,6 +12155,7 @@ def complete(root: Path, agent_id: str, note: str) -> dict[str, Any]:
     """Mark delivery work complete only after final independent proof exists."""
     task = ""
     cto_session = ""
+    proof_check = _proof_check_before_lock(root, agent_id)
     with locked_state(root) as state:
         agent = _require_agent(state, agent_id)
         if agent.get("status") == "done" and not agent.get("active"):
@@ -9885,7 +12186,7 @@ def complete(root: Path, agent_id: str, note: str) -> dict[str, Any]:
         latest_review = max(final_reviews, key=lambda request: int(request["cycle"]), default=None)
         if not latest_review or latest_review.get("status") != "passed":
             raise ValueError("delivery cannot complete before a passed final independent review")
-        completion_problems = _completion_gate_problems(root, state, agent["task"], agent["id"])
+        completion_problems = _completion_gate_problems(root, state, agent["task"], agent["id"], proof_check)
         if completion_problems:
             raise ValueError("delivery cannot complete: " + "; ".join(completion_problems))
         completed_at = now()
@@ -9996,6 +12297,7 @@ RELEASE_REQUIRED_CHECKS = {
     "claim_scope_audit_passed", "development_agents_complete",
     "main_branch", "git_clean", "main_pushed", "main_health_verified",
     "task_artifact_release_verified",
+    "owner_artifacts_readable",
     "ready_for_owner_test",
 }
 
@@ -10009,7 +12311,7 @@ BROKER_RELEASE_REQUIRED_CHECKS = {
     "development_agents_complete", "candidate_branch", "git_clean",
     "candidate_health_verified", "task_artifact_release_verified",
     "main_fast_forward_safe", "mirror_candidate_verified",
-    "runtime_verification_scope_correct", "ready_for_owner_test",
+    "runtime_verification_scope_correct", "owner_artifacts_readable", "ready_for_owner_test",
 }
 
 
@@ -10131,7 +12433,10 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
         if open_in_scope:
             failed.append("in_scope_findings_resolved")
         if failed:
-            raise ValueError("cannot record VISUAL_TEST_REQUIRED; release checks failed: " + ", ".join(failed))
+            detail = ""
+            if "owner_artifacts_readable" in failed and checks.get("owner_artifact_problems"):
+                detail = " — " + "; ".join(str(problem) for problem in checks["owner_artifact_problems"])
+            raise ValueError("cannot record VISUAL_TEST_REQUIRED; release checks failed: " + ", ".join(failed) + detail)
         recorded_at = now()
         lifecycle_record = json.loads(json.dumps(state.setdefault("release_lifecycle", {}).get(task, {"phases": {}})))
         if isinstance(checks.get("lifecycle"), dict):
@@ -11122,6 +13427,7 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
                 "last_status_at": now(),
             })
             agent.pop("stopped_by_owner_at", None)
+            agent.pop("stopped_by_harness_at", None)
             if agent.get("session_id"):
                 state.get("owner_directions", {}).pop(agent["session_id"], None)
                 state.get("pending_owner_clarifications", {}).pop(agent["session_id"], None)
@@ -11162,7 +13468,7 @@ def _stopped_task_to_resume(state: dict[str, Any], agent_id: str) -> tuple[str, 
         task = str(source.get("task") or "")
         if (
             source.get("role") in DEVELOPER_ROLES
-            and source.get("stopped_by_owner_at")
+            and (source.get("stopped_by_owner_at") or source.get("stopped_by_harness_at"))
             and not source.get("active")
             and not source.get("superseded_by_agent_id")
             and task not in {"", AWAITING_OWNER_DIRECTION}
@@ -11170,7 +13476,7 @@ def _stopped_task_to_resume(state: dict[str, Any], agent_id: str) -> tuple[str, 
             and state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES
             and owner_direction_for_task(state, str(source["id"]), task)
         ):
-            candidates.append((str(source["stopped_by_owner_at"]), str(source["id"]), task))
+            candidates.append((str(source.get("stopped_by_owner_at") or source.get("stopped_by_harness_at")), str(source["id"]), task))
     if not candidates:
         return "", ""
     _, source_id, task = min(candidates)
@@ -11397,13 +13703,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("record-release"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--health-command", default="")
     p = sub.add_parser("hook-event"); p.add_argument("--agent", required=True); p.add_argument("--event", required=True); p.add_argument("--payload", default="{}")
     p = sub.add_parser("create-contract"); p.add_argument("--agent", required=True); p.add_argument("--objective", required=True); p.add_argument("--deliverable", action="append", required=True)
-    p = sub.add_parser("contract-evidence"); p.add_argument("--agent", required=True); p.add_argument("--deliverable", required=True); p.add_argument("--evidence", required=True)
+    p = sub.add_parser("contract-evidence"); p.add_argument("--agent", required=True); p.add_argument("--deliverable", required=True); p.add_argument("--evidence", required=True); p.add_argument("--for-owner", action="store_true", help="this file is the document the owner reads; Mission Control links it"); p.add_argument("--document", default="", help="the document's name inside the deliverable (default: the deliverable); files marked under one name are versions")
+    p = sub.add_parser("deliverable-file"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--deliverable", required=True); p.add_argument("--evidence", default="", help="a recorded evidence path (or its file name) to mark as the document the owner reads"); p.add_argument("--document", default=""); p.add_argument("--retire", action="store_true", help="retire the --document name instead: its files stop counting as the owner's current document")
     p = sub.add_parser("expand-contract"); p.add_argument("--agent", required=True); p.add_argument("--deliverable", action="append", required=True, metavar="NAME|ACCEPTANCE_PROOF")
     p = sub.add_parser("begin-task"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True)
     p = sub.add_parser("resume-task"); p.add_argument("--agent", required=True); p.add_argument("--source-agent", required=True); p.add_argument("--task", required=True)
     p = sub.add_parser("attach-workspace"); p.add_argument("--agent", required=True); p.add_argument("--workspace", required=True)
     p = sub.add_parser("bind-repository"); p.add_argument("--agent", required=True); p.add_argument("--repo", default=""); p.add_argument("--baseline", default="")
     p = sub.add_parser("reconcile-baseline"); p.add_argument("--agent", required=True)
+    p = sub.add_parser("clear-hold"); p.add_argument("--task", required=True); p.add_argument("--source", required=True)
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
     p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True)
@@ -11413,6 +13721,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("execute-challenge"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--retry-reason", default="")
     p = sub.add_parser("finding-triage"); p.add_argument("--finding", required=True); p.add_argument("--verdict", required=True, choices=["repeat", "distinct", "cleared"]); p.add_argument("--target", default=""); p.add_argument("--note", default=""); p.add_argument("--recommend", default="", choices=["", "fix", "do_not_fix"]); p.add_argument("--why", default="")
     p = sub.add_parser("finding-resolved"); p.add_argument("--finding", required=True); p.add_argument("--evidence", default="")
+    p = sub.add_parser("finding-route-around"); p.add_argument("--finding", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("deliverable-waived"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--deliverable", required=True); p.add_argument("--owner-message", required=True); p.add_argument("--owner-words", required=True); p.add_argument("--part", default=""); p.add_argument("--note", default="")
     p = sub.add_parser("findings"); p.add_argument("--include-resolved", action="store_true")
     p = sub.add_parser("request-qa"); p.add_argument("--agent", required=True); p.add_argument("--ledger", required=True); p.add_argument("--summary", required=True)
     p.add_argument("--changes", default="", help="required for QA re-test cycles; state what changed")
@@ -11448,7 +13758,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("recover-git")
     p = sub.add_parser("reintegrate-main"); p.add_argument("--agent", required=True); p.add_argument("--finish", action="store_true")
     p = sub.add_parser("screen-check"); p.add_argument("--agent", required=True); p.add_argument("--url", required=True); p.add_argument("--expect", default="")
+    p = sub.add_parser("screen-script"); p.add_argument("--agent", required=True); p.add_argument("--url", required=True); p.add_argument("--steps", required=True)
+    p = sub.add_parser("amend-exclusions"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--action", required=True); p.add_argument("--exclusion", default=""); p.add_argument("--text", default=""); p.add_argument("--reason", required=True); p.add_argument("--owner-message", required=True); p.add_argument("--owner-words", required=True)
     p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", dest="owner_command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default=""); p.add_argument("--kind", default="", choices=["", *OWNER_ACTION_KINDS]); p.add_argument("--for-agent", default="")
+    p.add_argument("--default", dest="owner_default", default="", help="what the CTO does if the owner does not answer in time (a question to the owner must carry one)"); p.add_argument("--default-minutes", type=int, default=0, help="minutes before the default applies (1 to the owner_questions setting; default: the setting)"); p.add_argument("--location-verified", default="", help="how you know the URL the card names is the owner's instance (only when the board says it cannot verify)")
     p = sub.add_parser("owner-action-done"); p.add_argument("--agent", required=True); p.add_argument("--id", required=True); p.add_argument("--outcome", required=True)
     p = sub.add_parser("reopen-integrity"); p.add_argument("--request", action="append", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("reevaluate-finalization"); p.add_argument("--task", required=True); p.add_argument("--finding", required=True); p.add_argument("--reason", required=True)
@@ -11495,13 +13808,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "record-release": out = record_release(root, args.agent, args.task, args.health_command)
         elif args.command == "hook-event": out = hook_event(root, args.agent, args.event, args.payload)
         elif args.command == "create-contract": out = create_contract(root, args.agent, args.objective, args.deliverable)
-        elif args.command == "contract-evidence": out = attach_contract_evidence(root, args.agent, args.deliverable, args.evidence)
+        elif args.command == "contract-evidence": out = attach_contract_evidence(root, args.agent, args.deliverable, args.evidence, args.for_owner, args.document)
+        elif args.command == "deliverable-file": out = retire_deliverable_document(root, args.agent, args.task, args.deliverable, args.document) if args.retire else mark_deliverable_file(root, args.agent, args.task, args.deliverable, args.evidence, args.document)
         elif args.command == "expand-contract": out = expand_contract(root, args.agent, [tuple(raw.split("|", 1)) if "|" in raw else ("", "") for raw in args.deliverable])
         elif args.command == "begin-task": out = begin_task(root, args.agent, args.task)
         elif args.command == "resume-task": out = resume_task(root, args.agent, args.source_agent, args.task)
         elif args.command == "attach-workspace": out = attach_task_workspace(root, args.agent, args.workspace)
         elif args.command == "bind-repository": out = bind_task_repository(root, args.agent, args.repo, args.baseline)
         elif args.command == "reconcile-baseline": out = reconcile_inherited_baseline(root, args.agent)
+        elif args.command == "clear-hold": out = owner_clear_hold(root, args.task, args.source)
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
         elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text)
@@ -11511,6 +13826,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "execute-challenge": out = execute_challenge(root, args.agent, args.request, args.retry_reason)
         elif args.command == "finding-triage": out = triage_finding(root, args.finding, args.verdict, args.target, args.note, args.recommend, args.why)
         elif args.command == "finding-resolved": out = resolve_finding(root, args.finding, args.evidence)
+        elif args.command == "finding-route-around": out = route_around_finding(root, args.finding, args.reason)
+        elif args.command == "deliverable-waived": out = waive_deliverable(root, args.agent, args.task, args.deliverable, args.owner_message, args.owner_words, args.part, args.note)
         elif args.command == "findings": out = {"findings": list_findings(root, args.include_resolved)}
         elif args.command == "request-qa": out = request_qa(root, args.agent, args.ledger, args.summary, args.changes)
         elif args.command == "request-independent-review": out = request_independent_review(root, args.agent, args.summary)
@@ -11580,7 +13897,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "recover-git": out = recover_git_transactions(root)
         elif args.command == "reintegrate-main": out = broker_reintegrate_main(root, args.agent, args.finish)
         elif args.command == "screen-check": out = screen_check(root, args.agent, args.url, args.expect)
-        elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.owner_command, args.why, args.task, args.kind, args.for_agent)
+        elif args.command == "screen-script": out = screen_script(root, args.agent, args.url, args.steps)
+        elif args.command == "amend-exclusions": out = amend_exclusions(root, args.agent, args.task, args.action, args.exclusion, args.text, args.reason, args.owner_message, args.owner_words)
+        elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.owner_command, args.why, args.task, args.kind, args.for_agent, args.owner_default, args.default_minutes, args.location_verified)
         elif args.command == "owner-action-done": out = clear_owner_action(root, args.agent, args.id, args.outcome)
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)
         elif args.command == "reevaluate-finalization": out = reevaluate_finalization(root, args.task, args.finding, args.reason)

@@ -32,6 +32,7 @@ UPLOAD_ARGUMENTS = {
     "claim-qa": ("--challenge-ledger", "challenge_ledger", False),
     "qa-result": ("--evidence", "evidence", True),
     "contract-evidence": ("--evidence", "evidence", True),
+    "screen-script": ("--steps", "steps", True),
 }
 
 
@@ -313,7 +314,9 @@ def invoke(argv: list[str]) -> int:
         if protocol != PROTOCOL_VERSION:
             raise ValueError("board protocol version is incompatible")
         arguments, artifacts = _prepare_artifacts(arguments[0], arguments)
-        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release"} else 30
+        # A screen script has its own 90 second run budget plus bounded browser start and clean-up waits; the
+        # agent must not give up (and rerun clicks) while it is still running.
+        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release"} else 240 if arguments[0] == "screen-script" else 30
         attempts = POLL_TRANSPORT_ATTEMPTS if arguments[0] == "poll" else 1
         value = None
         for attempt in range(attempts):

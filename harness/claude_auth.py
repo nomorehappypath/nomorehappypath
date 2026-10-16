@@ -35,10 +35,22 @@ class ClaudeAuthRequired(RuntimeError):
         super().__init__(action(reason)["why"])
 
 
+# Reasons that are the sign-in itself (a new token fixes them) and reasons that are not (it would only waste the owner's time).
+NOT_A_TOKEN_PROBLEM = {
+    "confinement": "Claude could not be started in the agents' protected sandbox, so the sign-in could not be checked. Your token was not rejected. Install or repair the sandbox (on Linux: apt install bubblewrap), then retry.",
+    "cli": "The Claude program could not be run or did not answer the sign-in check. Your token was not rejected. Check that Claude is installed and up to date (claude --version), then retry.",
+    "quota": "Your Claude account is over its usage limit or out of credit, or Claude is overloaded. Your token was not rejected. Wait or top up the plan on the Claude side, then retry.",
+    "unavailable": "Claude could not be reached to check the sign-in (connection, timeout or a temporary Claude problem). Your token was not rejected. Check your connection, then retry; no agent was started.",
+    "model": "The model used only for the sign-in check is not available to your account. Your token was not rejected. Set HARNESS_CLAUDE_AUTH_MODEL to a model your account can use (for example sonnet), restart the harness when your project is safely paused, then retry.",
+}
+
+
 def action(reason="missing") -> dict:
     why = {"missing": "Claude needs a dedicated setup-token before this agent can start.",
            "rejected": "Claude rejected the setup-token. Generate a replacement before restarting this agent.",
-           "unavailable": "Claude authentication could not be checked. Check your connection and retry; no agent was started."}[reason]
+           **NOT_A_TOKEN_PROBLEM}[reason]
+    if reason in NOT_A_TOKEN_PROBLEM:
+        return {"title": "Claude agents cannot start", "why": why, "instructions": "No new token is needed. After the fix above, retry the agent from Mission Control."}
     instructions = platform_support.claude_credentials().instructions()
     return {"title": "Set up Claude agent authentication", "why": why, "instructions": instructions}
 
@@ -56,8 +68,9 @@ def manager_environment(environment) -> dict:
     value.pop(TOKEN_ENV, None)
     try:
         value[TOKEN_ENV] = resolve_token(environment)
-        if platform_support.claude_credentials().uses_keychain and not environment.get(TOKEN_ENV):
-            value["HARNESS_CLAUDE_TOKEN_SOURCE"] = "keychain"
+        credentials = platform_support.claude_credentials()
+        if not environment.get(TOKEN_ENV) and (credentials.uses_keychain or getattr(credentials, "uses_file", False)):
+            value["HARNESS_CLAUDE_TOKEN_SOURCE"] = "keychain" if credentials.uses_keychain else "file"
     except ClaudeAuthRequired:
         pass  # Missing auth blocks a Claude launch, never opening the project.
     return value
@@ -69,10 +82,16 @@ def _probe_prefix(home):
     return implementation.wrap([], [str(home), *implementation.temp_paths()], store=home / "guard", protected_reads=protected)
 
 
+def _sandbox_failed(completed) -> bool:
+    """The protective sandbox itself refused to start (its own diagnostic, before Claude ran): not a token problem."""
+    text = f"{completed.stdout}\n{completed.stderr}".lower()
+    return any(word in text for word in ("bwrap:", "namespace failed", "sandbox-exec", "sandbox_apply", "setting up uid map"))
+
+
 def validate_token(token: str) -> None:
     cli = global_settings.resolved_cli("claude").get("path")
     if not cli:
-        raise ClaudeAuthRequired("unavailable")
+        raise ClaudeAuthRequired("cli")
     key = (token, cli)  # Never persisted, hashed into an artifact, or logged.
     with _lock:
         now = time.monotonic()
@@ -90,8 +109,13 @@ def validate_token(token: str) -> None:
                                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, check=False)
                 try:
                     authenticated = json.loads(status.stdout).get("authMethod") == "oauth_token"
+                    understood = True
                 except (ValueError, AttributeError):
-                    authenticated = False
+                    authenticated, understood = False, False
+                if not understood and _sandbox_failed(status):
+                    raise ClaudeAuthRequired("confinement")
+                if not understood and any(word in (status.stdout + status.stderr).lower() for word in ("unknown command", "unrecognized", "no such command", "unknown argument", "usage:")):
+                    raise ClaudeAuthRequired("cli")  # an old CLI without `auth status`, not proof the token is bad
                 if status.returncode or not authenticated:
                     raise ClaudeAuthRequired("rejected")
                 # Status identifies the credential source; a real unpersisted turn
@@ -103,14 +127,22 @@ def validate_token(token: str) -> None:
                 try:
                     result = json.loads(probe.stdout)
                 except ValueError:
-                    raise ClaudeAuthRequired("unavailable") from None
+                    raise ClaudeAuthRequired("confinement" if _sandbox_failed(probe) else "unavailable") from None
                 if probe.returncode or result.get("is_error"):
                     message = str(result.get("result", "")).lower()
+                    if any(word in message for word in ("usage limit", "rate limit", "credit", "quota", "429", "overloaded", "529")):
+                        raise ClaudeAuthRequired("quota")
+                    if "model" in message and any(word in message for word in ("not found", "not available", "no access", "invalid model", "does not exist")):
+                        raise ClaudeAuthRequired("model")
                     rejected = any(word in message for word in ("401", "unauthorized", "authentication", "invalid token", "expired", "login", "oauth"))
                     raise ClaudeAuthRequired("rejected" if rejected else "unavailable")
         except ClaudeAuthRequired:
             raise
-        except (OSError, subprocess.SubprocessError, agent_confinement.ConfinementUnavailable):
+        except agent_confinement.ConfinementUnavailable:
+            raise ClaudeAuthRequired("confinement") from None
+        except FileNotFoundError:
+            raise ClaudeAuthRequired("cli") from None
+        except (OSError, subprocess.SubprocessError):
             raise ClaudeAuthRequired("unavailable") from None
         _cache.clear()
         _cache[key] = time.monotonic()
@@ -119,19 +151,47 @@ def validate_token(token: str) -> None:
 def prepare_launch(root, session: dict) -> str:
     provider = session.get("provider") or control.default_agent_settings()[control.role_for_kind(session["kind"])]["provider"]
     if provider != "claude":
+        _clear_cards(root, session)  # a role that moved to another provider no longer needs a Claude sign-in card
         return ""
+    # The sign-in check can legitimately take up to two probes of HARNESS_CLAUDE_AUTH_TIMEOUT_SECONDS each, and the three
+    # roles' checks run one after another. The terminal's 30-second attach deadline starts only once the check is done.
+    _set_launch_deadline(root, session, control.claude_launch_budget_seconds())
     try:
         token = resolve_token()
         validate_token(token)
     except ClaudeAuthRequired as error:
+        _set_launch_deadline(root, session, 30)
         with control.locked_state(root) as state:
+            for prior in state["sessions"].values():  # an older blocked launch of this role is superseded by this one
+                if prior.get("kind") == session["kind"]:
+                    prior.pop("claude_auth_action", None)
             state["sessions"][session["id"]]["claude_auth_action"] = action(error.reason)
         raise
+    _clear_cards(root, session)
+    _set_launch_deadline(root, session, 30)
+    return _handoff(root, session["id"], token)
+
+
+def _set_launch_deadline(root, session: dict, seconds: float) -> None:
+    """Only a still-launching session: never revive one that already failed or attached."""
+    from datetime import datetime, timedelta, timezone
+    with control.locked_state(root) as state:
+        stored = state["sessions"].get(session["id"])
+        if stored and stored.get("status") == "launching":
+            stored["launch_deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def _clear_cards(root, session: dict) -> None:
+    try:
+        sessions = control._read_state(root).get("sessions", {})
+    except (OSError, ValueError):
+        return
+    if not any(prior.get("claude_auth_action") and prior.get("kind") == session["kind"] for prior in sessions.values()):
+        return  # nothing to clear: do not take the state lock on every launch
     with control.locked_state(root) as state:
         for prior in state["sessions"].values():
             if prior.get("kind") == session["kind"]:
                 prior.pop("claude_auth_action", None)
-    return _handoff(root, session["id"], token)
 
 
 def _handoff(root, session_id: str, token: str) -> str:
@@ -195,7 +255,32 @@ def exec_with_token(path: str, session_id: str, command: list[str], share_with_c
         raise SystemExit(2) from None
 
 
+def store_token_command() -> int:
+    """Owner's own terminal: read a setup-token without echo and save it where the platform keeps it across reboots."""
+    import getpass
+    if not sys.stdin.isatty():
+        sys.stderr.write("Not saved: run this in your own terminal so the token can be typed hidden.\n")
+        return 1
+    credentials = platform_support.claude_credentials()
+    if not hasattr(credentials, "store_token"):
+        sys.stderr.write("This platform keeps the token in the login Keychain; see the card in Mission Control.\n")
+        return 2
+    import warnings
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)  # echoed fallback: refuse before reading a secret
+            typed = getpass.getpass("Claude setup-token (hidden): ")
+        saved = credentials.store_token(typed)
+    except (ValueError, OSError, getpass.GetPassWarning) as error:
+        sys.stderr.write(f"Not saved: {error}\n")
+        return 1
+    print(f"Saved to {saved}. It survives reboots. It is not yet checked with Claude: press Test Claude connection in Settings, then retry the agent.")
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["store-token"]:
+        raise SystemExit(store_token_command())
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
     parser.add_argument("--session", required=True)

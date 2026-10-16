@@ -19,7 +19,7 @@ PROBE = r'''<script>
  for(let i=0;i<150&&!document.querySelector('#claude-auth-actions .owner-action');i++)await new Promise(r=>setTimeout(r,100));
  const section=document.querySelector('#claude-auth-actions');
  const card=section?.querySelector('.owner-action');
- await fetch('/__probe__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rendered:!!document.querySelector('#agents'),visible:!!card&&card.getBoundingClientRect().height>0&&!section.hidden,text:section?.innerText||''})});
+ await fetch('/__probe__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rendered:!!document.querySelector('#agents'),visible:!!card&&card.getBoundingClientRect().height>0&&!section.hidden,cards:section?section.querySelectorAll('.owner-action').length:0,text:section?.innerText||''})});
 })();</script>'''
 
 
@@ -43,6 +43,8 @@ class ClaudeAuthRenderedTests(unittest.TestCase):
                         response = json.load(caught.exception)
                         self.assertIn('setup-token', response['error'])
                         host.assert_not_called()
+                        request = Request(f'http://127.0.0.1:{worker.server_address[1]}/api/sessions', data=b'{"kind":"claude_reviewer"}', headers={'Content-Type':'application/json'}, method='POST')
+                        with self.assertRaises(HTTPError): urlopen(request)
                     sink = {}
                     proxy = ThreadingHTTPServer(('127.0.0.1',0), probe_proxy(f'http://127.0.0.1:{worker.server_address[1]}',sink,PROBE))
                     threading.Thread(target=proxy.serve_forever,daemon=True).start()
@@ -59,6 +61,8 @@ class ClaudeAuthRenderedTests(unittest.TestCase):
                         self.assertIn('Set up Claude agent authentication',sink['value']['text'])
                         self.assertIn('claude setup-token',sink['value']['text'])
                         self.assertIn('retry',sink['value']['text'])
+                        self.assertEqual(sink['value']['cards'],1,'one card per missing sign-in, not one per blocked agent')
+                        self.assertIn('Needed by: CTO, Reviewer',sink['value']['text'])
                         if reason=='rejected': self.assertIn('rejected',sink['value']['text'])
                     finally: proxy.shutdown();proxy.server_close()
             finally: worker.shutdown();worker.server_close()

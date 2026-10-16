@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -177,6 +178,21 @@ def update(root: ProjectRoot, workspace_root: str) -> dict[str, Any]:
     raise ValueError("the project folder is managed from Projects and cannot be changed here")
 
 
+def _temporary_workspace_in_owner_codex_config(workspace: Path, config: Path) -> bool:
+    try:
+        owner_config = (Path.home() / ".codex" / "config.toml").resolve()
+        if config.resolve() != owner_config:
+            return False
+        resolved = workspace.resolve()
+    except OSError:
+        return False
+    return any(root == resolved or root in resolved.parents for root in _temporary_roots())
+
+
+def _temporary_roots() -> set[Path]:
+    return {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve(), Path("/var/tmp").resolve()}
+
+
 def apply_provider_files(settings: dict[str, Any], provider: str) -> dict[str, str]:
     """Apply only the explicitly supported access fields, preserving other keys."""
     if provider not in PROVIDERS:
@@ -198,6 +214,11 @@ def apply_provider_files(settings: dict[str, Any], provider: str) -> dict[str, s
         _save(path, value)
         return {"provider": provider, "path": str(path), "mode": "bypassPermissions", "deny_count": str(len(permissions["deny"]))}
     path = Path(settings["codex"]["config_path"]).expanduser()
+    if _temporary_workspace_in_owner_codex_config(workspace, path):
+        # A throwaway project (a private test or review copy under a temporary
+        # folder) must never add its trust entry to the owner's own Codex
+        # configuration: the entry would outlive the folder (2026-10-15).
+        return {"provider": provider, "path": str(path), "skipped": "temporary project; the owner's Codex configuration is not changed"}
     path.parent.mkdir(parents=True, exist_ok=True)
     original = path.read_text(encoding="utf-8") if path.is_file() else ""
     lines = original.splitlines()

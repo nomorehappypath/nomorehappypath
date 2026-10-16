@@ -23,7 +23,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import (
     agent_confinement,
-    accepted_bytes, board, browser_acceptance, child_process, contract, execution_identity, git_broker, git_process,
+    accepted_bytes, board, browser_acceptance, certified_execution, child_process, contract, execution_identity, git_broker, git_process,
     lifecycle, runtime_probe,
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
@@ -485,21 +485,15 @@ def _certified_delivery_health(
             and fields.get("environment_sha256") == environment_sha256
             and fields.get("role") == "delivery"
             and fields.get("gate") == expected_gate
-            and int(fields.get("policy_version", 0)) == execution_identity.POLICY_VERSION
+            and int(fields.get("policy_version", 0)) in execution_identity.accepted_success_policy_versions()
             and _clean_process_audit(root, entry)
         ):
             return failed
         output = execution_identity.load_output(entry)
     except (KeyError, TypeError, ValueError):
         return failed
-    counts = [
-        int(value)
-        for pair in re.findall(
-            r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", output, re.I,
-        )
-        for value in pair if value
-    ]
-    if not counts or max(counts) < 1:
+    count = certified_execution.executed_test_count(output)
+    if not count or count < 1:
         return failed
     if browser_acceptance.blocked_note(output):
         return failed   # a reported browser failure is never release health (review r2 B3)
@@ -552,6 +546,31 @@ def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
         return True
     text = str(review.get("result_summary") or "").lstrip(" \t\r\n>*-#`\"'")
     return text.upper().startswith("TASK DONE: YES")
+
+
+def owner_artifacts_readable(root: Path, state: dict[str, Any], task: str, latest_review: dict[str, Any] | None) -> tuple[bool, list[str], list[dict[str, Any]]]:
+    """Every deliverable's CURRENT owner document is readable and, when the final review recorded the manifest, reviewed."""
+    links = board.document_deliverable_links(root, task, state)
+    # A review recorded before this change has no "owner_documents" key: only
+    # readability is required. A review with the key (even an empty list)
+    # certifies the files it saw: the current document must be one the review
+    # listed for that deliverable, or a file that was already attached when
+    # the review was requested (a designation-only repair of reviewed bytes).
+    review_has_manifest = bool(latest_review) and "owner_documents" in (latest_review or {}) and latest_review.get("status") == "passed"
+    reviewed = {(str(d.get("deliverable")), str(d.get("sha256"))) for d in ((latest_review or {}).get("owner_documents") or []) if d.get("sha256")}
+    review_requested_at = str((latest_review or {}).get("requested_at") or "")
+    problems: list[str] = []
+    for link in links:
+        if not link.get("latest"):
+            continue  # earlier versions are history; they never block
+        name = Path(str(link.get("path") or "")).name
+        if not link.get("available"):
+            problems.append(f"the owner's document for '{link.get('deliverable')}' ({name}) cannot be shown: {link.get('reason')}; {board.DOCUMENT_RECOVERY}")
+        elif review_has_manifest and (str(link.get("deliverable")), str(link.get("sha256"))) not in reviewed \
+                and not (str(link.get("attached_at") or "") and review_requested_at and str(link.get("attached_at")) <= review_requested_at):
+            problems.append(f"the owner's document for '{link.get('deliverable')}' ({name}) was attached after the final review was requested and is not what the reviewer saw; request a new final review (on a new commit), mark the reviewed file again with deliverable-file, or retire a mistaken document name with deliverable-file --retire")
+    manifest = [{"deliverable": l.get("deliverable"), "path": l.get("path"), "sha256": l.get("sha256"), "title": l.get("title"), "marked_at": l.get("marked_at"), "latest": l.get("latest")} for l in links]
+    return not problems, problems, manifest
 
 
 def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict | None = None, execute_health: bool = False, health_command: str = "") -> dict[str, Any]:
@@ -684,6 +703,19 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         contract_ok, contract_problems = False, ["Completion Contract missing"]
     checks["completion_contract_complete"] = contract_ok
     checks["completion_contract_problems"] = contract_problems
+    # Owner 2026-10-15: a document the owner must read is reachable before the
+    # owner is asked to test; the latest marked file per deliverable must be
+    # readable and, when the final review recorded a manifest, be a file that
+    # review saw (a designation-only repair of reviewed bytes passes).
+    documents_ok, document_problems, owner_documents = owner_artifacts_readable(root, state, task, latest_review)
+    checks["owner_artifacts_readable"] = documents_ok
+    checks["owner_artifact_problems"] = document_problems
+    checks["owner_documents"] = owner_documents
+    # Owner 2026-10-14: what the owner waived is part of the release record.
+    checks["owner_waived_deliverables"] = [
+        {"deliverable": str(w.get("deliverable") or ""), "part": str(w.get("part") or ""), "waiver": str(w.get("id") or "")}
+        for w in (state.get("deliverable_waivers") or {}).get(task, [])
+    ]
     owner_directions = [
         board.owner_direction_for_task(state, agent["id"], task)
         for agent in developers
@@ -807,9 +839,10 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
             "candidate_branch", "git_clean", "candidate_health_verified",
             "task_artifact_release_verified", "main_fast_forward_safe",
             "mirror_candidate_verified", "runtime_verification_scope_correct",
+            "owner_artifacts_readable",
         }
     else:
-        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified"}
+        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified", "owner_artifacts_readable"}
     if checks.get("runtime_gate_required"):
         required |= {"deployed_runtime_verified", "deployed_chat_verified"}
     checks["ready_for_owner_test"] = all(checks.get(key) is True for key in required)

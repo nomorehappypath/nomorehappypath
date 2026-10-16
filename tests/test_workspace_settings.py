@@ -204,6 +204,46 @@ class WorkspaceSettingsTests(unittest.TestCase):
                 Path(os.path.abspath(os.fspath(target))),
             )
 
+class OwnerCodexConfigIsNeverTouchedByTemporaryProjectsTests(unittest.TestCase):
+    """2026-10-15: a throwaway project's trust entry landed in the owner's real ~/.codex/config.toml."""
+
+    def settings_for(self, workspace, config):
+        return {"workspace_root": str(workspace), "codex": {"config_path": str(config)}}
+
+    def test_a_temporary_project_does_not_write_to_the_owners_codex_config(self):
+        with tempfile.TemporaryDirectory() as fake_home, tempfile.TemporaryDirectory() as work:
+            home_config = Path(fake_home) / ".codex" / "config.toml"
+            home_config.parent.mkdir()
+            home_config.write_text("model = \"x\"\n", encoding="utf-8")
+            project = Path(work) / "c"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": fake_home}):
+                result = workspace_settings.apply_provider_files(self.settings_for(project, home_config), "codex")
+            self.assertIn("skipped", result)
+            self.assertEqual(home_config.read_text(encoding="utf-8"), "model = \"x\"\n")
+
+    def test_a_project_outside_temporary_folders_still_gets_its_trust_entry(self):
+        with tempfile.TemporaryDirectory() as fake_home:
+            home_config = Path(fake_home) / ".codex" / "config.toml"
+            real_project = Path(fake_home) / "Projects" / "app"
+            real_project.mkdir(parents=True)
+            with patch.dict(os.environ, {"HOME": fake_home}), patch.object(
+                workspace_settings, "_temporary_roots", return_value=set(),
+            ):
+                result = workspace_settings.apply_provider_files(self.settings_for(real_project, home_config), "codex")
+            self.assertNotIn("skipped", result)
+            self.assertIn(str(real_project.resolve()), home_config.read_text(encoding="utf-8"))
+
+    def test_a_temporary_project_with_its_own_codex_home_still_gets_trust_there(self):
+        with tempfile.TemporaryDirectory() as fake_home, tempfile.TemporaryDirectory() as work:
+            own_config = Path(work) / "codex-home" / "config.toml"
+            project = Path(work) / "c"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": fake_home}):
+                result = workspace_settings.apply_provider_files(self.settings_for(project, own_config), "codex")
+            self.assertNotIn("skipped", result)
+            self.assertIn(str(project.resolve()), own_config.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,6 +60,7 @@ class _Fixture(unittest.TestCase):
         session = control.create(self.root, "codex_delivery")
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
+        control.note_cli_exec(self.root, session["id"])   # the runner reached the CLI, as a real session does
         agent = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
         board.record_owner_direction(self.root, session["id"], f"OWNER DIRECTION — {task}")
         board.begin_task(self.root, agent["id"], task)

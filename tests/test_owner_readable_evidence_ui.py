@@ -39,7 +39,10 @@ class OwnerReadableEvidenceUI(unittest.TestCase):
         return board_viewer.rendered_page().split("<script>", 1)[1].split("</script>", 1)[0].split("el('#status-dialog-close')", 1)[0]
 
     def node(self, invocation):
-        result = subprocess.run(["node", "-e", self.script() + "\n" + invocation], capture_output=True, text=True)
+        # The viewer script is past Linux's single-argument limit (E2BIG with `node -e`), so it runs from a file.
+        script = self.root / "viewer-under-test.js"
+        script.write_text(self.script() + "\n" + invocation, encoding="utf-8")
+        result = subprocess.run(["node", str(script)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

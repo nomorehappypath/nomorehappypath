@@ -333,7 +333,7 @@ class RunnerArgvTests(unittest.TestCase):
         argv = self.argv()
         self.assertEqual(argv[0], "resume")
         self.assertIn(recorded, argv)
-        self.assertIn("sandbox_mode=workspace-write", " ".join(argv))
+        self.assertIn("default_permissions=" if sys.platform.startswith("linux") else "sandbox_mode=workspace-write", " ".join(argv))
         self.assertIn("approval_policy=never", " ".join(argv))
         self.assertNotIn("--cd", argv)
         self.assertIn(conversation.RECOVERY_LABEL, self.text())

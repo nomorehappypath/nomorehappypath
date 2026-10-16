@@ -90,7 +90,8 @@ class ClaimTruthTests(unittest.TestCase):
         """
         text = help_text().lower()
         self.assertIn("can still read anything you can", text)
-        self.assertIn("read confinement is not available today", text)
+        self.assertIn("on macos, and for codex agents on any system", text)
+        self.assertIn("claude and gemini agents on linux", text)
 
     def test_help_still_credits_the_protection_that_DOES_exist(self):
         """Honest means accurate in both directions, not merely alarming."""
@@ -100,7 +101,7 @@ class ClaimTruthTests(unittest.TestCase):
 
     def test_help_does_not_invite_discounting_the_present_risk(self):
         text = help_text().lower()
-        self.assertIn("not available today", text)
+        self.assertIn("for codex agents, they are not safe from being read", text)
 
 
 class NoStaleNoticeTests(unittest.TestCase):

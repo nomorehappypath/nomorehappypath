@@ -28,17 +28,38 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import platform
 import secrets
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 from harness import board
 
+# The store lock is held only for short reads and appends; a longer wait means a stuck holder.
+STORE_LOCK_WAIT_SECONDS = 120.0
 STORE_NAME = "execution-store.jsonl"
-POLICY_VERSION = 3
+# Version 4 (2026-10-15; also: Linux commands now run read-confined, so earlier Linux results are not evidence for it): runs refused by the version-3 rules (an owner quitting
+# their browser failed a green run; go/cargo/gradle/node output was refused as
+# having no test count) must not block a retry after the upgrade. The version is
+# part of every identity hash, so version-3 records stay in the append-only store
+# as history but are no longer the "prior failure" of a fresh run.
+POLICY_VERSION = 4
+# A version-3 SUCCESS stays valid stored evidence (the old rules only ever
+# refused healthy runs, they never passed an unhealthy one), so CTO release
+# health and an already-certified Reviewer bundle keep accepting it; only the
+# reuse of a result for a NEW request is keyed on the current version.
+ACCEPTED_SUCCESS_POLICY_VERSIONS = (3, 4)
+
+
+def accepted_success_policy_versions() -> tuple[int, ...]:
+    """Version-3 evidence is trusted only where its rules had no known blind
+    spot. On Linux the version-3 browser detector could not see Linux-native
+    browsers, so only current-policy evidence counts there."""
+    return ACCEPTED_SUCCESS_POLICY_VERSIONS if sys.platform == "darwin" else (POLICY_VERSION,)
 
 
 def _sha(value: Any) -> str:
@@ -69,6 +90,8 @@ def runtime_versions() -> dict[str, str]:
         "implementation": sys.implementation.name,
         "system": platform.system(),
         "machine": platform.machine(),
+        # What the confined command may read beyond the defaults: a change here is a different execution environment.
+        "agent_read_paths": os.environ.get("HARNESS_AGENT_READ_PATHS", ""),
     }
 
 
@@ -179,7 +202,19 @@ def _store_lock(root: Path, *, exclusive: bool) -> Iterator[Path]:
     directory = board.board_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".execution-store.lock").open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        deadline = time.monotonic() + STORE_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), flag | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:   # only contention is waited out
+                if time.monotonic() >= deadline:
+                    raise ValueError(
+                        "the certified-result store stayed busy for "
+                        f"{int(STORE_LOCK_WAIT_SECONDS)} seconds; no test failed. Ask again in a moment."
+                    ) from None
+                time.sleep(0.05)
         try:
             yield _store_path(root)
         finally:

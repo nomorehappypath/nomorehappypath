@@ -113,9 +113,106 @@ def writable_paths(writable_roots: list[str], *, home: str | Path, claude_config
     return list(writable_roots) + state + temp
 
 
+EXTRA_READ_ENV = "HARNESS_AGENT_READ_PATHS"
+
+
+def _system_path(path: str) -> bool:
+    return any(path == root or path.startswith(root + "/") for root in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"))
+
+
+def tool_read_roots(clis: list[str], *, home: str | Path, extra: list[str] | None = None, path_env: str | None = None) -> list[str]:
+    """What an agent on Linux may READ besides the system folders and its grant: the tools it runs with.
+
+    The CLI itself (its real file's folder, and the install prefix when that folder is a `bin`), every PATH folder
+    that is not a system folder (that folder only), the harness install and interpreter passed in `extra`, and the owner's own additions in
+    `HARNESS_AGENT_READ_PATHS` (os.pathsep separated). Never the home folder itself or any ancestor of it.
+    """
+    import shutil
+    home_real = Path(home).expanduser().resolve()
+    search = path_env if path_env is not None else os.environ.get("PATH", "")
+    found: list[str] = []
+
+    def add(path) -> None:
+        real = Path(path).expanduser().resolve()
+        if not real.exists() or real == Path("/") or real == home_real or real in home_real.parents:
+            return
+        if not _system_path(str(real)) and str(real) not in found:
+            found.append(str(real))
+
+    def add_tool_folder(folder: Path) -> None:
+        add(folder)
+        parent = folder.parent
+        looks_installed = (parent / "lib").is_dir() or (parent / "pyvenv.cfg").is_file() or (parent / "node_modules").is_dir()
+        if folder.name == "bin" and looks_installed and parent != home_real and parent.name not in {".local", "local", ""}:
+            add(parent)  # an install prefix (lib/node_modules beside bin, a virtual environment's libraries), not any parent
+
+    for cli in [*clis, "node", "python3"]:
+        located = shutil.which(cli, path=search)
+        if located:
+            add_tool_folder(Path(located).resolve().parent)  # the identified tool: its real folder and install prefix
+            add(Path(os.path.abspath(located)).parent)       # and the folder it is invoked from (a symlink's own place)
+    for entry in search.split(os.pathsep):
+        if entry and Path(entry).is_dir():
+            add(entry)  # the folder only: never its prefix, so ~/client/bin does not expose ~/client
+    for item in extra or []:
+        if item:
+            given = Path(os.path.abspath(item))
+            real = given.resolve()
+            add_tool_folder(real if real.is_dir() else real.parent)
+            if not real.is_dir():
+                add_tool_folder(given.parent)  # a virtual environment's own folder, beside the interpreter it links to
+    for item in os.environ.get(EXTRA_READ_ENV, "").split(os.pathsep):
+        if item.strip():
+            add(item.strip())
+    return found
+
+
+def session_runtime_roots(manager_home: str | Path | None, project: str, session: str) -> list[str]:
+    """The session's harness runtime directory (hooks, directive, handover sockets): outside the grant, read-only inside."""
+    if not manager_home or not session:
+        return []
+    from harness import runtime_dir
+    return [str(runtime_dir.session_directory(manager_home, project, session))]
+
+
+def git_read_roots(writable_roots: list[str], *, home: str | Path | None = None) -> list[str]:
+    """A linked git worktree keeps its repository elsewhere: that GIT folder (objects, refs; never the other checkout's
+    working files) must be readable or `git status` fails.
+
+    The `.git` file is project content an agent can edit, so its pointer is only believed when it checks out: the
+    target is `<repo git dir>/worktrees/<name>`, the repository folder looks like a git directory (HEAD and objects),
+    the worktree's own back-pointer names this checkout, and the folder is not the home folder or an ancestor of it.
+    """
+    home_real = Path(home).expanduser().resolve() if home else Path.home().resolve()
+    found: list[str] = []
+    for root in writable_roots:
+        marker = Path(root) / ".git"
+        try:
+            if not marker.is_file():
+                continue
+            line = marker.read_text(encoding="utf-8", errors="replace").strip()
+            if not line.startswith("gitdir:"):
+                continue
+            gitdir = Path(line[7:].strip())
+            if not gitdir.is_absolute():
+                gitdir = Path(root) / gitdir
+            gitdir = gitdir.resolve()
+            common = gitdir.parent.parent
+            back = gitdir / "gitdir"
+            valid = (gitdir.parent.name == "worktrees" and (common / "HEAD").is_file() and (common / "objects").is_dir()
+                     and back.is_file() and Path(back.read_text(encoding="utf-8", errors="replace").strip()).resolve().parent
+                     == Path(root).resolve())
+            if valid and common != Path("/") and common != home_real and common not in home_real.parents:
+                found.append(str(common))
+        except OSError:
+            continue
+    return found
+
+
 def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str | Path,
          claude_config_dir: str | None = None, implementation=None,
-         protected_writes: list[str] | None = None, provider: str = "claude") -> list[str]:
+         protected_writes: list[str] | None = None, provider: str = "claude",
+         read_confined: bool = False, readable_roots: list[str] | None = None) -> list[str]:
     """The command to run so that `argv` can write only inside the grant.
 
     `protected_writes` are harness-owned paths (`agent_grant.agent_protected_roots`)
@@ -139,6 +236,10 @@ def wrap(argv: list[str], writable_roots: list[str], *, store: Path, home: str |
     protected = getattr(implementation, "protected_read_paths", None)
     protected_reads = protected(home, claude_config_dir) if protected else []
     extra = {}
+    if read_confined and getattr(implementation, "confines_reads", False):
+        # Linux: everything outside the system folders, the grant and these tools is absent from the sandbox.
+        extra["confine_reads"] = True
+        extra["read_roots"] = list(readable_roots or []) + git_read_roots(writable_roots, home=home)
     if provider == "gemini":
         # Antigravity saves its refreshed sign-in to the macOS Keychain by running
         # /usr/bin/security. Inside this sandbox that call cannot succeed and, instead
@@ -196,8 +297,12 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
     protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root)
     store = Path(context.storage_path("control"))
     store.mkdir(parents=True, exist_ok=True)
+    # Reads too (Linux): the command is the agent's own, so it must not read what the agent may not
+    # (Codex plan check 2026-10-15, finding 1). Dependencies: the tools on PATH, this interpreter, the harness install.
     return wrap(list(argv), writable, store=store, home=home or Path.home(), claude_config_dir=claude_config_dir or None,
-                implementation=implementation, protected_writes=protected)
+                implementation=implementation, protected_writes=protected, read_confined=True,
+                readable_roots=tool_read_roots([], home=home or Path.home(),
+                                               extra=[sys.executable, str(Path(__file__).resolve().parents[1])]))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -207,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--protected-writes", default="[]", help="JSON list of harness-owned paths denied inside the grant")
     parser.add_argument("--home", default=os.path.expanduser("~"))
     parser.add_argument("--provider", default="claude", choices=["claude", "codex", "gemini"])
+    parser.add_argument("--read-confined", action="store_true", help="Linux: deny reads outside the system folders, the grant and the tools")
+    parser.add_argument("--readable-roots", default="[]", help="JSON list of extra read-only roots (the harness install, the interpreter)")
     parser.add_argument("--claude-config-dir", default=os.environ.get("CLAUDE_CONFIG_DIR") or None)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="the CLI command (after --)")
     args = parser.parse_args(argv)
@@ -214,7 +321,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         wrapped = wrap(command, json.loads(args.writable_roots), store=Path(args.store), home=args.home,
                        claude_config_dir=args.claude_config_dir, protected_writes=json.loads(args.protected_writes),
-                       provider=args.provider)
+                       provider=args.provider, read_confined=args.read_confined,
+                       readable_roots=tool_read_roots([command[0]] if command else [], home=args.home,
+                                                      extra=json.loads(args.readable_roots)) if args.read_confined else None)
     except ConfinementUnavailable as error:
         print(str(error), file=sys.stderr)
         return 3

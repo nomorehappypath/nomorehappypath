@@ -636,7 +636,22 @@ class _BrowserHost:
         Dropping it off Darwin would silently weaken the check on the platform
         being added.
         """
-        return any(part.lower().endswith(".app") for part in Path(resolved).parts)
+        parts = [part.lower() for part in Path(resolved).parts]
+        if any(part.endswith(".app") for part in parts):
+            return True
+        # Ubuntu's `chromium` is /snap/bin/chromium, a symlink to the snap
+        # launcher (/usr/bin/snap), and /usr/bin/chromium-browser is a stub that
+        # asks for that snap: neither is a browser a governed command can start
+        # headless with an isolated profile. Taking one made every screen check
+        # on that host fail with "did not open its page in time" (2026-10-15).
+        return parts[-1:] == ["snap"] or "snap" in parts[:-1] and "bin" in parts[:-1]
+
+    def is_snap_stub_script(self, path: Path) -> bool:
+        try:
+            head = Path(path).read_bytes()[:4096]
+        except OSError:
+            return False
+        return head.startswith(b"#!") and b"snap install chromium" in head
 
 
 BROWSER_HOST = _BrowserHost()
@@ -754,13 +769,13 @@ end run'''
             carried = {'HARNESS_AGENT_HOME': os.environ['HOME']} if os.environ.get('HOME') else {}
             subprocess.run([
                 '/usr/bin/screen', '-c', '/dev/null', '-dmS', name, *argv,
-            ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, **carried, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True)
+            ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, **carried, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True, timeout=60)
             self._open_screen_view(directory, session_id, color_rgb)
             return SessionSurface(session_id=session_id)
         command = "exec " + shlex.join(list(argv))
         subprocess.run(
             ["/usr/bin/osascript", "-e", self._open_script(color_rgb, title), command],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, timeout=60,
         )
         return SessionSurface(session_id=session_id)
 
@@ -996,10 +1011,15 @@ class _AgentConfinement:
             lines.append(f'(deny process-exec (literal "{self._quote(self._real(path))}"))')
         return "\n".join(lines) + "\n"
 
+    confines_reads = False  # Seatbelt here confines writes and the login files only; a read of other files is not denied
+
     def wrap(self, argv, writable: list[str], *, store, protected_reads: list[str] | None = None,
              protected_writes: list[str] | None = None,
-             denied_executables: list[str] | None = None) -> list[str]:
-        """The command to run so that `argv` can write only inside `writable` and never reads the protected paths."""
+             denied_executables: list[str] | None = None, confine_reads: bool = False,
+             read_roots: list[str] | None = None) -> list[str]:
+        """The command to run so that `argv` can write only inside `writable` and never reads the protected paths.
+
+        `confine_reads` / `read_roots` are accepted and ignored: read confinement is Linux-only (the Help says so)."""
         if not self.available():
             raise AgentConfinementUnavailable("macOS sandbox-exec is missing; refusing to launch the agent unconfined")
         profile = self.profile(writable, protected_reads, protected_writes, denied_executables)

@@ -210,6 +210,92 @@ class ProjectResumeTests(unittest.TestCase):
         self.assertEqual(len(agents), 1)
         self.assertTrue(agents[delivery["id"]]["active"])
 
+    def _pause_missing_delivery(self, capture_in_pause=True, provider="codex", model="gpt-6.1-sol", effort="medium"):
+        session = control.create(self.root, "codex_delivery")
+        with control.locked_state(self.root) as state:
+            state["sessions"][session["id"]].update({
+                "provider": provider, "model": model, "effort": effort,
+                "cli_session_id": "conv-1", "cli_session_provider": provider, "cli_launches": 2,
+            })
+        delivery = board.register(
+            self.root, "engineering", board.AWAITING_OWNER_DIRECTION,
+            vendor="OpenAI", session_id=session["id"],
+        )
+        board.record_owner_direction(self.root, session["id"], "Keep my provider through a pause.")
+        board.begin_task(self.root, delivery["id"], "KEEP-PROVIDER")
+        board.begin_project_pause(self.root, drain_seconds=0)
+        board.finish_project_pause(self.root)
+        if not capture_in_pause:
+            with board.locked_state(self.root, allow_paused=True, operation="test: older pause") as state:
+                for saved in state["project_pause"]["agents"].values():
+                    saved.pop("session_capture", None)
+        with control.locked_state(self.root) as state:
+            state["sessions"].pop(session["id"])
+        return session
+
+    def _resume_with_changed_settings(self):
+        from harness import global_settings
+        real = global_settings.load(self.home)
+        changed = dict(real)
+        settings = {role: dict(entry) for role, entry in real["agent_settings"].items()}
+        settings["delivery"] = {"provider": "claude", "model": "opus", "effort": "high"}
+        settings["reviewer"] = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"}
+        changed["agent_settings"] = settings
+        with patch("harness.project_manager.global_settings.load", return_value=changed):
+            return self._resume(self._manager([]))
+
+    def test_a_missing_session_keeps_its_paused_provider_model_effort_and_conversation(self):
+        session = self._pause_missing_delivery()
+        self._resume_with_changed_settings()
+        restored = {item["id"]: item for item in control.snapshot(self.root)["sessions"]}[session["id"]]
+        self.assertEqual(
+            (restored["provider"], restored["model"], restored["effort"], restored["cli_session_id"]),
+            ("codex", "gpt-6.1-sol", "medium", "conv-1"),
+        )
+
+    def test_a_captured_claude_delivery_is_not_replaced_because_the_default_reviewer_is_claude(self):
+        session = self._pause_missing_delivery(provider="claude", model="opus", effort="high")
+        from harness import global_settings
+        real = global_settings.load(self.home)
+        changed = dict(real)
+        settings = {role: dict(entry) for role, entry in real["agent_settings"].items()}
+        settings["delivery"] = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"}
+        changed["agent_settings"] = settings
+        with patch("harness.project_manager.global_settings.load", return_value=changed):
+            self._resume(self._manager([]))
+        restored = {item["id"]: item for item in control.snapshot(self.root)["sessions"]}[session["id"]]
+        self.assertEqual((restored["provider"], restored["cli_session_id"]), ("claude", "conv-1"))
+
+    def test_an_older_pause_without_a_capture_still_restores_from_current_settings(self):
+        session = self._pause_missing_delivery(capture_in_pause=False)
+        self._resume_with_changed_settings()
+        restored = {item["id"]: item for item in control.snapshot(self.root)["sessions"]}[session["id"]]
+        self.assertEqual(restored["provider"], "claude")
+        self.assertIsNone(restored["cli_session_id"])
+
+    def test_a_replaced_reviewer_is_not_relaunched_beside_its_continuation(self):
+        first = control.create(self.root, "claude_reviewer")
+        with control.locked_state(self.root) as state:
+            state["sessions"][first["id"]].update({
+                "status": "exited", "pid": None, "cli_session_id": "conv-r", "cli_session_provider": "claude",
+                "cli_launches": 1,
+            })
+        second = control.create(self.root, "claude_reviewer")
+        self.assertEqual(second["continues_session"], first["id"])
+        for session in (first, second):
+            board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=session["id"])
+        board.begin_project_pause(self.root, drain_seconds=0)
+        board.finish_project_pause(self.root)
+        with control.locked_state(self.root) as state:
+            for session in (first, second):
+                state["sessions"][session["id"]].update({"status": "paused", "pid": None})
+        launched: list[str] = []
+        self._resume(self._manager(launched))
+        self.assertEqual(launched, [second["id"]])
+        agents = board.snapshot(self.root)["agents"]
+        stale = [a for a in agents.values() if a.get("session_id") == first["id"]]
+        self.assertTrue(all(not a["active"] for a in stale), "the replaced reviewer is not revived without a terminal")
+
     def test_development_complete_without_delivery_action_does_not_revive_delivery(self):
         session = control.create(self.root, "codex_delivery")
         delivery = board.register(

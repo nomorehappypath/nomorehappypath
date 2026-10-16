@@ -103,7 +103,9 @@ class CreditExhaustionTests(RealConnectionTestTests):
     def test_anthropic_credit_error_names_anthropic(self):
         body = 'echo "Your credit balance is too low to access the Anthropic API" >&2\nexit 1\n'
         fake_cli(self.bin, "claude", body)
-        with mock.patch.dict(os.environ, {"HARNESS_CLAUDE_BIN": str(self.bin / "claude")}):
+        from harness import claude_auth
+        with mock.patch.dict(os.environ, {"HARNESS_CLAUDE_BIN": str(self.bin / "claude")}), \
+             mock.patch.object(claude_auth, "resolve_token", return_value="tok"), mock.patch.object(claude_auth, "validate_token"):
             with self.assertRaises(ValueError) as raised:
                 global_settings.test_connection(
                     self.home, "claude", "opus", "high", self.workspace,

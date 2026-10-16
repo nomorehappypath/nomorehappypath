@@ -379,9 +379,18 @@ class RunnerPermissionTests(unittest.TestCase):
         self.assertIn("approval_policy=never", argv)
         self.assertNotIn("--permission-mode", argv)
         self.assertNotIn("--add-dir", argv)
-        writable = next(item for item in argv if item.startswith("sandbox_workspace_write.writable_roots="))
+        # Linux always uses the permission profile (it also hides the saved Claude token folder); the granted roots are in it.
+        writable = next(item for item in argv if item.startswith(("sandbox_workspace_write.writable_roots=", "permissions.harness_agent.filesystem=")))
         for root in self._granted_outside_execution_root():
             self.assertIn(root, writable)
+
+    def test_codex_launch_carries_folder_trust_so_no_config_file_write_is_needed(self):
+        session = control.create(self.root, "codex_delivery")
+        completed = run_runner(self.root, session, self.environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        trust = [item for item in self.argv() if item.startswith("projects.") and item.endswith('.trust_level="trusted"')]
+        self.assertEqual(len(trust), 1, trust)
+        self.assertTrue(trust[0].startswith('projects."/') and '"' in trust[0][len('projects."'):], trust)
 
 
 LANDING_PROBE = r"""

@@ -50,8 +50,8 @@ ALL_BOARD_OPERATIONS = {
     "migrate-contract-scope", "expand-contract", "begin-task", "resume-task",
     "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
-    "owner-direction", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
-    "finding-decision", "execute-challenge", "finding-triage", "finding-resolved",
+    "owner-direction", "clear-hold", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
+    "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "claim-qa", "reserve-qa",
@@ -62,7 +62,7 @@ ALL_BOARD_OPERATIONS = {
     "reopen-integrity", "watch", "reopen-candidate-scope", "reevaluate-finalization",
     "reintegrate-main",
     "owner-action", "owner-action-done",
-    "screen-check",
+    "screen-check", "screen-script", "amend-exclusions",
     "supersede-subtask",
     "close-released",
 }
@@ -84,7 +84,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "supersede-subtask",
     # Owner 2026-09-29 (option 1): the harness renders the project's own local
     # page outside the agent sandbox; the agent never gets a browser.
-    "screen-check",
+    "screen-check", "screen-script",
     # Recovery valve for the scaffold wedge: --repo is a PROTECTED argument the
     # surface refuses from clients, so an authenticated Delivery bind can only
     # ever target the server-derived project repository.
@@ -93,10 +93,17 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | {
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "execute-challenge", "findings", "claim-qa", "reserve-qa",
     "review-brief", "review-intents", "attach-challenge-ledger", "qa-result", "split-repair-package",
-    "screen-check",
+    "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     "record-finding", "finding-triage", "finding-resolved", "findings",
+    # Owner 2026-10-14: the CTO sets an in-scope finding aside as not material,
+    # and records the owner's waiver of a contract deliverable.
+    "finding-route-around", "deliverable-waived",
+    # Owner order 2026-10-15: the CTO records an owner-approved amendment of a contract's exclusions.
+    "amend-exclusions",
+    # Owner 2026-10-15: the CTO marks the attached file the owner reads.
+    "deliverable-file",
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
     "reopen-integrity", "reopen-candidate-scope",
@@ -134,6 +141,7 @@ UPLOAD_ARGUMENTS = {
     "claim-qa": ("--challenge-ledger", "challenge_ledger", False),
     "qa-result": ("--evidence", "evidence", True),
     "contract-evidence": ("--evidence", "evidence", True),
+    "screen-script": ("--steps", "steps", True),
 }
 RAW_PATH_OPERATIONS = {"attach-workspace", "bind-repository"}
 IDENTITY_AGENT_ARGUMENT = "--agent"
@@ -150,7 +158,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
-    "supersede-subtask", "close-released",
+    "supersede-subtask", "close-released", "deliverable-waived", "deliverable-file", "screen-script", "amend-exclusions",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",
@@ -168,7 +176,7 @@ _PROJECT_COMMAND_LOCKS_GUARD = threading.Lock()
 # Their board functions use the durable state lock, and staged review authoring
 # depends on them remaining responsive while Delivery evidence executes.
 CONCURRENT_BOARD_OPERATIONS = {
-    "poll", "reserve-qa", "review-brief", "review-intents", "screen-check",
+    "poll", "reserve-qa", "review-brief", "review-intents", "screen-check", "screen-script",
 }
 # `screen-check` is here because Delivery's own rendered test calls it while
 # `request-review` is running that very test. Serialised behind it, the nested
@@ -457,9 +465,9 @@ def _argument_value(arguments: list[str], name: str) -> str | None:
     return found[0] if found else None
 
 
-def _screen_check_arguments(arguments: list[str]) -> tuple[str, str, str]:
-    """Strictly parse `screen-check --agent A --url U [--expect T]` for the direct-call path."""
-    values: dict[str, list[str]] = {"--agent": [], "--url": [], "--expect": []}
+def _screen_check_arguments(arguments: list[str], extra: str = "--expect") -> tuple[str, str, str]:
+    """Strictly parse `screen-check --agent A --url U [--expect T]` (or screen-script's required `--steps`) for the direct-call path."""
+    values: dict[str, list[str]] = {"--agent": [], "--url": [], extra: []}
     index = 1
     while index < len(arguments):
         name, separator, inline = arguments[index].partition("=")
@@ -472,12 +480,13 @@ def _screen_check_arguments(arguments: list[str]) -> tuple[str, str, str]:
                 raise SurfaceProtocolError(f"{name} requires a value")
             value, index = arguments[index + 1], index + 2
         values[name].append(value)
-    for name in ("--agent", "--url"):
+    required = ("--agent", "--url") + (("--steps",) if extra == "--steps" else ())
+    for name in required:
         if len(values[name]) != 1 or not values[name][0]:
             raise SurfaceProtocolError(f"{name} must be supplied exactly once")
-    if len(values["--expect"]) > 1:
-        raise SurfaceProtocolError("--expect may be supplied only once")
-    return values["--agent"][0], values["--url"][0], (values["--expect"] or [""])[0]
+    if len(values[extra]) > 1:
+        raise SurfaceProtocolError(f"{extra} may be supplied only once")
+    return values["--agent"][0], values["--url"][0], (values[extra] or [""])[0]
 
 
 def _concurrent_arguments(
@@ -596,6 +605,9 @@ def _without_client_environment() -> Iterator[None]:
         os.environ.update(saved)
 
 
+_TASK_BRIEF_LIMIT_MESSAGE = "task brief needs a plan (1-420 chars) and update (1-240 chars)"
+
+
 def _refusal_task(state: dict[str, Any], agent: dict[str, Any], operation: str, arguments: Sequence[str]) -> str:
     """The task a repeatedly refused command is about, or "" for no hold (backlog #15).
 
@@ -649,6 +661,11 @@ class CommandGateway:
         control-plane hold so Mission Control shows the diagnosis in red.
         """
         import time as _time
+        if operation == "task-brief" and error.strip() == _TASK_BRIEF_LIMIT_MESSAGE:
+            # A task brief over its stated length limits is the agent's
+            # formatting slip: the refusal already names the limits, so it is
+            # not a wedge. Only this exact message (equality) on this operation is exempt.
+            return
         key = (operation, error[:160])
         stamp = _time.monotonic()
         window = [t for t in self._refusals.get(key, []) if stamp - t < self.REFUSAL_WINDOW_SECONDS]
@@ -775,7 +792,7 @@ class CommandGateway:
                 raise SurfaceAuthorizationError("caller task does not match the authenticated session")
             if operation in {"record-finding", "claim-release-repair", "repin-final-review", "supersede-subtask"}:
                 arguments = _canonical_argument(arguments, "--task", identity.task)
-        if operation == "screen-check":
+        if operation in {"screen-check", "screen-script"}:
             from urllib.parse import urlsplit
             try:
                 port = urlsplit(_argument_value(arguments, "--url") or "").port
@@ -1029,6 +1046,14 @@ class CommandGateway:
                 return board.screen_check(self.context, agent_id, url, expect)
             except ValueError as error:
                 # The serialised path turned every board refusal into this; keep it.
+                raise SurfaceProtocolError(
+                    _sanitized_text(str(error).removeprefix("error: ").strip(), self.context)
+                ) from error
+        if operation == "screen-script":
+            agent_id, url, steps = _screen_check_arguments(arguments, "--steps")
+            try:
+                return board.screen_script(self.context, agent_id, url, steps)
+            except ValueError as error:
                 raise SurfaceProtocolError(
                     _sanitized_text(str(error).removeprefix("error: ").strip(), self.context)
                 ) from error

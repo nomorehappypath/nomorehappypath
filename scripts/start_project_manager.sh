@@ -101,12 +101,17 @@ trap cleanup EXIT INT TERM
 
 manager_ready() {
   local page
-  page="$(curl --disable --noproxy '*' --silent --fail "$url" 2>/dev/null)" || return 1
+  page="$(curl --disable --noproxy '*' --silent --fail --connect-timeout 2 --max-time 10 "$url" 2>/dev/null)" || return 1
   [[ "$page" == *"NoMoreHappyPath"* ]]
 }
 
 wait_for_manager() {
-  for _ in {1..60}; do
+  # The manager reads every project's board before it answers; a big board on a
+  # busy machine needs far more than a few seconds (2026-10-15). Wall-clock
+  # deadline, HARNESS_MANAGER_START_TIMEOUT seconds (default 120).
+  local limit="${HARNESS_MANAGER_START_TIMEOUT:-120}" started=$SECONDS
+  [[ "$limit" =~ ^[0-9]+$ && "$limit" -gt 0 ]] || limit=120
+  while (( SECONDS - started < limit )); do
     if manager_ready; then return 0; fi
     if ! kill -0 "$manager_pid" 2>/dev/null; then
       wait "$manager_pid"

@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from harness import board, control
+from harness import board, control, execution_identity
 
 
 def _old_time(seconds: int = 600) -> str:
@@ -107,7 +107,8 @@ class RetryReasonGateTests(unittest.TestCase):
         self.assertIn("2026-08-20T10:00:00+00:00", reason)
 
     def test_genuine_failure_still_requires_the_reviewer_reason(self):
-        attempts = [{"status": "failed", "recorded_at": "2026-08-20T10:00:00+00:00"}]
+        attempts = [{"status": "failed", "recorded_at": "2026-08-20T10:00:00+00:00",
+                     "policy_version": execution_identity.POLICY_VERSION}]
         with self.assertRaisesRegex(ValueError, "non-empty repair reason"):
             board._challenge_retry_reason(attempts, "")
         self.assertEqual(board._challenge_retry_reason(attempts, "fixed the fixture"), "fixed the fixture")

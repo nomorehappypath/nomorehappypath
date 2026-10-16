@@ -135,6 +135,23 @@ KIND_TO_ROLE = {
     "cto": "cto",
 }
 ACTIVE_STATUSES = {"launching", "running", "stopping", "pausing"}
+
+
+def _attach_seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if 0 < value < 1e7 else default
+
+
+# How long a terminal may take to attach after it is launched: 30 s for a fresh launch.
+# A staged resume relaunch waits in line with no clock (see _reconcile) and gets
+# RESUME_ATTACH_SECONDS from the moment it is actually launched
+# (mark_resume_launch_requested): Open used to expire staged sessions during a slow
+# board start (2026-10-15).
+LAUNCH_ATTACH_SECONDS = _attach_seconds("HARNESS_LAUNCH_ATTACH_SECONDS", 30.0)
+RESUME_ATTACH_SECONDS = _attach_seconds("HARNESS_RESUME_ATTACH_SECONDS", 120.0)
 # Hard limits for visible work. A stopping process keeps its slot until the
 # registry observes it exited, preventing a fast double-click from exceeding
 # capacity.
@@ -169,6 +186,14 @@ def session_identity(kind: str, provider: str) -> dict[str, str]:
 def provider_executable_name(provider: str) -> str:
     """The program a provider runs as: its own `executable` key, else its id (Gemini's is `agy`)."""
     return str(PROVIDERS[provider].get("executable", provider))
+
+
+def claude_launch_budget_seconds() -> float:
+    """Worst case of a Claude sign-in check before the terminal opens: three roles in turn, two probes each, plus the usual 30 s."""
+    try:
+        return 6 * float(os.environ.get("HARNESS_CLAUDE_AUTH_TIMEOUT_SECONDS", "45")) + 30
+    except ValueError:
+        return 6 * 45 + 30
 
 
 def now() -> str:
@@ -515,18 +540,123 @@ def _reconcile(state: dict[str, Any]) -> None:
                 "terminal intentionally paused with its saved session pointer"
                 if session.get("pause_requested_at") else
                 "stopped from control panel" if session.get("stop_requested_at") else
-                "terminal session ended outside the viewer"
+                _ended_without_launch_reason(session)
+                or "terminal session ended outside the viewer"
             )
+            continue
+        if session.get("resume_offer") == "relaunch" and not session.get("resume_launch_requested_at") and not session.get("pid"):
+            # Staged for a relaunch that has not started: its attachment clock begins at
+            # the actual launch (mark_resume_launch_requested), never while it waits in
+            # line behind a slow board start or another session's launch.
             continue
         deadline = datetime.fromisoformat(session["launch_deadline"])
         if datetime.now(timezone.utc) >= deadline:
             session["status"] = "failed"
             session["ended_at"] = now()
-            session["reason"] = "terminal session did not attach within 30 seconds"
+            reported = session.get("launch_failure")
+            if isinstance(reported, dict) and reported.get("reason"):
+                session["reason"] = str(reported["reason"])      # the runner said why it never attached
+            else:
+                session["reason"] = "terminal session did not attach within its launch window"
+                role = _launch_role_label(session)
+                session["launch_failure"] = {
+                    "pid": None, "code": None, "step": "attaching", "diagnostic": "", "signal": "", "setup_problem": False,
+                    "reason": (f"The {role} terminal did not attach within its launch window and said nothing. Press Start for the "
+                               f"{role} in Mission Control; the new terminal continues the role's latest conversation."),
+                    "at": now(), "recorded_by": "reconcile",
+                }
+
+
+LAUNCH_STEP_PLAIN = "starting up"
+MAX_LAUNCH_DIAGNOSTIC = 300
+_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_\-.]{32,}")
+
+
+def sanitize_launch_diagnostic(text: Any) -> str:
+    """The runner's last words, made safe to keep and show: no control characters, no token-like strings, bounded."""
+    cleaned = "".join(character if character.isprintable() else " " for character in str(text or ""))
+    cleaned = re.sub(r"HARNESS_[A-Z_]*TOKEN\S*", "[redacted]", cleaned)
+    cleaned = re.sub(r"(?i)(bearer|authorization:?|token|secret|password|passwd|api[_-]?key|key)([=:\s]+)\S+", r"\1\2[redacted]", cleaned)
+    cleaned = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1[redacted]@", cleaned)
+    cleaned = _TOKEN_SHAPE.sub("[redacted]", cleaned)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[-MAX_LAUNCH_DIAGNOSTIC:]
+
+
+def _launch_role_label(session: dict[str, Any]) -> str:
+    return str(session.get("role") or KINDS.get(str(session.get("kind")), {}).get("role") or "agent")
+
+
+def launch_failure_text(session: dict[str, Any], step: str, code: Any, diagnostic: str = "", signal_name: str = "") -> tuple[str, bool]:
+    """The plain sentence for a terminal that stopped before its CLI started, and whether it is a setup problem."""
+    role = _launch_role_label(session)
+    step = " ".join(str(step or "").split()) or LAUNCH_STEP_PLAIN
+    setup = "REFUSED" in diagnostic or code == 3
+    if signal_name:
+        sentence = f"The {role} terminal was closed by {signal_name} while it was {step}, before the CLI started."
+    elif code in (126, 127) and step.startswith("starting the CLI"):
+        sentence = f"The {role} terminal could not run the CLI program (exit code {code}): it is missing or not executable."
+        setup = True
+    else:
+        sentence = f"The {role} terminal stopped while it was {step} (exit code {code}), before the CLI started."
+    if diagnostic:
+        sentence += f" The terminal said: {diagnostic}"
+    if setup:
+        sentence += " This is a setup problem; pressing Start again will not fix it. Check the role's provider, model and sign-in in Settings, then press Start."
+    else:
+        sentence += f" Press Start for the {role} in Mission Control; the new terminal continues the role's latest conversation."
+    return sentence, setup
+
+
+def _ended_without_launch_reason(session: dict[str, Any]) -> str:
+    """A tracked attempt whose runner died before noting the CLI launch, with no report: say so honestly."""
+    failure = session.get("launch_failure")
+    if isinstance(failure, dict) and failure.get("pid") == session.get("pid") and failure.get("reason"):
+        return str(failure["reason"])
+    if not session.get("launch_tracked") or session.get("launch_exec_at") or session.get("superseded_by_session_id"):
+        return ""
+    role = _launch_role_label(session)
+    reason = (
+        f"The {role} terminal ended before the CLI started and the cause was not recorded "
+        f"(it may have been killed or the computer shut down). Press Start for the {role} in Mission Control; "
+        "the new terminal continues the role's latest conversation."
+    )
+    session["launch_failure"] = {
+        "pid": session.get("pid"), "code": None, "step": "unknown", "diagnostic": "", "signal": "",
+        "setup_problem": False, "reason": reason, "at": now(), "recorded_by": "reconcile",
+    }
+    return reason
+
+
+def record_launch_failure(root: Path, session_id: str, pid: int, code: int, step: str,
+                          diagnostic: str = "", signal_name: str = "") -> dict[str, Any]:
+    """The runner reports that it is ending before it started the CLI.
+
+    Accepted only from the pid recorded for the CURRENT attempt, and ignored when
+    the owner stopped or paused the session or it was superseded: those are
+    legitimate endings, not failures.
+    """
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        before_attach = session.get("pid") is None and session.get("status") == "launching"
+        if session.get("pid") != pid and not before_attach:
+            return {"recorded": False, "why": "a report from an earlier attempt"}
+        if session.get("stop_requested_at") or session.get("pause_requested_at") or session.get("superseded_by_session_id"):
+            return {"recorded": False, "why": "the session was stopped, paused or replaced"}
+        diagnostic = sanitize_launch_diagnostic(diagnostic)
+        reason, setup = launch_failure_text(session, step, code, diagnostic, signal_name)
+        session["launch_failure"] = {
+            "pid": session.get("pid"), "code": code, "step": step[:120], "diagnostic": diagnostic, "signal": signal_name[:12],
+            "setup_problem": setup, "reason": reason, "at": now(), "recorded_by": "runner",
+        }
+        session["reason"] = reason
+        return {"recorded": True, "reason": reason}
 
 
 def create(root: Path, kind: str, task: str = "", color: str = "black",
-           settings_override: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+           settings_override: dict[str, dict[str, str]] | None = None, continues: str = "") -> dict[str, Any]:
     if kind not in KINDS:
         raise ValueError("unknown session kind")
     task = task.strip()
@@ -591,7 +721,7 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
             "attention_since": None, "attention_reason": None,
             **_cli_memory_fields(),
-            "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+            "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=LAUNCH_ATTACH_SECONDS)).isoformat(),
             **KINDS[kind],
             **session_identity(kind, selected["provider"]),
             "provider": selected["provider"],
@@ -599,12 +729,12 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "effort": selected["effort"],
             "provider_label": PROVIDERS[selected["provider"]]["label"],
         }
-        _inherit_cli_memory(state, session)
+        _inherit_cli_memory(state, session, continues)
         state["sessions"][session_id] = session
         return dict(session)
 
 
-def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any]) -> None:
+def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any], only: str = "") -> None:
     """A new session of a role continues the last conversation of that role.
 
     Conversation memory used to follow the terminal session only, so stopping
@@ -627,6 +757,7 @@ def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any]) -> None:
         if item.get("kind") == kind and item.get("id") != session.get("id")
         and item.get("status") not in ACTIVE_STATUSES
         and item.get("cli_session_id") and str(item.get("cli_session_id")) not in live_ids
+        and (not only or item.get("id") == only)
     ]
     if not candidates:
         return
@@ -664,6 +795,35 @@ def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any]) -> None:
         state.setdefault("inbox", {}).setdefault(session["id"], [])[:0] = carried
 
 
+def _validated_session_capture(capture: dict[str, Any]) -> dict[str, str]:
+    """A captured provider/model/effort, valid on its own (not against today's other roles)."""
+    provider = str(capture.get("provider", "")).strip().lower()
+    if provider not in PROVIDERS:
+        raise ValueError("captured provider is not supported")
+    effort = normalize_provider_effort(provider, capture.get("effort", ""))
+    model = normalize_provider_model(provider, capture.get("model", ""))
+    if effort not in PROVIDER_EFFORTS[provider]:
+        raise ValueError("captured effort is not supported")
+    if provider == "gemini":
+        model, effort, _note = gemini_pair(model, effort, repair=False)
+    return {"provider": provider, "model": model, "effort": effort}
+
+
+def _paused_session_capture(root: Path, session_id: str, kind: str) -> dict[str, Any]:
+    """The identity the project pause saved for this session, or {} for an older pause."""
+    from harness import board
+    try:
+        agents = board.pause_state(root).get("agents") or {}
+    except (OSError, ValueError):
+        return {}
+    for saved in agents.values():
+        if isinstance(saved, dict) and saved.get("session_id") == session_id:
+            capture = saved.get("session_capture")
+            if isinstance(capture, dict) and capture.get("kind", kind) == kind:
+                return dict(capture)
+    return {}
+
+
 def restore_missing_resume_session(
     root: Path, session_id: str, kind: str,
     settings_override: dict[str, dict[str, str]] | None = None,
@@ -677,6 +837,7 @@ def restore_missing_resume_session(
     session_id = str(session_id or "").strip()
     if kind not in KINDS or not session_id.startswith(f"{kind}-"):
         raise ValueError("saved resume session identity does not match its role")
+    capture = _paused_session_capture(root, session_id, kind)
     with locked_state(root) as state:
         _reconcile(state)
         existing = state.get("sessions", {}).get(session_id)
@@ -691,6 +852,23 @@ def restore_missing_resume_session(
             )[role]
         except ValueError:
             selected = default_agent_settings()[role]
+        memory = _cli_memory_fields()
+        if capture:
+            # The pause recorded what this session ran as; restore that, not
+            # whatever the settings say today (P2d). An unusable capture
+            # falls back to the settings, as an older pause always did.
+            try:
+                selected = _validated_session_capture(capture)
+                if capture.get("cli_session_id"):
+                    memory.update({
+                        "cli_session_id": capture["cli_session_id"],
+                        "cli_session_provider": capture.get("cli_session_provider") or selected["provider"],
+                        "cli_launches": max(int(capture.get("cli_launches") or 0), 1),
+                    })
+                if capture.get("continues_session"):
+                    memory["continues_session"] = str(capture["continues_session"])
+            except (ValueError, TypeError):
+                memory = _cli_memory_fields()
         active_count = sum(
             entry.get("kind") == kind and entry.get("status") in ACTIVE_STATUSES
             for entry in state.get("sessions", {}).values()
@@ -709,7 +887,7 @@ def restore_missing_resume_session(
             "color_label": SESSION_COLORS["black"]["label"],
             "last_output_at": None, "output_bytes": 0, "last_status_request_at": None,
             "attention_since": None, "attention_reason": None,
-            **_cli_memory_fields(),
+            **memory,
             "launch_deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=30)
             ).isoformat(),
@@ -827,7 +1005,18 @@ def note_cli_launch(root: Path, session_id: str, resumed: bool) -> dict[str, Any
         # in its prompt; a later relaunch (a crash, say) is an ordinary one.
         # (Not cleared on attach: the runner attaches BEFORE it plans.)
         session["resumed_after_pause_at"] = None
+        session["launch_noted_at"] = now()
         return {"session_id": session_id, "cli_launches": session["cli_launches"], "resumed": bool(resumed)}
+
+
+def note_cli_exec(root: Path, session_id: str) -> dict[str, Any]:
+    """The runner is about to replace itself with the CLI: from here a death is the CLI's, not the launch's."""
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        session["launch_exec_at"] = now()
+        return {"session_id": session_id, "launch_exec_at": session["launch_exec_at"]}
 
 
 def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
@@ -844,7 +1033,17 @@ def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
             terminal_tty = os.ttyname(0)
         except OSError:
             terminal_tty = ""
-        session.update({"status": "running", "pid": pid, "terminal_tty": terminal_tty, "attached_at": now(), "reason": "interactive CLI session is running"})
+        earlier = session.get("launch_failure")
+        if earlier:
+            history = list(session.get("launch_failures") or [])
+            history.append(earlier)
+            session["launch_failures"] = history[-5:]
+        session.update({
+            "status": "running", "pid": pid, "terminal_tty": terminal_tty, "attached_at": now(),
+            "reason": "interactive CLI session is running",
+            # A new attempt: the CLI is not launched yet, and no failure is current.
+            "launch_tracked": True, "launch_noted_at": None, "launch_exec_at": None, "launch_failure": None,
+        })
         return dict(session)
 
 
@@ -1153,6 +1352,22 @@ def acknowledge_instruction(root: Path, session_id: str, instruction_id: str) ->
         return dict(receipt)
 
 
+def find_instruction_receipt(root: Path, source: str, marker: str) -> dict[str, Any] | None:
+    """The live receipt of an instruction queued with this source whose text carries the marker, if any.
+
+    Used by the board to make a dispatch idempotent across a crash (owner
+    defaults, 2026-10-15): a withdrawn or discarded receipt does not count.
+    """
+    with locked_state(root) as state:
+        for receipt in state.setdefault("instruction_receipts", {}).values():
+            if (
+                receipt.get("source") == source and marker in str(receipt.get("text") or "")
+                and receipt.get("status") not in {"withdrawn", "discarded", "failed"}
+            ):
+                return json.loads(json.dumps(receipt))
+    return None
+
+
 def instruction_receipt(root: Path, instruction_id: str) -> dict[str, Any]:
     """Return the durable transport state for one event-driven instruction."""
     with locked_state(root) as state:
@@ -1335,10 +1550,26 @@ def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str
     prepared: list[dict[str, Any]] = []
     with locked_state(root) as state:
         _reconcile(state)
+        # A replacement reviewer continues the conversation of the one it
+        # replaced; relaunching both would put two terminals on one
+        # conversation (P2e).
+        sessions_now = state.get("sessions", {})
+        successors = {
+            str(entry.get("continues_session"))
+            for entry in sessions_now.values()
+            if entry.get("continues_session") and entry.get("id") in unique
+            and entry.get("status") != "failed"
+            and entry.get("id") != entry.get("continues_session")
+            and (sessions_now.get(str(entry.get("continues_session"))) or {}).get("kind") == entry.get("kind")
+            and (sessions_now.get(str(entry.get("continues_session"))) or {}).get("provider") == entry.get("provider")
+        }
         for session_id in unique:
             session = state.get("sessions", {}).get(session_id)
             if not session:
                 prepared.append({"id": session_id, "action": "missing"})
+                continue
+            if session_id in successors:
+                prepared.append({**dict(session), "action": "superseded_by_continuation"})
                 continue
             _withdraw_pause_notices(state, session_id)
             pid = session.get("pid")
@@ -1370,8 +1601,10 @@ def prepare_resume_sessions(root: Path, session_ids: list[str]) -> list[dict[str
                 # resume selected for relaunch may be launched by the owner's
                 # button; a retired terminal is never offered.
                 "resume_offer": "relaunch",
+                # Roles are launched one after another, and a Claude role's sign-in check can take minutes: every staged role
+                # waits that long for its turn; the usual 30 seconds start when its own launch is claimed.
                 "launch_deadline": (
-                    datetime.now(timezone.utc) + timedelta(seconds=30)
+                    datetime.now(timezone.utc) + timedelta(seconds=claude_launch_budget_seconds())
                 ).isoformat(),
                 "reason": "terminal ready to relaunch from its saved next action",
             })
@@ -1394,7 +1627,7 @@ def restage_resume_launch(root: Path, session_id: str) -> dict[str, Any]:
             return dict(session)
         session.update({
             "resume_launch_requested_at": None, "resume_offer": "relaunch",
-            "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+            "launch_deadline": (datetime.now(timezone.utc) + timedelta(seconds=LAUNCH_ATTACH_SECONDS)).isoformat(),
             "reason": "relaunch attempted by the resume did not open a Terminal; ready to relaunch from the board",
         })
         return dict(session)
@@ -1403,6 +1636,12 @@ def restage_resume_launch(root: Path, session_id: str) -> dict[str, Any]:
 def mark_resume_launch_requested(root: Path, session_id: str) -> dict[str, Any]:
     """Claim one staged relaunch before opening Terminal, preventing duplicates."""
     with locked_state(root) as state:
+        staged = state.get("sessions", {}).get(session_id)
+        if (staged and staged.get("status") == "launching" and not staged.get("pid")
+                and staged.get("resume_offer") == "relaunch" and not staged.get("resume_launch_requested_at")):
+            # The attachment clock starts at the actual launch, not at staging.
+            staged["launch_deadline"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=RESUME_ATTACH_SECONDS)).isoformat()
         _reconcile(state)
         session = state.get("sessions", {}).get(session_id)
         if not session or session.get("status") != "launching":
@@ -1412,6 +1651,7 @@ def mark_resume_launch_requested(root: Path, session_id: str) -> dict[str, Any]:
         if session.get("resume_offer") != "relaunch":
             raise ValueError("this terminal was not offered for relaunch")
         session["resume_launch_requested_at"] = now()
+        session["launch_deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
         session["reason"] = "resume terminal launch requested; waiting for attachment"
         return dict(session)
 
@@ -1463,6 +1703,15 @@ def main(argv: list[str] | None = None) -> int:
     launch_parser = subparsers.add_parser("note-cli-launch")
     launch_parser.add_argument("--session-id", required=True)
     launch_parser.add_argument("--resumed", action="store_true")
+    exec_marker_parser = subparsers.add_parser("note-cli-exec")
+    exec_marker_parser.add_argument("--session-id", required=True)
+    failed_parser = subparsers.add_parser("launch-failed")
+    failed_parser.add_argument("--session-id", required=True)
+    failed_parser.add_argument("--pid", required=True, type=int)
+    failed_parser.add_argument("--code", required=True, type=int)
+    failed_parser.add_argument("--step", default="")
+    failed_parser.add_argument("--signal", default="")
+    failed_parser.add_argument("--diagnostic", default="")
     conversation_parser = subparsers.add_parser(
         "conversation", help="print the readable conversation of one managed terminal (any agent may read another's)",
     )
@@ -1487,6 +1736,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "note-cli-launch":
         print(json.dumps(note_cli_launch(context_from_args(args), args.session_id, args.resumed), sort_keys=True))
+        return 0
+    if args.command == "note-cli-exec":
+        print(json.dumps(note_cli_exec(context_from_args(args), args.session_id), sort_keys=True))
+        return 0
+    if args.command == "launch-failed":
+        # The shell is waiting for this report while it closes: never let a stalled lock or disk hold it.
+        signal.alarm(8)
+        print(json.dumps(record_launch_failure(
+            context_from_args(args), args.session_id, args.pid, args.code, args.step, args.diagnostic, args.signal),
+            sort_keys=True))
         return 0
     if args.command == "conversation":
         from harness import conversation

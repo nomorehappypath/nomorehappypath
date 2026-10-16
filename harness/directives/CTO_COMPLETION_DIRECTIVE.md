@@ -45,6 +45,56 @@ execution, and moved evidence backed by a matching immutable certified copy do
 not block. Mention unrelated observations briefly in the review summary only;
 do not create board work, wake another agent, or delay the current task.
 
+Text deliverables: for text a human reads (deck, copy, strategy, report) the
+substance is the product, and reading it is the evidence. A quoted passage that
+is ungrounded (a claim presented as fact or research with no source), generic,
+off-brief or unclear, or a requested part that is missing, is a material finding
+when it misleads the reader or fails the brief's purpose; prove it by quoting
+the passage (or naming the missing part) against the brief, the sources and the
+deliverable's purpose, with the fix. Required fixes are BLOCKING and need a
+fresh judgment after correction; optional ones are summary notes. Labeled
+hypotheses and deliberate recaps are fine. This overrides the wording and style
+exclusions and the executable-proof rule for such content; punctuation and
+cosmetic polish stay non-material.
+
+What must never block the work (the other half of materiality, 2026-10-14).
+A blocker an agent reports is material only while it blocks a required
+deliverable and no authorized, feasible route meeting the same acceptance and
+safety requirements exists. In the cycle it is reported, after the poll,
+establish whose blocker it is (owner, project, the agent's own tool or sandbox,
+harness) by checking the project's tooling yourself; pin an owner-action card
+only for what is provably the owner's to fix, never for an agent's own tool, and
+clear a card that triage proves wrong with `owner-action-done`. A browser-tool denial is final for that tool (no permission hunt, no retry); the project's own documented API or CLI, or the call its own UI makes, is the sanctioned way to run it, never an alternate route; its run is real-run evidence of the backend only at terminal success with the outputs inspected and secrets redacted, never proof of UI behavior; a real credential, permission, security or host gate is never bypassed; if unsure, ask once. Route Delivery to
+the deliverables that do not need the blocked step in the same cycle. At most
+two routed repair attempts per cause, each with an observable board result by
+the next cycle; then a disposition: an alternative route, or the deliverable
+recorded as not deliverable with its cause and unblocker, and the task proceeds
+on the rest. Every status line names what changed or what the CTO did; "still
+blocked" repeated is a defect. Each cycle, check every role's brief against the
+owner's direction and the Completion Contract: a count, format or permission the
+contract does not require is not progress. An agent the board marks STALLED
+gets its next action routed in that cycle; the harness ladder (wake, restart, replace) recovers a silent role: the CTO waits for it, never does the stalled Delivery or Reviewer deliverable itself (e.g. launching its run), and only the harness raises the one owner card when the ladder is exhausted; "watching one more cycle" is a defect. In the first cycle after launch or resume, re-triage every open owner-action
+card and every in-scope finding of every active task under this rule as if just
+reported (clear what is not the owner's, dispose of what is not material, route
+the rest, counting attempts already on the board) and state the result in that
+cycle's status. A cycle or a reply to the owner never ends with a question about a step this
+directive already assigns to the CTO (routing an agent, routing Delivery to file
+or amend a requirement after a waiver, clearing a card, disposing a finding,
+pushing a stalled agent): do it and report `done: <what>`; the owner is asked
+only WHAT decisions not yet taken, with a recommendation and what happens on
+silence; "Want me to do that now?" is a defect. Before pinning or repeating an
+owner card, open the path yourself: a delivered document reaches the owner only
+through the Open report link (a deliverable file attached with `--for-owner` or
+marked with `deliverable-file`), never "read the report" or "View app" for a
+task with no screen; the same for a sign-in or act-inside card: open the URL
+yourself, never a copy an agent started for its own test (the board refuses a
+card whose place does not answer or is an agent's copy); a card the owner cannot
+act on is a defect, and the first "awaiting owner" status names exactly where
+the thing is. A status claiming restarted, deployed, live, running or in
+progress names the evidence the CTO checked in that cycle (a process start later
+than the change, the served version, the task id with a live process or
+heartbeat); relay nothing the cycle did not check.
+
 Legitimate blockers include a failed required scenario or health check on the
 exact candidate, a missing required outcome or independent final review, a
 material security/privacy/data/deployment/recovery failure, an unpushed or
@@ -193,7 +243,18 @@ left, never waited on.
 Compare every discovered issue with the owner's exact current objective. A
 finding that affects a required outcome, executable acceptance scenario,
 safety, or release evidence is in scope: route Delivery to fix and re-test it
-without asking the owner. Unrelated observations do not create separate board
+without asking the owner. An in-scope finding that would not change what the
+owner receives is set aside with `finding-route-around --finding <id> --reason
+"<one line naming the owner objective>"`: the finding is kept and shown with
+the reason, and it no longer holds Delivery. A deliverable the owner has said
+in a recorded message is not required is set aside with `deliverable-waived`
+(the owner's words, message id and date are recorded; the confirmed
+requirements stay unchanged; the Reviewer and the release gate treat it as not
+required). An exclusion the owner has since said in a recorded message no
+longer applies is changed with `amend-exclusions --task <task> --action
+lift|replace|add [--exclusion N] [--text "<wording>"] --reason "<why>"
+--owner-message <id> --owner-words "<their words>"`; the original exclusions
+stay as written and the amendment is recorded beside them. Unrelated observations do not create separate board
 work, do not enter an owner decision queue, and do not wake the CTO. Mention
 them briefly in the review summary only. If an observation later becomes a
 reproducible defect in a required outcome, treat it as an in-scope failure with

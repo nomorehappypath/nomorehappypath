@@ -93,6 +93,54 @@ PLUMBING_LIMITS = {
 }
 
 
+# 2026-10-15: a CTO question to the owner carries a default and a deadline
+# (board.classify_owner_question); the deadline and the phrase lists are the
+# owner's settings, defaults in harness/board.py.
+OWNER_QUESTION_LISTS = ("question_markers", "authority_patterns", "what_markers", "owner_only_markers")
+
+
+def default_owner_questions() -> dict[str, Any]:
+    from harness import board
+    return {
+        "default_minutes": board.OWNER_QUESTION_DEFAULT_MINUTES,
+        "question_markers": list(board.OWNER_QUESTION_LEADS),
+        "authority_patterns": list(board.OWNER_QUESTION_AUTHORITY),
+        "what_markers": list(board.OWNER_QUESTION_WHAT_MARKERS),
+        "owner_only_markers": list(board.OWNER_QUESTION_OWNER_ONLY),
+    }
+
+
+def _validated_owner_questions(value: Any) -> dict[str, Any]:
+    from harness import board
+    if value is None:
+        return default_owner_questions()
+    if not isinstance(value, dict):
+        raise ValueError("owner_questions settings must be an object")
+    result = default_owner_questions()
+    unknown = set(value) - set(result)
+    if unknown:
+        raise ValueError(f"unknown owner_questions settings: {', '.join(sorted(unknown))}")
+    minutes = value.get("default_minutes", result["default_minutes"])
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= board.OWNER_QUESTION_MAX_MINUTES:
+        raise ValueError(f"owner_questions default_minutes must be a whole number from 1 to {board.OWNER_QUESTION_MAX_MINUTES}")
+    result["default_minutes"] = minutes
+    for name in OWNER_QUESTION_LISTS:
+        phrases = value.get(name, result[name])
+        if not isinstance(phrases, list) or not phrases or any(not isinstance(item, str) or not item.strip() for item in phrases):
+            raise ValueError(f"owner_questions {name} must be a non-empty list of phrases")
+        if name == "authority_patterns":
+            # regular expressions (the other lists are plain lowercase phrases); a bad one is refused here, never at a board command
+            for item in phrases:
+                try:
+                    re.compile(item)
+                except re.error as error:
+                    raise ValueError(f"owner_questions authority_patterns entry is not a valid regular expression: {item!r} ({error})") from error
+            result[name] = [" ".join(item.split()) for item in phrases]
+            continue
+        result[name] = [" ".join(item.split()).lower() for item in phrases]
+    return result
+
+
 # Proving mode (the owner's test copy only): a switched-on stage may run while
 # its LIVE capabilities are still UNPROVEN, so the visible run that proves them
 # can happen at all. A capability proven false, and every static one, still
@@ -158,6 +206,7 @@ def _default() -> dict[str, Any]:
         "agent_settings": control.default_agent_settings(),
         "connectivity": {},
         "plumbing": default_plumbing(),
+        "owner_questions": default_owner_questions(),
         "notices": [],
     }
 
@@ -183,6 +232,7 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
         "agent_settings": agent_settings,
         "connectivity": connectivity,
         "plumbing": _validated_plumbing(value.get("plumbing")),
+        "owner_questions": _validated_owner_questions(value.get("owner_questions")),
         "notices": notices,
     }
 
@@ -833,10 +883,29 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
             "tested_at": tested_at, "message": message,
         })
         raise ValueError(message)
+    child_environment = provider_environment(executable)
+    if provider == "claude":
+        # Test the sign-in the agents launch with (the dedicated setup-token), never the owner's ordinary login:
+        # otherwise this button is green while every agent launch is blocked.
+        from harness import claude_auth
+        try:
+            token = claude_auth.resolve_token()
+            claude_auth.validate_token(token)
+        except claude_auth.ClaudeAuthRequired as error:
+            card = claude_auth.action(error.reason)
+            message = f"Claude agents cannot start: {card['why']} {card['instructions']}"
+            _record_connectivity(home, provider, {
+                "ok": False, "model": model, "effort": effort,
+                "tested_at": tested_at, "message": message,
+            })
+            raise ValueError(message) from error
+        for name in claude_auth.OTHER_AUTH:
+            child_environment.pop(name, None)
+        child_environment[claude_auth.TOKEN_ENV] = token
     try:
         completed = subprocess.run(
             command, cwd=str(Path(workspace).resolve()), capture_output=True, text=True,
-            timeout=CONNECTION_TEST_TIMEOUT_SECONDS, env=provider_environment(executable),
+            timeout=CONNECTION_TEST_TIMEOUT_SECONDS, env=child_environment,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         message = f"{provider.title()} CLI could not be started: {error}"
@@ -884,9 +953,12 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
     result = {
         "ok": True, "provider": provider, "model": model, "effort": effort,
         "tested_at": tested_at, "cli_path": executable, "cli_version": version,
+        **({"method": "agent-token"} if provider == "claude" else {}),
         "message": (
-            f"{provider.title()} ran a one-word test with model {model} at {effort} effort and answered. "
-            f"This was a real request on your own account and costs a fraction of a cent. "
+            (f"{provider.title()} ran a one-word test with model {model} and answered. " if provider == "claude"
+             else f"{provider.title()} ran a one-word test with model {model} at {effort} effort and answered. ")
+            + ("The agents' own Claude sign-in (the setup-token) was checked first and accepted. " if provider == "claude" else "")
+            + f"This was a real request on your own account and costs a fraction of a cent. "
             f"The agents use {provider.title()} {version or '(version not reported)'} at {executable}."
         ),
     }
