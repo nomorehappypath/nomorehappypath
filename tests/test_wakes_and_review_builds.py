@@ -115,7 +115,9 @@ class ReviewWakeWithdrawalTests(unittest.TestCase):
         self.assertTrue(notices[0]["text"].startswith("REVIEW CANCELLED: request review-Y for WORK was withdrawn"))
         self.assertIn("unit tests failed", notices[0]["text"])
         self.assertEqual(notices[0]["source"], "review-cancelled")
-        self.assertEqual(control.instruction_receipt(self.root, queued["id"])["status"], "taken")
+        # Deliberate change (2026-10-16 quota-handoff review): the taken wake is also invalidated in its receipt, so a supervisor that
+        # still holds it never types it, even after the request is routed again and no request names it any more.
+        self.assertEqual(control.instruction_receipt(self.root, queued["id"])["status"], "discarded")
 
 
 class LinkedBuildDependencyTests(unittest.TestCase):

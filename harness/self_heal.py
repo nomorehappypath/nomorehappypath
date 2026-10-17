@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from harness import board, control
+from harness import attention, board, control
 
 FROZEN_AFTER_SECONDS = 15 * 60
 REVIEWER_WAIT_SECONDS = 5 * 60
@@ -76,6 +76,17 @@ def _age(value: Any, current: datetime) -> float | None:
 def _needs_sign_in(session: dict[str, Any]) -> bool:
     reason = str(session.get("attention_reason") or "").lower()
     return any(word in reason for word in SIGN_IN_WORDS)
+
+
+def _limit_held(session: dict[str, Any], current: datetime | None = None) -> bool:
+    """A LIVE terminal that shows its provider's usage-limit message, or that is within the grace after the line cleared.
+
+    The hold belongs to a live terminal: one that ended while held is an ordinary exit (control clears its hold fields), so
+    it reaches relaunch and recovery as always.
+    """
+    if session.get("status") not in control.ACTIVE_STATUSES:
+        return False
+    return attention.is_limit_reason(session.get("attention_reason")) or attention.in_limit_grace(session, current or _now())
 
 
 def _unfinished(state: dict[str, Any], agent: dict[str, Any]) -> bool:
@@ -194,7 +205,7 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         if session.get("read_only") or session.get("superseded_by_session_id"):
             continue
         agent = agents_by_session.get(str(session.get("id")))
-        if not agent or _needs_sign_in(session) or _stall_exhausted(state, agent):
+        if not agent or _needs_sign_in(session) or _limit_held(session, current) or _stall_exhausted(state, agent):
             continue
         status = session.get("status")
         if agent.get("restart_requested_at") and status not in control.ACTIVE_STATUSES:
@@ -253,7 +264,15 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         (session.get("provider") == reviewer_provider if reviewer_provider and session.get("provider")
          else session.get("kind", "").startswith("claude")) and _needs_sign_in(session)
         for session in live)
-    if needed and waited is not None and waited >= REVIEWER_WAIT_SECONDS and not reviewer_starting and not claude_signed_out:
+    # A Reviewer of the required provider that is only waiting out its usage limit is present, not missing: another terminal
+    # against the same exhausted allowance would only fail too.
+    reviewer_limit_held = any(
+        control.KIND_TO_ROLE.get(str(session.get("kind", ""))) == "reviewer"
+        and (not reviewer_provider or not session.get("provider") or session.get("provider") == reviewer_provider)
+        and _limit_held(session, current)
+        for session in live)
+    if needed and waited is not None and waited >= REVIEWER_WAIT_SECONDS and not reviewer_starting and not claude_signed_out \
+            and not reviewer_limit_held:
         actions.append(_limited(state, "role:reviewer", current, {
             "action": "start_reviewer", "kind": "claude_reviewer",
             "reason": f"a review has waited {int(waited // 60)} minutes with no reviewer available",
@@ -275,7 +294,6 @@ def _stall_key(agent: dict[str, Any]) -> str:
 
 def _stall_blocked(state: dict[str, Any], agent: dict[str, Any], session: dict[str, Any] | None, current: datetime) -> bool:
     """Reasons a silent agent is NOT a stall to climb on: the owner's own acts and honest waiting."""
-    from harness import attention
     if session:
         if session.get("read_only") or session.get("superseded_by_session_id") or session.get("pause_requested_at"):
             return True
@@ -283,9 +301,11 @@ def _stall_blocked(state: dict[str, Any], agent: dict[str, Any], session: dict[s
             return True  # the owner stopped it
         if _needs_sign_in(session) or attention.needs_owner(session) or attention.holds_harness_input(session.get("attention_reason")):
             return True  # sign-in and trust menus are the owner's
+        if _limit_held(session, current):
+            return True  # a usage-limit message, and the grace after it clears: honest waiting, not a stall
         if session.get("launch_failure") and session.get("status") not in control.ACTIVE_STATUSES:
             return True  # the launch-failure card owns this
-    if agent.get("liveness") == board.SIGNED_OUT_LIVENESS or agent.get("task") == board.AWAITING_OWNER_DIRECTION:
+    if agent.get("liveness") in {board.SIGNED_OUT_LIVENESS, board.USAGE_LIMIT_LIVENESS} or agent.get("task") == board.AWAITING_OWNER_DIRECTION:
         return True
     if str(agent.get("status") or "") in {"awaiting_owner", "awaiting_owner_decision", "waiting_for_owner"}:
         return True
@@ -344,7 +364,8 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
             if _stall_blocked(state, agent, session, current) or not board._agent_has_actionable_work(state, agent):
                 continue
             real = board.real_heartbeat(agent)
-            beats = [real, _parsed(agent.get("spawned_at")), _parsed(agent.get("session_reattached_at")), resumed]
+            beats = [real, _parsed(agent.get("spawned_at")), _parsed(agent.get("session_reattached_at")), resumed,
+                     _parsed((session or {}).get("limit_cleared_at"))]
             beat = max((item for item in beats if item is not None), default=None)
             threshold = window + (board.CTO_MONITOR_INTERVAL_SECONDS if role == "cto" else 0)
             if beat is None or (current - beat).total_seconds() < threshold:
@@ -385,7 +406,8 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
                 actions.append(_limited(state, f"replace:{key}", current, {**base, "action": "stall_replace_launch"}))
                 continue
         reference = [_parsed(entry.get("step_at")), _parsed((agent or {}).get("session_reattached_at")),
-                     _parsed((agent or {}).get("spawned_at")) if step >= 2 else None, resumed]
+                     _parsed((agent or {}).get("spawned_at")) if step >= 2 else None, resumed,
+                     _parsed((session or {}).get("limit_cleared_at"))]    # time spent held never advances a step
         anchor = max((item for item in reference if item is not None), default=None)
         if anchor is None or (current - anchor).total_seconds() < step_wait:
             continue
@@ -407,6 +429,35 @@ def _record(root: Path, kind: str, key: str, message: str, **payload: Any) -> No
     with board.locked_state(root) as state:
         agent = (state.get("agents") or {}).get(payload.get("agent_id", ""))
         board._event(state, kind, agent, {"task": (agent or {}).get("task", ""), "self_heal_key": key, "message": message, **payload})
+
+
+def _skip_if_held_now(root: Path, action: dict[str, Any]) -> str:
+    """Re-read the world right before any destructive or replacement action: a plan made a tick ago must not run against a
+    terminal that has just shown its usage-limit message, is in the grace after it cleared, or whose project is no longer active.
+    Returns the plain reason to skip, or an empty string."""
+    name = str(action.get("action", ""))
+    acts_on_terminal = name in {"restart", "relaunch", "relaunch_ended"} or (name.startswith("stall_") and name != "stall_reset")
+    if not (acts_on_terminal or name == "start_reviewer"):
+        return ""
+    try:
+        if board.pause_state(root).get("status") != "active":
+            return "skipped: the project is not active"
+    except (OSError, ValueError, KeyError):
+        return ""
+    snapshot = control.snapshot(root)
+    sessions = snapshot.get("sessions", [])
+    if acts_on_terminal and action.get("session_id"):
+        target = next((item for item in sessions if item.get("id") == action.get("session_id")), None)
+        if target is not None and _limit_held(target):
+            return "skipped: the terminal shows a usage-limit message, so it is waiting, not stuck"
+    if name == "start_reviewer":
+        settings = snapshot.get("agent_settings") or {}
+        reviewer_provider = str((settings.get("reviewer") or {}).get("provider") or "")
+        for item in sessions:
+            if control.KIND_TO_ROLE.get(str(item.get("kind", ""))) == "reviewer" and _limit_held(item) and (
+                    not reviewer_provider or not item.get("provider") or item.get("provider") == reviewer_provider):
+                return "skipped: the Reviewer shows a usage-limit message, so a second one would hit the same limit"
+    return ""
 
 
 def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]], Any],
@@ -455,6 +506,13 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
                 f"stuck ({action['reason']}). Please open its terminal to see what it needs.",
                 agent_id=action.get("agent_id", ""))
         return {"action": "give_up", "self_heal_key": key}
+    skipped = _skip_if_held_now(root, action)
+    if skipped:
+        try:
+            _record(root, "self_heal_skipped", key, skipped, agent_id=action.get("agent_id", ""), session_id=action.get("session_id", ""))
+        except board.ProjectPausedError:
+            pass       # a paused project refuses every write, this note included; nothing was done, which is the point
+        return {"action": action["action"], "skipped": skipped}
     if str(action["action"]).startswith("stall_"):
         return _execute_stall(root, action, launch, create)
     if action["action"] in {"restart", "relaunch_ended", "start_reviewer"}:

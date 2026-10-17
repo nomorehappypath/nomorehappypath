@@ -22,6 +22,8 @@ the screen NOW.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from harness.conversation import strip_terminal_sequences
 
@@ -56,6 +58,151 @@ GEMINI_SIGN_IN_REASON = ("is waiting for you in its terminal: Gemini needs you t
 GEMINI_QUOTA_MARK = "Gemini ran out of quota"
 QUOTA_RECENT_LINES = 8     # the error, its id, the prompt box and the status line sit within this
 GEMINI_QUOTA_PATTERN = re.compile(r"quota reached.{0,160}?Resets in\s*(?:(\d+)h)?", re.IGNORECASE | re.DOTALL)
+
+
+# A Claude or Codex terminal that has used up the owner's allowance prints the CLI's own limit line and stops (the harness used to
+# read that silence as a stall and restart the terminal). Wording measured 2026-10-16 on the real CLIs (Claude Code 2.1.293,
+# Codex 0.162.0) answering a local mock that returned each CLI's own limit response; raw captures:
+# board/evidence/2026-10-16_quota-handoff-live-capture/CAPTURES.md (governance folder). The reset time is the CLI's own words.
+#   Claude: "You've hit your session|weekly|Opus|Sonnet limit · resets 9:43pm (America/Chicago)", "You're out of usage credits · resets ...",
+#           far resets "resets Oct 18 at 12:45am (America/Chicago)"; the interactive screen also shows
+#           "Usage limit reached · continuing automatically at 9:44pm · esc to cancel" and the status row "⚠ Usage limit reached · limit resets 9:44pm".
+#   Codex:  "You’ve hit your usage limit. <plan advice> ... try again at 9:45 PM." (curly apostrophe; far resets "Oct 18th, 2026 12:46 AM.")
+# The patterns are chosen by the session's own provider; a Claude pattern is never tried on a Codex screen.
+LIMIT_REASON_MARK = "usage-limit message"
+LIMIT_RECENT_LINES = 12     # the error and the prompt box with its status rows sit within this
+LIMIT_ESTIMATED_MINUTES = 60       # when the CLI printed no usable time: hold this long, then nudge once
+LIMIT_NUDGE_AFTER_SECONDS = 60     # the line still on screen this long after the announced time: one nudge
+LIMIT_RESUME_GRACE_SECONDS = 120   # after the line clears, nothing restarts or stalls the terminal for this long
+LIMIT_JUST_PASSED_MINUTES = 15       # a clock time this recently past on the screen means "now due", not "tomorrow"
+LIMIT_SAME_INCIDENT_SECONDS = 120  # redraws that parse to the same instant (within this) are one incident
+LIMIT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "claude": re.compile(
+        r"(?:hit your [^\n·]{1,40}? limit|out of usage credits|Usage limit reached)\s*·\s*"
+        r"(?:limit resets|resets|continuing automatically at)\s+(?P<when>[^\n(·]+?)\s*(?:\((?P<zone>[A-Za-z_]+(?:/[A-Za-z_+\-0-9]+)*)\))?\s*(?:·|$)",
+        re.IGNORECASE | re.MULTILINE),
+    "codex": re.compile(
+        r"You(?:'|\u2019)ve hit your usage limit\..{0,320}?try\s+again\s+at\s+(?P<when>[^.\n]{3,45}?)\s*\.",
+        re.IGNORECASE | re.DOTALL),
+}
+PROVIDER_LABELS = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini"}
+# A line starting with one of these, BELOW the limit line, is a newer output event of that CLI: the terminal resumed.
+# Claude Code: "⏺" (macOS build 2.1.293) or "●" (Linux build 2.1.300) opens every assistant/tool line (an answer, "API Error: ...");
+# Codex: "•" opens "Working" and answers.
+LIMIT_RESUME_MARKERS = {"claude": ("\u23fa", "\u25cf"), "codex": ("\u2022",)}
+
+
+NUDGE_TEXT = "Please continue where you stopped."
+REVIEWER_NUDGE_TEXT = "Please check the board for your current assignment and continue from there."
+
+
+def nudge_text(role: str | None) -> str:
+    """The one fixed line typed into a held terminal once its announced time has passed (a Reviewer re-checks its assignment first)."""
+    return REVIEWER_NUDGE_TEXT if str(role or "").lower() == "reviewer" else NUDGE_TEXT
+
+
+def limit_reason(provider: str | None) -> str:
+    """Stable for the whole incident (no countdown, no time): the incident fields carry the time."""
+    return f"shows {PROVIDER_LABELS.get(str(provider or '').lower(), 'its provider')}'s {LIMIT_REASON_MARK}"
+
+
+def is_limit_reason(reason: str | None) -> bool:
+    return LIMIT_REASON_MARK in str(reason or "")
+
+
+_MONTHS = {name: number for number, name in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+_RELATIVE = re.compile(r"^in\s+(?:(\d+)\s*d(?:ays?)?\s*)?(?:(\d+)\s*h(?:ours?|rs?)?\s*)?(?:(\d+)\s*m(?:in(?:ute)?s?)?\s*)?(?:(\d+)\s*s(?:ec(?:ond)?s?)?)?$",
+                       re.IGNORECASE)
+_ABSOLUTE = re.compile(
+    r"^(?:(?P<mon>[A-Za-z]{3})[A-Za-z]*\.?\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:\s*,)?(?:\s+(?P<year>\d{4}))?(?:\s*,)?(?:\s+at)?\s+)?"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?$", re.IGNORECASE)
+
+
+def parse_reset(when: str, zone: str | None, observed: datetime) -> datetime | None:
+    """The instant the CLI announced, as an aware datetime; None when the text is not a time this module understands.
+
+    An explicit zone in the CLI's text is honoured; otherwise the machine's local zone. Date-less times mean the next
+    occurrence after `observed`. A wall-clock time that does not exist (DST gap) resolves to the first valid instant after it;
+    an ambiguous one (DST overlap) to the earlier instant. The result carries its offset, so a later change of the machine's
+    time zone does not move it.
+    """
+    text = " ".join(str(when or "").replace("\u00a0", " ").split()).strip(" .,")
+    if not text:
+        return None
+    if observed.tzinfo is None:
+        observed = observed.astimezone()
+    relative = _RELATIVE.match(text)
+    if relative and any(relative.groups()):
+        days, hours, minutes, seconds = (int(part or 0) for part in relative.groups())
+        return observed + timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+    absolute = _ABSOLUTE.match(text)
+    if not absolute:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(zone) if zone else observed.tzinfo
+    except Exception:
+        tz = observed.tzinfo     # an unknown zone name: read the time as local rather than guess another zone
+    here = observed.astimezone(tz)
+    hour, minute, ampm = int(absolute.group("hour")), int(absolute.group("minute") or 0), (absolute.group("ampm") or "").lower().replace(".", "")
+    if ampm:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if ampm == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    month = absolute.group("mon")
+    try:
+        if month:
+            number = _MONTHS.get(month.lower())
+            if not number:
+                return None
+            explicit_year = absolute.group("year")
+            year = int(explicit_year) if explicit_year else here.year
+            candidate = datetime(year, number, int(absolute.group("day")), hour, minute, tzinfo=tz)
+            if not explicit_year and candidate < here - timedelta(days=1):
+                candidate = candidate.replace(year=year + 1)
+        else:
+            candidate = datetime(here.year, here.month, here.day, hour, minute, tzinfo=tz)
+            if candidate <= here and (here - candidate) > timedelta(minutes=LIMIT_JUST_PASSED_MINUTES):
+                tomorrow = here + timedelta(days=1)
+                candidate = datetime(tomorrow.year, tomorrow.month, tomorrow.day, hour, minute, tzinfo=tz)
+            # else: a time that passed minutes ago and is still on the screen is an announcement that has come due (a redraw of the
+            # same line after its time), never "tomorrow": the CLI prints a date for anything more than a day away.
+    except ValueError:
+        return None
+    # Through UTC and back: a nonexistent local time (spring-forward gap) becomes the first valid instant after it, an ambiguous
+    # one (fall-back overlap) the earlier instant (fold=0), and the result carries a fixed offset.
+    return candidate.astimezone(timezone.utc).astimezone(tz)
+
+
+def detect_limit(text: str, provider: str | None, observed: datetime) -> dict | None:
+    """The Claude or Codex usage-limit incident on this screen, or None.
+
+    Only the session's own provider's pattern is tried, and only among the last LIMIT_RECENT_LINES non-empty lines: a replayed
+    conversation or a quoted phrase higher up does not count, and the hold ends the moment the line leaves the screen.
+    """
+    pattern = LIMIT_PATTERNS.get(str(provider or "").lower())
+    if pattern is None:
+        return None
+    lines = [line for line in text.splitlines() if line.strip()][-LIMIT_RECENT_LINES:]
+    recent = "\n".join(lines)
+    matched = None
+    for candidate in pattern.finditer(recent):
+        matched = candidate          # the LAST limit line on screen
+    if not matched:
+        return None
+    # The limit holds only while it is the CLI's most recent output event. Once the CLI prints a new turn after it (an answer, an
+    # error, "Working"), the allowance is being used again and the stale limit text above must not keep the terminal held
+    # (found 2026-10-17: Claude answered after the nudge and stayed "held" for the rest of the run).
+    after = recent[matched.end():]
+    markers = LIMIT_RESUME_MARKERS.get(str(provider).lower(), ())
+    if any(line.lstrip().startswith(markers) for line in after.splitlines() if line.strip()):
+        return None
+    resets = parse_reset(matched.group("when"), matched.groupdict().get("zone"), observed)
+    return {"provider": str(provider).lower(), "when_text": " ".join(matched.group("when").split()),
+            "resets_at": resets, "kind": "announced" if resets else "estimated"}
 
 
 def gemini_quota_reason(hours: str | None) -> str:
@@ -114,8 +261,27 @@ def holds_harness_input(reason: str | None) -> bool:
     keeps receiving messages.
     """
     reason = str(reason or "")
-    return "/login" in reason or GEMINI_QUOTA_MARK in reason or reason in {
+    return "/login" in reason or GEMINI_QUOTA_MARK in reason or is_limit_reason(reason) or reason in {
         TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON, GEMINI_TRUST_REASON, GEMINI_SIGN_IN_REASON}
+
+
+def in_limit_grace(session: dict | None, now: datetime | None = None) -> bool:
+    """The usage-limit line cleared a moment ago: the terminal needs LIMIT_RESUME_GRACE_SECONDS to show life before anything restarts it."""
+    cleared = str((session or {}).get("limit_cleared_at") or "")
+    if not cleared:
+        return False
+    moment = _parsed(cleared)
+    if moment.timestamp() == 0:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds() < LIMIT_RESUME_GRACE_SECONDS
+
+
+def menu_on_screen(text: str) -> bool:
+    """Whether a sign-in, folder-trust or permission menu is on this screen, checked apart from any usage-limit line (detect() returns the limit first)."""
+    return any(pattern.search(text) for pattern, reason in PROMPT_FORMS if holds_harness_input(reason))
 
 
 def needs_sign_in(session: dict | None) -> bool:
@@ -130,7 +296,9 @@ def needs_sign_in(session: dict | None) -> bool:
 
 
 def has_quota_block(session: dict | None) -> bool:
-    return GEMINI_QUOTA_MARK in str((session or {}).get("attention_reason") or "")
+    """The terminal shows a usage-limit message (Gemini's quota line, or Claude's or Codex's limit line)."""
+    reason = str((session or {}).get("attention_reason") or "")
+    return GEMINI_QUOTA_MARK in reason or is_limit_reason(reason)
 
 
 def needs_owner(session: dict | None) -> bool:
@@ -142,8 +310,56 @@ def owner_block(session: dict | None) -> str:
     return "sign_in" if needs_sign_in(session) else ("quota" if has_quota_block(session) else "")
 
 
+def format_limit_time(moment: datetime | str | None, now: datetime | None = None) -> str:
+    """'3:00 PM' for today, 'Fri 17 Oct, 3:00 PM' for another day (local time of the machine)."""
+    if isinstance(moment, str):
+        try:
+            moment = datetime.fromisoformat(moment)
+        except ValueError:
+            return ""
+    if not isinstance(moment, datetime):
+        return ""
+    local = moment.astimezone()
+    today = (now or datetime.now().astimezone()).astimezone().date()
+    clock = local.strftime("%I:%M %p").lstrip("0")
+    return clock if local.date() == today else f"{local.strftime('%a')} {local.day} {local.strftime('%b')}, {clock}"
+
+
+LIMIT_WAY_OUT = ("If this is not a real limit, type a message into its terminal; when the CLI answers, the harness continues.")
+
+
+def limit_sentence(role: str, session: dict | None, now: datetime | None = None) -> str:
+    """One plain line for the owner about a terminal that shows a usage-limit message (what is observed, never a certainty)."""
+    session = session or {}
+    now = now or datetime.now().astimezone()
+    label = PROVIDER_LABELS.get(str(session.get("provider") or "").lower(), "its provider")
+    when = format_limit_time(session.get("limit_resets_at"), now)
+    estimated = str(session.get("limit_kind") or "") == "estimated"
+    nudged = str(session.get("limit_nudged_at") or "")
+    if nudged and now >= _parsed(nudged) + timedelta(seconds=LIMIT_NUDGE_AFTER_SECONDS):
+        said = (f"was expected back about {when} (estimated)" if estimated else f"announced {when}") if when else "gave no time"
+        return f"The {role} ({label}) {said} but still shows {label}'s usage-limit message. It keeps waiting. {LIMIT_WAY_OUT}"
+    if not when:
+        said = "it gave no time"
+    elif estimated:
+        said = f"it gave no time, so the harness will look again about {when} (estimated)"
+    else:
+        said = f"it announced {when}"
+    return (f"The {role} ({label}) shows {label}'s usage-limit message; {said}. Nothing is sent to it until the message goes; "
+            f"it continues then. {LIMIT_WAY_OUT}")
+
+
+def _parsed(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.fromtimestamp(0, timezone.utc)
+
+
 def owner_block_sentence(role: str, session: dict | None) -> str:
     """One plain line for the owner about a terminal that cannot work until they act."""
+    if is_limit_reason((session or {}).get("attention_reason")):
+        return limit_sentence(role, session)
     if has_quota_block(session):
         match = re.search(r"about (\d+) more hours", str((session or {}).get("attention_reason") or ""))
         span = f" (about {match.group(1)} more hours)" if match else ""
@@ -169,8 +385,10 @@ _TOKEN = re.compile(
 )
 
 
-def detect(text: str) -> str | None:
+def detect(text: str, provider: str | None = None, observed: datetime | None = None) -> str | None:
     """The reason a terminal is waiting, or None when this text shows none."""
+    if provider and detect_limit(text, provider, observed or datetime.now().astimezone()):
+        return limit_reason(provider)
     # The quota line counts only as the MOST RECENT event: among the last few lines of the screen. A resumed
     # conversation replays old output, including an old quota error above work the agent has since done.
     recent = "\n".join([line for line in text.splitlines() if line.strip()][-QUOTA_RECENT_LINES:])
@@ -378,22 +596,57 @@ class PromptWatch:
     drops when it disappears or when the owner types. After the owner has
     typed, a prompt still on screen does not re-raise the alarm; only a prompt
     that goes away and comes back does.
+
+    A provider's usage-limit message is different: the owner typing does not
+    prove the allowance is back, so it clears only when the line leaves the
+    screen. Its parsed reset time is the INCIDENT (`incident`): redraws that
+    parse to the same instant are one incident; a different instant is a new
+    one, reported even though the reason text is unchanged.
     """
 
-    def __init__(self, height: int | None = None) -> None:
+    def __init__(self, height: int | None = None, provider: str = "",
+                 clock: Callable[[], datetime] | None = None) -> None:
         self.screen = Screen(height or DEFAULT_HEIGHT)
+        self.provider = str(provider or "").lower()
+        self.clock = clock or (lambda: datetime.now().astimezone())
         self.visible: str | None = None
         self.reason: str | None = None
+        self.incident: dict | None = None
 
     def resize(self, height: int | None) -> tuple[str, str | None] | None:
         self.screen.resize(height)
         return self._reconcile()
 
+    def _adopt_incident(self, found: dict, observed: datetime) -> bool:
+        """Keep the current incident when this is the same one; otherwise start a new one. True when a new one started."""
+        current = self.incident
+        if current and current["provider"] == found["provider"]:
+            if found["when_text"] == current["when_text"]:
+                return False     # the same words on screen: the same incident, never re-read against a later clock
+            if found["kind"] == "estimated" and current["kind"] == "estimated":
+                return False
+            if found["kind"] == "announced" and current["kind"] == "announced" and \
+                    abs((found["resets_at"] - current["_instant"]).total_seconds()) <= LIMIT_SAME_INCIDENT_SECONDS:
+                return False
+        resets = found["resets_at"] or observed + timedelta(minutes=LIMIT_ESTIMATED_MINUTES)
+        self.incident = {"provider": found["provider"], "kind": found["kind"], "when_text": found["when_text"],
+                         "seen_at": observed.isoformat(timespec="seconds"), "resets_at": resets.isoformat(timespec="seconds"),
+                         "_instant": resets if found["kind"] == "announced" else None}
+        return True
+
     def _reconcile(self) -> tuple[str, str | None] | None:
-        now = detect(self.screen.text())
+        observed = self.clock()
+        text = self.screen.text()
+        found = detect_limit(text, self.provider, observed) if self.provider in LIMIT_PATTERNS else None
+        now = limit_reason(self.provider) if found else detect(text)
         was = self.visible
         self.visible = now
-        if now and not was:
+        new_incident = False
+        if found:
+            new_incident = self._adopt_incident(found, observed)
+        elif self.incident is not None:
+            self.incident = None     # the line left the screen: a fresh limit line later is a new incident
+        if now and (not was or now != was or new_incident):
             self.reason = now
             return ("waiting", now)
         if was and not now and self.reason:
@@ -406,9 +659,16 @@ class PromptWatch:
         self.screen.feed(data)
         return self._reconcile()
 
+    def tick(self) -> tuple[str, str | None] | None:
+        """Re-evaluate the screen as it is now (no new output): the supervisor's periodic look."""
+        return self._reconcile()
+
     def owner_typed(self) -> tuple[str, str | None] | None:
-        """The owner answered in the terminal: whatever was waiting is now theirs."""
-        if self.reason:
+        """The owner answered in the terminal: whatever was waiting is now theirs.
+
+        Not a usage-limit message: typing does not prove the allowance is back, so that reason stays until the line leaves the screen.
+        """
+        if self.reason and not is_limit_reason(self.reason):
             self.reason = None
             return ("cleared", None)
         return None

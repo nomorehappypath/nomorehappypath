@@ -276,6 +276,14 @@ def page_version() -> str:
     return hashlib.sha256(PAGE.encode("utf-8")).hexdigest()[:16]
 
 
+def _limit_notices(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """One calm line for each terminal of this project that is waiting out its provider's usage limit."""
+    try:
+        return control.limit_notices(registry.context_for_entry(entry))
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+
+
 def _waiting_sessions(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """Managed terminals of this project that stopped to wait for the owner.
 
@@ -481,6 +489,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "health": health,
         "waiting_sessions": waiting,
+        "limit_notices": _limit_notices(entry),
         "task_counts": counts,
         "agent_counts": agent_counts,
         "running": running,

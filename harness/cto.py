@@ -106,17 +106,18 @@ def _git_output(repo: Path, *args: str) -> str:
 
 
 def _status_paths(repo: Path) -> list[str]:
+    """Every path the working tree reports as changed, both endpoints of a rename, exact (NUL form).
+
+    Strict on purpose: release-blocking checks use it, so the app's own .harness files stay visible
+    here. Diagnostics that only display the list filter them at the call site.
+    """
     result = git_process.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=repo, capture_output=True, text=True,
     )
-    paths = []
-    for line in result.stdout.splitlines() if result.returncode == 0 else []:
-        if len(line) < 4:
-            continue
-        path = line[3:]
-        paths.append(path.split(" -> ", 1)[-1])
-    return paths
+    if result.returncode != 0:
+        return []
+    return sorted({path for _code, paths in git_broker.porcelain_entries(result.stdout) for path in paths})
 
 
 def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
@@ -259,7 +260,8 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
     """
     artifact_started_at = lifecycle.now()
     reviewed_commit = str((latest_review or {}).get("reviewed_commit", ""))
-    reviewed_files = sorted(set((latest_review or {}).get("reviewed_files", []) or []))
+    # Reviews saved before 2026-10-16 hold Git-quoted names for unusual filenames; decode so they still match.
+    reviewed_files = sorted({git_broker.git_unquote(str(path)) for path in ((latest_review or {}).get("reviewed_files", []) or [])})
     repins = list((latest_review or {}).get("review_repins", []) or [])
     head = _git_output(repo, "rev-parse", "HEAD")
     branch = _git_output(repo, "branch", "--show-current")
@@ -375,7 +377,7 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
         "artifact_health_verified": health_verified,
         "artifact_archive_error": archive_error,
         "artifact_health_output": health_output,
-        "shared_worktree_dirty_files": status_paths,
+        "shared_worktree_dirty_files": [path for path in status_paths if not board._harness_owned_path(path)],
         "uncommitted_task_artifact_files": uncommitted_task_files,
         "task_artifact_clean": not uncommitted_task_files,
         "task_artifact_release_verified": bool(exact_commit and repin_verified and (pushed or not check_remote) and archive_verified and not uncommitted_task_files),

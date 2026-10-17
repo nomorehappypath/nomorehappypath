@@ -216,6 +216,18 @@ the **Open report** link opens the document Delivery attached for you (and
 the CTO's card carries the same link). View app starts the app itself; it
 does not show a document. Accepted work keeps its link in Task history.
 
+**What happens when Claude or Codex runs out of my usage allowance?**
+The agent that ran out is held, not restarted: the project shows one amber note
+("... shows Claude's usage-limit message; it announced 9:43 PM ...") and that
+agent's row reads WAITING: USAGE LIMIT. Nothing is typed into it, the other
+agents keep working, and its messages wait. Claude Code continues by itself at
+the announced time; if the message is still on the screen a minute later the
+harness types one short line, once. A waiting Reviewer is never replaced by a
+second one, and a review is never handed to the company that wrote the work.
+It does not switch vendors mid-task, use another account, or use an API key to
+get around a limit. If the note is wrong, type any message into that agent's
+terminal and the harness continues when the program answers.
+
 **Why not just Claude Code?**
 Claude Code is a superb builder — this platform launches it as one. But when
 the same assistant builds and then verifies, one context window is grading

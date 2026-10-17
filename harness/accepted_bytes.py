@@ -38,9 +38,9 @@ def binary_patch_arguments(*revisions: str, paths: Iterable[str] = ()) -> list[s
     return ["diff", *RENAME_RULE, "--binary", *revisions, "--", *paths]
 
 
-def commit_manifest_arguments(commit: str) -> list[str]:
+def commit_manifest_arguments(commit: str, nul: bool = False) -> list[str]:
     """Arguments after ``git`` that list the paths one commit changed."""
-    return ["diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-r", commit, "--"]
+    return ["diff-tree", "--no-commit-id", "--no-renames", "--name-only", *(["-z"] if nul else []), "-r", commit, "--"]
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:

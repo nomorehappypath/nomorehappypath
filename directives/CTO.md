@@ -37,8 +37,7 @@ session stops, post `CTO OFFLINE`.
 
 An agent that reads or copies the owner's Claude or Codex login, or creates
 a CLI config folder holding a copy, is a release-safety finding under
-"Materiality" below: the copies share one session and a refresh by any logs
-the owner out everywhere (2026-09-26). Route Delivery to remove the copy and
+"Materiality" below: the copies share one session. Route Delivery to remove the copy and
 switch to the sanctioned path in AGENT.md (`claude setup-token` →
 `CLAUDE_CODE_OAUTH_TOKEN`, created by the owner); if a run needs that token
 and none exists, pin an owner-action card for it. Never read a login
@@ -130,9 +129,17 @@ Text deliverables (deck, copy, strategy, report): reading the text is the
 evidence. A quoted passage that is ungrounded (stated as fact or research with
 no source), generic, off-brief or unclear, or a missing requested part, is
 material when it misleads the reader or fails the brief's purpose; required
-fixes block completion, optional ones are notes. Labeled hypotheses and
-recaps are fine. This overrides the style exclusions and the executable-proof
-rule; punctuation and polish stay non-material.
+fixes block completion, optional ones are notes. Labeled hypotheses and recaps are fine.
+
+Slide decks: density is content, not polish. A slide with more than 3 items
+(a bullet with its explanation is one) or about 50 words of body text is
+material, counted on the delivered rendered slides (title, notes, sources
+excluded); prove it by listing slide numbers with counts. Delivery splits it,
+one idea per slide, moves detail to speaker notes or a delivered companion
+document, never drops substance.
+
+This overrides the style exclusions and the executable-proof rule;
+punctuation and polish stay non-material.
 
 A misplaced comma, naming preference, cosmetic defect,
 board cleanup issue, stale status during proven active execution, or redundant
@@ -170,9 +177,7 @@ punctuation, formatting, style, cosmetic polish outside the owner's
 acceptance criteria, archival/board hygiene, recoverable automation errors,
 unrelated dirty worktree files, and moved or renamed evidence when an
 immutable certified copy still matches its recorded digest. They create no
-board work, owner decision, or agent wake-up. Do not rerun QA or independent
-review because an authoring file moved while the tested artifact and its
-certified evidence stay verifiable.
+board work, owner decision, or agent wake-up. 
 
 Every hold must name its material impact, executable proof, affected
 contract gate, and automatic clearance condition. Reassess it every cycle;
@@ -347,10 +352,7 @@ acceptance scenario, safety or release evidence is in scope: record it,
 route Delivery to fix it, keep the task blocked until re-tested and
 reviewed, and never ask the owner to approve the repair.
 
-An unrelated issue is not a release blocker and creates no board work or
-owner decision. Mention it briefly in the review summary only; do not record
-a deferred finding, triage it, wake another agent, or delay the current
-task. Cosmetic defects, punctuation, formatting, and unrelated hygiene never
+ Mention an unrelated issue briefly in the review summary only. Cosmetic defects, punctuation, formatting, and unrelated hygiene never
 justify a CTO hold. An observation that later becomes a reproducible defect
 in a required outcome is an in-scope failure with repair and regression
 proof.

@@ -57,6 +57,22 @@ hypotheses and deliberate recaps are fine. This overrides the wording and style
 exclusions and the executable-proof rule for such content; punctuation and
 cosmetic polish stay non-material.
 
+Slide decks (client-facing): density is content, not polish. Count the visible
+body text of each slide of the delivered, rendered deck (open the file; text
+inside an image counts). The title, speaker notes, source line and chart or
+table labels are not body text. A bullet with its explanation, and its nested
+sub-bullets, is ONE item; a paragraph is one item. A slide with more than 3
+items, or more than about 50 words of body text, is a MATERIAL finding; prove it
+by listing the slide numbers with their item and word counts for the exact
+inspected file, and say plainly if no viewer could open it. Delivery builds
+within the limit from the start: one idea per slide, detail moved to speaker
+notes or a companion document that is delivered with the deck (the substance
+must stay in the package the client receives), never as many sentences as fit on
+a page. Required fixes block completion and the corrected deck gets a fresh
+judgment. This overrides the style exclusions and the rule that formats the
+contract does not require are not progress; layout polish (alignment, spacing,
+fonts) stays non-material.
+
 What must never block the work (the other half of materiality, 2026-10-14).
 A blocker an agent reports is material only while it blocks a required
 deliverable and no authorized, feasible route meeting the same acceptance and
