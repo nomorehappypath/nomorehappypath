@@ -4,6 +4,38 @@
 
 NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-built software. You describe what you want. A team of AI agents plans it, builds it, tests it and reviews it, inside a governed project board and a local control room (Mission Control). Nothing moves forward without recorded evidence, and "done" stays your word. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
 
+## See it working
+
+![Mission Control: the project list](https://nomorehappypath.com/assets/readme-projects.png)
+*Mission Control lists every project. This one is a commercial marketing app built and maintained with NoMoreHappyPath.*
+
+![Every step the studio ran, including cross-vendor review](https://nomorehappypath.com/assets/readme-studio-steps.png)
+*One task, step by step: checking the brief, experts working, a synthesized strategy, and an independent review by the other AI company.*
+
+![Mission Control: a task ready for the owner's test](https://nomorehappypath.com/assets/shot-ready.png)
+*A small weather app built from one request: review passes recorded, then "ready for your test".*
+
+Demo videos and a longer walkthrough: https://nomorehappypath.com
+
+## Quick start
+
+1. **Check you have** macOS 13+ or Linux, Python 3.9+, git, and **any two** of the Codex CLI, Claude Code CLI and Gemini (Antigravity) CLI, installed and signed in (details in [What you need](#what-you-need)). On Linux you also need tmux and bubblewrap.
+2. **Install:**
+
+   ```bash
+   git clone https://github.com/nomorehappypath/nomorehappypath.git
+   cd nomorehappypath && bash install.sh
+   ```
+
+   The installer checks your prerequisites (it cannot check that your accounts and sign-ins work; Settings does that), tells you plainly what is missing, then installs the auto-start service or runs once in the foreground.
+3. **Open Mission Control** at http://127.0.0.1:8740/ (the installer prints the address), or run `python3 harness/project_manager.py`. On a Linux server, that address is on the server itself: forward it first, for example `ssh -L 8740:127.0.0.1:8740 you@your-server`, then open http://127.0.0.1:8740/ on your own computer.
+4. **In Settings:** choose a provider for each of the three roles (Delivery, Reviewer, CTO) from the CLIs you installed, keeping Delivery and Reviewer on different vendors, and use the connection test to check each one. Settings apply to agents you start afterwards. If you use Claude, set up its agent token as described in [Claude agent authentication](#claude-agent-authentication); if you use Gemini, follow [Gemini agent setup](#gemini-agent-setup-optional). For the optional project chat, add your OpenAI API key under *Project chat key*.
+5. **New project** (or **Adopt existing**): choose the folder (read *Help → Your Responsibility* first: agents can edit, delete and run code in that folder, so choose it deliberately and back it up), then start the three agent roles from Mission Control. If Claude or Codex asks *Do you trust this folder?*, answer it in the agent's window (**View agent**).
+6. **Give your first direction** in plain English in the Delivery agent's window. Review the requirements the agents propose and press **Go ahead** (or change them).
+7. **When the task shows "ready for your test"**, follow its test checklist: press **View app** (or **Open report** for a document), try it, then choose **Accepted** or **Not accepted**.
+
+The first run needs a few sign-ins; the sections below explain each one.
+
 ## What it is
 
 - **A team of agents.** A builder, an independent reviewer from a different AI company, and a CTO that watches the board. Claude, Codex or Gemini can take any role, and the reviewer is never from the builder's company.
