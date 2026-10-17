@@ -590,6 +590,13 @@ def locked_state(
         path = _state_path(root)
         try:
             state = _seed_route_obligations(_upgrade_accepted_releases(_load_or_recover_state(root, allow_restore=True)), root)
+            removed, saved = _compact_task_baselines(state)
+            if saved:
+                _event(state, "board_compacted", None, {
+                    "task": "",
+                    "message": f"Board housekeeping: removed {removed} of the app's own file entries from task start records and saved {saved} bytes; nothing the owner sees changed",
+                    "entries_removed": removed, "bytes_saved": saved,
+                })
             pause = state.setdefault("project_pause", {"status": "active"})
             saved_resume_session = bool(
                 pause.get("status") == "resuming"
@@ -2194,41 +2201,107 @@ def _broker_for_state(root: ProjectRoot, state: dict[str, Any], task: str) -> gi
     return git_broker.GitBroker(context, state_loader=lambda: state)
 
 
-def _git_task_baseline(root: ProjectRoot, mode: str = "task_start") -> dict[str, Any]:
-    """Capture inherited Git state so later work never becomes an owner choice."""
-    root = project_context(root).code_root
+def _harness_owned_path(path: str) -> bool:
+    """A path inside .harness, the app's own storage (never project content)."""
+    path = path.strip().strip('"')
+    return path == ".harness" or path.startswith(".harness/")
+
+
+def _text_line_paths(line: str) -> list[str]:
+    """Paths of one ``git status --porcelain`` text line, read conservatively (quoted names stay quoted)."""
+    tail = line[3:]
+    if line[:1] in {"R", "C"} and tail.count(" -> ") == 1:
+        origin, destination = tail.split(" -> ")
+        return [git_broker.git_unquote(destination), git_broker.git_unquote(origin)]
+    return [git_broker.git_unquote(tail)]
+
+
+def _status_entry_is_harness_owned(paths: list[str]) -> bool:
+    """An entry is the app's own only when EVERY path it names is (a rename into .harness is not)."""
+    return bool(paths) and all(_harness_owned_path(path) for path in paths)
+
+
+def _git_status_entries(root: Path) -> tuple[str, list[tuple[str, list[str]]]] | None:
+    """Raw ``-z`` status text and its logical entries, or None when Git cannot report."""
     status = git_process.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=root, capture_output=True, text=True,
     )
     if status.returncode != 0:
+        return None
+    return status.stdout, git_broker.porcelain_entries(status.stdout)
+
+
+def _git_task_baseline(root: ProjectRoot, mode: str = "task_start") -> dict[str, Any]:
+    """Capture inherited Git state so later work never becomes an owner choice."""
+    root = project_context(root).code_root
+    captured = _git_status_entries(root)
+    if captured is None:
         return {"available": False, "mode": mode, "captured_at": now(), "requires_owner_action": False, "dirty_files": []}
+    raw_status, entries = captured
     head = git_process.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True)
     branch = git_process.run(["git", "branch", "--show-current"], cwd=root, capture_output=True, text=True)
-    status_lines = [line for line in status.stdout.splitlines() if line]
+    # The app's own files under .harness are never the owner's inherited work: recording them listed
+    # thousands of paths per task and grew the board file past 40 MB. The fingerprint still covers the
+    # unfiltered status so a changed tree is still a changed fingerprint.
+    kept = sorted({path for _code, paths in entries if not _status_entry_is_harness_owned(paths) for path in paths})
     # Intake is attribution, not review: record paths and Git state without
     # opening unrelated untracked files that the owner explicitly excluded.
     # Candidate bytes are bound later by the reviewed commit or dirty-worktree
     # review digest.
-    fingerprint = hashlib.sha256(status.stdout.encode("utf-8"))
+    fingerprint = hashlib.sha256(raw_status.encode("utf-8"))
     return {
         "available": True,
         "mode": mode,
         "captured_at": now(),
         "head": head.stdout.strip() if head.returncode == 0 else "",
         "branch": branch.stdout.strip() if branch.returncode == 0 else "",
-        "dirty_files": [line[3:] for line in status_lines],
-        "status_lines": status_lines,
+        "dirty_files": kept,
         "fingerprint": fingerprint.hexdigest(),
         "requires_owner_action": False,
         "policy": "inherited changes are attributed, tested, and reviewed internally; they never require owner classification",
     }
 
 
-def _harness_owned_status_line(line: str) -> bool:
-    """A `git status --porcelain` line about a path inside .harness (the app's own storage)."""
-    path = line[3:].split(" -> ", 1)[-1].strip().strip('"')
-    return path == ".harness" or path.startswith(".harness/")
+def _compact_task_baselines(state: dict[str, Any]) -> tuple[int, int]:
+    """Shrink baselines written before the filter existed. Returns (entries removed, bytes saved).
+
+    Old baselines hold the full ``git status`` twice (``dirty_files`` and ``status_lines``), mostly
+    the app's own .harness files. Legacy entries are classified from their own status lines before
+    that field is dropped; an entry that cannot be classified with certainty is kept.
+    """
+    if state.get("baselines_compacted_at"):
+        return 0, 0
+    removed = saved = 0
+    for baseline in (state.get("task_baselines") or {}).values():
+        if not isinstance(baseline, dict):
+            continue
+        size = len(json.dumps(baseline, separators=(",", ":")))
+        lines = baseline.pop("status_lines", None)
+        dirty = baseline.get("dirty_files")
+        if isinstance(dirty, list):
+            use_lines = isinstance(lines, list) and len(lines) == len(dirty)
+            kept: list[str] = []
+            for index, entry in enumerate(dirty):
+                text = str(entry)
+                tail = str(lines[index])[3:] if use_lines else text
+                parts = tail.split(" -> ")
+                code = str(lines[index])[:1] if use_lines else ""
+                if len(parts) == 2 and (code in {"R", "C"} or not use_lines):
+                    owned = all(_harness_owned_path(part) for part in parts)
+                elif len(parts) > 2 and (code in {"R", "C"} or not use_lines):
+                    owned = False  # ambiguous endpoints: keep
+                else:
+                    owned = _harness_owned_path(tail)
+                if owned:
+                    removed += 1
+                else:
+                    kept.append(text)
+            baseline["dirty_files"] = kept
+        saved += max(0, size - len(json.dumps(baseline, separators=(",", ":"))))
+    if saved or removed:
+        state["baselines_compacted_at"] = now()
+    return removed, saved
 
 
 def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[str, Any]:
@@ -2245,19 +2318,28 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
         return {"available": False, "commit": "", "branch": "", "files": [], "working_tree_digest": "", "working_tree_files": [], "immutable_clean": False}
     status = git_process.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=root, capture_output=True, text=True)
     status_lines = [line for line in status.stdout.splitlines() if line] if status.returncode == 0 else []
+    # The digest below stays over Git's text lines (so saved evidence keeps its meaning); the exact paths
+    # come from the NUL form, which never quotes or splits a name on " -> ". Both list the same entries in
+    # the same order; when they cannot be paired, each text line is read conservatively instead.
+    captured = _git_status_entries(root) if status.returncode == 0 else None
+    entries = captured[1] if captured else []
+    if len(entries) != len(status_lines):
+        entries = [(line[:2], _text_line_paths(line)) for line in status_lines]
     # The app's own files under .harness (for example the macOS sandbox profile it writes for
     # each launch) are never project content. Counting them made an ordinary pause and resume
-    # look like a change to the reviewed code and threw away a passed review.
-    status_lines = [line for line in status_lines if not _harness_owned_status_line(line)]
-    manifest_command = ["git", *accepted_bytes.commit_manifest_arguments(head.stdout.strip())]
+    # look like a change to the reviewed code and threw away a passed review. An entry is the app's
+    # own only when every path it names is, so a rename of a project file into .harness stays visible.
+    pairs = [(line, entry) for line, entry in zip(status_lines, entries) if not _status_entry_is_harness_owned(entry[1])]
+    status_lines = [line for line, _entry in pairs]
+    manifest_command = ["git", *accepted_bytes.commit_manifest_arguments(head.stdout.strip(), nul=True)]
     if baseline_commit and baseline_commit != head.stdout.strip():
-        manifest_command = ["git", *accepted_bytes.name_only_arguments(f"{baseline_commit}..{head.stdout.strip()}")]
+        manifest_command = ["git", *accepted_bytes.name_only_arguments(f"{baseline_commit}..{head.stdout.strip()}", nul=True)]
     files = git_process.run(
         manifest_command,
         cwd=root, capture_output=True, text=True,
     )
-    committed_manifest = [path for path in files.stdout.splitlines() if path.strip()] if files.returncode == 0 else []
-    dirty_paths = [line[3:].split(" -> ", 1)[-1] for line in status_lines if len(line) >= 4]
+    committed_manifest = [path for path in files.stdout.split("\0") if path.strip()] if files.returncode == 0 else []
+    dirty_paths = list(dict.fromkeys(path for _line, entry in pairs for path in entry[1]))
     # A committed candidate remains immutable even when a shared product
     # checkout contains unrelated inherited files. Review materializes HEAD in
     # a disposable archive; only dirt overlapping the candidate manifest can
@@ -2275,10 +2357,11 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
     if not immutable_candidate:
         diff = git_process.run(["git", *accepted_bytes.binary_patch_arguments("HEAD")], cwd=root, capture_output=True)
         digest.update(b"\0" + diff.stdout)
-        for line in status_lines:
+        for line, entry in pairs:
             if not line.startswith("?? "):
                 continue
-            candidate = root / line[3:]
+            untracked_name = entry[1][0]
+            candidate = root / untracked_name
             if candidate.is_file():
                 try:
                     payload = candidate.read_bytes()
@@ -2288,7 +2371,7 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
                     # require clean commits, so an unreadable dirty artifact
                     # is represented as non-certifiable metadata only.
                     payload = b"<unreadable-untracked-file>"
-                digest.update(b"\0" + line[3:].encode("utf-8", errors="replace") + b"\0" + payload)
+                digest.update(b"\0" + untracked_name.encode("utf-8", errors="replace") + b"\0" + payload)
     if not immutable_candidate and status.returncode == 0:
         # A dirty review has no truthful commit manifest.  Bind the visible
         # scope to the exact candidate working tree instead of reporting the
@@ -2312,7 +2395,7 @@ def _git_review_artifact(root: ProjectRoot, baseline_commit: str = "") -> dict[s
         "branch": branch.stdout.strip() if branch.returncode == 0 else "",
         "files": sorted(set(manifest_files)),
         "working_tree_digest": digest.hexdigest() if status.returncode == 0 else "",
-        "working_tree_files": [line[3:].split(" -> ", 1)[-1] for line in status_lines if len(line) >= 4],
+        "working_tree_files": dirty_paths,
         "immutable_clean": immutable_candidate,
         "shared_worktree_dirty_files": dirty_paths,
         "captured_at": now(),
@@ -3405,6 +3488,8 @@ def _routine_cycle_due(state: dict[str, Any], agent: dict[str, Any], current: da
 
 
 SIGNED_OUT_LIVENESS = "needs_sign_in"
+# A live terminal that shows its provider's usage-limit message: waiting, not stalled, not signed out (2026-10-16_quota-handoff).
+USAGE_LIMIT_LIVENESS = "usage_limit"
 ROLE_NAMES = {"qa": "Reviewer", "cto": "CTO", "engineering": "Delivery agent", "development": "Delivery agent"}
 
 
@@ -3438,8 +3523,17 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         signed_out_sessions = {
             item.get("id"): item for item in sessions_snapshot
             if item.get("status") in control.ACTIVE_STATUSES and attention.needs_owner(item)
+            and not attention.is_limit_reason(item.get("attention_reason"))
         }
         signed_out_session_ids = set(signed_out_sessions)
+        limit_sessions = {
+            item.get("id"): item for item in sessions_snapshot
+            if item.get("status") in control.ACTIVE_STATUSES and attention.is_limit_reason(item.get("attention_reason"))
+        }
+        limit_grace_ids = {
+            item.get("id") for item in sessions_snapshot
+            if item.get("status") in control.ACTIVE_STATUSES and item.get("id") not in limit_sessions and attention.in_limit_grace(item, current)
+        }
         menu_session_ids = {
             item.get("id") for item in sessions_snapshot
             if item.get("status") in control.ACTIVE_STATUSES and attention.holds_harness_input(item.get("attention_reason"))
@@ -3448,6 +3542,8 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         live_session_ids = None
         signed_out_sessions = {}
         signed_out_session_ids = set()
+        limit_sessions = {}
+        limit_grace_ids = set()
         menu_session_ids = set()
     due_defaults: list[dict[str, Any]] = []
     cto_session_id = ""
@@ -3467,6 +3563,36 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             # wake-up; routing to it only piled up undelivered messages for an
             # hour. Hold every wake, say plainly who needs signing in, and
             # resume on the first check after the prompt leaves the screen.
+            if agent.get("session_id") in limit_sessions:
+                # Waiting out the owner's allowance: say what is observed, once per incident, and never call it a stall.
+                held = limit_sessions[agent.get("session_id")]
+                note = attention.owner_block_sentence(ROLE_NAMES.get(str(agent.get("role", "")), "agent"), held)
+                key = str(held.get("limit_seen_at") or "")
+                if agent.get("liveness") != USAGE_LIMIT_LIVENESS or agent.get("liveness_note") != note:
+                    first = agent.get("liveness") != USAGE_LIMIT_LIVENESS or agent.get("limit_notice_key") != key
+                    agent.update({"liveness": USAGE_LIMIT_LIVENESS, "liveness_note": note, "limit_notice_key": key})
+                    agent.pop("automatic_recovery_requested_at", None)
+                    agent.pop("consecutive_stalls", None)
+                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive", "answered_without_poll", "signed_out"}:
+                        agent["recovery_state"] = "usage_limit"
+                    if first:
+                        _event(state, "agent_usage_limit", agent, {"task": agent.get("task", ""), "message": note, "limit_seen_at": key,
+                                                                    "limit_resets_at": held.get("limit_resets_at")})
+                    elif held.get("limit_nudged_at") and agent.get("limit_still_key") != str(held.get("limit_nudged_at")):
+                        agent["limit_still_key"] = str(held.get("limit_nudged_at"))
+                        _event(state, "agent_usage_limit_nudged", agent, {"task": agent.get("task", ""), "message": note})
+                continue
+            if agent.get("liveness") == USAGE_LIMIT_LIVENESS:
+                agent.update({"liveness": "recovering", "liveness_note": "its usage-limit message is gone; wake-ups resume after a short grace"})
+                agent.pop("limit_notice_key", None)
+                agent.pop("limit_still_key", None)
+                if agent.get("recovery_state") == "usage_limit":
+                    agent.pop("recovery_state", None)
+                _event(state, "agent_usage_limit_cleared", agent, {
+                    "task": agent.get("task", ""), "message": "its usage-limit message is gone; wake-ups resume after a short grace",
+                })
+            if agent.get("session_id") in limit_grace_ids:
+                continue      # a moment to show life after the line cleared; never marked stalled inside it
             if agent.get("session_id") in signed_out_session_ids:
                 if agent.get("liveness") != SIGNED_OUT_LIVENESS:
                     note = attention.owner_block_sentence(ROLE_NAMES.get(str(agent.get("role", "")), "agent"),
@@ -6710,6 +6836,8 @@ def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIE
         raise ValueError("reservation timeout must be positive")
     current = datetime.now(timezone.utc)
     released = []
+    stale_wakes: list[dict[str, Any]] = []
+    expired_wakes: list[tuple[str, str]] = []
     with locked_state(root) as state:
         for request in state.get("qa_requests", {}).values():
             if request.get("status") != "reserved" or not request.get("reserved_at"):
@@ -6735,6 +6863,18 @@ def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIE
             if age < timeout_seconds:
                 continue
             previous_reviewer = request.get("reserved_by", "")
+            holder_session = str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or "")
+            if holder_session:
+                expired_wakes.append((holder_session, str(request["id"])))
+            if request.get("route_instruction_id"):
+                # The reviewer's wake for this request is obsolete now (a held reviewer never took it): withdraw it below,
+                # outside this lock, so it is not typed after a long wait for an assignment the reviewer no longer owns.
+                stale_wakes.append({
+                    "request_id": request["id"], "task": request.get("task", ""), "instruction_id": request["route_instruction_id"],
+                    "session_id": str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or ""),
+                    "reviewer_id": str(previous_reviewer or ""), "notify": False,
+                    "event_message": "the reviewer's wake for the expired reservation was withdrawn before it could be typed",
+                })
             _abandon_review_intents(request, str(previous_reviewer or ""), "reservation expired")
             request.update({
                 "status": "authoring" if request.get("delivery_state") == "executing" else "open",
@@ -6751,7 +6891,36 @@ def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIE
                 "message": "review reservation expired without a valid Challenge Ledger and was reopened for another reviewer",
             })
             released.append(event)
+    from harness import control
+    for wake in stale_wakes:
+        try:
+            _withdraw_reviewer_wake(root, wake)
+        except (ValueError, OSError):
+            pass
+    for session_id, request_id in expired_wakes:
+        try:
+            control.invalidate_review_wakes(root, session_id, request_id, "the reservation it announced expired")
+        except (ValueError, OSError):
+            pass
     return released
+
+
+def review_assignment_is_current(root: Path, session_id: str, instruction_id: str) -> bool:
+    """Whether a review-assignment wake still describes work this terminal owns (checked right before it is typed).
+
+    Stale only when it is PROVABLY stale: the request that carries this wake (`route_instruction_id`) is closed, or is held by or
+    routed to someone else. A wake no request names proves nothing (the route id is written just after the wake is queued, and a
+    relaunched terminal may carry one over), so it is delivered by the ordinary rules; a reservation that expired is handled by
+    withdrawing its wake at expiry.
+    """
+    state = snapshot(root)
+    mine = {agent["id"] for agent in state.get("agents", {}).values() if agent.get("session_id") == session_id}
+    named = [request for request in state.get("qa_requests", {}).values() if request.get("route_instruction_id") == instruction_id]
+    if not named:
+        return True
+    request = named[0]
+    owned = (request.get("routed_session_id") == session_id or request.get("reserved_by") in mine or request.get("claimed_by") in mine)
+    return bool(owned and request.get("status") in {"authoring", "open", "reserved", "claimed"})
 
 
 def due_owner_alerts(
@@ -7320,6 +7489,13 @@ def _withdraw_reviewer_wake(root: ProjectRoot, wake: dict[str, Any]) -> dict[str
             receipt = control.withdraw_instruction(root, instruction_id)
         except (ValueError, OSError):
             receipt = {}
+    if receipt.get("status") == "taken" and instruction_id:
+        # Already taken by the old terminal's supervisor but not typed: invalidate it in its receipt, durably, so it is dropped at the
+        # moment it would be typed even after the request is routed again and no request names this wake any more.
+        try:
+            control.discard_instruction(root, session_id, instruction_id, "the review it announced was reassigned or its reservation expired")
+        except (ValueError, OSError):
+            pass
     if receipt.get("status") == "withdrawn":
         outcome["action"] = "withdrawn"
     elif session_id and wake.get("notify", True):

@@ -54,6 +54,9 @@ PAGE = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1360px;margin:auto;padding:34px 28px 56px}.top,.launch,.row,.task-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}.top{border-bottom:1px solid var(--line);padding-bottom:24px}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;color:var(--blue);text-transform:uppercase}.back-link{display:inline-block;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none;margin-bottom:10px}.back-link:hover{text-decoration:underline}#board-offline{position:fixed;inset:0;background:rgba(247,249,251,.97);display:none;align-items:center;justify-content:center;z-index:50}#board-offline.show{display:flex}#board-offline .panel{max-width:440px;text-align:center;padding:30px}#board-offline h2{margin:0 0 8px}h1{font-size:30px;line-height:1.12;letter-spacing:-.04em;margin:5px 0 8px}h2{font-size:17px;margin:0}h3{font-size:16px;margin:0}.sub,#updated,.section>p,.launch p,small{color:var(--muted)}.live{display:inline-flex;gap:8px;align-items:center;background:var(--green-soft);color:var(--green);border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 1px 2px #1018280a}.launch{align-items:center;margin-top:24px}.launch p,.section>p{margin:4px 0 0}.actions{display:flex;gap:9px;flex-wrap:wrap}button{appearance:none;border:0;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font:inherit;font-weight:700;cursor:pointer}button:hover{filter:brightness(.94)}button.secondary{background:var(--blue-soft);color:#174ea6}.actions a.conversation-link{display:inline-flex;align-items:center;box-sizing:border-box;border-radius:8px;background:var(--blue-soft);color:#174ea6;padding:7px 10px;font:inherit;font-size:13px;font-weight:700;text-decoration:none;line-height:normal}.actions a.conversation-link:hover{text-decoration:none;filter:brightness(.97)}button.stop{background:var(--red-soft);color:var(--red)}.task-actions{display:flex;gap:10px;align-items:center;margin-top:12px}.security-choice{display:block;margin-top:12px;padding:10px 12px;border:1px solid var(--line,#dde3ee);border-radius:10px}.security-choice label{font-weight:650;display:flex;gap:8px;align-items:center;cursor:pointer}.security-choice input[type=checkbox]{width:16px;height:16px}.security-choice small{display:block;color:var(--muted);margin-top:4px}.security-choice .notice{margin-top:4px;min-height:0}.task-actions small{color:var(--muted)}button:disabled{background:#e4e8ec;color:#8994a0;cursor:not-allowed}.notice{margin-top:13px;color:var(--muted);min-height:22px}
 .waiting-banner{margin:14px 0 0;padding:16px 20px;border-radius:14px;background:var(--red);color:#fff;font-size:17px;font-weight:800;line-height:1.35;box-shadow:0 12px 32px rgba(180,35,24,.28);animation:waiting-blink 1.1s steps(2,start) infinite}
 .waiting-banner p{margin:6px 0 0;font-size:15px;font-weight:600}
+.limit-notice{margin:14px 0 0;padding:14px 18px;border-radius:12px;background:#fff7e0;color:#4a3500;border:1px solid #e3c766;font-size:15px;line-height:1.4}.limit-notice p{margin:4px 0}
+@media (prefers-color-scheme:dark){.limit-notice{background:#3a2f0d;color:#f4e3a6;border-color:#7a6420}}
+.badge.tone-limit{background:#e3c766;color:#3a2a00}
 .waiting-banner small{display:block;margin-top:8px;font-size:13px;font-weight:500;opacity:.92}
 @keyframes waiting-blink{50%{background:#7a1610}}
 @media (prefers-reduced-motion:reduce){.waiting-banner{animation:none;outline:4px solid #7a1610}}
@@ -87,6 +90,7 @@ PAGE = r"""<!doctype html>
 <body>__PROJECT_NAV__<main class="wrap">
 <header class="top"><div style="display:flex;gap:14px;align-items:flex-start"><img src="favicon.png" alt="" aria-hidden="true" style="width:44px;height:44px;border-radius:10px;object-fit:contain;margin-top:3px"><div><div class="eyebrow">Local delivery system</div><h1>NoMoreHappyPath Mission Control</h1>__PROJECT_DESC__<div class="sub" id="project">Loading project…</div></div></div><div><div class="live"><i class="dot"></i>Board connected</div><div id="updated"></div>__PROJECT_CONTROLS__</div></header>__PROJECT_CLOSE_DIALOG__<div id="board-offline"><div class="panel"><h2>This project is closed</h2><p class="sub">Its board is not running. Return to Projects to open it again.</p><p><a id="board-offline-link" class="back-link" href="#">Projects</a></p></div></div>
 <section class="waiting-banner" id="waiting-banner" hidden role="alert" aria-live="assertive"></section>
+<section class="limit-notice" id="limit-notice" hidden role="status" aria-live="polite"></section>
 <section class="panel paused-banner" id="paused-banner" hidden role="status"><div><h2>Project paused</h2><p>This board is read-only. Saved work, review ownership, and evidence are preserved exactly where they stopped.</p></div><a class="resume-link" id="resume-project" href="__RESUME_LINK__">Resume project</a></section>
 
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
@@ -859,6 +863,7 @@ function deliveryTaskAccepted(agent,state){
 function humanStage(agent,state,contracts){
   if(deliveryTaskAccepted(agent,state))return'TASK ACCEPTED';
   if(agent.status==='paused')return'PAUSED';
+  if(agent.liveness==='usage_limit')return'WAITING: USAGE LIMIT';
   if(agent.liveness==='needs_sign_in')return String(agent.liveness_note||'').includes('out of Gemini quota')?'OUT OF QUOTA':'NEEDS SIGN-IN';
   if(agent.role==='cto'){
     if(agent.recovery_state==='unresponsive')return'CTO NOT RESPONDING';
@@ -930,6 +935,7 @@ function agentStatusSummaryCore(agent,state,contracts){
   if(agent.role==='qa'&&reviewExecutionActive(agent))return{summary:'The Independent Reviewer is actively running a long executable check. Execution heartbeats are current while board polling is temporarily deferred; this is not an abandoned agent. You do not need to do anything.',next:'Wait for the executable check to finish; the reviewer will post PASS or FAIL. Your action: none.'};
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&(recentOutputActive(agent)&&!agent.stall_exhausted))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
+  if(agent.liveness==='usage_limit')return{summary:agent.liveness_note||'This agent shows its provider\'s usage-limit message.',next:'Nothing to do. The harness sends it nothing until the message goes, and it continues by itself.',ownerAction:'None needed.'};
   if(agent.liveness==='needs_sign_in'&&agent.vendor==='Anthropic')return{summary:'Claude needs a new setup-token. Follow the Claude authentication card, then retry this agent.',next:'Generate the token in your own terminal and supply it to the harness.',ownerAction:'Follow the Claude authentication card.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('out of Gemini quota'))return{summary:agent.liveness_note,next:'Choose another provider for this role in Settings, or wait for the quota to refresh. The harness holds its messages until then and carries on by itself.',ownerAction:'Open Settings and choose another provider, or upgrade your Google plan.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('sign-in prompt'))return{summary:agent.liveness_note,next:'Follow the sign-in prompt in its window. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and follow the sign-in prompt.'};
@@ -1061,8 +1067,16 @@ function agentOrderKey(agent){
   return `${roleRank}|${String(agent.task||'').toLowerCase()}|${String(agent.id||'').toLowerCase()}`;
 }
 
+function isUsageLimit(session){return String((session||{}).attention_reason||'').includes('usage-limit message');}
 function waitingSessions(sessionItems){
-  return (sessionItems||[]).filter(session=>session.attention_since&&['launching','running','stopping','pausing'].includes(session.status));
+  return (sessionItems||[]).filter(session=>session.attention_since&&!isUsageLimit(session)&&['launching','running','stopping','pausing'].includes(session.status));
+}
+function renderLimitNotice(sessionItems){
+  const box=el('#limit-notice'); if(!box)return;
+  const held=(sessionItems||[]).filter(session=>isUsageLimit(session)&&session.limit_notice&&['launching','running','stopping','pausing'].includes(session.status));
+  if(!held.length){box.hidden=true;box.replaceChildren();return;}
+  box.hidden=false;
+  box.innerHTML=held.map(session=>`<p>${esc(session.limit_notice)}</p>`).join('');
 }
 function waitingSince(session){
   const started=new Date(session.attention_since); if(Number.isNaN(started.getTime()))return '';
@@ -1085,6 +1099,7 @@ function renderWaiting(sessionItems){
     (prompts.length?`<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`:`<small>Signing in is the only thing needed; the harness holds its messages until then and carries on by itself.</small>`);
 }
 function waitingBadge(session){
+  if(isUsageLimit(session))return '<span class="badge tone-limit">WAITING: USAGE LIMIT</span>';
   return session&&session.attention_since?'<span class="badge tone-waiting">WAITING FOR YOU</span>':'';
 }
 let agentInputQueue=Promise.resolve();
@@ -1425,6 +1440,7 @@ function render(data,managed){
   currentHistoryVersion=String(data.history_version||'');
   if(historyLoaded&&historyLoadedAtVersion!==currentHistoryVersion)loadHistory(true);
   renderWaiting(managed.sessions||[]);
+  renderLimitNotice(managed.sessions||[]);
   openAgents(state,contracts,managed.sessions||[]);
   queue(state);
   fitTaskScroller();

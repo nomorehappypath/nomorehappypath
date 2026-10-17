@@ -224,6 +224,7 @@ class RenderedHelpTests(unittest.TestCase):
         self.assertFalse(reading["hidden"], "Help page did not open")
         for title in (
             "What This App Needs To Run",
+            "When Claude Or Codex Runs Out Of Allowance",
             "Switch On Project Chat (OpenAI Key)",
             "Configure The Agents (Settings)",
             "Frame A Good Task",
@@ -238,6 +239,26 @@ class RenderedHelpTests(unittest.TestCase):
         ):
             self.assertIn(title, reading["titles"], f"section not visibly rendered: {title}")
         self.assertGreaterEqual(reading["tables"], 3, "help tables missing from render")
+
+    def test_the_usage_limit_help_and_faq_say_what_the_landed_code_does(self):
+        from harness import attention, project_manager_page
+        page = project_manager_page.PAGE
+        start = page.index('id="help-limit-title"')
+        text = page[start:page.index('id="help-version-title"')]
+        for words in ("WAITING: USAGE LIMIT", "amber note", "(estimated)", "one</strong> short line", "Please continue where you stopped",
+                      "check the board for its current assignment", "type any message into that agent", "never hands a review",
+                      "does not switch an agent to another company", "two minutes"):
+            self.assertIn(words, text)
+        # the numbers in the text are the code's own
+        self.assertEqual(attention.LIMIT_RESUME_GRACE_SECONDS, 120)
+        self.assertEqual(attention.LIMIT_NUDGE_AFTER_SECONDS, 60)
+        self.assertEqual(attention.LIMIT_ESTIMATED_MINUTES, 60)
+        self.assertEqual(attention.nudge_text("delivery"), "Please continue where you stopped.")
+        self.assertIn("check the board for your current assignment", attention.nudge_text("reviewer"))
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+        for words in ("What happens when Claude or Codex runs out of my usage allowance?", "WAITING: USAGE LIMIT", "never handed to the company that wrote the work",
+                      "does not switch vendors mid-task"):
+            self.assertIn(" ".join(words.split()), " ".join(readme.split()))
 
 
 if __name__ == "__main__":

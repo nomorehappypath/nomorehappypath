@@ -27,6 +27,7 @@ import re
 import select
 import signal
 import subprocess
+from datetime import datetime, timedelta
 import sys
 import termios
 import time
@@ -220,6 +221,84 @@ def _input_bytes_waiting(fd: int) -> int:
     pending = array.array("i", [0])
     fcntl.ioctl(fd, termios.FIONREAD, pending, True)
     return max(0, pending[0])
+
+
+def _assignment_still_current(root: Path, session_id: str, item: dict, transcript) -> bool:
+    """Right before ANY write into the terminal (first delivery, retry, or a message a delivery worker handed back):
+    a review-assignment wake that no longer describes this session's work is dropped with a note, never typed.
+
+    A long wait (a usage limit, a sign-in) can outlive the reservation the wake announced; another reviewer may own the request now.
+    """
+    if str(item.get("source") or "") not in control.REVIEW_WAKE_SOURCES:
+        return True
+    try:
+        if control.instruction_receipt(root, str(item.get("id") or "")).get("status") in {"discarded", "withdrawn"}:
+            transcript.note(f"review assignment {item.get('id')} dropped: it was withdrawn or reassigned while it waited")
+            return False
+        if str(item.get("source") or "") != "review-assignment" or board.review_assignment_is_current(root, session_id, str(item.get("id") or "")):
+            return True
+        control.discard_instruction(root, session_id, str(item.get("id") or ""), "the review it announced is no longer assigned to this terminal")
+    except (ValueError, OSError):
+        return True      # nothing provable: deliver by the ordinary rules
+    transcript.note(f"review assignment {item.get('id')} dropped: that review is no longer assigned to this terminal")
+    return False
+
+
+def _maybe_nudge_limit(root: Path, session_id: str, watch, attempts: dict[str, int], max_attempts: int, transcript, fd: int,
+                       typed: bytearray, last_owner_key_at: float, owner_undecided: bool, ready: bool) -> bool:
+    """One nudge into a terminal that still shows its provider's usage-limit message after the time it announced.
+
+    Re-checked at send time: the line is still on screen, the session is active and still holds this incident, the project is not
+    pausing, no menu or sign-in prompt is open, the owner is not mid-input and no delivery is in flight. `limit_nudged_at` is set only
+    when the write was made; a refusal is recorded as "not sent" with its reason and is not counted; a failed write is retried once.
+    The nudge is the one deliberate exception to the input hold (a held terminal otherwise takes nothing).
+    """
+    incident = watch.incident
+    if not incident or not attention.is_limit_reason(watch.visible) or not ready:
+        return False
+    key = str(incident.get("seen_at"))
+    if attempts.get(key, 0) >= max_attempts:
+        return False
+    try:
+        due = datetime.fromisoformat(str(incident["resets_at"])) + timedelta(seconds=attention.LIMIT_NUDGE_AFTER_SECONDS)
+    except (KeyError, ValueError):
+        return False
+    if datetime.now().astimezone() < due:
+        return False
+    try:
+        held = control.limit_state(root, session_id)
+    except (ValueError, OSError):
+        return False
+    if held["status"] not in control.ACTIVE_STATUSES or held.get("limit_seen_at") != incident.get("seen_at") or held.get("limit_nudged_at"):
+        return False
+    try:
+        if board.pause_state(root).get("status") != "active":
+            return False       # a project that is pausing or paused takes nothing
+    except (OSError, ValueError, KeyError):
+        return False
+
+    def not_sent(reason: str) -> bool:
+        try:
+            control.record_limit_nudge(root, session_id, sent=False, note=reason)
+        except (ValueError, OSError):
+            pass
+        return False
+
+    if attention.menu_on_screen(watch.screen.text()):
+        return not_sent("not sent: a menu is open")
+    if owner_undecided or not _controller_delivery_allowed(bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at):
+        return not_sent("not sent: the owner was typing")
+    attempts[key] = attempts.get(key, 0) + 1
+    try:
+        _submit_controller_message(fd, "harness", attention.nudge_text(held.get("role")))
+    except OSError as error:
+        return not_sent(f"not sent: the write failed ({error.__class__.__name__})")
+    try:
+        control.record_limit_nudge(root, session_id, sent=True)
+    except (ValueError, OSError):
+        pass
+    transcript.note(f"usage-limit nudge sent after the announced time ({incident.get('resets_at')})")
+    return True
 
 
 def _submit_controller_message(fd: int, source: str, text: str) -> None:
@@ -738,7 +817,7 @@ def run(
     # A terminal that stops to ask the owner something halts all progress
     # until a person looks at it. The watch recognises that in the output
     # and the session record carries it, so Mission Control can shout.
-    watch = attention.PromptWatch(height=_terminal_rows(stdin_fd))
+    watch = attention.PromptWatch(height=_terminal_rows(stdin_fd), provider=provider)
 
     input_held = False
     controller_queue: list[dict] = []
@@ -765,13 +844,20 @@ def run(
                     from harness import claude_auth
                     with control.locked_state(root) as state:
                         state["sessions"][session_id]["claude_auth_action"] = claude_auth.action("rejected")
-                control.record_attention(root, session_id, reason or "is waiting for you")
-                transcript.note(f"terminal is waiting for the owner: {reason}")
+                incident = {key: value for key, value in (watch.incident or {}).items() if not key.startswith("_")}
+                control.record_attention(root, session_id, reason or "is waiting for you",
+                                         limit=incident if attention.is_limit_reason(reason) else None)
+                transcript.note(f"terminal is waiting for the owner: {reason}"
+                                + (f" (announced {incident.get('resets_at')}, {incident.get('kind')})" if incident and attention.is_limit_reason(reason) else ""))
             else:
                 control.clear_attention(root, session_id)
                 transcript.note("terminal no longer waiting for the owner")
         except ValueError:
             pass
+    LIMIT_NUDGE_ATTEMPTS = 2          # one send, and one retry if the write itself failed
+    LIMIT_LOOK_SECONDS = 2.0          # the periodic look at the screen and the nudge clock
+    nudge_attempts: dict[str, int] = {}
+    next_limit_look = 0.0
     master, slave = pty.openpty()
     _copy_terminal_size(stdin_fd, slave)
     child_environment = child_process.environment(git=True, shell=True)
@@ -1012,6 +1098,15 @@ def run(
                 elif time.time() - launched_at > give_up_after:
                     transcript.note(f"{provider} session id not found within {give_up_after}s; a relaunch will start fresh")
                     codex_id_pending = False
+            if time.monotonic() >= next_limit_look:
+                next_limit_look = time.monotonic() + LIMIT_LOOK_SECONDS
+                # The screen as it is now, with no new output: a quiet or re-adopted terminal reports the line gone too,
+                # and the one nudge below runs on this clock, not on incoming bytes.
+                note_attention(watch.tick())
+                _maybe_nudge_limit(
+                    root, session_id, watch, nudge_attempts, LIMIT_NUDGE_ATTEMPTS, transcript, master, typed, last_owner_key_at,
+                    owner_keys.undecided, child_output_seen and not (stage3["mux"] is not None and not stage3["fallback"] and stage3["worker"].busy()),
+                )
             if not input_held:
                 # A terminal showing a menu the owner must answer (sign-in,
                 # folder trust, permission) takes nothing: its messages stay
@@ -1058,12 +1153,16 @@ def run(
                         # Stage 3: a turn on the app-server, acknowledged by the
                         # server - never typed. Its outcome is read next tick.
                         item = controller_queue.pop(0)
+                        if not _assignment_still_current(root, session_id, item, transcript):
+                            continue
                         retry = bool(item.pop("_stage3_retry", False))
                         channel = {"stage3_codex_app_server": "app-server", "stage3_gemini_delivery": "hook"}.get(stage3["stage"], "inbox")
                         transcript.note(f"controller message ({item['source']}) via {channel}: {item['text']}")
                         stage3["worker"].submit(item, f"[SYSTEM CONTROL — {item['source']}] {item['text']}", retry=retry)
                 else:
                     item = controller_queue.pop(0)
+                    if not _assignment_still_current(root, session_id, item, transcript):
+                        continue
                     if item.pop("_stage3_retry", False) and stage3["mux"] is not None and \
                             stage3["mux"].already_delivered(f"harness-{item['id']}", 3.0):
                         # Its receipt was only late: typing it now would send it twice.

@@ -99,6 +99,9 @@ PAGE = r'''<!doctype html>
     .badge.waiting { color: #fff; background: var(--red); animation: waiting-blink 1.1s steps(2, start) infinite; }
     .waiting-banner { margin: 0 0 18px; padding: 18px 22px; border-radius: 16px; background: var(--red); color: #fff; font-size: 18px; font-weight: 800; line-height: 1.35; box-shadow: 0 14px 36px rgba(180, 35, 24, .28); animation: waiting-blink 1.1s steps(2, start) infinite; }
     .waiting-banner p { margin: 8px 0 0; font-size: 15px; font-weight: 600; }
+    .limit-notice { margin: 0 0 18px; padding: 14px 20px; border-radius: 14px; background: #fff7e0; color: #4a3500; border: 1px solid #e3c766; font-size: 15px; line-height: 1.4; }
+    .limit-notice p { margin: 4px 0; }
+    @media (prefers-color-scheme: dark) { .limit-notice { background: #3a2f0d; color: #f4e3a6; border-color: #7a6420; } }
     .waiting-banner small { display: block; margin-top: 10px; font-size: 13px; font-weight: 500; opacity: .92; }
     @keyframes waiting-blink { 50% { background: #7a1610; } }
     @media (prefers-reduced-motion: reduce) { .waiting-banner, .badge.waiting { animation: none; } .waiting-banner { outline: 4px solid #7a1610; } }
@@ -278,6 +281,7 @@ PAGE = r'''<!doctype html>
   <main class="page">
     <section id="projects-page">
       <section class="waiting-banner" id="waiting-banner" hidden role="alert" aria-live="assertive"></section>
+      <section class="limit-notice" id="limit-notice" hidden role="status" aria-live="polite"></section>
       <div class="hero">
         <div>
           <div class="eyebrow">Your workspace</div>
@@ -346,6 +350,19 @@ PAGE = r'''<!doctype html>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
+        </section>
+
+        <section class="help-section" aria-labelledby="help-limit-title">
+          <h2 id="help-limit-title">When Claude Or Codex Runs Out Of Allowance</h2>
+          <p>Claude and Codex work on your own accounts, and an account has a usage allowance. When one runs out, the program stops and prints its own message ("You've hit your session limit &middot; resets 9:43pm" for Claude, "You've hit your usage limit ... try again at 9:45 PM" for Codex). The harness reads that message and waits with it instead of treating the silence as a crash.</p>
+          <ul class="help-list">
+            <li><strong>What you see:</strong> one amber note on the project page (and on the Projects page) in plain words, for example <em>"The Delivery agent (Codex) shows Codex's usage-limit message; it announced 10:06 PM. Nothing is sent to it until the message goes; it continues then."</em> That agent's row reads <strong>WAITING: USAGE LIMIT</strong>. If the program printed no usable time, the note says <strong>(estimated)</strong> and the harness looks again about an hour later. A time on another day shows its date. There is no red alarm, because nothing is needed from you.</li>
+            <li><strong>What the harness does:</strong> it holds <strong>that one agent</strong>. Nothing is typed into its window, it is not restarted and not replaced, and its messages wait in line. The other agents keep working. Claude Code continues by itself at the announced time. If the message is still on the screen a minute after the announced time, the harness types <strong>one</strong> short line ("Please continue where you stopped"; a Reviewer is asked to check the board for its current assignment). If it is still there a minute after that, the note says so and the agent keeps waiting.</li>
+            <li><strong>When the message goes away</strong> (the program answered, or the line left the screen) the hold ends, the waiting messages are delivered, and for two minutes the harness will not treat the agent as stuck while it picks up again.</li>
+            <li><strong>Reviews stay independent.</strong> If the Reviewer is the one waiting, the review waits for it. The harness does not start a second Reviewer against the same allowance, and it never hands a review to the company that wrote the work. A review that was waiting for a long time may be reopened and picked up again; an obsolete assignment is never typed.</li>
+            <li><strong>What it does not do:</strong> it does not switch an agent to another company mid-task, use a different account, or use an API key to get around a limit. Gemini's own quota message is handled as before: the banner asks you to choose another provider for that role in Settings.</li>
+          </ul>
+          <p class="help-callout">If the note is wrong (for example the agent only quoted the message in its own text), <strong>type any message into that agent's terminal window</strong>. When the program answers, the harness continues by itself. Usually you only wait: the note tells you the time.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-version-title">
@@ -730,6 +747,14 @@ PAGE = r'''<!doctype html>
         + waiting.map(({project, session}) => `<p>${esc(project.name)}: ${esc(session.role || session.label)} (${esc(session.label)}) ${esc(session.reason)} — waiting ${esc(waitingSince(session.since))}.</p>`).join('')
         + '<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>';
     };
+    const renderLimitNotice = (projects) => {
+      const box = q('#limit-notice'); if (!box) return;
+      const notices = [];
+      for (const project of projects) for (const item of project.limit_notices || []) notices.push({project, item});
+      if (!notices.length) { box.hidden = true; box.replaceChildren(); return; }
+      box.hidden = false;
+      box.innerHTML = notices.map(({project, item}) => `<p><strong>${esc(project.name)}:</strong> ${esc(item.notice)}</p>`).join('');
+    };
     const renderSummary = (projects) => {
       q('#summary-total').textContent = projects.length;
       q('#summary-active').textContent = projects.filter((project) => project.active || project.running).length;
@@ -973,6 +998,7 @@ PAGE = r'''<!doctype html>
           : '<div class="empty"><strong>No projects yet</strong>Create a new project or adopt an existing folder to get started.</div>';
         renderSummary(value.projects);
         renderWaiting(value.projects);
+        renderLimitNotice(value.projects);
         if (typeof value.native_folder_picker === 'boolean') {
           nativeFolderPicker = value.native_folder_picker;
           applyFolderPickerMode();

@@ -80,19 +80,57 @@ def _safe(value: str) -> str:
     return SAFE_COMPONENT.sub("-", str(value)).strip("-.") or "task"
 
 
-def _porcelain_paths(output: str) -> list[str]:
-    """Paths named by ``git status --porcelain=v1 -z`` (a rename's origin included)."""
+def porcelain_entries(output: str) -> list[tuple[str, list[str]]]:
+    """Logical entries of ``git status --porcelain=v1 -z``: (two-letter status, paths).
+
+    Paths are exact (``-z`` never quotes or escapes). A rename or copy lists its destination
+    first and its origin second, so both endpoints are kept for attribution and overlap checks.
+    """
     entries = [entry for entry in output.split("\0") if entry]
-    paths: list[str] = []
+    logical: list[tuple[str, list[str]]] = []
     index = 0
     while index < len(entries):
         entry = entries[index]
-        paths.append(entry[3:])
+        paths = [entry[3:]]
         if entry[:1] in {"R", "C"} and index + 1 < len(entries):
             index += 1
             paths.append(entries[index])
+        logical.append((entry[:2], paths))
         index += 1
-    return sorted(set(paths))
+    return logical
+
+
+def _porcelain_paths(output: str) -> list[str]:
+    """Paths named by ``git status --porcelain=v1 -z`` (a rename's origin included)."""
+    return sorted({path for _status, paths in porcelain_entries(output) for path in paths})
+
+
+_UNQUOTE_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34}
+
+
+def git_unquote(path: str) -> str:
+    """Decode a path Git printed in its C-style quoted form; an unquoted path is returned as is."""
+    if len(path) < 2 or not (path.startswith('"') and path.endswith('"')):
+        return path
+    body, out, index = path[1:-1], bytearray(), 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\" or index + 1 >= len(body):
+            out += char.encode("utf-8")
+            index += 1
+            continue
+        nxt = body[index + 1]
+        if nxt in _UNQUOTE_ESCAPES:
+            out.append(_UNQUOTE_ESCAPES[nxt])
+            index += 2
+        elif nxt in "01234567":
+            digits = body[index + 1:index + 4]
+            out.append(int(digits, 8) & 0xFF)
+            index += 1 + len(digits)
+        else:
+            out += ("\\" + nxt).encode("utf-8")
+            index += 2
+    return out.decode("utf-8", errors="replace")
 
 
 # A subtask that owns source under ``<app>/src`` also owns that app's rebuilt

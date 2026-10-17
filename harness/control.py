@@ -513,6 +513,21 @@ def _stop_overdue(session: dict[str, Any]) -> bool:
 
 
 def _reconcile(state: dict[str, Any]) -> None:
+    from harness import attention      # not at module level: attention imports conversation, which imports this module
+    try:
+        _reconcile_sessions(state)
+    finally:
+        # A hold belongs to a live terminal: one that ended while held (in this pass or an earlier one) must reach relaunch and
+        # recovery as an ordinary exit, so the hold ends with it.
+        for session in state["sessions"].values():
+            if session["status"] not in ACTIVE_STATUSES and (
+                    session.get("limit_seen_at") or attention.is_limit_reason(session.get("attention_reason"))):
+                session["attention_since"] = None
+                session["attention_reason"] = None
+                _end_limit_hold(session, session.get("ended_at"))
+
+
+def _reconcile_sessions(state: dict[str, Any]) -> None:
     for session in state["sessions"].values():
         if session["status"] not in ACTIVE_STATUSES:
             continue
@@ -1144,12 +1159,30 @@ def record_observed_model(root: Path, session_id: str, model: str) -> bool:
         return mismatch and changed
 
 
-def record_attention(root: Path, session_id: str, reason: str) -> dict[str, Any]:
+LIMIT_ROLE_LABELS = {"delivery": "Delivery agent", "reviewer": "Reviewer", "cto": "CTO"}
+LIMIT_FIELDS = ("limit_seen_at", "limit_resets_at", "limit_kind", "limit_when_text", "limit_nudged_at", "limit_nudge_note")
+
+
+def _end_limit_hold(session: dict[str, Any], cleared_at: str | None = None) -> None:
+    """The usage-limit hold of a session ends: keep what was seen as history (`last_limit_*`), clear what holds the terminal."""
+    if session.get("limit_seen_at"):
+        session["last_limit_seen_at"] = session.get("limit_seen_at")
+        session["last_limit_resets_at"] = session.get("limit_resets_at")
+        session["limit_cleared_at"] = cleared_at or now()
+    for field in LIMIT_FIELDS:
+        session.pop(field, None)
+
+
+def record_attention(root: Path, session_id: str, reason: str, limit: dict[str, Any] | None = None) -> dict[str, Any]:
     """The terminal stopped to wait for the owner; say so on the session record.
 
     Set once per wait: a redraw that repeats the same prompt keeps the original
     time, so the banner can say how long the owner has been needed.
+
+    A usage-limit message also carries its `limit` incident (when it was seen, the instant it announced, announced or estimated):
+    a new incident resets the nudge bookkeeping, a repeat of the same one changes nothing.
     """
+    from harness import attention
     reason = str(reason or "").strip()
     if not reason:
         raise ValueError("an attention reason is required")
@@ -1161,6 +1194,16 @@ def record_attention(root: Path, session_id: str, reason: str) -> dict[str, Any]
         if not session.get("attention_since"):
             session["attention_since"] = now()
         session["attention_reason"] = reason[:200]
+        if limit:
+            if session.get("limit_seen_at") != limit.get("seen_at"):
+                for field in ("limit_nudged_at", "limit_nudge_note", "limit_cleared_at"):
+                    session.pop(field, None)
+            session["limit_seen_at"] = limit.get("seen_at")
+            session["limit_resets_at"] = limit.get("resets_at")
+            session["limit_kind"] = limit.get("kind")
+            session["limit_when_text"] = str(limit.get("when_text") or "")[:80]
+        elif not attention.is_limit_reason(reason) and session.get("limit_seen_at"):
+            _end_limit_hold(session)    # another prompt replaced the limit line on screen
         return {"session_id": session_id, "attention_since": session["attention_since"], "attention_reason": session["attention_reason"]}
 
 
@@ -1173,16 +1216,51 @@ def clear_attention(root: Path, session_id: str) -> dict[str, Any]:
             raise ValueError("unknown managed session")
         session["attention_since"] = None
         session["attention_reason"] = None
+        _end_limit_hold(session)
         return {"session_id": session_id, "attention_since": None, "attention_reason": None}
+
+
+def limit_state(root: Path, session_id: str) -> dict[str, Any]:
+    """What the supervisor needs to decide a nudge: the session's role, status and its usage-limit fields."""
+    session = _read_state(root).get("sessions", {}).get(session_id)
+    if not session:
+        raise ValueError(f"unknown managed session: {session_id}")
+    return {"role": KIND_TO_ROLE.get(str(session.get("kind", "")), ""), "status": session.get("status"),
+            "attention_reason": session.get("attention_reason"),
+            **{field: session.get(field) for field in LIMIT_FIELDS}}
+
+
+def record_limit_nudge(root: Path, session_id: str, *, sent: bool, note: str = "") -> dict[str, Any]:
+    """The supervisor's one nudge into a held terminal: `limit_nudged_at` is set only when the write was confirmed."""
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not session or session["status"] not in ACTIVE_STATUSES or not session.get("limit_seen_at"):
+            raise ValueError("no usage-limit hold on this session")
+        if sent:
+            session["limit_nudged_at"] = now()
+            session.pop("limit_nudge_note", None)
+        else:
+            session["limit_nudge_note"] = str(note or "not sent")[:120]
+        return {"session_id": session_id, "limit_nudged_at": session.get("limit_nudged_at"), "limit_nudge_note": session.get("limit_nudge_note")}
 
 
 def waiting_sessions(root: Path) -> list[dict[str, Any]]:
     """Active sessions whose terminal is waiting for the owner, oldest wait first."""
+    from harness import attention
     waiting = [
         item for item in snapshot(root).get("sessions", [])
-        if item.get("status") in ACTIVE_STATUSES and item.get("attention_since")
+        # A terminal waiting out a usage limit does not need the owner (it continues by itself): it is not an alarm.
+        if item.get("status") in ACTIVE_STATUSES and item.get("attention_since") and not attention.is_limit_reason(item.get("attention_reason"))
     ]
     return sorted(waiting, key=lambda item: str(item.get("attention_since")))
+
+
+def limit_notices(root: Path) -> list[dict[str, Any]]:
+    """Plain one-line notices for live terminals that show their provider's usage-limit message, oldest first."""
+    held = [item for item in snapshot(root).get("sessions", []) if item.get("limit_notice")]
+    return [{"id": str(item.get("id", "")), "label": str(item.get("label", "")), "role": str(item.get("role", "")), "notice": item["limit_notice"]}
+            for item in sorted(held, key=lambda item: str(item.get("attention_since")))]
 
 
 def request_status_update(root: Path, session_id: str) -> dict[str, Any] | None:
@@ -1283,6 +1361,52 @@ def withdraw_instruction(root: Path, instruction_id: str) -> dict[str, Any]:
                 inbox.pop(session_id, None)
             receipt.update({"status": "withdrawn", "withdrawn_at": now()})
         return dict(receipt)
+
+
+def discard_instruction(root: Path, session_id: str, instruction_id: str, reason: str) -> dict[str, Any]:
+    """A message the supervisor holds (taken, or returned to its queue) turned out to be obsolete: it is never typed.
+
+    `withdraw_instruction` can only take back what is still queued; this closes a message that was already taken.
+    """
+    with locked_state(root) as state:
+        receipt = state.setdefault("instruction_receipts", {}).get(instruction_id)
+        if not receipt:
+            raise ValueError("unknown instruction receipt")
+        if receipt.get("status") in {"queued", "taken"}:
+            # Only what has not been typed yet: a posted or delivered message is already in the CLI and cannot be recalled here.
+            receipt.update({"status": "discarded", "discarded_at": now(), "reason": str(reason)[:160]})
+        inbox = state.setdefault("inbox", {})
+        if session_id in inbox:
+            inbox[session_id] = [entry for entry in inbox[session_id] if entry.get("id") != instruction_id]
+            if not inbox[session_id]:
+                inbox.pop(session_id, None)
+        return dict(receipt)
+
+
+REVIEW_WAKE_SOURCES = ("review-assignment", "review-delivery-succeeded")
+
+
+def invalidate_review_wakes(root: Path, session_id: str, request_id: str, reason: str) -> int:
+    """Close every review wake about `request_id` that this terminal has not typed yet (queued or taken).
+
+    A review wake announces one request to one reviewer. When that reviewer's reservation expires or the request is routed again,
+    every wake about it that is still waiting - the assignment and the "Delivery succeeded" message alike - is obsolete, however
+    long its terminal waits (a usage limit, a sign-in) before it would type them.
+    """
+    closed = 0
+    with locked_state(root) as state:
+        inbox = state.setdefault("inbox", {})
+        for receipt in state.setdefault("instruction_receipts", {}).values():
+            if (receipt.get("session_id") == session_id and receipt.get("source") in REVIEW_WAKE_SOURCES
+                    and receipt.get("status") in {"queued", "taken"} and request_id and request_id in str(receipt.get("text") or "")):
+                receipt.update({"status": "discarded", "discarded_at": now(), "reason": str(reason)[:160]})
+                closed += 1
+        if closed and session_id in inbox:
+            alive = {receipt.get("id") for receipt in state["instruction_receipts"].values() if receipt.get("status") == "queued"}
+            inbox[session_id] = [entry for entry in inbox[session_id] if entry.get("id") in alive]
+            if not inbox[session_id]:
+                inbox.pop(session_id, None)
+    return closed
 
 
 def reclaim_stranded(root: Path, session_id: str) -> int:
@@ -1679,6 +1803,11 @@ def snapshot(root: Path) -> dict[str, Any]:
             "active_counts": active_counts,
             "limits": dict(MAX_ACTIVE_SESSIONS),
         }
+    from harness import attention
+    for item in result["sessions"]:
+        if item.get("status") in ACTIVE_STATUSES and attention.is_limit_reason(item.get("attention_reason")):
+            # One wording, in Python: the dashboard shows this line as is (what is observed, the time, the way out).
+            item["limit_notice"] = attention.limit_sentence(LIMIT_ROLE_LABELS.get(KIND_TO_ROLE.get(str(item.get("kind", "")), ""), "agent"), item)
     result["agent_settings"] = agent_settings(root)
     return result
 
