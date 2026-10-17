@@ -15,6 +15,18 @@ NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-b
 ![Mission Control: a task ready for the owner's test](https://nomorehappypath.com/assets/shot-ready.png)
 *A small weather app built from one request: review passes recorded, then "ready for your test".*
 
+![How a request becomes accepted work](https://nomorehappypath.com/assets/readme-flow.png)
+*The six steps: you say what you want, approve the contract, Delivery plans and builds, the board reruns the proof, an independent reviewer checks, and you test and accept.*
+
+![Three roles, each filled by Codex, Claude or Gemini](https://nomorehappypath.com/assets/readme-roles.png)
+*Builder, independent reviewer and CTO can each be Codex, Claude or Gemini. Only the platform software writes the project board; agents change it through governed commands, and the reviewer is never from the builder's company.*
+
+![A commercial marketing app built with it: expert chats](https://nomorehappypath.com/assets/readme-experts.png)
+*A commercial marketing app built with it: chatting with the expert agents.*
+
+![Choosing which AI company builds and which reviews](https://nomorehappypath.com/assets/readme-vendors.png)
+*Settings: choose which AI company builds and which one reviews.*
+
 Demo videos and a longer walkthrough: https://nomorehappypath.com
 
 ## Quick start
@@ -35,6 +47,18 @@ Demo videos and a longer walkthrough: https://nomorehappypath.com
 7. **When the task shows "ready for your test"**, follow its test checklist: press **View app** (or **Open report** for a document), try it, then choose **Accepted** or **Not accepted**.
 
 The first run needs a few sign-ins; the sections below explain each one.
+
+**Costs tip:** the agents run on your own plans. For small tasks, choose a medium effort level in Settings before you start the agents; the highest effort settings use noticeably more of your allowance.
+
+**On a fresh Linux server, also:**
+
+- **Install the CLIs without sudo.** `curl -fsSL https://claude.ai/install.sh | bash` and `curl -fsSL https://chatgpt.com/codex/install.sh | sh` put `claude` and `codex` in `~/.local/bin`. Open a new terminal window afterwards; `bash install.sh --check` then finds them. With no browser on the server, sign in with `codex login --device-auth` and `claude auth login`.
+- **Claude's one-time warning.** The first time Claude runs in agent mode it shows a *Bypass Permissions* warning that defaults to "No, exit". Clear it with the same account and Claude installation the harness uses: press **View agent** and answer it there, or in your own terminal run `claude --dangerously-skip-permissions`, press Down to choose "Yes, I accept", press Enter, then type `/exit`. Until then a Claude agent looks stuck on "waiting for the harness" in Mission Control, and **Test Claude connection** does not catch it.
+- **Claude token, simplest way.** Run `claude setup-token`, then from the repository folder `python3 -m harness.claude_auth store-token` and paste the token only at its hidden prompt. Never put it on a command line or in a chat. If an older token was imported into the service earlier (see above), it overrides the saved one: remove that import, safely pause the project, restart the service, press **Test Claude connection**, then restart the affected agent.
+- **A native browser, only if you need screen checks** (rendered evidence for app work; not needed for documents or backend work). Snap Chromium does not work. For example, on Ubuntu: download `https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb` (or `..._amd64.deb` on an Intel/AMD server) and install it with `sudo apt install ./google-chrome-stable_current_arm64.deb`. Then tell the app where it is: `export HARNESS_BROWSER_BIN=/usr/bin/google-chrome` before a foreground start, or for the auto-start service `systemctl --user set-environment HARNESS_BROWSER_BIN=/usr/bin/google-chrome` and restart the service (repeat after a reboot). On the Ubuntu 26.04 machine we tried, the Google package's AppArmor profile blocked Chrome's network inside the agent sandbox, so fully rendered tests there could not run; the screen check worked.
+- **Reaching Mission Control through an SSH tunnel.** Forward the same port on both sides, for example `ssh -L 8740:127.0.0.1:8740 user@server`. If you start the manager with `--port N`, forward `N:N`. A different local port is refused with "same-origin project request required".
+
+**Where this was tried:** install, sandbox, Mission Control and the start of Claude and Codex agents were verified on a clean Ubuntu 26.04 ARM64 server (Gemini was not part of that test). A full run to Accepted was not completed there.
 
 ## What it is
 
