@@ -528,17 +528,19 @@ def make_handler(
                             "error": "This project is paused and read-only. Resume it from Projects before making changes."
                         }); return
                     data = self._small_json()
-                    settings_override = (
-                        global_settings.load(settings_home)["agent_settings"]
-                        if settings_home else None
-                    )
-                    session = control.create(
-                        root, data.get("kind", ""), data.get("task", ""),
-                        data.get("color", "black"), settings_override=settings_override,
-                    )
+                    try:
+                        # The same request function as the standalone viewer (2026-10-17): read-only Settings, the
+                        # Delivery dialog's launch_settings, every refusal a plain sentence — answered 400, not 500.
+                        session = board_viewer.create_session_request(root, data, settings_home)
+                    except ValueError as error:
+                        self.send_json(400, {"error": str(error)}); return
                     authority.prepare(session["id"])
-                    launch_terminal(root, session, bootstrap_socket(), manager_home=settings_home)
-                    self.send_json(201, {"session": session})
+                    surface = launch_terminal(root, session, bootstrap_socket(), manager_home=settings_home)
+                    payload = {"session": session}
+                    hint = board_viewer._attach_hint(surface)
+                    if hint:
+                        payload["attach_hint"] = hint
+                    self.send_json(201, payload)
                 except Exception as error:
                     if session:
                         authority.revoke(session["id"])
@@ -670,8 +672,11 @@ def serve(
         bootstrap_thread = threading.Thread(target=bootstrap_server.serve_forever, daemon=True)
         bootstrap_thread.start()
         def self_heal_create(kind: str, continues: str = "") -> dict:
-            settings_override = global_settings.load(settings_home)["agent_settings"] if settings_home else None
-            return control.create(root, kind, settings_override=settings_override, continues=continues)
+            # Unreadable Settings refuse (never launch defaults silently); a replacement continues the owner's
+            # launch choice through `continues`; the Gemini availability gate applies as on every new session.
+            settings_override = board_viewer.read_agent_settings_for_launch(settings_home)
+            return control.create(root, kind, settings_override=settings_override, continues=continues,
+                                  availability=board_viewer._delivery_availability(settings_home))
 
         def self_heal_launch(session: dict) -> None:
             authority.prepare(session["id"])

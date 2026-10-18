@@ -109,8 +109,54 @@ elif [[ -n "$sandbox_problem" ]]; then
   warn "$sandbox_problem"
   missing=1
 elif [[ "$(platform_kind)" == "linux" ]]; then
-  ok "tmux and the bubblewrap sandbox work — agent sessions can start"
+  ok "tmux and the bubblewrap sandbox work"
 fi
+
+# What a FULL run still needs. These are not prerequisites the app refuses to start without, but each one stops a
+# real run (clean-install findings, 2026-10-17), so the check names them instead of staying silent. A check that
+# itself fails is reported as "could not check", never as success.
+full_run_gaps=()
+preflight_text() {
+  local interpreter; interpreter="$(command -v python3 || true)"
+  [[ -n "$interpreter" ]] || { printf '%s' "could not check (python3 not found)"; return 0; }
+  local out
+  if out="$("$interpreter" -E -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from harness import preflight
+if sys.argv[2] == "consent":
+    print(preflight.claude_bypass_consent_problem(True, executable=sys.argv[3]))
+elif sys.argv[2] == "defaults":
+    print(preflight.role_defaults_text())
+else:
+    print(preflight.native_browser_problem())
+' "$root" "$1" "${2:-claude}" 2>&1)"; then
+    printf '%s' "$out"
+  else
+    printf '%s' "could not check ($1): ${out##*$'\n'}"
+  fi
+}
+if [[ -n "${claude_path:-}" ]]; then
+  consent_problem="$(preflight_text consent "$claude_path")"
+  [[ -n "$consent_problem" ]] && full_run_gaps+=("$consent_problem")
+fi
+browser_problem="$(preflight_text browser)"
+[[ -n "$browser_problem" ]] && full_run_gaps+=("$browser_problem")
+if [[ "${#full_run_gaps[@]}" -gt 0 ]]; then
+  say ""
+  warn "Still needed for a FULL run (the app itself and the sandbox above are separate from this):"
+  for gap in "${full_run_gaps[@]}"; do say "      - $gap"; done
+  missing=1
+fi
+say ""
+say "$(preflight_text defaults)"
+# A CLI in ~/.local/bin is found by the app without PATH, but a shell opened before the install does not see it.
+for found_cli in "${codex_path:-}" "${claude_path:-}" "${gemini_path:-}"; do
+  if [[ "$found_cli" == "$HOME/.local/bin/"* ]]; then
+    say ""; say "Note: a CLI in ~/.local/bin is found by the app on its own, but a shell opened before the install may not see it. Open a NEW terminal, or use its full path now: $found_cli"
+    break
+  fi
+done
 
 # OpenAI API key for project chat — configured in the app, not here.
 say ""

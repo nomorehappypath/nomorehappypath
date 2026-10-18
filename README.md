@@ -272,6 +272,16 @@ the **Open report** link opens the document Delivery attached for you (and
 the CTO's card carries the same link). View app starts the app itself; it
 does not show a document. Accepted work keeps its link in Task history.
 
+**Can I use a strong model to write the spec and a cheaper one to code it?**
+Yes, without touching Settings. The Delivery button in Mission Control opens a
+small dialog pre-filled with the Delivery card's provider, model and effort;
+change them there (the model list is the Settings card's, plus a custom id) and the choice applies to that launch only. Settings stays
+the default, the Reviewer and the CTO always use Settings, and the provider list
+offers only providers that keep review independent. A replacement the harness
+opens for a stopped agent, and a project resume, keep the choice. A model the
+CLI rejects is not yet explained by the harness: read its terminal, Stop it and
+start again with a corrected model.
+
 **What happens when Claude or Codex runs out of my usage allowance?**
 The agent that ran out is held, not restarted: the project shows one amber note
 ("... shows Claude's usage-limit message; it announced 9:43 PM ...") and that

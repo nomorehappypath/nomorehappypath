@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from harness import attention, board, control
+from harness import attention, claude_auth, board, control
 
 FROZEN_AFTER_SECONDS = 15 * 60
 REVIEWER_WAIT_SECONDS = 5 * 60
@@ -75,7 +75,7 @@ def _age(value: Any, current: datetime) -> float | None:
 
 def _needs_sign_in(session: dict[str, Any]) -> bool:
     reason = str(session.get("attention_reason") or "").lower()
-    return any(word in reason for word in SIGN_IN_WORDS)
+    return attention.needs_consent(session) or any(word in reason for word in SIGN_IN_WORDS)
 
 
 def _limit_held(session: dict[str, Any], current: datetime | None = None) -> bool:
@@ -451,6 +451,18 @@ def _skip_if_held_now(root: Path, action: dict[str, Any]) -> str:
         if target is not None and _limit_held(target):
             return "skipped: the terminal shows a usage-limit message, so it is waiting, not stuck"
     if name == "start_reviewer":
+        target_provider = str(((snapshot.get("agent_settings") or {}).get("reviewer") or {}).get("provider") or "")
+    elif acts_on_terminal and action.get("session_id"):
+        target = next((item for item in sessions if item.get("id") == action.get("session_id")), None) or {}
+        target_provider = str(target.get("provider") or ("claude" if str(target.get("kind", action.get("kind", ""))).startswith("claude") else ""))
+    else:
+        target_provider = ""
+    if target_provider == "claude":
+        # A Claude launch the owner has not consented to stays refused: another attempt cannot succeed and would only repeat.
+        # Other providers are unaffected by a Claude consent card.
+        if any((item.get("claude_auth_action") or {}).get("reason") == "consent" for item in sessions):
+            return "skipped: Claude agents are waiting for YOU to accept the one-time bypass warning, so another launch would be refused again"
+    if name == "start_reviewer":
         settings = snapshot.get("agent_settings") or {}
         reviewer_provider = str((settings.get("reviewer") or {}).get("provider") or "")
         for item in sessions:
@@ -777,6 +789,10 @@ def run_once(root: Path, launch: Callable[[dict[str, Any]], Any], current: datet
              create: Callable[[str], dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """One self-heal pass: plan, then act on each decision; one failure never blocks the rest."""
     results = []
+    try:
+        claude_auth.settle_consent_cards(root)
+    except Exception:  # a card that cannot be checked stays; it never stops the watchdog
+        pass
     for action in plan(root, current):
         try:
             results.append(execute(root, action, launch, create))

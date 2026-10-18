@@ -260,6 +260,30 @@ class RenderedHelpTests(unittest.TestCase):
                       "does not switch vendors mid-task"):
             self.assertIn(" ".join(words.split()), " ".join(readme.split()))
 
+    def test_the_launch_choice_help_and_faq_say_what_the_code_does(self):
+        """Task 2026-10-17_launch-model-choice: one Help item, one FAQ entry, every sentence true of the code."""
+        from harness import control, project_manager_page
+        page = project_manager_page.PAGE
+        start = page.index('id="help-settings-title"')
+        text = page[start:page.index("</section>", start)]
+        for words in ("Choosing a model for one launch", "that launch only", "Settings is not changed",
+                      "The Independent Reviewer and the CTO always use their Settings values",
+                      "never the Reviewer's provider", "keep the choice", "<code>/model</code>",
+                      "does not yet explain it"):
+            self.assertIn(words, text)
+        # the sentences describe the code: the server refuses other roles with that very sentence, and a per-launch
+        # choice is a stored flag the replacement and the pause capture carry
+        self.assertEqual(control.LAUNCH_CHOICE_ROLE_SENTENCE, "the Independent Reviewer and the CTO always use their Settings values")
+        import inspect
+        self.assertIn('"launch_choice"', inspect.getsource(control.create))
+        from harness import board
+        self.assertIn('"launch_choice"', inspect.getsource(board))
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+        for words in ("Can I use a strong model to write the spec and a cheaper one to code it?", "that launch only",
+                      "Settings stays the default", "the Reviewer and the CTO always use Settings", "keep review independent",
+                      "not yet explained by the harness"):
+            self.assertIn(" ".join(words.split()), " ".join(readme.split()))
+
 
 if __name__ == "__main__":
     unittest.main()

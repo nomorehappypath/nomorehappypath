@@ -62,7 +62,7 @@ globalThis.document={querySelector(selector){return nodes[selector.slice(1)]||nu
 tasks(%s,%s,{});
 process.stdout.write(JSON.stringify(nodes.tasks.children[0].innerHTML));
 """ % (state, contracts)
-            completed = subprocess.run(["node", "-e", script + "\n" + invocation], capture_output=True, text=True)
+            completed = subprocess.run(["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             rendered = completed.stdout
             self.assertIn("Accepted", json.loads(rendered))

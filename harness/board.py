@@ -833,8 +833,9 @@ def finish_project_pause(root: ProjectRoot) -> dict[str, Any]:
             session_record = control_sessions.get(str(agent.get("session_id", ""))) or {}
             capture = {
                 key: session_record[key]
-                for key in ("kind", "provider", "model", "effort", "cli_session_id", "cli_session_provider", "cli_launches", "continues_session")
-                if session_record.get(key) not in (None, "")
+                for key in ("kind", "provider", "model", "effort", "cli_session_id", "cli_session_provider", "cli_launches", "continues_session",
+                            "launch_choice")
+                if session_record.get(key) not in (None, "", False)
             } if session_record else {}
             saved_agents[agent_id] = {
                 # What the session ran as, so a resume with a missing control
@@ -7059,8 +7060,14 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     block = attention.owner_block(blocked_reviewer) if blocked_reviewer else ""
                     waiting_for_sign_in = block == "sign_in"
                     sign_in_how = attention.sign_in_how((blocked_reviewer or {}).get("provider") or "claude")
+                    consent_refused = str(((managed.get("agent_settings") or {}).get("reviewer") or {}).get("provider") or "claude") == "claude" and any(
+                        (item.get("claude_auth_action") or {}).get("reason") == "consent"
+                        for item in managed.get("sessions", [])
+                    )
                     reason = (
                         attention.owner_block_sentence("Reviewer", blocked_reviewer) if block else
+                        "the Reviewer cannot start because Claude Code's one-time bypass warning has not been accepted: it is waiting for YOU, not for the harness (the card in Mission Control has the exact step)"
+                        if consent_refused else
                         "open review queue has no live eligible reviewer; start one from Mission Control"
                     )
                     needed = state.get("reviewer_needed") or {}

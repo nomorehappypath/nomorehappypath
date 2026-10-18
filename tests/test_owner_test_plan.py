@@ -63,7 +63,7 @@ globalThis.document={querySelector(){return null;}};
 process.stdout.write(releaseResponseHtml(%s,'TASK'));
 """ % json.dumps(state)
         completed = subprocess.run(
-            ["node", "-e", script + "\n" + invocation], capture_output=True, text=True,
+            ["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("What to test before accepting", completed.stdout)

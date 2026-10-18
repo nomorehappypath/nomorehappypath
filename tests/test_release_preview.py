@@ -893,7 +893,7 @@ class ReleaseCardRenderTests(unittest.TestCase):
             "process.stdout.write(JSON.stringify({html}));"
         )
         completed = subprocess.run(
-            ["node", "-e", declarations + "\n" + invocation], capture_output=True, text=True,
+            ["node", "--input-type=commonjs", "-"], input=declarations + "\n" + invocation, capture_output=True, text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)["html"]

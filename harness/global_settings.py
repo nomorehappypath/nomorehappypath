@@ -339,7 +339,23 @@ def initialize(home: Path, data_roots: list[Path] | None = None) -> dict[str, An
 
 
 def load(home: Path) -> dict[str, Any]:
-    return initialize(home)
+    """Read the global settings WITHOUT writing anything.
+
+    Until 2026-10-17 `load` was `initialize`: every read rewrote the file when a stored value needed repair (an older
+    Gemini pair) and created it when missing — and readers are everywhere (Mission Control's refresh poll, the launch
+    endpoint, the launch script, the plumbing checks). A per-launch model choice promises that a launch never changes
+    Settings, so reading must not either. Repairs are applied IN MEMORY (every reader sees the values the Settings page
+    shows); a missing file reads as the defaults; an unreadable file reads as the defaults plus `error`, exactly as
+    `initialize` reports it. `initialize` keeps repair-and-create for manager start, the Settings page and the
+    connection test (task 2026-10-17_launch-model-choice §3.4).
+    """
+    path = _path(home)
+    if not path.exists():
+        return json.loads(json.dumps(_default()))
+    try:
+        return _validate_document(json.loads(path.read_text(encoding="utf-8")), [])
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        return {**_default(), "error": f"saved global settings need attention: {error}"}
 
 
 def chat_settings(
@@ -892,7 +908,7 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
             token = claude_auth.resolve_token()
             claude_auth.validate_token(token)
         except claude_auth.ClaudeAuthRequired as error:
-            card = claude_auth.action(error.reason)
+            card = claude_auth.action(error.reason, error.detail)
             message = f"Claude agents cannot start: {card['why']} {card['instructions']}"
             _record_connectivity(home, provider, {
                 "ok": False, "model": model, "effort": effort,
@@ -962,6 +978,14 @@ def test_connection(home: Path, provider: str, model: str, effort: str,
             f"The agents use {provider.title()} {version or '(version not reported)'} at {executable}."
         ),
     }
+    if provider == "claude":
+        # The one-time "Bypass Permissions mode" warning exits every Claude agent at startup, and a one-word -p request
+        # never meets it: say so next to the green result instead of letting the owner find it as a dead agent.
+        from harness import preflight
+        consent_problem = preflight.claude_bypass_consent_problem(True, executable=executable)
+        if consent_problem:
+            result["bypass_consent_missing"] = True
+            result["message"] += " BUT: " + consent_problem
     recorded = _record_connectivity(
         home, provider, {key: value for key, value in result.items() if key != "provider"},
     )
