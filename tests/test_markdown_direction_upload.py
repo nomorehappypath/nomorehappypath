@@ -68,7 +68,7 @@ globalThis.document={querySelector(selector){return ({
 })().catch(error=>{console.error(error);process.exit(1)});
 """
         completed = subprocess.run(
-            ["node", "-e", declarations + "\n" + invocation],
+            ["node", "--input-type=commonjs", "-"], input=declarations + "\n" + invocation,
             capture_output=True,
             text=True,
         )

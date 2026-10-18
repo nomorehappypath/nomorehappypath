@@ -30,9 +30,10 @@ _lock = threading.Lock()
 
 
 class ClaudeAuthRequired(RuntimeError):
-    def __init__(self, reason="missing"):
+    def __init__(self, reason="missing", detail=""):
         self.reason = reason
-        super().__init__(action(reason)["why"])
+        self.detail = detail
+        super().__init__(action(reason, detail)["why"])
 
 
 # Reasons that are the sign-in itself (a new token fixes them) and reasons that are not (it would only waste the owner's time).
@@ -41,14 +42,31 @@ NOT_A_TOKEN_PROBLEM = {
     "cli": "The Claude program could not be run or did not answer the sign-in check. Your token was not rejected. Check that Claude is installed and up to date (claude --version), then retry.",
     "quota": "Your Claude account is over its usage limit or out of credit, or Claude is overloaded. Your token was not rejected. Wait or top up the plan on the Claude side, then retry.",
     "unavailable": "Claude could not be reached to check the sign-in (connection, timeout or a temporary Claude problem). Your token was not rejected. Check your connection, then retry; no agent was started.",
+    "consent": "",
     "model": "The model used only for the sign-in check is not available to your account. Your token was not rejected. Set HARNESS_CLAUDE_AUTH_MODEL to a model your account can use (for example sonnet), restart the harness when your project is safely paused, then retry.",
 }
 
 
-def action(reason="missing") -> dict:
+def _require_bypass_consent() -> None:
+    """Claude Code's one-time "Bypass Permissions mode" warning exits every agent at startup and a sign-in probe never meets it."""
+    from harness import preflight
+    try:
+        from harness import global_settings
+        executable = str(global_settings.provider_executable("claude"))   # the copy the agents will really run
+    except Exception:
+        executable = os.environ.get("HARNESS_CLAUDE_BIN", "").strip() or "claude"
+    problem = preflight.claude_bypass_consent_problem(True, executable=executable)
+    if problem:
+        raise ClaudeAuthRequired("consent", detail=problem)
+
+
+def action(reason="missing", detail="") -> dict:
     why = {"missing": "Claude needs a dedicated setup-token before this agent can start.",
            "rejected": "Claude rejected the setup-token. Generate a replacement before restarting this agent.",
            **NOT_A_TOKEN_PROBLEM}[reason]
+    if reason == "consent":
+        return {"reason": "consent", "title": "Claude agents are waiting for YOU", "why": detail or "Claude Code's one-time bypass warning has not been accepted.",
+                "instructions": "No new token is needed. After you accepted it, retry the agent from Mission Control."}
     if reason in NOT_A_TOKEN_PROBLEM:
         return {"title": "Claude agents cannot start", "why": why, "instructions": "No new token is needed. After the fix above, retry the agent from Mission Control."}
     instructions = platform_support.claude_credentials().instructions()
@@ -159,13 +177,14 @@ def prepare_launch(root, session: dict) -> str:
     try:
         token = resolve_token()
         validate_token(token)
+        _require_bypass_consent()
     except ClaudeAuthRequired as error:
         _set_launch_deadline(root, session, 30)
         with control.locked_state(root) as state:
             for prior in state["sessions"].values():  # an older blocked launch of this role is superseded by this one
                 if prior.get("kind") == session["kind"]:
                     prior.pop("claude_auth_action", None)
-            state["sessions"][session["id"]]["claude_auth_action"] = action(error.reason)
+            state["sessions"][session["id"]]["claude_auth_action"] = action(error.reason, error.detail)
         raise
     _clear_cards(root, session)
     _set_launch_deadline(root, session, 30)
@@ -179,6 +198,26 @@ def _set_launch_deadline(root, session: dict, seconds: float) -> None:
         stored = state["sessions"].get(session["id"])
         if stored and stored.get("status") == "launching":
             stored["launch_deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def settle_consent_cards(root) -> int:
+    """Clear the "waiting for YOU" cards of a refused launch once the owner's acceptance is on file. Returns how many were cleared."""
+    from harness import preflight
+    try:
+        sessions = control._read_state(root).get("sessions", {})
+    except (OSError, ValueError):
+        return 0
+    waiting = [key for key, item in sessions.items() if (item.get("claude_auth_action") or {}).get("reason") == "consent"]
+    if not waiting or not preflight.claude_bypass_consent_accepted(Path.home(), os.environ):
+        return 0
+    cleared = 0
+    with control.locked_state(root) as state:
+        for key in waiting:
+            stored = state["sessions"].get(key)
+            if stored and (stored.get("claude_auth_action") or {}).get("reason") == "consent":
+                stored.pop("claude_auth_action", None)
+                cleared += 1
+    return cleared
 
 
 def _clear_cards(root, session: dict) -> None:
@@ -278,7 +317,33 @@ def store_token_command() -> int:
     return 0
 
 
+def token_argument_problem(arguments: list[str]) -> str:
+    """`store-token` reads the token at a hidden prompt. A token typed as an argument is not read, and it is already in
+    the shell history, so say that WITHOUT printing the value (clean-install finding, 2026-10-17)."""
+    if not arguments:
+        return ""
+    if arguments[0] == "store-token" and len(arguments) > 1:
+        looks_like_token = any(item.startswith("sk-ant-") for item in arguments[1:])
+        lead = "That looks like a token." if looks_like_token else "store-token takes no arguments."
+        return (
+            f"{lead} Do not paste it on the command line (it stays in your shell history). Run exactly "
+            "`python3 -m harness.claude_auth store-token` and paste the token at the hidden prompt. "
+            "If a real token was typed, treat it as exposed: remove that line from your shell history, revoke it in your Anthropic "
+            "account, and create a new one with `claude setup-token`."
+        )
+    if arguments[0].startswith("sk-ant-"):
+        return (
+            "That looks like a token typed as a command. Do not paste it here (it stays in your shell history). Run "
+            "`python3 -m harness.claude_auth store-token` and paste it at the hidden prompt."
+        )
+    return ""
+
+
 if __name__ == "__main__":
+    _argument_problem = token_argument_problem(sys.argv[1:])
+    if _argument_problem:
+        sys.stderr.write(_argument_problem + "\n")
+        raise SystemExit(2)
     if sys.argv[1:] == ["store-token"]:
         raise SystemExit(store_token_command())
     parser = argparse.ArgumentParser()

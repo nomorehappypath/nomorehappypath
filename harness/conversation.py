@@ -309,7 +309,14 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
     transcript = str(transcript_path(root, session_id))
     predecessor = str(record.get("continues_session") or "")
     after_pause = bool(record.get("resumed_after_pause_at"))
-    if launches > 0 and known:
+    previous_provider = str(record.get("cli_session_provider") or "")
+    if launches > 0 and known and previous_provider and previous_provider != provider:
+        # The conversation this session inherited was held with ANOTHER CLI (the owner chose a different provider
+        # for this launch, 2026-10-17): it cannot be resumed here, and "not in the vendor store" would be misleading.
+        reason = (f"the previous conversation was with {control.PROVIDERS.get(previous_provider, {}).get('short', previous_provider)}; "
+                  f"starting fresh with {control.PROVIDERS.get(provider, {}).get('short', provider)}")
+        control.clear_cli_session(root, session_id, reason)
+    elif launches > 0 and known:
         if provider == "claude" and claude_session_exists(known):
             return {"mode": "resume", "provider": provider, "cli_session_id": known,
                     "transcript": transcript, "reason": f"resuming Claude Code session {known}",

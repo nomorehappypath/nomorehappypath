@@ -21,6 +21,12 @@ class ClaudeAuthTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
         claude_auth._cache.clear()
+        # These tests are about the sign-in token. The owner's one-time bypass-warning consent is tested in
+        # tests/test_install_check_full_run.py and tests/test_consent_waiting_for_you.py; here it must not depend on
+        # whether the machine running the suite has accepted it.
+        consent = patch.object(claude_auth, '_require_bypass_consent')
+        consent.start()
+        self.addCleanup(consent.stop)
 
     def test_service_reads_named_keychain_item_without_secret_in_argv(self):
         result = subprocess.CompletedProcess([], 0, 'synthetic-setup-token\n', 'private diagnostic')

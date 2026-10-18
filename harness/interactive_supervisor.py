@@ -794,7 +794,7 @@ def run(
     *, close_terminal_on_exit: bool = False, provider: str = "", execution_root: str = "",
     codex_app_server: list[str] | None = None, runtime_directory: str = "", claude_inbox: bool = False,
     gemini_delivery: bool = False, conversation_wait: float = 1800.0, codex_expected_policy: dict | None = None, busy_wait: float = 900.0,
-    receipt_timeout: float = 30.0, response_timeout: float = 20.0,
+    receipt_timeout: float = 30.0, response_timeout: float = 20.0, codex_launch: dict | None = None,
 ) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive supervisor requires a real Terminal")
@@ -885,6 +885,7 @@ def run(
                 admit=lambda pid: _descends_from(pid, stage3["child_pid"]),
                 peer_pid=platform_support.process_identity().peer_process_id,
                 on_event=stage3_event, expected_policy=codex_expected_policy,
+                launch_settings=codex_launch,
             )
             mux.start()
             stage3["mux"] = mux
@@ -1251,6 +1252,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gemini-delivery", action="store_true")
     parser.add_argument("--conversation-wait", type=float, default=1800.0)
     parser.add_argument("--codex-expected-policy", default="")
+    parser.add_argument("--codex-launch-json", default="", help='{"model": ..., "effort": ...} of this session, applied to the resumed thread and every turn')
     parser.add_argument("--busy-wait", type=float, default=900.0)
     parser.add_argument("--receipt-timeout", type=float, default=30.0)
     parser.add_argument("--app-server-timeout", type=float, default=20.0)
@@ -1268,6 +1270,7 @@ def main(argv: list[str] | None = None) -> int:
         codex_app_server=json.loads(args.codex_app_server_json) if args.codex_app_server_json else None,
         runtime_directory=args.runtime_dir, claude_inbox=args.claude_inbox, gemini_delivery=args.gemini_delivery, conversation_wait=args.conversation_wait, receipt_timeout=args.receipt_timeout,
         codex_expected_policy=json.loads(args.codex_expected_policy) if args.codex_expected_policy else None,
+        codex_launch=json.loads(args.codex_launch_json) if args.codex_launch_json else None,
         busy_wait=args.busy_wait,
         response_timeout=args.app_server_timeout,
     )

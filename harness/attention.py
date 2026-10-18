@@ -38,6 +38,10 @@ _INCOMPLETE_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*)?$")
 TRUST_REASON = ("is asking whether you trust this project folder (open its terminal and choose "
                 "'Yes, I trust this folder')")
 PERMISSION_REASON = "is asking permission to continue ('Do you want to proceed?')"
+# Claude Code's first-run warning when started in bypass mode (default answer "No, exit"). Accepting it is the OWNER's
+# consent to the risk: the harness never types it, and the card tells him the one command to run (2026-10-17).
+BYPASS_CONSENT_REASON = ("is waiting for YOU: Claude Code's one-time 'Bypass Permissions mode' warning needs your answer "
+                         "(in your own terminal run `claude --dangerously-skip-permissions` once, choose 'Yes, I accept')")
 # Codex 0.160's own folder question (measured on the real `--remote` TUI,
 # 2026-10-03): "Folder access ... Trust this folder? Codex can read, edit, and
 # run files here ... › 1. Trust and continue  2. Back to Agent Command Center".
@@ -226,6 +230,9 @@ PROMPT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
      TRUST_REASON),
     (re.compile(r"Trust\s*this\s*folder\?|Trust\s*and\s*continue", re.IGNORECASE),
      CODEX_TRUST_REASON),
+    (re.compile(r"Bypass Permissions mode.{0,900}?No,\s*exit.{0,200}?Yes,\s*I\s*accept",   # the live menu, not a line that merely quotes the warning
+                re.IGNORECASE | re.DOTALL),
+     BYPASS_CONSENT_REASON),
     (re.compile(r"Do you want to (?:proceed|make this edit|create|run|allow)", re.IGNORECASE),
      PERMISSION_REASON),
     (re.compile(r"switch to auto mode", re.IGNORECASE),
@@ -262,7 +269,7 @@ def holds_harness_input(reason: str | None) -> bool:
     """
     reason = str(reason or "")
     return "/login" in reason or GEMINI_QUOTA_MARK in reason or is_limit_reason(reason) or reason in {
-        TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON, GEMINI_TRUST_REASON, GEMINI_SIGN_IN_REASON}
+        TRUST_REASON, CODEX_TRUST_REASON, PERMISSION_REASON, GEMINI_TRUST_REASON, GEMINI_SIGN_IN_REASON, BYPASS_CONSENT_REASON}
 
 
 def in_limit_grace(session: dict | None, now: datetime | None = None) -> bool:
@@ -301,13 +308,19 @@ def has_quota_block(session: dict | None) -> bool:
     return GEMINI_QUOTA_MARK in reason or is_limit_reason(reason)
 
 
+def needs_consent(session: dict | None) -> bool:
+    """The terminal shows Claude Code's one-time bypass warning: only the owner can answer it."""
+    # The reason is stored cut to 200 characters (control.record_attention), so recognise it by its stable opening.
+    return "Bypass Permissions mode" in str((session or {}).get("attention_reason") or "")
+
+
 def needs_owner(session: dict | None) -> bool:
-    """Signed out, or out of quota: nothing can run in this terminal until the owner acts, so nothing is sent to it."""
-    return needs_sign_in(session) or has_quota_block(session)
+    """Signed out, out of quota, or at the owner's consent screen: nothing can run in this terminal until the owner acts, so nothing is sent to it."""
+    return needs_sign_in(session) or has_quota_block(session) or needs_consent(session)
 
 
 def owner_block(session: dict | None) -> str:
-    return "sign_in" if needs_sign_in(session) else ("quota" if has_quota_block(session) else "")
+    return "sign_in" if needs_sign_in(session) else ("quota" if has_quota_block(session) else ("consent" if needs_consent(session) else ""))
 
 
 def format_limit_time(moment: datetime | str | None, now: datetime | None = None) -> str:
@@ -365,6 +378,10 @@ def owner_block_sentence(role: str, session: dict | None) -> str:
         span = f" (about {match.group(1)} more hours)" if match else ""
         return (f"The {role} is out of Gemini quota{span}: open Settings and choose another provider for it, or upgrade "
                 "your Google plan. Its work is paused, not lost.")
+    if needs_consent(session):
+        return (f"The {role} is waiting for YOU, not for the harness: Claude Code's one-time 'Bypass Permissions mode' warning needs "
+                "your answer. Do not answer it in the agent's window. In your own terminal run `claude --dangerously-skip-permissions` "
+                "once and choose 'Yes, I accept', then restart the agent. Its work is paused, not lost.")
     return f"The {role} needs you to sign in again: open its terminal and {sign_in_how((session or {}).get('provider'))}."
 
 

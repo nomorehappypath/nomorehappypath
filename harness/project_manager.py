@@ -609,7 +609,9 @@ class ProjectManager:
         }
 
     def settings_payload(self) -> dict[str, Any]:
-        value = global_settings.load(self.home)
+        # Opening Settings is the one read that still repairs and creates the file (`load` is read-only since
+        # 2026-10-17 so that no launch or refresh poll can change Settings).
+        value = global_settings.initialize(self.home)
         return {
             **value,
             "roles": control.ROLE_SETTINGS,

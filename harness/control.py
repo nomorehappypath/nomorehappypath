@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -617,7 +617,12 @@ def launch_failure_text(session: dict[str, Any], step: str, code: Any, diagnosti
     if diagnostic:
         sentence += f" The terminal said: {diagnostic}"
     if setup:
-        sentence += " This is a setup problem; pressing Start again will not fix it. Check the role's provider, model and sign-in in Settings, then press Start."
+        if session.get("launch_choice"):
+            sentence += (" This is a setup problem; pressing Start again will not fix it. Press the Delivery button in Mission Control"
+                         " and correct the provider, model or effort for this launch; if the CLI itself is missing or signed out,"
+                         " fix that in Settings.")
+        else:
+            sentence += " This is a setup problem; pressing Start again will not fix it. Check the role's provider, model and sign-in in Settings, then press Start."
     else:
         sentence += f" Press Start for the {role} in Mission Control; the new terminal continues the role's latest conversation."
     return sentence, setup
@@ -670,8 +675,51 @@ def record_launch_failure(root: Path, session_id: str, pid: int, code: int, step
         return {"recorded": True, "reason": reason}
 
 
+LAUNCH_CHOICE_ROLE_SENTENCE = "the Independent Reviewer and the CTO always use their Settings values"
+
+
+def validated_launch_choice(settings: dict[str, dict[str, str]], role: str, choice: Any,
+                            availability: "Callable[[str], dict[str, Any]] | None" = None) -> dict[str, str]:
+    """The owner's per-launch provider/model/effort for one Delivery launch, validated the way Settings is.
+
+    Task 2026-10-17_launch-model-choice §3.3. `settings` are the validated agent settings of the moment (the Reviewer's
+    provider comes from them); `choice` is what the page sent. Refusals are the sentences Settings would use. Gemini's
+    effort may ADJUST the model (the level is part of the name): the adjustment comes back as `note`, with launch
+    wording (this dialog has no Test button). `availability` is `cli_capabilities.provider_availability` bound to the
+    manager home; only Gemini can fail it.
+    """
+    if role != "delivery":
+        raise ValueError(LAUNCH_CHOICE_ROLE_SENTENCE)
+    if not isinstance(choice, dict):
+        raise ValueError("the launch choice must be an object with provider, model and effort")
+    provider = str(choice.get("provider", "")).strip().lower()
+    if provider not in PROVIDERS:
+        raise ValueError("unsupported provider for this launch; choose codex, claude or gemini")
+    effort = normalize_provider_effort(provider, choice.get("effort", ""))
+    model = normalize_provider_model(provider, choice.get("model", ""))
+    if effort not in PROVIDER_EFFORTS[provider]:
+        raise ValueError(f"unsupported effort for {provider}; choose " + ", ".join(PROVIDER_EFFORTS[provider]))
+    note = ""
+    if provider == "gemini":
+        model, effort, note = gemini_pair(model, effort, repair=False)
+        note = note.replace("press Test connection to confirm it exists", "to test it, open Settings")
+    reviewer_provider = str((settings.get("reviewer") or {}).get("provider") or "")
+    if provider == reviewer_provider:
+        raise ValueError(
+            f"{PROVIDERS[provider]['short']} is your Independent Reviewer's provider, so it cannot write the work it reviews; "
+            "choose another provider for this launch or change the Reviewer in Settings"
+        )
+    if availability is not None:
+        ready = availability(provider)
+        if not ready.get("available", True):
+            raise ValueError(str(ready.get("reason") or f"{PROVIDERS[provider]['label']} is not available on this machine"))
+    return {"provider": provider, "model": model, "effort": effort, "note": note}
+
+
 def create(root: Path, kind: str, task: str = "", color: str = "black",
-           settings_override: dict[str, dict[str, str]] | None = None, continues: str = "") -> dict[str, Any]:
+           settings_override: dict[str, dict[str, str]] | None = None, continues: str = "",
+           launch_choice: dict[str, Any] | None = None,
+           availability: "Callable[[str], dict[str, Any]] | None" = None) -> dict[str, Any]:
     if kind not in KINDS:
         raise ValueError("unknown session kind")
     task = task.strip()
@@ -681,14 +729,39 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
     if color not in SESSION_COLORS:
         raise ValueError("unknown terminal color; choose one of: " + ", ".join(SESSION_COLORS))
     role = role_for_kind(kind)
+    if launch_choice is not None and role != "delivery":
+        raise ValueError(LAUNCH_CHOICE_ROLE_SENTENCE)
     with locked_state(root) as state:
         _reconcile(state)
         try:
-            selected = _validated_agent_settings(
+            all_settings = _validated_agent_settings(
                 settings_override if settings_override is not None else state.get("agent_settings")
-            )[role]
+            )
         except ValueError:
-            selected = default_agent_settings()[role]
+            all_settings = default_agent_settings()
+        selected = dict(all_settings[role])
+        chosen = False
+        choice_note = ""
+        predecessor = state["sessions"].get(continues) if continues else None
+        if launch_choice is not None:
+            # The owner's explicit choice for THIS launch (2026-10-17): validated OUTSIDE the defaults fallback above,
+            # so a refused choice is refused, never silently replaced by another configuration.
+            picked = validated_launch_choice(all_settings, role, launch_choice, availability)
+            choice_note = picked.pop("note")
+            selected, chosen = picked, True
+        elif predecessor and predecessor.get("launch_choice") and role == "delivery":
+            # A self-heal replacement continues the owner's launch choice, not today's Settings (§3.5).
+            picked = validated_launch_choice(all_settings, role, {
+                "provider": predecessor.get("provider"), "model": predecessor.get("model"), "effort": predecessor.get("effort"),
+            }, availability)
+            picked.pop("note")
+            selected, chosen = picked, True
+        elif availability is not None and role == "delivery":
+            # Settings' own value (the dialog's Cancel, the queue, self-heal) passes the same availability gate: a
+            # Gemini default whose CLI update made its gates unproven must not launch because nothing asked (§3.2).
+            ready = availability(selected["provider"])
+            if not ready.get("available", True):
+                raise ValueError(str(ready.get("reason") or f"{PROVIDERS[selected['provider']]['label']} is not available on this machine"))
         counterpart = {"delivery": "reviewer", "reviewer": "delivery"}.get(role)
         collision = next((
             entry for entry in state["sessions"].values()
@@ -743,6 +816,12 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "model": selected["model"],
             "effort": selected["effort"],
             "provider_label": PROVIDERS[selected["provider"]]["label"],
+            # The owner chose provider/model/effort for this launch (or a replacement continues such a choice): a
+            # replacement must not revert to Settings, and the failure sentence points to the Delivery button.
+            "launch_choice": chosen,
+            "launch_choice_note": choice_note,
+            # The runner's plan for the CLI conversation (continue / fresh and why), shown on the agent card.
+            "cli_launch_reason": None,
         }
         _inherit_cli_memory(state, session, continues)
         state["sessions"][session_id] = session
@@ -882,6 +961,7 @@ def restore_missing_resume_session(
                     })
                 if capture.get("continues_session"):
                     memory["continues_session"] = str(capture["continues_session"])
+                memory["launch_choice"] = bool(capture.get("launch_choice"))
             except (ValueError, TypeError):
                 memory = _cli_memory_fields()
         active_count = sum(
@@ -911,6 +991,9 @@ def restore_missing_resume_session(
             "provider": selected["provider"], "model": selected["model"],
             "effort": selected["effort"],
             "provider_label": PROVIDERS[selected["provider"]]["label"],
+            "launch_choice": bool(memory.pop("launch_choice", False)),
+            "launch_choice_note": "",
+            "cli_launch_reason": None,
         }
         state.setdefault("sessions", {})[session_id] = session
         return dict(session)
@@ -1008,7 +1091,7 @@ def clear_cli_session(root: Path, session_id: str, reason: str = "") -> dict[str
         return {"session_id": session_id, "cleared": previous, "reason": session["cli_session_cleared_reason"]}
 
 
-def note_cli_launch(root: Path, session_id: str, resumed: bool) -> dict[str, Any]:
+def note_cli_launch(root: Path, session_id: str, resumed: bool, reason: str = "") -> dict[str, Any]:
     with locked_state(root) as state:
         session = state.get("sessions", {}).get(session_id)
         if not session:
@@ -1016,6 +1099,9 @@ def note_cli_launch(root: Path, session_id: str, resumed: bool) -> dict[str, Any
         session["cli_launches"] = int(session.get("cli_launches") or 0) + 1
         session["cli_last_launch_at"] = now()
         session["cli_last_launch_resumed"] = bool(resumed)
+        # The plan's own words (continue / fresh and why), for the agent card. It is the PLAN, written before the CLI
+        # has started; the card's liveness says whether the CLI runs (2026-10-17).
+        session["cli_launch_reason"] = " ".join(str(reason or "").split())[:200] or None
         # The launch that follows a pause has now been planned with the pause
         # in its prompt; a later relaunch (a crash, say) is an ordinary one.
         # (Not cleared on attach: the runner attaches BEFORE it plans.)
@@ -1058,6 +1144,7 @@ def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
             "reason": "interactive CLI session is running",
             # A new attempt: the CLI is not launched yet, and no failure is current.
             "launch_tracked": True, "launch_noted_at": None, "launch_exec_at": None, "launch_failure": None,
+            "cli_launch_reason": None,
         })
         return dict(session)
 
@@ -1777,6 +1864,7 @@ def mark_resume_launch_requested(root: Path, session_id: str) -> dict[str, Any]:
         session["resume_launch_requested_at"] = now()
         session["launch_deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
         session["reason"] = "resume terminal launch requested; waiting for attachment"
+        session["cli_launch_reason"] = None
         return dict(session)
 
 
@@ -1832,6 +1920,7 @@ def main(argv: list[str] | None = None) -> int:
     launch_parser = subparsers.add_parser("note-cli-launch")
     launch_parser.add_argument("--session-id", required=True)
     launch_parser.add_argument("--resumed", action="store_true")
+    launch_parser.add_argument("--reason", default="", help="the launch plan's reason, shown on the agent card")
     exec_marker_parser = subparsers.add_parser("note-cli-exec")
     exec_marker_parser.add_argument("--session-id", required=True)
     failed_parser = subparsers.add_parser("launch-failed")
@@ -1864,7 +1953,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(record_cli_session(context_from_args(args), args.session_id, args.cli_session_id, args.provider), sort_keys=True))
         return 0
     if args.command == "note-cli-launch":
-        print(json.dumps(note_cli_launch(context_from_args(args), args.session_id, args.resumed), sort_keys=True))
+        print(json.dumps(note_cli_launch(context_from_args(args), args.session_id, args.resumed, args.reason), sort_keys=True))
         return 0
     if args.command == "note-cli-exec":
         print(json.dumps(note_cli_exec(context_from_args(args), args.session_id), sort_keys=True))

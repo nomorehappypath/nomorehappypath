@@ -41,6 +41,7 @@ class MultiplexerFixture(unittest.TestCase):
             environment={**os.environ, "STUB_MODE": self.mode, "STUB_STEER": self.steer, "STUB_LOG": str(self.server_log)},
             admit=lambda pid: pid in self.admitted, peer_pid=lambda connection: os.getpid(),
             on_event=lambda kind, detail: self.events.append((kind, detail)),
+            launch_settings=getattr(self, "launch_settings", None),
         )
         self.mux.start()
         self.addCleanup(self.mux.stop)
@@ -193,3 +194,50 @@ class HelperThreadTests(MultiplexerFixture):
         self.assertEqual(self.mux.deliver("harness-8", "x", response_timeout=5, receipt_timeout=5), "delivered")
         starts = [json.loads(line) for line in self.server_log.read_text().splitlines() if '"turn/start"' in line]
         self.assertEqual(starts[-1]["params"]["threadId"], "th-1")
+
+
+class LaunchSettingsTests(MultiplexerFixture):
+    """Codex batch review F3 (2026-10-17): the session's chosen model and effort must reach the resumed thread and every turn,
+    not only the app-server's command line. The stub records exactly what the server receives."""
+    launch_settings = {"model": "gpt-5.6-terra", "effort": "low"}
+
+    def _server_requests(self, method: str) -> list[dict]:
+        return [json.loads(line) for line in self.server_log.read_text().splitlines() if f'"{method}"' in line]
+
+    def test_the_terminals_thread_start_and_resume_carry_the_sessions_model_and_effort(self):
+        tui = self.connect_tui()
+        start = self._server_requests("thread/start")[-1]["params"]
+        self.assertEqual(start["model"], "gpt-5.6-terra")
+        self.assertEqual(start["config"]["model_reasoning_effort"], "low")
+        # a resume of an older conversation (its rollout remembers Luna/Medium) is told the new choice the same way
+        tui.send({"id": 7, "method": "thread/resume", "params": {"threadId": "th-old", "config": {"model_reasoning_effort": "medium", "sandbox_mode": "danger-full-access"}}})
+        tui.receive_until(lambda m: m.get("id") == 7)
+        resume = self._server_requests("thread/resume")[-1]["params"]
+        self.assertEqual(resume["model"], "gpt-5.6-terra")
+        self.assertEqual(resume["config"]["model_reasoning_effort"], "low", "the session's effort wins over the rollout's")
+        self.assertNotIn("sandbox_mode", resume["config"], "policy keys are still pinned away")
+        tui.close()
+
+    def test_every_turn_carries_the_sessions_model_and_effort(self):
+        tui = self.connect_tui()
+        tui.send({"id": 9, "method": "turn/start", "params": {"threadId": "th-1", "input": [{"type": "text", "text": "hi", "text_elements": []}]}})
+        tui.receive_until(lambda m: m.get("id") == 9)
+        owner_turn = self._server_requests("turn/start")[-1]["params"]
+        self.assertEqual((owner_turn["model"], owner_turn["effort"]), ("gpt-5.6-terra", "low"), "the owner's own turn")
+        result = self.mux.deliver("harness-11", "[SYSTEM CONTROL — test] hello", response_timeout=5, receipt_timeout=5)
+        self.assertEqual(result, "delivered")
+        harness_turn = [r for r in self._server_requests("turn/start") if r["params"].get("clientUserMessageId") == "harness-11"][-1]["params"]
+        self.assertEqual((harness_turn["model"], harness_turn["effort"]), ("gpt-5.6-terra", "low"), "the harness's turn")
+        tui.close()
+
+
+class PinPolicyUnitTests(unittest.TestCase):
+    def test_with_launch_settings_shapes(self):
+        f = codex_app_server.with_launch_settings
+        launch = {"model": "gpt-5.6-terra", "effort": "low"}
+        self.assertEqual(f({}, "thread/resume", launch), {"model": "gpt-5.6-terra", "config": {"model_reasoning_effort": "low"}})
+        self.assertEqual(f({"input": []}, "turn/start", launch), {"input": [], "model": "gpt-5.6-terra", "effort": "low"})
+        self.assertEqual(f({"x": 1}, "turn/steer", launch), {"x": 1}, "a steer changes nothing")
+        self.assertEqual(f({"x": 1}, "thread/start", None), {"x": 1}, "no launch settings: untouched (today's launches)")
+        pinned = codex_app_server.pin_policy({"id": 1, "method": "thread/resume", "params": {"threadId": "t", "approvalPolicy": "on-request"}}, launch)
+        self.assertEqual(pinned["params"], {"threadId": "t", "model": "gpt-5.6-terra", "config": {"model_reasoning_effort": "low"}})

@@ -364,9 +364,9 @@ plan_cli_launch() {
   mkdir -p "$(dirname "$transcript_path")"
   printf '%s -- launch: mode=%s provider=%s cli_session_id=%s (%s) cli=%s version=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$launch_mode" "$provider" "${cli_session_id:-none}" "$launch_reason" "${cli_path:-not-found}" "$cli_version" >> "$transcript_path"
   if [[ "$launch_mode" == "resume" ]]; then
-    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" --resumed >/dev/null
+    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" --resumed --reason "$launch_reason" >/dev/null
   else
-    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" >/dev/null
+    "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-launch --session-id "$session_id" --reason "$launch_reason" >/dev/null
   fi
 }
 
@@ -641,7 +641,9 @@ if values.get("default_permissions") == "\"harness_agent\"":
 else:
     expected["writableRoots"] = json.loads(values.get("sandbox_workspace_write.writable_roots", "[]"))
     expected["networkAccess"] = values.get("sandbox_workspace_write.network_access") == "true"
+launch = {"model": values.get("model", "").strip().strip(chr(34)), "effort": values.get("model_reasoning_effort", "").strip()}
 sys.stdout.write("\0".join(["--codex-app-server-json", json.dumps(argv), "--codex-expected-policy", json.dumps(expected),
+                            "--codex-launch-json", json.dumps(launch),
                             "--runtime-dir", str(directory),
                             "--receipt-timeout", str(plumbing["delivery_receipt_timeout_seconds"]),
                             "--app-server-timeout", str(plumbing["app_server_start_timeout_seconds"])]) + "\0")

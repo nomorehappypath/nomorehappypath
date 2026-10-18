@@ -75,7 +75,7 @@ PAGE = r"""<!doctype html>
 .settings-details>summary,.history-details>summary{list-style:none}.settings-details>summary::-webkit-details-marker,.history-details>summary::-webkit-details-marker{display:none}.summary-end{display:inline-flex;align-items:center;gap:10px}.summary-caret{flex:none;width:7px;height:7px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);transition:transform .15s ease}.settings-details[open]>summary .summary-caret,.history-details[open]>summary .summary-caret{transform:rotate(45deg)}@media(prefers-reduced-motion:reduce){.summary-caret{transition:none}}.settings-grid{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;margin-top:14px}.settings-grid input{width:100%;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.settings-provider{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}.settings-provider strong{display:block}.settings-provider code{display:block;margin-top:4px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.settings-warning{margin-top:8px;color:#7a3b00;background:var(--amber-soft);border-radius:7px;padding:8px 10px;font-size:13px}.settings-actions{margin-top:12px;display:flex;gap:9px;flex-wrap:wrap}
 </style>
 <style>.progress-heading{display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:13px}.progress-heading span{color:var(--muted);text-align:right}.task-dynamic .progress{margin-top:6px}</style>
-<style>.color-options{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.color-choice{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff;color:var(--ink);cursor:pointer}.color-choice:hover{border-color:var(--blue)}.color-choice input{accent-color:var(--blue)}.color-swatch{width:24px;height:24px;border-radius:6px;border:1px solid #9aa6b2;display:inline-block}</style>
+<style>.launch-choice{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.launch-choice label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink)}.launch-choice select,.launch-choice input{font:inherit;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);min-width:0;max-width:100%}.launch-choice input[hidden]{display:none}.launch-choice-note{margin:8px 0 0;font-size:13px;color:var(--ink)}.launch-choice-note.bad{color:#9b1c1c}.launch-choice-origin{margin:6px 0 0;font-size:13px}.modal-links{margin-top:8px;font-size:13px}@media(max-width:600px){.launch-choice{grid-template-columns:1fr}}.color-options{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.color-choice{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff;color:var(--ink);cursor:pointer}.color-choice:hover{border-color:var(--blue)}.color-choice input{accent-color:var(--blue)}.color-swatch{width:24px;height:24px;border-radius:6px;border:1px solid #9aa6b2;display:inline-block}</style>
 <style>.requirements-confirmation{margin:12px 0;border:1px solid #b6dfc8;border-radius:8px;background:var(--green-soft);padding:10px 12px}.requirements-title{color:var(--green);font-weight:800;font-size:13px}.requirements-body{margin-top:5px;font-size:13px}.requirements-body p{margin:4px 0;color:var(--ink)}.requirements-confirmation small{display:block;margin-top:8px;color:var(--muted)}.requirements-pending{border-left-color:var(--amber);background:var(--amber-soft);color:#6b3a08}</style>
 <style>.requirements-section{border-top:1px solid #cce6d7;padding-top:8px;margin-top:8px}.requirements-section:first-child{border-top:0;padding-top:0;margin-top:0}.requirements-section h4{font-size:12px;color:#286344;margin:0 0 3px;text-transform:uppercase}.requirements-section ul,.requirements-section ol{margin:5px 0 8px;padding-left:22px}.requirements-section li{margin:5px 0;overflow-wrap:anywhere}.scope-change{border-left:3px solid var(--amber);padding:7px 10px;margin-top:8px;background:var(--amber-soft)}.scope-change small{display:block}.cto-task-list{max-height:min(52vh,520px);overflow:auto;overscroll-behavior:contain;border-top:1px solid var(--line);margin-top:14px}.cto-task{padding:12px 0;border-bottom:1px solid var(--line)}.cto-task:last-child{border-bottom:0}.cto-task h3{font-size:14px}.cto-task p{margin:5px 0}.cto-task .row{align-items:center}.task-counts{font-weight:750;color:#27476f}</style>
 <style>.history-requirements{margin-top:10px;border:1px solid #b6dfc8;border-radius:8px;background:var(--green-soft);padding:9px 11px}.history-requirements-title{color:var(--green);font-size:12px;font-weight:800}.history-requirements-body{margin-top:5px;font-size:13px}.history-requirements-body p{margin:4px 0}.history-requirements small{display:block;margin-top:6px;color:var(--muted)}</style>
@@ -93,7 +93,7 @@ PAGE = r"""<!doctype html>
 <section class="limit-notice" id="limit-notice" hidden role="status" aria-live="polite"></section>
 <section class="panel paused-banner" id="paused-banner" hidden role="status"><div><h2>Project paused</h2><p>This board is read-only. Saved work, review ownership, and evidence are preserved exactly where they stopped.</p></div><a class="resume-link" id="resume-project" href="__RESUME_LINK__">Resume project</a></section>
 
-<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. Choose a terminal color to identify it; Cancel uses standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
+<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
@@ -105,7 +105,7 @@ PAGE = r"""<!doctype html>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
 <section class="layout"><div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only current work appears here. Component counts are supporting evidence, not a completion claim.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div><aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside></section>
 <dialog id="status-dialog" aria-labelledby="status-dialog-title"><div class="modal"><h2 id="status-dialog-title" tabindex="-1">Agent status</h2><div id="status-dialog-body"></div><div class="modal-actions"><button class="secondary" id="status-dialog-close">Close</button></div></div></dialog>
-<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><p>This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div></form></dialog>
+<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Up to 5 files, 10 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
 <dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message will be sent as one complete owner instruction. It will not be submitted by pressing Enter inside the paragraph box.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 stored UTF-8 bytes. Line endings become line feeds and boundary whitespace is removed once; all interior text is preserved exactly.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">The browser reads the file as strict UTF-8. Its path is never sent or opened by the worker.</small></div><label for="owner-message-attachments"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
@@ -136,6 +136,7 @@ let historyLoadedAtVersion='';
 let currentHistoryVersion='';
 let historyLoading=false;
 let pendingLaunchKind='';
+let lastManaged=null;   // the latest /api/control snapshot, for the launch dialog's provider list
 let ownerMessageAgentId='';
 let ownerMessageType='direction';
 const ownerMessageMaxBytes=20000;
@@ -864,7 +865,7 @@ function humanStage(agent,state,contracts){
   if(deliveryTaskAccepted(agent,state))return'TASK ACCEPTED';
   if(agent.status==='paused')return'PAUSED';
   if(agent.liveness==='usage_limit')return'WAITING: USAGE LIMIT';
-  if(agent.liveness==='needs_sign_in')return String(agent.liveness_note||'').includes('out of Gemini quota')?'OUT OF QUOTA':'NEEDS SIGN-IN';
+  if(agent.liveness==='needs_sign_in')return String(agent.liveness_note||'').includes('Bypass Permissions')?'WAITING FOR YOU':String(agent.liveness_note||'').includes('out of Gemini quota')?'OUT OF QUOTA':'NEEDS SIGN-IN';
   if(agent.role==='cto'){
     if(agent.recovery_state==='unresponsive')return'CTO NOT RESPONDING';
     if(agent.liveness==='stalled')return'CTO RECOVERY REQUIRED';
@@ -936,6 +937,7 @@ function agentStatusSummaryCore(agent,state,contracts){
   if(agent.broker_refusal)return{summary:`The last Git write by the ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} was refused by the Git broker: ${agent.broker_refusal.reason}. The agent is blocked, not stalled; it keeps polling and every retry is refused until the cause is cleared.`,next:'CTO: run recover-git, which reports and reconciles the drift; the next Git write then clears this state. Your action: none.'};
   if(agent.liveness==='stalled'&&(recentOutputActive(agent)&&!agent.stall_exhausted))return{summary:`The ${agent.role==='qa'?'Independent Reviewer':'Delivery Agent'} for ${humanTask(agent,state)} is producing recent terminal output, but its board status update is overdue. This is not enough to satisfy the board heartbeat or release gates; the harness has routed a short internal update request and will not show a Recover action.`,next:'Post a short board status update. Owner action is not required.'};
   if(agent.liveness==='usage_limit')return{summary:agent.liveness_note||'This agent shows its provider\'s usage-limit message.',next:'Nothing to do. The harness sends it nothing until the message goes, and it continues by itself.',ownerAction:'None needed.'};
+  if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('Bypass Permissions'))return{summary:agent.liveness_note,next:'Nothing is wrong with the harness. In your own terminal run claude --dangerously-skip-permissions once and choose Yes, I accept; then restart this agent. The harness types nothing into the warning for you.',ownerAction:'Run claude --dangerously-skip-permissions once and accept.'};
   if(agent.liveness==='needs_sign_in'&&agent.vendor==='Anthropic')return{summary:'Claude needs a new setup-token. Follow the Claude authentication card, then retry this agent.',next:'Generate the token in your own terminal and supply it to the harness.',ownerAction:'Follow the Claude authentication card.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('out of Gemini quota'))return{summary:agent.liveness_note,next:'Choose another provider for this role in Settings, or wait for the quota to refresh. The harness holds its messages until then and carries on by itself.',ownerAction:'Open Settings and choose another provider, or upgrade your Google plan.'};
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('sign-in prompt'))return{summary:agent.liveness_note,next:'Follow the sign-in prompt in its window. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and follow the sign-in prompt.'};
@@ -1178,8 +1180,10 @@ function openAgents(state,contracts,sessionItems=[]){
     const row=document.createElement('div');
     row.className='agent-row';
     row.dataset.agentId=agent.id; row.dataset.sessionId=session?.id||''; row.dataset.task=task;
-    const provider=agent.vendor||session?.vendor||'Provider not recorded', model=session?.model||'Model not recorded';
-    row.innerHTML=`<div class="row"><div><strong>${esc(agent.display_name||agent.role)} — ${esc(task)}</strong><small class="agent-meta">Role: ${esc(agent.role)} · Provider: ${esc(provider)} · Model: ${esc(model)} · Board stage: ${esc(stage)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div><small class="agent-meta">${esc(wording.summary)}</small>`;
+    const provider=agent.vendor||session?.vendor||'Provider not recorded', model=session?.model||'Model not recorded', effort=session?.effort?(session.effort==='xhigh'?'extra high':session.effort):'';
+    const chosen=session?.launch_choice?' (chosen for this launch)':'';
+    const plan=session?.cli_launch_reason?`<small class="agent-meta">Planned: ${esc(/^resuming/i.test(session.cli_launch_reason)?'continue the saved conversation':'fresh conversation — '+session.cli_launch_reason)}</small>`:'';
+    row.innerHTML=`<div class="row"><div><strong>${esc(agent.display_name||agent.role)} — ${esc(task)}</strong><small class="agent-meta">Role: ${esc(agent.role)} · Provider: ${esc(provider)} · Model: ${esc(model)}${effort?` · Effort: ${esc(effort)}`:''}${esc(chosen)} · Board stage: ${esc(stage)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div><small class="agent-meta">${esc(wording.summary)}</small>${plan}`;
     const actions=document.createElement('div');actions.className='actions';actions.append(viewAgentButton(session));
     if(agent.role==='engineering'||agent.role==='development'){
       const waiting=agent.task==='AWAITING_OWNER_DIRECTION', directionSent=Boolean((state.owner_directions||{})[agent.session_id]?.text);
@@ -1415,6 +1419,7 @@ async function recoverAgent(agentId,task){
 }
 
 function render(data,managed){
+  lastManaged=managed;
   const state=data.state||{},contracts=data.contracts||{},agents=Object.values(state.agents||{}),reviews=Object.values(state.qa_requests||{});
   const projectPaused=['paused','resuming'].includes(state.project_pause?.status);
   state.live_tasks=Array.isArray(data.live_tasks)?[...data.live_tasks]:[];
@@ -1496,21 +1501,136 @@ function applyChatAvailability(state,projectPaused){
   }
 }
 
-function showColorDialog(kind){
+// The Delivery Start dialog (2026-10-17): provider, model and effort for THIS launch, pre-filled from Settings. Settings
+// is read, never written. Each opening carries a token so a slow answer for an earlier opening cannot fill a later one.
+let launchChoiceToken=0, launchChoiceSettings=null, launchChoiceReady=false, launchChoiceDamaged=false;
+const providerShort={codex:'Codex',claude:'Claude',gemini:'Gemini'};
+function settingsPageHref(){return document.querySelector('.project-nav a[href*="page=settings"]')?.href||'';}
+function connectionSentence(settings,provider,model,effort){
+  const result=settings.connectivity?.[provider]; const cat=(settings.provider_models_catalog||{})[provider]||[];
+  const custom=!cat.includes(model);
+  if(!result){return custom?'Custom model id, not tested with this effort. To test it, open Settings.':'Not tested with this model and effort. To test it, open Settings.';}
+  const when=result.tested_at?String(result.tested_at).slice(0,16).replace('T',' '):'';
+  const rModel=result.effective_model||result.model||'', rEffort=result.effective_effort||result.effort||'';
+  if(result.ok===false)return `Last test FAILED on ${when}: ${result.message||'the provider refused'}. You can still launch; to test again, open Settings.`;
+  if(!rModel||!rEffort)return `A connection test exists (${when}) but not for this model and effort. To test this pair, open Settings.`;
+  if(rModel!==model||rEffort!==effort)return `Last tested with another model or effort (${when}). To test this pair, open Settings.`;
+  const current=settings.provider_availability?.[provider]?.version;
+  if(provider==='gemini'&&result.cli_version&&current&&String(current)!==String(result.cli_version))return `Last tested with an older CLI version (${when}). To test again, open Settings.`;
+  if(provider==='claude')return `Tested OK on ${when} with this model (the connection test does not exercise the effort)${result.cli_version?`; CLI version at the time of the test: ${result.cli_version}; the current version is not checked here`:''}.`;
+  if(provider==='codex')return `Tested OK on ${when} with this model and effort${result.cli_version?` (CLI version at the time of the test: ${result.cli_version}; the current version is not checked here)`:''}.`;
+  return `Tested OK on ${when} with this model and effort.`;
+}
+function launchChoiceProviders(settings){
+  const reviewerProvider=settings.agent_settings?.reviewer?.provider||'';
+  const activeReviewers=new Set((lastManaged?.sessions||[]).filter(s=>s.kind==='claude_reviewer'&&['launching','running','paused'].includes(s.status)).map(s=>s.provider));
+  return Object.keys(settings.providers||providerShort).map(id=>{
+    let reason='';
+    if(id===reviewerProvider)reason=`${providerShort[id]||id} is your Independent Reviewer's provider, so it cannot write the work it reviews.`;
+    else if(activeReviewers.has(id))reason=`An active Independent Reviewer is running on ${providerShort[id]||id}; stop it first or choose another provider.`;
+    else if(settings.provider_availability?.[id]&&settings.provider_availability[id].available===false)reason=settings.provider_availability[id].reason||`${providerShort[id]||id} is not available on this machine.`;
+    return {id,label:(settings.providers?.[id]?.label)||providerShort[id]||id,reason};
+  });
+}
+function fillLaunchChoice(settings){
+  const delivery=settings.agent_settings?.delivery||{};
+  const providers=launchChoiceProviders(settings);
+  const providerSelect=el('#launch-provider'), modelSelect=el('#launch-model-select'), modelInput=el('#launch-model'), effortSelect=el('#launch-effort');
+  providerSelect.innerHTML=providers.map(p=>`<option value="${esc(p.id)}"${p.reason?' disabled':''}${p.id===delivery.provider?' selected':''}>${esc(p.label)}${p.reason?' — unavailable':''}</option>`).join('');
+  // The model picker is the Settings page's: a dropdown of the catalog ("id — what it is for") plus "Custom model ID…",
+  // which reveals a text box. (The first build used a free-text box with browser suggestions, and the pre-filled text
+  // filtered every other model out of sight — the owner saw it "stuck on luna", 2026-10-17.)
+  const currentModel=()=>modelSelect.value==='__custom__'?modelInput.value.trim():modelSelect.value;
+  const fillModels=(provider,selected)=>{
+    const cat=(settings.provider_models_catalog||{})[provider]||[]; const desc=(settings.provider_model_descriptions||{})[provider]||{};
+    const current=cat.includes(selected)?selected:'__custom__';
+    modelSelect.innerHTML=cat.map(id=>`<option value="${esc(id)}"${current===id?' selected':''}>${esc(id)}${desc[id]?' — '+esc(desc[id]):''}</option>`).join('')
+      +`<option value="__custom__"${current==='__custom__'?' selected':''}>Custom model ID…</option>`;
+    modelInput.hidden=current!=='__custom__'; if(current==='__custom__')modelInput.value=selected||'';
+  };
+  const refill=()=>{
+    const provider=providerSelect.value;
+    const efforts=settings.provider_efforts?.[provider]||{};
+    // within ONE opening the owner's effort choice is kept across a provider change; across openings the box is
+    // emptied first (below), so each opening starts from Settings (Codex batch review F1, 2026-10-17: saved Low, one
+    // launch at Medium, reopen, Launch untouched -> Medium again)
+    const keepEffort=effortSelect.value||delivery.effort;
+    effortSelect.innerHTML=Object.entries(efforts).map(([id,label])=>`<option value="${esc(id)}"${id===keepEffort?' selected':''}>${esc(label)}</option>`).join('');
+    if(!effortSelect.value&&effortSelect.options.length)effortSelect.selectedIndex=0;
+    const chosen=providers.find(p=>p.id===provider);
+    const note=el('#launch-choice-note'); note.classList.remove('bad');
+    if(chosen?.reason){note.textContent=chosen.reason;note.classList.add('bad');}
+    else note.textContent=connectionSentence(settings,provider,currentModel(),effortSelect.value);
+    el('#color-launch').disabled=Boolean(chosen?.reason)||!currentModel();
+  };
+  providerSelect.onchange=()=>{const provider=providerSelect.value; const cat=(settings.provider_models_catalog||{})[provider]||[]; fillModels(provider,provider===delivery.provider?(delivery.model||cat[0]||''):(cat[0]||'')); refill();};
+  modelSelect.onchange=()=>{modelInput.hidden=modelSelect.value!=='__custom__'; if(!modelInput.hidden){modelInput.value='';modelInput.focus();} refill();};
+  modelInput.oninput=refill; effortSelect.onchange=refill;
+  effortSelect.innerHTML='';           // a fresh opening: no effort carried over from the last one
+  fillModels(delivery.provider||providerSelect.value,delivery.model||''); refill();
+  for(const node of [providerSelect,modelSelect,modelInput,effortSelect])node.disabled=false;
+}
+async function showColorDialog(kind){
   pendingLaunchKind=kind;
   el('#color-options').innerHTML=terminalColors.map((color,index)=>`<label class="color-choice"><input type="radio" name="terminal-color" value="${color.id}"${index===0?' checked':''}><span class="color-swatch" style="background:${color.hex}"></span><span>${color.label}</span></label>`).join('');
+  const choice=el('#launch-choice'), isDelivery=kind==='codex_delivery';
+  choice.hidden=!isDelivery; launchChoiceReady=false; launchChoiceDamaged=false; launchChoiceSettings=null;
+  el('#color-dialog-title').textContent=isDelivery?'Start a Delivery Agent':'Choose terminal color';
+  el('#color-cancel').textContent=isDelivery?'Cancel — use Settings and black':'Cancel — use black';
+  // A paused project disables EVERY button and rewrites their tooltips (render); a reopened dialog after Resume
+  // must give all three of its buttons back, Close included (Codex batch review F2, 2026-10-17: Close stayed disabled).
+  for(const [id,title] of [['#color-close','Close this dialog; nothing is launched.'],['#color-cancel',isDelivery?"Launch with Settings' provider, model and effort, standard black.":'Launch with the standard black background.'],['#color-launch','Launch with the choices above.']]){const b=el(id);b.disabled=false;b.title=title;}
+  const link=el('#launch-settings-link'); link.href=settingsPageHref()||'#'; link.hidden=!isDelivery||!settingsPageHref();
   el('#color-dialog').showModal();
+  if(!isDelivery)return;
+  const token=++launchChoiceToken;
+  for(const node of [el('#launch-provider'),el('#launch-model-select'),el('#launch-model'),el('#launch-effort')])node.disabled=true;
+  el('#launch-choice-origin').textContent='Loading Settings…'; el('#launch-choice-note').textContent=''; el('#launch-choice-note').classList.remove('bad');
+  el('#color-launch').disabled=true;
+  try{
+    const response=await fetch(apiPath('/api/settings'),{cache:'no-store'}); const settings=await response.json();
+    if(token!==launchChoiceToken)return;           // the owner closed and reopened: this answer is stale
+    if(!response.ok)throw Error(settings.error||'Settings could not be read');
+    if(settings.error){
+      launchChoiceDamaged=true;
+      el('#launch-choice-origin').textContent='Your saved Settings cannot be read, so there is nothing to launch with: '+settings.error;
+      el('#launch-choice-note').textContent='Open Settings to repair them, then come back. Close launches nothing.'; el('#launch-choice-note').classList.add('bad');
+      el('#color-cancel').disabled=true; el('#color-launch').disabled=true; return;
+    }
+    launchChoiceSettings=settings; launchChoiceReady=true;
+    el('#launch-choice-origin').textContent='Pre-filled from Settings. Your choice here is for this launch only; Settings is not changed.';
+    fillLaunchChoice(settings);
+  }catch(error){
+    if(token!==launchChoiceToken)return;
+    el('#launch-choice-origin').textContent='Could not read Settings: '+error.message;
+    el('#launch-choice-note').textContent='Launch is disabled until Settings can be read; Cancel still launches with Settings\' saved values.'; el('#launch-choice-note').classList.add('bad');
+    el('#color-launch').disabled=true;
+  }
+}
+function launchChoiceFromDialog(){
+  if(!launchChoiceReady)return null;
+  const select=el('#launch-model-select'); const model=select.value==='__custom__'?el('#launch-model').value.trim():select.value;
+  return {provider:el('#launch-provider').value,model,effort:el('#launch-effort').value};
 }
 
-async function start(kind,color='black'){
-  try{const started=await call('/api/sessions',{kind,color});const providerName=String(started&&started.provider||(kind==='codex_delivery'?'codex':'claude')).toUpperCase(), role=kind==='claude_cto'?'CTO':`${providerName} ${kind==='codex_delivery'?'Delivery Agent':'Independent Reviewer'}`;const shade=terminalColors.find(item=>item.id===color)?.label||'standard black';
+async function start(kind,color='black',launchSettings=null){
+  try{const body={kind,color}; if(launchSettings)body.launch_settings=launchSettings;
+    const started=await call('/api/sessions',body); const session=started?.session||{};
+    // The notice is built from what the server STORED (the effective provider, model and effort), never from what the page
+    // guessed: until 2026-10-17 it read a field the response does not carry and announced the role's default provider.
+    const providerName=String(session.provider||(kind==='codex_delivery'?'codex':'claude')).toUpperCase(), role=kind==='claude_cto'?'CTO':`${providerName} ${kind==='codex_delivery'?'Delivery Agent':'Independent Reviewer'}`;const shade=terminalColors.find(item=>item.id===color)?.label||'standard black';
+    const effortLabel=session.effort==='xhigh'?'extra high':(session.effort||''); const withModel=session.model?` with ${session.model}${effortLabel?` at ${effortLabel} effort`:''}`:'';
+    const adjust=session.launch_choice_note?` ${session.launch_choice_note}.`:'';
+    const memory=kind==='codex_delivery'&&session.cli_session_id&&session.cli_session_provider&&session.cli_session_provider!==session.provider
+      ?` Fresh conversation: the previous Delivery conversation was with ${providerShort[session.cli_session_provider]||session.cli_session_provider}; pending messages are carried over and it will read the task record.`
+      :(kind==='codex_delivery'&&session.cli_session_id?' Continues the previous Delivery conversation if the CLI still has it.':'');
     // On macOS the window is already in front of the owner and there is nothing
     // to say. On Linux the session runs in tmux with no window at all, so the
     // exact attach command is the ONLY way they can reach their agent - the
     // launch would otherwise look like it did nothing.
     el('#notice').textContent = started && started.attach_hint
-      ? `${role} started in a ${shade} session. Attach to watch it:  ${started.attach_hint}`
-      : `${role} launch requested with ${shade} terminal.`;
+      ? `${role} started${withModel} in a ${shade} session.${adjust}${memory} Attach to watch it:  ${started.attach_hint}`
+      : `${role} launch requested${withModel} with ${shade} terminal.${adjust}${memory}`;
     await refresh();}
   catch(error){el('#notice').textContent='Could not launch session: '+error.message;await refresh();}
 }
@@ -1570,8 +1690,9 @@ async function loadHistory(force=false){
 }
 
 el('#status-dialog-close').onclick=()=>el('#status-dialog').close();
-el('#color-cancel').onclick=()=>{el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind)start(kind,'black');};
-el('#color-form').onsubmit=event=>{event.preventDefault();const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;pendingLaunchKind='';el('#color-dialog').close();if(kind)start(kind,selected);};
+el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';};
+el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind)start(kind,'black');};
+el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind)start(kind,selected,choice);};
 el('#decision-cancel').onclick=()=>el('#decision-dialog').close();
 el('#decision-form').onsubmit=submitRejection;
 el('#push-cancel').onclick=()=>el('#push-dialog').close();
@@ -2787,12 +2908,13 @@ def dispatch_approved_findings(
     if int(managed.get("active_counts", {}).get("codex_delivery", 0)) >= int(managed.get("limits", {}).get("codex_delivery", 2)):
         return {"status": "waiting_for_delivery_capacity"}
     try:
-        settings_override = (
-            global_settings.load(settings_home)["agent_settings"]
-            if settings_home else None
-        )
+        try:
+            settings_override = read_agent_settings_for_launch(settings_home)
+        except ValueError as error:
+            return {"status": "settings_unreadable", "reason": str(error)}
         session = control.create(
             root, "codex_delivery", settings_override=settings_override,
+            availability=_delivery_availability(settings_home),
         )
         surface = launch_terminal(root, session, manager_home=settings_home)
         started = {"status": "terminal_started", "session_id": session["id"]}
@@ -2973,7 +3095,11 @@ def settings_payload(root: Path, settings_home: Path | None = None) -> dict:
     value["efforts"] = control.EFFORTS
     value["provider_efforts"] = control.PROVIDER_EFFORTS
     value["provider_models"] = available_provider_models()
+    # The launch dialog shows EXACTLY the Settings page's static catalog (cached ids are unverified suggestions).
+    value["provider_models_catalog"] = control.PROVIDER_MODELS
     value["provider_model_descriptions"] = control.PROVIDER_MODEL_DESCRIPTIONS
+    if global_value and global_value.get("error"):
+        value["error"] = global_value["error"]
     if settings_home:
         value["provider_availability"] = {name: cli_capabilities.provider_availability(settings_home, name) for name in control.PROVIDERS}
     if global_value:
@@ -3047,6 +3173,45 @@ def test_provider_connection(root: Path, provider: str, effort: str, model: str 
         "message": f"{provider.title()} is installed and accepts the launch flags for model {model} with effort {effort}. No task was launched or billed.",
     }
 
+
+
+def _delivery_availability(settings_home: Path | None) -> "Callable[[str], dict[str, Any]] | None":
+    """`provider_availability` bound to the manager home: the gate every NEW Delivery session passes (only Gemini can fail it)."""
+    if not settings_home:
+        return None
+    return lambda provider: cli_capabilities.provider_availability(settings_home, provider)
+
+
+def read_agent_settings_for_launch(settings_home: Path | None) -> dict[str, dict[str, str]] | None:
+    """Settings for a NEW session, read without writing; unreadable Settings refuse the launch instead of launching defaults.
+
+    Before 2026-10-17 every launch path took `load(...)["agent_settings"]`, dropped the `error` an unreadable file
+    reports, and `create` then launched the role defaults silently — while the dialog would refuse the same file.
+    """
+    if not settings_home:
+        return None
+    value = global_settings.load(settings_home)
+    if value.get("error"):
+        raise ValueError(f"{value['error']}. Open Settings to repair them; nothing was launched.")
+    return value["agent_settings"]
+
+
+def create_session_request(root: Path, data: dict[str, Any], settings_home: Path | None) -> dict[str, Any]:
+    """The one place both `/api/sessions` handlers (the viewer's and the project worker's) create a session.
+
+    Reads Settings read-only, refuses unreadable Settings, accepts the Delivery dialog's `launch_settings`
+    (provider/model/effort for this launch only) and lets `control.create` validate it the way Settings is validated.
+    Every refusal is a `ValueError` the handlers answer with 400 and the plain sentence; no session exists then.
+    """
+    settings_override = read_agent_settings_for_launch(settings_home)
+    launch_choice = data.get("launch_settings")
+    if launch_choice is not None and not isinstance(launch_choice, dict):
+        raise ValueError("the launch choice must be an object with provider, model and effort")
+    return control.create(
+        root, str(data.get("kind", "")), str(data.get("task", "")), str(data.get("color", "black") or "black"),
+        settings_override=settings_override, launch_choice=launch_choice,
+        availability=_delivery_availability(settings_home),
+    )
 
 
 def _attach_hint(surface: Any) -> str:
@@ -3539,14 +3704,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     result = agent_view.open_view(root, session_id) if suffix == "/view" else agent_view.send_input(root, session_id, data.get("text"))
                     self.send_json(200, result); return
                 if path == "/api/sessions":
-                    settings_override = (
-                        global_settings.load(settings_home)["agent_settings"]
-                        if settings_home else None
-                    )
-                    session = control.create(
-                        root, data.get("kind", ""), data.get("task", ""),
-                        data.get("color", "black"), settings_override=settings_override,
-                    )
+                    session = create_session_request(root, data, settings_home)
                     try:
                         surface = launch_terminal(root, session, manager_home=settings_home)
                     except Exception as error:

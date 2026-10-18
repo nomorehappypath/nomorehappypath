@@ -63,16 +63,47 @@ TUI_POLICY_PARAMS = {
 POLICY_CONFIG_PREFIXES = ("sandbox", "approval", "permissions", "default_permissions")
 
 
-def pin_policy(message: dict[str, Any]) -> dict[str, Any]:
-    """The TUI's request with every permission-bearing parameter removed."""
-    removed = TUI_POLICY_PARAMS.get(str(message.get("method")))
+# The session's chosen model and reasoning effort are applied to the thread the TUI starts or RESUMES and to every
+# turn (the TUI's and the harness's). A resumed thread keeps the configuration stored in its rollout, and the remote
+# TUI may carry no --model/-c of its own (see above), so the app-server's `-c model=` default never reached a continued
+# conversation: the owner chose Terra/Low in the launch dialog and the first turn ran Luna/Medium (Codex batch review
+# F3, 2026-10-17, measured on macOS and Linux from the rollout's turn_context). ThreadStart/ResumeParams take `model` and
+# `config`; TurnStartParams take `model` and `effort` (codex app-server protocol v2 schema, codex-cli 0.160–0.163).
+TUI_LAUNCH_PARAMS = ("thread/start", "thread/resume", "turn/start")
+
+
+def with_launch_settings(params: dict[str, Any], method: str, launch: dict[str, Any] | None) -> dict[str, Any]:
+    """`params` with the session's model and effort applied for `method`; unchanged when no launch settings are known."""
+    if not launch or method not in TUI_LAUNCH_PARAMS:
+        return params
+    model, effort = str(launch.get("model") or ""), str(launch.get("effort") or "")
+    params = dict(params)
+    if model:
+        params["model"] = model
+    if method == "turn/start":
+        if effort:
+            params["effort"] = effort
+    elif effort:
+        config = params.get("config") if isinstance(params.get("config"), dict) else {}
+        params["config"] = {**config, "model_reasoning_effort": effort}
+    return params
+
+
+def pin_policy(message: dict[str, Any], launch: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The TUI's request with every permission-bearing parameter removed, and the session's model/effort applied."""
+    method = str(message.get("method"))
+    removed = TUI_POLICY_PARAMS.get(method)
     params = message.get("params")
-    if not removed or not isinstance(params, dict):
+    if not isinstance(params, dict):
+        if method in TUI_LAUNCH_PARAMS and launch and params is None:
+            return {**message, "params": with_launch_settings({}, method, launch)}
         return message
-    params = {key: value for key, value in params.items() if key not in removed}
-    if isinstance(params.get("config"), dict):
-        params["config"] = {key: value for key, value in params["config"].items()
-                            if not str(key).startswith(POLICY_CONFIG_PREFIXES)}
+    if removed:
+        params = {key: value for key, value in params.items() if key not in removed}
+        if isinstance(params.get("config"), dict):
+            params["config"] = {key: value for key, value in params["config"].items()
+                                if not str(key).startswith(POLICY_CONFIG_PREFIXES)}
+    params = with_launch_settings(params, method, launch)
     return {**message, "params": params}
 
 
@@ -265,9 +296,11 @@ class CodexMultiplexer:
         cwd: str | None = None, admit: Callable[[int], bool], peer_pid: Callable[[socket.socket], int],
         on_event: Callable[[str, str], None] = lambda kind, detail: None,
         expected_policy: dict[str, Any] | None = None,
+        launch_settings: dict[str, Any] | None = None,
     ) -> None:
         self.socket_path = socket_path
         self.expected_policy = expected_policy
+        self.launch_settings = dict(launch_settings) if launch_settings else None   # {"model", "effort"} of this session
         self.app_server_argv = list(app_server_argv)
         self.environment = environment
         self.cwd = cwd
@@ -416,7 +449,7 @@ class CodexMultiplexer:
                 with self.lock:
                     self.tui_requests[message["id"]] = str(message["method"])
             if isinstance(message, dict) and "method" in message:
-                message = pin_policy(message)
+                message = pin_policy(message, self.launch_settings)
             try:
                 self._write_server(message)
             except OSError:
@@ -602,7 +635,8 @@ class CodexMultiplexer:
                     self.steered[client_id] = turn
         else:
             try:
-                response = self.request("turn/start", {"threadId": thread, "clientUserMessageId": client_id, "input": message},
+                response = self.request("turn/start", with_launch_settings(
+                    {"threadId": thread, "clientUserMessageId": client_id, "input": message}, "turn/start", self.launch_settings),
                                         response_timeout)
             except (TimeoutError, OSError):
                 return "unconfirmed"
