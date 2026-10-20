@@ -261,6 +261,19 @@ interchangeable labor — is the point; the code is how we prove it works.
 
 ## FAQ
 
+**Can it build and test a Windows program?**
+Build on this machine, test on one you name. Set up a throwaway Windows VM
+with an ssh server, put its private key and its host key (`ssh-keyscan`) in
+the project's data folder shown in Settings, then tell Delivery: "build
+here, test on `ssh user@address`". The agents add a `make test` target that
+copies the code there and runs the tests over ssh; the board certifies that
+output, and the reviewer, from the other AI company, reruns it on the same
+VM in its own folder. Reset the VM yourself when you want it clean, then
+tell Delivery to raise the generation number in the test command and ask
+for a new review, so the checks run again on the clean VM. Keep the VM away from your files and your other
+machines: anything the agents write can run there. The harness itself does
+not run on Windows, and it has not yet been walked through a Windows task.
+
 **Is this for real, serious products, or for toys?**
 Serious products - that is the design center. This platform is for
 building software that might carry revenue, clients, and your name -

@@ -350,6 +350,37 @@ review.
   project's own tests, or a headless driver you add that needs nothing from the
   board. Reading served markup, template source, or a build log is not seeing
   the page; an empty or error render is a FAIL row, not a pass.
+  **A test machine the owner names** (`ssh user@address`, for example a
+  Windows VM for a Windows program). First establish the build route: build
+  here when the toolchain allows, otherwise build there too, and say which;
+  name the exact missing prerequisite if neither works. Then a `make test`
+  target, declared as `TEST_MACHINE_GEN=<n> make test` (when the owner raises
+  `n` after resetting the machine, update every command that touches it and
+  request a new review; nothing already certified reruns by itself), that:
+  copies the candidate into a fresh folder there named by a timestamp and
+  the source tree's own hash (computed by the target, not by git: the
+  reviewer's checkout has no `.git`), builds if needed, runs the tests under
+  a remote-side time limit that stops what it started, prints that hash and
+  one count line the board reads (`Ran <n> tests`, from the runner's own
+  summary, failures kept), and fails if any step fails. Non-interactive ssh
+  with the owner's files from the project's data folder (its absolute path
+  from Settings; the data folder is excluded from the upload and the hash,
+  it may sit inside the project): never copied:
+  `-i <data>/<key> -o IdentitiesOnly=yes -o BatchMode=yes -o
+  UserKnownHostsFile=<data>/known_hosts -o StrictHostKeyChecking=yes`. The
+  board certifies the returned output; it does not see the machine. The
+  Reviewer runs its own ledger the same way. A web page served only there is
+  captured through a tunnel started from your task folder for this run's
+  server (`ssh -L`), then `screen-check` on the loopback port, both stopped
+  afterwards; the Reviewer captures its own. Say in your summary when a
+  result could depend on what an earlier run left there, and when a remote
+  cleanup could not be confirmed. Each certified command, copying included,
+  must finish within the board's five minutes: install dependencies on the
+  machine beforehand and split a long battery. Record the machine, the
+  generation and this setup in the task's contract notes so the CTO and a
+  resumed session read them. If the machine does not answer or refuses
+  the key, diagnose as for any blocker and name the exact owner-controlled
+  action (address, key, host key, account); the CTO decides whose it is.
   The rendered page itself is captured independently, before you submit (and
   the Reviewer before it attaches its ledger): run the board command
   `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"`. It
