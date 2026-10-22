@@ -38,12 +38,12 @@ class ClaudeAuthRequired(RuntimeError):
 
 # Reasons that are the sign-in itself (a new token fixes them) and reasons that are not (it would only waste the owner's time).
 NOT_A_TOKEN_PROBLEM = {
-    "confinement": "Claude could not be started in the agents' protected sandbox, so the sign-in could not be checked. Your token was not rejected. Install or repair the sandbox (on Linux: apt install bubblewrap), then retry.",
-    "cli": "The Claude program could not be run or did not answer the sign-in check. Your token was not rejected. Check that Claude is installed and up to date (claude --version), then retry.",
-    "quota": "Your Claude account is over its usage limit or out of credit, or Claude is overloaded. Your token was not rejected. Wait or top up the plan on the Claude side, then retry.",
-    "unavailable": "Claude could not be reached to check the sign-in (connection, timeout or a temporary Claude problem). Your token was not rejected. Check your connection, then retry; no agent was started.",
+    "confinement": "Claude could not be started in the protected area where agents work, so your sign-in could not be checked. Your sign-in was not rejected. On Linux, install the missing safety tool (apt install bubblewrap), then retry the agent.",
+    "cli": "The Claude program did not run or did not answer the sign-in check. Your sign-in was not rejected. Check that Claude is installed and up to date (type claude --version in Terminal), then retry the agent.",
+    "quota": "Your Claude account has reached its usage limit or is out of credit, or Claude is overloaded. Your sign-in was not rejected. Wait, or add credit on Claude's side, then retry the agent.",
+    "unavailable": "Claude could not be reached to check the sign-in (connection, timeout or a temporary Claude problem). Your sign-in was not rejected. Check your internet connection, then retry; no agent was started.",
     "consent": "",
-    "model": "The model used only for the sign-in check is not available to your account. Your token was not rejected. Set HARNESS_CLAUDE_AUTH_MODEL to a model your account can use (for example sonnet), restart the harness when your project is safely paused, then retry.",
+    "model": "The sign-in check uses a model your account cannot use. Your sign-in was not rejected. Ask the person who set up this app to choose an available model, then pause the project, restart the app and retry. (Technical detail: set HARNESS_CLAUDE_AUTH_MODEL, for example to sonnet.)",
 }
 
 
@@ -61,14 +61,14 @@ def _require_bypass_consent() -> None:
 
 
 def action(reason="missing", detail="") -> dict:
-    why = {"missing": "Claude needs a dedicated setup-token before this agent can start.",
-           "rejected": "Claude rejected the setup-token. Generate a replacement before restarting this agent.",
+    why = {"missing": "Claude needs its own sign-in token (a setup-token) before this agent can start.",
+           "rejected": "Claude rejected the setup-token (its sign-in token). Generate a replacement before restarting this agent.",
            **NOT_A_TOKEN_PROBLEM}[reason]
     if reason == "consent":
         return {"reason": "consent", "title": "Claude agents are waiting for YOU", "why": detail or "Claude Code's one-time bypass warning has not been accepted.",
                 "instructions": "No new token is needed. After you accepted it, retry the agent from Mission Control."}
     if reason in NOT_A_TOKEN_PROBLEM:
-        return {"title": "Claude agents cannot start", "why": why, "instructions": "No new token is needed. After the fix above, retry the agent from Mission Control."}
+        return {"title": "Claude agents cannot start", "why": why, "instructions": "You do not need a new token. After the fix above, press retry for the agent in Mission Control."}
     instructions = platform_support.claude_credentials().instructions()
     return {"title": "Set up Claude agent authentication", "why": why, "instructions": instructions}
 

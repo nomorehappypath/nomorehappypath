@@ -187,12 +187,20 @@ def copy_owner_files(project: Path, source: Path, names: list[str]) -> list[str]
     return copied
 
 
+def program_only(release: dict[str, Any]) -> bool:
+    """A release whose task declared a program build (and no web app): it is downloaded, never previewed."""
+    build = release.get("build")
+    return isinstance(build, dict) and bool(build) and not build.get("with_web_app")
+
+
 def request_view(root: Any, task: str) -> dict[str, Any]:
     """The owner clicked View app: open what runs, or start the candidate now."""
     state = board.snapshot(root)
     release = (state.get("releases") or {}).get(str(task or "")) or {}
     if release.get("status") != "VISUAL_TEST_REQUIRED" or (state.get("release_decisions") or {}).get(task):
         raise ValueError("this release is no longer waiting for your test")
+    if program_only(release):
+        raise ValueError("this release is a program built on a test machine: there is nothing to open in the browser. Use Get the build on the card.")
     preview = release.get("preview") or {}
     if preview.get("status") == "ready" and preview.get("url"):
         return {"status": "ready", "url": preview["url"]}
@@ -412,6 +420,16 @@ class ReleasePreviewSupervisor:
         ).removeprefix("refs/heads/")
         command = str(settings.get("command") or "").strip()
         if not head_commit:
+            return
+        if program_only(release):
+            # Owner 2026-10-21: a program built on a test machine has nothing to start here, even if a command is saved.
+            preview = self.previews.pop(task, None)
+            if preview is not None:
+                preview.stop()
+                shutil.rmtree(preview.directory, ignore_errors=True)
+            if recorded.get("status") != "skipped":
+                self._record(task, {"status": "skipped", "head_commit": head_commit, "workspace": workspace, "branch": branch,
+                                    "skipped_at": datetime.now(timezone.utc).isoformat()})
             return
         if not command and recorded.get("status") == "skipped":
             # The owner said there is nothing to run for this release; the

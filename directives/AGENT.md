@@ -54,6 +54,8 @@ to pin as an owner-action card, and continue with the rest of the work. A
 config folder isolated for hermeticity (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
 pointed at a temporary folder) stays empty of logins.
 
+Everything the owner reads (an owner card, a clarification question, a status note, release and acceptance text) is written for a non-technical person: say what happened, what it means for them and what to do, in that order, in plain words, with at most one question per card. Leave out words they would have to look up (hold, ledger, candidate, certified, repair package, stale, commit, merge); the technical detail belongs in the evidence, not in the card.
+
 **What the app gives you, and what it does not (owner, 2026-10-07 and 2026-10-08).** The Reviewer's commands carry the
 token the app already holds, as `HARNESS_REVIEWER_CLAUDE_TOKEN`: that is the sanctioned route for the Reviewer, and it
 needs nothing from the owner (the Reviewer workflow below says how to use it). Nothing gives any agent the owner's Codex
@@ -350,37 +352,169 @@ review.
   project's own tests, or a headless driver you add that needs nothing from the
   board. Reading served markup, template source, or a build log is not seeing
   the page; an empty or error render is a FAIL row, not a pass.
-  **A test machine the owner names** (`ssh user@address`, for example a
-  Windows VM for a Windows program). First establish the build route: build
-  here when the toolchain allows, otherwise build there too, and say which;
-  name the exact missing prerequisite if neither works. Then a `make test`
-  target, declared as `TEST_MACHINE_GEN=<n> make test` (when the owner raises
-  `n` after resetting the machine, update every command that touches it and
-  request a new review; nothing already certified reruns by itself), that:
+  **A test machine the owner names** (for example a Windows VM for a Windows
+  program). First establish the build route: build here when the toolchain
+  allows, otherwise build there too, and say which; name the exact missing
+  prerequisite if neither works. Before the first test, tell the owner what to
+  build the machine with (Windows version with OpenSSH Server, disk, memory,
+  processors) so the owner sizes it once; the tools are yours to install.
+  **The owner does not paste, install or set up anything by hand, and a request
+  for the owner is never a message in your terminal.** The owner makes the VM,
+  enters its address, account and password once in Mission Control (the Test
+  machine card), and destroys the VM at the end. Mission Control, not you,
+  pins the machine's host key, makes the project's key in the project's data
+  folder, installs it and checks it. When you need the machine and it is not
+  usable, run `need-test-machine --agent <you> --reason "<what you need it
+  for>"` (Delivery and the Reviewer can; no CTO is needed): the card appears in
+  Mission Control by itself and clears itself when the owner connects the
+  machine. Then carry on with everything that does not need the machine. Start
+  every stretch of machine work with the board command `machine-status
+  --agent <you>`: it prints the connection, the machine revision, whether the
+  owner's password is required again (it is after every pause, close, restart
+  or key failure, and after a resume unless the owner connected during that
+  pause) and the current rule; while it says the machine is not
+  usable, a certified command or capture that uses the machine is refused, so
+  do not retry it, wait on the card. **You install the tools yourself** over
+  ssh with the project's key, in short non-interactive steps that each fit the
+  five-minute limit, under the machine lock below: run `machine-baseline
+  --agent <you> --begin` BEFORE any install, upgrade or reboot (it makes every
+  earlier machine result stale and refuses certification until you finish) and
+  `machine-baseline --agent <you> --done --note "<tools and versions now found>"`
+  after it (Delivery alone does the one step allowed before the lock, installing
+  Python 3 on a macOS or Linux machine that lacks it, as that baseline; the
+  Reviewer does no machine work until `--done`); a failed installer leaves the
+  baseline open, which is recovered by provisioning again. Where the account lacks a privilege an installer needs
+  (a standard Windows account), name the exact missing privilege and what the
+  owner can change in the VM; that is the only thing you ask the owner for.
+  After the owner reconnects, run `machine-status`, then resubmit the review
+  that used the old connection under the current revision (Delivery resubmits
+  and a fresh review request is made; the Reviewer's rerun on the old request
+  cannot clear its stale records); an old machine-dependent result is never
+  reused, and a reused certified result of an unchanged command is only as fresh
+  as the machine generation. An
+  agent's own ssh with the key is outside what the board can check: use the
+  test form below for every certified command, and the Reviewer rejects a test
+  that reaches the machine without it. When you or the owner report a change
+  the connection cannot detect (a restored snapshot, a changed setting), raise
+  the generation. **You keep it fit for testing**: leftovers from your runs must never change a result. Then a
+  `make test` target, declared as `TEST_MACHINE_GEN=<n> make test` (the form
+  makes the board stamp the result with the machine's revision, authorization and tools
+  revision and refuse it when stale; when the machine changed in a way the
+  connection cannot detect (a restored snapshot, installed tools, accounts,
+  settings, addresses), you raise `n`, update every command that touches it and
+  request a new review; nothing already certified
+  reruns by itself), that first takes the machine's lock, then cleans and
+  checks. The lock (version 2) is a folder named like the project's older lock
+  folder with `-v2` appended, holding an exclusive lock file and `holder.txt`.
+  The lock script opens the lock file exclusively and not inheritably for its
+  whole run (Windows: `[System.IO.File]::Open(<path>,'OpenOrCreate',
+  'ReadWrite','None')`; macOS and Linux: Python `fcntl.flock` on a descriptor
+  from `os.open`, children started with Python `subprocess`, never `os.fork`
+  without exec), then publishes `holder.txt` (`v2 <agent id> <role> pid=<the
+  lock script's pid> start=<start time> since=<time>`) by writing a temporary
+  file and renaming it. The operating system releases the lock the instant the
+  script ends or dies, so a dead holder, your own earlier run included, never
+  blocks anyone and a live holder is never taken over. A run that finds it held
+  retries only that contention, for a bounded time (well inside the five
+  minutes), then fails saying who holds it from `holder.txt`; any other error
+  fails at once with its real cause. The lock file and its folder are never
+  deleted, renamed or replaced by cleanup; age alone never frees a lock, and an
+  agent id is never proof of anything. If the project's OLD lock folder still
+  exists (any content), a script that cannot be proven stopped may be running:
+  fail naming it; the CTO asks the owner once to approve a restart of the
+  machine, and on approval Delivery reads the machine's boot identity (Windows
+  `(Get-CimInstance Win32_OperatingSystem).LastBootUpTime`; Linux
+  `cat /proc/sys/kernel/random/boot_id` or `uptime -s`; macOS
+  `sysctl -n kern.boottime`, which the other two do not support there), restarts it over ssh,
+  reconnects, requires a CHANGED boot identity (a denied restart, unreachable
+  ssh or changed host identity fails and names the cause for the CTO), removes
+  the old folder and takes the version 2 lock. A script from before this
+  revision is updated to this lock by Delivery after the owner's reconnect (it
+  makes every earlier machine result stale) and the work is resubmitted. The
+  remote time limit covers copying and
+  setup too, not only the tests. Cleaning stops only
+  the processes your earlier runs started and deletes only the run folders of
+  this project, both listed in a run record kept on the machine (so it
+  survives a lost ssh session or a resumed agent; processes recorded by id
+  and start time, never found by name), and it removes or reverts anything
+  persistent a run created (services, scheduled tasks, registry entries,
+  local accounts), recording the owner and the prior state of each and
+  removing or restoring only what the run created, never something that was
+  there before; a leftover it cannot remove fails the run and names it. It then checks the prerequisites against the baseline you wrote
+  in the contract notes and that the ports and files the test itself will use
+  are free, and prints one `clean:` line saying so; if it cannot reach that
+  state (something not yours is in the way, or ownership is unclear) it fails
+  and names it for the CTO, and a test is never run on a machine you could
+  not clean. It then
   copies the candidate into a fresh folder there named by a timestamp and
   the source tree's own hash (computed by the target, not by git: the
   reviewer's checkout has no `.git`), builds if needed, runs the tests under
   a remote-side time limit that stops what it started, prints that hash and
   one count line the board reads (`Ran <n> tests`, from the runner's own
-  summary, failures kept), and fails if any step fails. Non-interactive ssh
-  with the owner's files from the project's data folder (its absolute path
-  from Settings; the data folder is excluded from the upload and the hash,
-  it may sit inside the project): never copied:
-  `-i <data>/<key> -o IdentitiesOnly=yes -o BatchMode=yes -o
-  UserKnownHostsFile=<data>/known_hosts -o StrictHostKeyChecking=yes`. The
-  board certifies the returned output; it does not see the machine. The
+  summary, failures kept), cleans up again what this run started, releases the lock, and fails
+  if any step fails: it keeps the native test command's own status, runs the
+  cleanup, and exits non-zero when the tests, the setup or the cleanup failed
+  (tests passing while the cleanup fails is a failure). Non-interactive ssh
+  with the files Mission Control made in the project's data folder (their
+  absolute paths are `key_path` and `known_hosts_path` in `machine-status`; the
+  data folder is excluded from the upload and the hash, it may sit inside the
+  project): never copied:
+  `-F /dev/null -i <key_path> -o IdentitiesOnly=yes -o BatchMode=yes -o
+  UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=yes -o
+  ControlMaster=no -o ControlPath=none -o ForwardAgent=no`, on every ssh and
+  scp call (copying, tests, cleanup, captures). **A Windows machine** (found by
+  `machine-status`): copy files with `scp` and never embed source in the ssh
+  command (the OpenSSH exec channel refuses a long command); run scripts with
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <script>` (a fresh
+  Windows refuses `.ps1` files); read a native command's result with
+  `& <cmd>; $LASTEXITCODE`, never `Start-Process`; a native command that writes
+  to stderr is not an error (`2>&1`, and `$ErrorActionPreference = 'Continue'`
+  only around that command, restored after it; setup and cleanup failures still
+  fail the run); a local user name is at most 20 characters and
+  `Remove-LocalUser` throws on a user that is not there; the default ssh shell
+  is `cmd.exe`, so quote for it; the script prints the runner's own `Ran <n>
+  tests` summary line (the board reads it). The board
+  certifies the returned output; it does not see the machine. The
   Reviewer runs its own ledger the same way. A web page served only there is
   captured through a tunnel started from your task folder for this run's
-  server (`ssh -L`), then `screen-check` on the loopback port, both stopped
-  afterwards; the Reviewer captures its own. Say in your summary when a
-  result could depend on what an earlier run left there, and when a remote
-  cleanup could not be confirmed. Each certified command, copying included,
+  server (`ssh -L 127.0.0.1:<port>:...`), then `screen-check --machine` (or `screen-script --machine`) on the loopback port (the flag stamps the capture with the machine's identity; a tunnelled capture without it cannot be tied to the machine and the Reviewer rejects it), both stopped
+  afterwards, the server and the tunnel kept under the same machine lock until
+  the capture finishes; the Reviewer captures its own. Say in your summary that a
+  tunnelled capture shows what that machine served, not which folder or
+  binary served it, and when a remote cleanup could not be confirmed. Each certified command, copying included,
   must finish within the board's five minutes: install dependencies on the
-  machine beforehand and split a long battery. Record the machine, the
+  machine first (above) and split a long battery; the final full-suite command
+  must fit too, and if it cannot, say so before building, not at acceptance. Record the machine, the
   generation and this setup in the task's contract notes so the CTO and a
   resumed session read them. If the machine does not answer or refuses
-  the key, diagnose as for any blocker and name the exact owner-controlled
-  action (address, key, host key, account); the CTO decides whose it is.
+  the key, run `need-test-machine` (the card names the observed cause: machine off
+  or unreachable, wrong address, ssh server not answering, host identity changed, wrong
+  password) and carry on with the rest; do not ask the owner to paste or run anything.
+  **A program the owner downloads** (the task delivers a program built on the
+  machine, not a web app or a document): declare it before the final-acceptance
+  review with `declare-build --output <file name> [--output ...] --platform
+  "<OS and processor>" --requirements "<a privilege or prerequisite, or none>"
+  --step "<step>" [--step ...] --expect "<what the owner sees>"` (add
+  `--with-web-app` only when the task also delivers a web app; after a failed
+  review declare again, after a PASS the CTO reopens the task). The certified
+  unit-test command copies each declared output to
+  `harness-builds/<task>/<sha256>/<name>` under the ssh account's home (a
+  regular file in regular folders, never a link and never inside a run folder
+  that cleanup deletes) and prints one line per output into its own output:
+  `build: <name> sha256=<64 hex> size=<bytes>`. The board reads those lines
+  only from that certified run and collects exactly those files after the final
+  PASS (the coordinator does it; `collect-build --task <task>` does too). Never
+  delete anything under `harness-builds`; it is left for the machine's owner.
+  After copying, run each output from its retained location the way the first
+  step tells the owner to, and print `smoke: <name> ok` (or `smoke: <name>
+  unverified: <why>` when the declared target is not this machine); the card
+  tells the owner which outputs were launched. If a retained file was lost
+  after the test, submit a changed clean candidate (a real committed change,
+  such as a build number) with a new final review. The steps are the owner's:
+  where the downloaded file lands, `chmod +x` on macOS and Linux, the supported
+  architecture, any privilege it needs, the exact command, and what the owner
+  should see; the card adds the unsigned-program warning itself. The Reviewer
+  checks the `build:` lines, the declaration and the steps against the artifact.
   The rendered page itself is captured independently, before you submit (and
   the Reviewer before it attaches its ledger): run the board command
   `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"`. It
@@ -779,12 +913,31 @@ Reviewer may use only the mechanical command prefill and must author independent
 scenario meaning. In both cases rerun every retained command against the new
 candidate, run the complete suite for final acceptance, and form a fresh
 semantic verdict. This reuse saves authoring time; it never reuses a PASS.
+If you hold the reservation (Delivery's evidence has passed) but cannot attach a
+valid Challenge Ledger because the code moved on, and you already have evidence
+that shows a real failure of the reserved candidate (a failing result line, a
+nonzero exit code or a traceback), record `qa-result` with a failed result and
+that evidence, naming what failed; it needs no ledger. It is only for a real
+product failure: an interruption, a busy machine or owner-machine activity is
+retried, never failed, and a review you can neither perform nor fail you report
+to the CTO.
 Create your own Challenge Ledger in a temporary directory you create (the board
 uploads it; the harness's `.harness` storage is not writable), execute real checks,
 and write PASS/FAIL plus evidence back to the same board item. For the declared
 Challenge Ledger commands, "execute" means call `execute-challenge` exactly
-once, then read the returned certified evidence file before forming your
-semantic verdict. Do not run those commands manually first, and do not ask
+once, then read the certified output it returns (`output_excerpt`; the board
+shows its own folder as `trusted://...`, which is a label and not a path, so
+never pass that to `--evidence`) before forming your semantic verdict. The
+Challenge Ledger is frozen when you attach it, so write every row complete
+before attaching: Result `PASS` and a substantive Observed system response
+that states the response you EXPECT (these entries declare the success
+condition; they are not observations); a row left pending makes
+`execute-challenge` refuse before it runs anything, and the way out is
+`attach-challenge-ledger --correction-reason` and then `execute-challenge
+--retry-reason`. Your observations and judgment of the real output are the
+certified output and the `qa-result` verdict, which may be FAIL; name the row. Record
+the verdict with `qa-result` and leave `--evidence` out to use that certified
+output, or pass the real path of a file you wrote. Do not run those commands manually first, and do not ask
 `qa-result` to run them: an independent-review PASS without a current
 `execute-challenge` certification is refused. You remain responsible for the
 ledger's independent authorship, adversarial scope, output interpretation, and
@@ -817,7 +970,19 @@ that walk a Challenge Ledger row whose command is a hermetic check the board can
 execute and certify (never one that runs `board.py` or `screen-check`), capture
 the rendered result yourself with `screen-check` before you attach the ledger,
 and cite its id in the row. Include at least one command Delivery's ledger does
-not contain. Your verdict says separately what the executed command certified
+not contain. On a project with a test machine, your first machine row is
+Delivery's certified command text (the current one after a generation change),
+so you do not write a transfer, lock or clean protocol of your own; your further
+rows are `test-<name>` targets or arguments of the same `make test` route, and a
+challenge that route cannot exercise is asked of Delivery through the CTO. A
+scenario the machine cannot reproduce (for example an access-denied case where
+every listener is visible to the account) stays a row that checks what the
+machine can show, plus a contract note `not reproducible here: <reason>` and an
+alternative proof (a unit test with a fake, say) that supplements, and never
+replaces, a required real run; an unmet real-execution requirement needs real
+evidence or the owner's recorded waiver, never an `N/A` row. Nobody creates
+accounts, services, scheduled tasks or registry entries on the owner's machine
+to force a scenario. Your verdict says separately what the executed command certified
 and what the independent capture showed. Your verdict summary then begins with one
 line: `TASK DONE: YES — <expected result> vs <what happened>` or
 `TASK DONE: NO — <expected result> vs <what happened>`. PASS always means TASK

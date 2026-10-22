@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any, Iterator, Mapping
 
-from harness import browser_acceptance, child_process, execution_identity, agent_confinement
+from harness import browser_acceptance, child_process, execution_identity, agent_confinement, test_machine
 
 
 _POSITIVE_COUNT_PATTERNS = (
@@ -217,8 +217,10 @@ def _run_observed(
     if not start_token:
         process.kill()
         process.wait(timeout=5)
-        raise ValueError("could not record certified command process identity")
-    pgid = os.getpgid(process.pid)
+        raise ValueError("could not record certified command process identity: the command exited before the harness could read it, or the process table was unreadable. Run the same command again; if it keeps happening, say so in the evidence")
+    # start_new_session=True made the child its own session and group leader, so its group id IS its pid. Asking the OS
+    # (os.getpgid) races a command that has already exited under load and raised ProcessLookupError.
+    pgid = process.pid
     owned: dict[int, dict[str, Any]] = {
         process.pid: {
             "pid": process.pid, "ppid": os.getpid(), "pgid": pgid,
@@ -323,9 +325,12 @@ def run(
         argv = shlex.split(command, posix=True)
     except ValueError as error:
         raise ValueError(f"test command cannot be parsed: {error}") from error
+    # A command that uses the owner's test machine is refused unless the machine is connected and authorized NOW, and its
+    # result is stamped with the machine's revision, epoch and tools revision (checked again before anything is certified).
+    machine = test_machine.stamp_for_command(board_root, argv, who=role)
     identity = execution_identity.command_run_identity(
         candidate, argv, ".", environment_sha256, lockfile_digests,
-        role=role, gate=gate, browser=browser,
+        role=role, gate=gate, browser=browser, machine=machine,
     )
     with _identity_lock(board_root, identity["sha256"]):
         if reuse:
@@ -353,6 +358,7 @@ def run(
                     "execution_identity": identity["sha256"],
                     "execution_record_id": decision["entry"].get("record_id", ""),
                     "process_audit": (decision["entry"].get("metadata") or {}).get("process_audit", {}),
+                    **({"machine": machine} if machine else {}),
                 },
             }
         if decision.get("reason") == "prior_execution_failed" and not retry_reason.strip():
@@ -368,6 +374,10 @@ def run(
             command, execution_root, child_process.with_live_board(environment, board_root), timeout_seconds,
         )
         audit_manifest = _write_process_audit(board_root, process_audit)
+        if machine and not test_machine.stamp_is_current(board_root, machine):
+            raise ValueError(
+                "the test machine changed or needed the owner's password while this command ran, so its result was discarded "
+                "(machine revision or authorization is no longer the one it started under). Run machine-status, then submit again.")
         if process_audit["timed_out"]:
             raise ValueError(browser_acceptance.with_blocked_note(
                 f"internal-QA test command timed out after {timeout_seconds} seconds; partial output was not certified",
@@ -446,6 +456,7 @@ def run(
             "execution_identity": identity["sha256"],
             "execution_record_id": certified["entry"].get("record_id", ""),
             "process_audit": audit_manifest,
+            **({"machine": machine} if machine else {}),
         }
         # ZERO EXECUTED TESTS IS ITS OWN REFUSAL, checked before the exit code.
         # Python 3.12 signals "no tests ran" through exit code 5, so this branch

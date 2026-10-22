@@ -244,6 +244,15 @@ def _assignment_still_current(root: Path, session_id: str, item: dict, transcrip
     return False
 
 
+def _acknowledge(root: Path, session_id: str, instruction_id: str, transcript: Any, how: str = "") -> None:
+    """Acknowledge one controller message; an acknowledgment that cannot be recorded (unknown receipt, another session's) is noted with
+    the instruction id and never ends the terminal: the message has already been handled by the CLI side."""
+    try:
+        control.acknowledge_instruction(root, session_id, instruction_id)
+    except ValueError as error:
+        transcript.note(f"controller message {instruction_id} {how or 'was handled'} but could not be acknowledged: {error}")
+
+
 def _maybe_nudge_limit(root: Path, session_id: str, watch, attempts: dict[str, int], max_attempts: int, transcript, fd: int,
                        typed: bytearray, last_owner_key_at: float, owner_undecided: bool, ready: bool) -> bool:
     """One nudge into a terminal that still shows its provider's usage-limit message after the time it announced.
@@ -530,6 +539,7 @@ def _schedule_terminal_close(stdin_fd: int) -> None:
 # 2026-10-01: after SIGKILL a Claude CLI sat in macOS state "?Es" (stuck in
 # kernel exit) and an unbounded wait() held Stop all forever.
 STOP_KILL_WAIT_SECONDS = 5.0
+POST_EXIT_DRAIN_SECONDS = 0.5
 STUCK_EXIT_CODE = 137
 
 
@@ -646,7 +656,7 @@ def _stage3_tick(root: Path, session_id: str, agent_id: str, stage3: dict, contr
         channel = {"stage3_codex_app_server": "app-server", "stage3_gemini_delivery": "hook"}.get(stage3["stage"], "inbox")
         if result == "delivered":
             stage3["failures"] = 0
-            control.acknowledge_instruction(root, session_id, item["id"])
+            _acknowledge(root, session_id, item["id"], transcript, "was delivered")
             transcript.note(f"controller message {item['id']} delivered ({channel} receipt)")
         elif result == "posted":
             # In the CLI's own queue - never posted or typed again by this
@@ -976,15 +986,29 @@ def run(
         except (OSError, ValueError) as error:
             transcript.note(f"PLUMBING FALLBACK stage3_gemini_delivery could not start the delivery socket: {error}")
             stage3["fallback"] = True
-    child = subprocess.Popen(
-        command,
-        stdin=slave,
-        stdout=slave,
-        stderr=slave,
-        close_fds=True,
-        preexec_fn=_make_controlling_terminal,
-        env=child_environment,
-    )
+    try:
+        child = subprocess.Popen(
+            command,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            close_fds=True,
+            preexec_fn=_make_controlling_terminal,
+            env=child_environment,
+        )
+    except OSError as error:
+        # The reason would otherwise exist only as a traceback in the window, which closes by itself now.
+        reason = f"the agent's program could not be started: {error}"
+        transcript.note(reason)
+        print("HARNESS | " + reason, flush=True)
+        try:
+            board.offline(root, agent_id, reason, transport_ended=True)
+        except ValueError:
+            pass
+        transcript.close()
+        os.close(slave)
+        os.close(master)
+        return 127
     stage3["child_pid"] = child.pid
     os.close(slave)
     original = termios.tcgetattr(stdin_fd)
@@ -1167,7 +1191,7 @@ def run(
                     if item.pop("_stage3_retry", False) and stage3["mux"] is not None and \
                             stage3["mux"].already_delivered(f"harness-{item['id']}", 3.0):
                         # Its receipt was only late: typing it now would send it twice.
-                        control.acknowledge_instruction(root, session_id, item["id"])
+                        _acknowledge(root, session_id, item["id"], transcript, "had already arrived")
                         transcript.note(f"controller message {item['id']} had already arrived; not typed again")
                         continue
                     transcript.note(f"controller message ({item['source']}): {item['text']}")
@@ -1181,7 +1205,22 @@ def run(
                         stage3["mux"].expect_receipt(client)
                     else:
                         _submit_controller_message(master, item["source"], item["text"])
-                        control.acknowledge_instruction(root, session_id, item["id"])
+                        _acknowledge(root, session_id, item["id"], transcript, "was typed")   # already typed: never end the terminal over its receipt
+        if not stop_requested:
+            # What the child printed just before it exited may still sit unread (an immediate refusal): keep it,
+            # briefly and bounded, because the window closes by itself now and this transcript is what remains.
+            drain_until = time.monotonic() + POST_EXIT_DRAIN_SECONDS
+            while time.monotonic() < drain_until:
+                try:
+                    if not select.select([master], [], [], .05)[0]:
+                        break
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                _write(stdout_fd, titles.feed(data))
+                transcript.agent_bytes(data)
         exited = child.poll()
         if exited is None and stop_requested:
             return STUCK_EXIT_CODE
@@ -1226,7 +1265,7 @@ def run(
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGWINCH, previous_winch)
-        transcript.note("supervisor ended; terminal closed")
+        transcript.note("supervisor ended")
         transcript.close()
         try:
             board.offline(root, agent_id, "visible CLI terminal ended", transport_ended=True)

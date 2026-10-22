@@ -118,8 +118,8 @@ class RenderedEnhancedSecurityTests(unittest.TestCase):
             before = reading["before"]
             self.assertTrue(before["boxVisible"], "the Enhanced security checkbox is not visibly rendered")
             self.assertFalse(before["checked"], "a new task must start Off")
-            for words in ("Enhanced security for this task", "threat model", "security test pass",
-                          "controls register", "before Delivery's first review request", "it then locks"):
+            for words in ("Enhanced security for this task", "ways the app could be attacked", "tests that try them",
+                          "a record of what protects it", "before Delivery's first review request", "it then locks"):
                 self.assertIn(words, before["cardText"], words)
             self.assertTrue(reading["saved"], "ticking the box did not report a save")
             self.assertIn("Saved: enhanced security On", reading["noteAfterRefresh"], "the note did not survive the refresh")

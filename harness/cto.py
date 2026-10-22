@@ -24,7 +24,7 @@ if __package__ in {None, ""}:
 from harness import (
     agent_confinement,
     accepted_bytes, board, browser_acceptance, certified_execution, child_process, contract, execution_identity, git_broker, git_process,
-    lifecycle, runtime_probe,
+    lifecycle, runtime_probe, test_machine,
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
 
@@ -485,6 +485,7 @@ def _certified_delivery_health(
             and fields.get("argv") == argv
             and fields.get("cwd") == "."
             and fields.get("environment_sha256") == environment_sha256
+            and fields.get("machine") == test_machine.stamp_for_command_or_none(root, argv)
             and fields.get("role") == "delivery"
             and fields.get("gate") == expected_gate
             and int(fields.get("policy_version", 0)) in execution_identity.accepted_success_policy_versions()
@@ -713,6 +714,10 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     checks["owner_artifacts_readable"] = documents_ok
     checks["owner_artifact_problems"] = document_problems
     checks["owner_documents"] = owner_documents
+    # Owner 2026-10-21: a declared program build must be collected from the test machine, tied to THIS final review, before the owner is asked.
+    build_declared = bool(contract.build_declaration(root, task))
+    checks["build_required"] = build_declared
+    checks["build_collected"], checks["build_problem"] = board.build_release_check(root, state, task, latest_review) if build_declared else (True, "")
     # Owner 2026-10-14: what the owner waived is part of the release record.
     checks["owner_waived_deliverables"] = [
         {"deliverable": str(w.get("deliverable") or ""), "part": str(w.get("part") or ""), "waiver": str(w.get("id") or "")}
@@ -847,6 +852,8 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified", "owner_artifacts_readable"}
     if checks.get("runtime_gate_required"):
         required |= {"deployed_runtime_verified", "deployed_chat_verified"}
+    if checks.get("build_required"):
+        required |= {"build_collected"}
     checks["ready_for_owner_test"] = all(checks.get(key) is True for key in required)
     artifact_lifecycle = checks.get("lifecycle", {}) if isinstance(checks.get("lifecycle"), dict) else {}
     checks["lifecycle"] = {

@@ -79,13 +79,13 @@ globalThis.document={querySelector(selector){return ({
         result = self.browser_file_results()
         self.assertIn(".md or .txt", result["wrong"]["status"])
         self.assertIn("empty", result["empty"]["status"])
-        self.assertIn("not valid UTF-8", result["invalid"]["status"])
+        self.assertIn("not a plain text file", result["invalid"]["status"])
         self.assertIn("20,001 UTF-8 bytes", result["overLimit"]["status"])
         self.assertIn("too large to read", result["tooLarge"]["status"])
         self.assertEqual(result["valid"]["kind"], "input-valid")
         self.assertEqual(result["valid"]["text"], "# Task\n\n  Keep this indentation.")
         self.assertFalse(result["valid"]["disabled"])
-        self.assertIn("stored UTF-8 bytes", result["count"])
+        self.assertIn("units used", result["count"])
 
     def test_server_intake_normalizes_and_authenticates_file_metadata(self):
         text, metadata = board_viewer.owner_message_input({

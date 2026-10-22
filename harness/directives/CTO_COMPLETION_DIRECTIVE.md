@@ -73,6 +73,13 @@ judgment. This overrides the style exclusions and the rule that formats the
 contract does not require are not progress; layout polish (alignment, spacing,
 fonts) stays non-material.
 
+The owner's test machine is the manager's card, not yours (2026-10-20). When Delivery or the
+Reviewer needs the machine and it is not connected, or its password is required again, Mission
+Control shows the Test machine card by itself; never pin an owner-action card for it and never
+ask the owner to paste or run anything. If a machine blocker is reported to you, check
+`machine-status`, tell the agent to run `need-test-machine` if no card exists, and let it carry on
+with everything else; the card clears itself when the owner connects the machine.
+
 What must never block the work (the other half of materiality, 2026-10-14).
 A blocker an agent reports is material only while it blocks a required
 deliverable and no authorized, feasible route meeting the same acceptance and

@@ -74,7 +74,10 @@ def _save(path, value):
     temp.write_text(json.dumps(value, indent=2, sort_keys=True)+"\n", encoding="utf-8"); temp.replace(path)
 
 def _immutable_projection(value):
-    return {"objective":value.get("objective"),"exclusions":json.loads(json.dumps(value.get("exclusions",[]))),"deliverables":[{"name":item.get("name"),"acceptance_proof":item.get("acceptance_proof")} for item in value.get("deliverables",[])]}
+    projection={"objective":value.get("objective"),"exclusions":json.loads(json.dumps(value.get("exclusions",[]))),"deliverables":[{"name":item.get("name"),"acceptance_proof":item.get("acceptance_proof")} for item in value.get("deliverables",[])]}
+    # A program build declaration is part of what a review certifies; contracts without one hash exactly as before.
+    if value.get("build"): projection["build"]=json.loads(json.dumps(value["build"]))
+    return projection
 
 EXCLUSION_ACTIONS = ("lift", "replace", "add")
 
@@ -114,6 +117,7 @@ def _immutable_problems(value):
     if not immutable: return []
     current=_immutable_projection(value)
     expected={"objective":immutable.get("objective"),"exclusions":immutable.get("exclusions",[]),"deliverables":immutable.get("deliverables",[])}
+    if immutable.get("build"): expected["build"]=immutable["build"]
     current["deliverables"]=current.get("deliverables",[])[:len(expected["deliverables"])]
     problems=["original contract objective, exclusions, and deliverable names/proofs/order are immutable"] if current != expected else []
     # The originals above must be untouched; every amendment beside them must carry the owner's approval.
@@ -178,6 +182,20 @@ def create_contract(root, task, objective, deliverables, exclusions=None):
     original=[{"name":x,"acceptance_proof":f"Executable evidence verifies: {x}","evidence":[],"verified":False} for x in deliverables]
     value={"task":task,"objective":objective,"deliverables":original,"exclusions":exclusions or [],"status":"open","remaining_work":list(deliverables),"created_at":_now(),"updated_at":_now(),"immutable_scope":_immutable_projection({"objective":objective,"exclusions":exclusions or [],"deliverables":original})}
     _save(path,value); return value
+
+def build_declaration(root, task):
+    """The task's declared program build ({} when it declares none: a web app, a document or a legacy contract)."""
+    try: return dict(_load(_task_path(root, task)).get("build") or {})
+    except (OSError, ValueError): return {}
+
+def declare_build(root, task, declaration):
+    """Record the program build the task will deliver, in the contract AND in its immutable scope (so a review certifies it)."""
+    path=_task_path(root,task)
+    if not path.is_file(): raise ValueError("the task has no Completion Contract yet; create it first")
+    value=_load(path)
+    if not value.get("immutable_scope"): value["immutable_scope"]=_immutable_projection(value); value["immutable_scope_migrated_at"]=_now()
+    value["build"]=json.loads(json.dumps(declaration)); value["immutable_scope"]["build"]=json.loads(json.dumps(declaration))
+    value["updated_at"]=_now(); _save(path,value); return value
 
 def migrate_legacy_scope(root, task):
     path=_task_path(root,task); value=_load(path)

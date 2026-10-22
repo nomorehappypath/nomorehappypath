@@ -722,6 +722,11 @@ class SessionSurface:
     attach_hint: str = ""
 
 
+# Private test walks set this to 1 in the app's environment: agents run in their screen sessions and
+# no Terminal window is raised on the owner's Mac (REVIEWER_DIRECTIVE).
+HEADLESS_ENVIRONMENT = 'HARNESS_HEADLESS_AGENTS'
+
+
 class _TerminalHost:
     """The visible agent terminal.
 
@@ -770,7 +775,20 @@ end run'''
             subprocess.run([
                 '/usr/bin/screen', '-c', '/dev/null', '-dmS', name, *argv,
             ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, **carried, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True, timeout=60)
-            self._open_screen_view(directory, session_id, color_rgb)
+            if os.environ.get(HEADLESS_ENVIRONMENT) == '1':
+                # Private test walks: the agent runs in its screen session and no window is raised on the
+                # owner's Mac. View agent still opens one on demand, and that window closes itself too.
+                return SessionSurface(session_id=session_id)
+            try:
+                self._open_screen_view(directory, session_id, color_rgb)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
+                # The agent is already running. Failing the launch here made a running agent look like a
+                # failed start and invited a second one; the owner can open the window with View agent.
+                self._note_viewer_failure(directory, session_id, error)
+                return SessionSurface(
+                    session_id=session_id,
+                    attach_hint='The agent is running, but its Terminal window could not be opened. Use View agent.',
+                )
             return SessionSurface(session_id=session_id)
         command = "exec " + shlex.join(list(argv))
         subprocess.run(
@@ -785,26 +803,42 @@ end run'''
             raise ValueError('Invalid managed session identity.')
         return 'nmhp-' + session_id
 
+    @staticmethod
+    def _note_viewer_failure(directory, session_id, error):
+        try:
+            from harness.platform_support import agent_window
+            agent_window._log(str(Path(directory).parent / 'terminal-close.log'), role_title(session_id) + ' [' + session_id + ']',
+                              '', f'the Terminal window could not be opened: {error}')
+        except Exception:
+            pass
+
     def _open_screen_view(self, directory, session_id, color_rgb):
         title = role_title(session_id) + ' [' + session_id + ']'
+        # Not `exec screen -r`: when screen returns, the window runs harness/agent_window.py, which closes
+        # THIS window (see that file). /bin/sh keeps the command independent of the owner's login shell.
+        script = ('env "SCREENDIR=$1" /usr/bin/screen -c /dev/null -r "$2"; code=$?; '
+                  'exec "$3" "$4" --log "$5" --title "$6" --exit-code "$code"')
+        helper = Path(__file__).resolve().parent / 'agent_window.py'
         command = 'exec ' + shlex.join([
-            '/usr/bin/env', 'SCREENDIR=' + str(directory),
-            '/usr/bin/screen', '-c', '/dev/null', '-r', self._screen_name(session_id),
+            '/bin/sh', '-c', script, 'nmhp-view', str(directory), self._screen_name(session_id),
+            sys.executable, str(helper), str(Path(directory).parent / 'terminal-close.log'), title,
         ])
         subprocess.run(['/usr/bin/osascript', '-e', self._open_script(color_rgb, title), command],
-                       check=True, capture_output=True, text=True)
+                       check=True, capture_output=True, text=True, timeout=30)
 
     FOCUS_SCRIPT = r'''on run argv
  tell application "Terminal"
   repeat with terminalWindow in windows
-   repeat with terminalTab in tabs of terminalWindow
-    if tty of terminalTab is item 1 of argv then
-     set selected tab of terminalWindow to terminalTab
-     set index of terminalWindow to 1
-     activate
-     return "focused"
-    end if
-   end repeat
+   try
+    repeat with terminalTab in tabs of terminalWindow
+     if tty of terminalTab is item 1 of argv then
+      set selected tab of terminalWindow to terminalTab
+      set index of terminalWindow to 1
+      activate
+      return "focused"
+     end if
+    end repeat
+   end try
   end repeat
  end tell
  return "not found"
@@ -817,9 +851,11 @@ end run'''
             name = self._screen_name(session['id'])
             if directory.is_dir() and list(directory.glob('*.' + name)):
                 title = role_title(session['id']) + ' [' + session['id'] + ']'
-                script = self.FOCUS_SCRIPT.replace('tty of terminalTab', 'custom title of terminalTab')
+                # A live attachment only: a finished or closing window keeps its title but is not busy.
+                script = self.FOCUS_SCRIPT.replace('if tty of terminalTab is item 1 of argv then',
+                                                   'if (custom title of terminalTab is item 1 of argv) and (busy of terminalTab) then')
                 focused = subprocess.run(['/usr/bin/osascript', '-e', script, title],
-                                         check=True, capture_output=True, text=True)
+                                         check=True, capture_output=True, text=True, timeout=30)
                 if focused.stdout.strip() != 'focused':
                     from harness import control
                     color = control.SESSION_COLORS.get(session.get('color', 'black'), control.SESSION_COLORS['black'])

@@ -97,6 +97,8 @@ def _pin_run_root() -> Path:
     os.environ["CODEX_HOME"] = str(codex_home)
     # No test may post a notification on the owner's desktop.
     os.environ["HARNESS_DESKTOP_NOTIFICATIONS"] = "off"
+    # A walk may export this; a test that expects a Terminal window must not inherit it (it sets it itself when it means it).
+    os.environ.pop("HARNESS_HEADLESS_AGENTS", None)
     # Never read the owner's real setup-token during ordinary tests.
     os.environ["HARNESS_CLAUDE_KEYCHAIN_SERVICE"] = ""
     # The suite never starts the owner's real Antigravity CLI (`agy`): it keeps its sign-in in the

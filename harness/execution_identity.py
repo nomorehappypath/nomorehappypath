@@ -106,6 +106,7 @@ def command_run_identity(
     role: str = "unspecified",
     gate: str = "unspecified",
     browser: dict[str, str] | None = None,
+    machine: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(argv, (list, tuple)) or not all(isinstance(a, str) for a in argv):
         raise ValueError("argv must be a structured list of strings, never a shell string")
@@ -121,6 +122,9 @@ def command_run_identity(
         "browser": dict(sorted((browser or {}).items())),
         "policy_version": POLICY_VERSION,
     }
+    if machine:
+        # Only a machine-dependent command (TEST_MACHINE_GEN=...) carries the machine's identity; local-only commands keep their hashes.
+        fields["machine"] = dict(sorted(machine.items()))
     return {"kind": "command_run", "fields": fields, "sha256": _sha(fields)}
 
 

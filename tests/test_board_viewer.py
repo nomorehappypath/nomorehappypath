@@ -294,7 +294,7 @@ process.stdout.write(JSON.stringify(points));
         pending = self.task_gate({}, {"status": "complete"}, {"status": "done"}, reviews)
         self.assertEqual(pending["status"], "FINAL RELEASE CHECKS")
         self.assertEqual(pending["progress"], 92)
-        self.assertIn("exact pushed version", pending["next"])
+        self.assertIn("version prepared for you is exactly the one that passed", pending["next"])
         released = self.task_gate(
             {"releases": {"TASK": {"status": "VISUAL_TEST_REQUIRED"}}},
             {"status": "complete"},
@@ -303,7 +303,7 @@ process.stdout.write(JSON.stringify(points));
         )
         self.assertEqual(released["status"], "READY FOR YOUR TEST")
         self.assertEqual(released["progress"], 100)
-        self.assertIn("visual test", released["next"])
+        self.assertIn("Try it", released["next"])
 
     def test_four_of_four_chunks_with_failed_review_is_visibly_partial(self):
         reviews = [{"phase": "chunk", "status": "failed", "completed_at": "2026-08-11T10:00:00Z"}]
@@ -321,8 +321,8 @@ process.stdout.write(JSON.stringify(points));
             {"TASK": "Test the complete task and do not show false completion."},
             requirements={"TASK": {"text": "Final agreed requirements: test the complete task."}},
         )[0]["html"]
-        self.assertIn("REPAIR IN PROGRESS", cards)
-        self.assertIn("4 changes independently passed · 0 remaining", cards)
+        self.assertIn("FIXING PROBLEMS FOUND", cards)
+        self.assertIn("4 changes checked and passed · 0 remaining", cards)
         self.assertNotIn("Overall:", cards)
         self.assertEqual(cards.count('role="progressbar"'), 2)
         self.assertIn('aria-label="Whole task progress"', cards)
@@ -346,7 +346,7 @@ process.stdout.write(JSON.stringify(points));
             {"delivery_plans": {"SMALL": {"mode": "atomic", "rationale": "One cohesive correction", "subtasks": {}}}, "task_chunks": {}, "qa_requests": {}, "agents": {}},
             {"SMALL": {"task": "SMALL"}}, {"SMALL": "Make one cohesive correction."}, ["SMALL"],
         )[0]["html"]
-        self.assertIn("One cohesive task · final independent acceptance still controls release", atomic)
+        self.assertIn("One piece of work · an independent reviewer must check it before you try it", atomic)
         self.assertIn("· atomic", atomic)
         self.assertIn("Product Management structure", atomic)
         self.assertIn("One cohesive correction", atomic)
@@ -360,7 +360,7 @@ process.stdout.write(JSON.stringify(points));
             },
             {"APP": {"task": "APP"}}, {"APP": "Build the full application."}, ["APP"],
         )[0]["html"]
-        self.assertIn("1 product subtask independently accepted · 1 remaining", application)
+        self.assertIn("1 product subtask checked by the independent reviewer · 1 remaining", application)
         self.assertIn("Product subtasks", application)
         self.assertIn("Authentication", application)
         self.assertIn("Workspace", application)
@@ -382,7 +382,7 @@ process.stdout.write(JSON.stringify(points));
         }]
         gate = self.task_gate({}, {"status": "complete"}, {"status": "review_wait"}, reviews)
         self.assertEqual(gate["status"], "REVIEWER PREPARING CHALLENGE LEDGER")
-        self.assertIn("preparing a different Challenge Ledger", gate["next"])
+        self.assertIn("preparing its own tests, different from the ones Delivery ran", gate["next"])
         self.assertNotIn("testing", gate["next"].lower())
         self.assertIn("REVIEWER PREPARING CHALLENGE LEDGER", board_viewer.PAGE)
         self.assertIn("REVIEW EXECUTING", board_viewer.PAGE)
@@ -396,7 +396,7 @@ process.stdout.write(JSON.stringify(points));
             ],
         )
         self.assertIn("Settings Ui", waiting["next"])
-        self.assertIn("waiting for an Independent Reviewer", waiting["next"])
+        self.assertIn("waiting for the independent reviewer to pick it up", waiting["next"])
         testing = self.task_gate(
             {}, {"status": "complete"}, {"status": "review_wait"},
             [
@@ -508,11 +508,11 @@ process.stdout.write(JSON.stringify(points));
         self.assertEqual(rows[0]["sessionId"], "codex-scenario")
         self.assertEqual(rows[0]["stopSessionId"], "codex-scenario")
         self.assertEqual(rows[0]["task"], "Scenario Ledger Simulation Enforcement")
-        self.assertIn("INDEPENDENT REVIEW IN PROGRESS", rows[0]["label"])
+        self.assertIn("INDEPENDENT REVIEW UNDER WAY", rows[0]["label"])
         self.assertEqual(rows[1]["sessionId"], "codex-viewer")
         self.assertEqual(rows[1]["stopSessionId"], "codex-viewer")
         self.assertEqual(rows[1]["task"], "Viewer Directive Status Recovery")
-        self.assertIn("REPAIR IN PROGRESS", rows[1]["label"])
+        self.assertIn("FIXING PROBLEMS FOUND", rows[1]["label"])
 
     def test_reviewer_terminal_tracks_the_current_claim_in_real_time(self):
         reviewer = {"id": "reviewer-one", "role": "qa", "task": "OLD_TASK", "status": "qa_complete", "active": True, "session_id": "claude-reviewer"}
@@ -529,22 +529,22 @@ process.stdout.write(JSON.stringify(points));
         self.assertEqual(routed["task"], "Routed Review")
         self.assertIn("REVIEW ROUTED — RESERVE NOW", routed["label"])
         routed_summary = self.agent_status_summary(reviewer, routed_state, {})
-        self.assertIn("actively notified", routed_summary["summary"])
-        self.assertIn("No owner action", routed_summary["next"])
+        self.assertIn("was asked to review", routed_summary["summary"])
+        self.assertIn("Nothing for you to do", routed_summary["next"])
         viewer_state = {
             "agents": {"reviewer": reviewer},
             "qa_requests": {"viewer": {"task": "VIEWER_DIRECTIVE_STATUS_RECOVERY", "status": "claimed", "claimed_by": "reviewer-one", "claimed_at": "2026-08-11T10:00:00Z"}},
         }
         viewer = self.rendered_sessions(session, viewer_state, {})[0]
         self.assertEqual(viewer["task"], "Viewer Directive Status Recovery")
-        self.assertIn("INDEPENDENT REVIEW IN PROGRESS", viewer["label"])
+        self.assertIn("INDEPENDENT REVIEW UNDER WAY", viewer["label"])
         scenario_state = {
             "agents": {"reviewer": reviewer},
             "qa_requests": {"scenario": {"task": "SCENARIO_LEDGER_SIMULATION_ENFORCEMENT", "status": "claimed", "claimed_by": "reviewer-one", "claimed_at": "2026-08-11T10:01:00Z"}},
         }
         scenario = self.rendered_sessions(session, scenario_state, {})[0]
         self.assertEqual(scenario["task"], "Scenario Ledger Simulation Enforcement")
-        self.assertIn("INDEPENDENT REVIEW IN PROGRESS", scenario["label"])
+        self.assertIn("INDEPENDENT REVIEW UNDER WAY", scenario["label"])
 
     def test_stop_confirmation_names_and_stops_only_the_selected_terminal(self):
         result = self.run_node("""
@@ -562,7 +562,7 @@ refresh=async()=>{};
         self.assertTrue(result["stopped"])
         self.assertEqual(result["calls"], ["/api/sessions/codex-viewer/stop"])
         self.assertIn("Viewer Directive Status Recovery", result["prompt"])
-        self.assertIn("REPAIR IN PROGRESS", result["prompt"])
+        self.assertIn("FIXING PROBLEMS FOUND", result["prompt"])
         self.assertIn("Viewer Directive Status Recovery", result["notice"])
 
     def test_canceling_stop_confirmation_changes_nothing(self):
@@ -1284,7 +1284,7 @@ process.stdout.write(JSON.stringify(nodes.agents.children.map(row=>({html:row.in
 """ % (json.dumps(state), json.dumps(sessions))
         rows = self.run_node(invocation)
         current = [row for row in rows if "Board stage" in row["html"]]
-        predecessor = [row for row in rows if "STOPPING — SUPERSEDED" in row["html"]]
+        predecessor = [row for row in rows if "REPLACED, CLOSING" in row["html"]]
         self.assertEqual(len(current), 1)
         self.assertEqual(len(predecessor), 1)
         self.assertIn("read-only", predecessor[0]["html"].lower())
@@ -1499,8 +1499,8 @@ process.stdout.write(JSON.stringify(nodes.agents.children.map(row=>row.dataset.a
             card = next(item for item in self.rendered_task_cards(
                 pending["state"], pending["contracts"], pending["owner_directions"], pending["live_tasks"], pending["requirement_confirmations"]
             ) if item["task"] == "RELEASE-WINDOW")
-            self.assertIn("FINAL RELEASE CHECKS", card["html"])
-            self.assertIn("CTO: verifying tested commit, push, clean main, and health", card["html"])
+            self.assertIn("FINAL CHECKS BEFORE YOUR TEST", card["html"])
+            self.assertIn("CTO: checking that the version prepared for you is the one that passed review", card["html"])
 
             with board.locked_state(root) as state:
                 state["releases"]["RELEASE-WINDOW"] = {

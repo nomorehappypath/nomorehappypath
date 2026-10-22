@@ -141,8 +141,8 @@ class RenderedOwnerCtoTests(unittest.TestCase):
             })
         board.status(self.root, self.cto["id"], "logged back in; reviewing the board", "working")
         reading = self.render()
-        self.assertIn("has not polled the board yet", reading["ctoRowText"], json.dumps(reading, indent=2))
-        self.assertIn("keeps waking it on the normal schedule", reading["ctoRowText"])
+        self.assertIn("has not checked the latest project records yet", reading["ctoRowText"], json.dumps(reading, indent=2))
+        self.assertIn("keeps reminding it", reading["ctoRowText"])
         self.assertNotIn("CTO NOT RESPONDING", reading["badges"])
         self.assertNotIn("not responding", reading["attention"])
 

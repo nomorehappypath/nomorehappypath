@@ -33,7 +33,7 @@ from harness import board, board_client, board_surface  # noqa: E402
 SERVER_NAME = "harness_board"
 PROTOCOL_VERSION = "2025-06-18"
 HIDDEN = {"--agent", "--session-id", "--root", "--data-root", "--workspace-root", "-h", "--help"}
-LONG_RUNNING = {"request-review", "execute-challenge", "record-release"}
+LONG_RUNNING = {"request-review", "execute-challenge", "record-release", "collect-build"}
 # The runner registers the agent; hooks report lifecycle. Neither is the agent's tool.
 NOT_TOOLS = {"register", "hook-event"}
 

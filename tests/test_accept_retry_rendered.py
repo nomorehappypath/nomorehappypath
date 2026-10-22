@@ -148,7 +148,7 @@ class RenderedAcceptRetryTests(unittest.TestCase):
         before = reading["before"]
         self.assertTrue(before["present"], json.dumps(reading, indent=2))
         self.assertTrue(before["visible"], "the failed-acceptance card has no geometry")
-        self.assertIn("Accepted, but not in main yet", before["text"])
+        self.assertIn("Accepted, but the app was not updated yet", before["text"])
         self.assertIn("press Accept again", before["text"])
         self.assertNotIn("manifest", before["text"])
         self.assertNotIn("reintegration or recovery", before["text"])

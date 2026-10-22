@@ -157,11 +157,25 @@ PAGE = r'''<!doctype html>
     .help-section strong { color: var(--ink); }
     .help-steps, .help-list { margin: 8px 0 0; padding-left: 22px; color: #4f5e74; }
     .help-steps li, .help-list li { margin: 7px 0; }
+    .help-code { margin: 8px 0; padding: 10px 12px; border-radius: 9px; background: #0f1b2d; color: #e8eefb; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; white-space: pre; }
+    .help-section code { font: 13px ui-monospace, Menlo, Consolas, monospace; }
     .help-table { width: 100%; border-collapse: collapse; margin-top: 9px; font-size: 14px; }
     .help-table th, .help-table td { padding: 9px 10px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
     .help-table th { color: var(--muted); font-size: 12px; font-weight: 820; letter-spacing: .06em; text-transform: uppercase; }
     .help-callout { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 9px 9px 0; color: #27476f; background: var(--blue-soft); font-size: 13px; }
 
+    .machine-card { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; font-size: 14px; line-height: 1.45; }
+    .machine-card.needs { border-color: #e3a34a; background: #fff6e6; color: #4a2e00; }
+    .machine-card.ok { border-color: #8bc7a0; background: #eefaf2; color: #0f3b22; }
+    .machine-card .machine-line { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+    .machine-card small { display: block; margin-top: 4px; font-size: 12.5px; opacity: .9; }
+    .machine-steps { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; }
+    .machine-steps .confirmed::before { content: "✓ "; }
+    .machine-steps .unknown::before { content: "? "; }
+    .machine-busy { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-weight: 650; }
+    .machine-identity { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e3a34a; background: #fff6e6; color: #4a2e00; font-size: 13.5px; }
+    .machine-identity code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    @media (prefers-color-scheme: dark) { .machine-card { background: #1b2433; } .machine-card.needs, .machine-identity { background: #3a2f0d; color: #f4e3a6; border-color: #7a6420; } .machine-card.ok { background: #12301f; color: #cdeedd; border-color: #2d6a47; } }
     dialog { width: min(560px, calc(100% - 32px)); padding: 0; border: 0; border-radius: 18px; color: var(--ink); background: white; box-shadow: 0 30px 90px rgba(8,18,35,.34); }
     dialog::backdrop { background: rgba(9,17,30,.58); backdrop-filter: blur(3px); }
     .modal { padding: 25px; }
@@ -346,7 +360,7 @@ PAGE = r'''<!doctype html>
             <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
             <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
             <li><strong>Linux Claude sign-in and browser:</strong> in your own terminal run <code>claude setup-token</code> and then <code>python3 -m harness.claude_auth store-token</code> (a hidden prompt). The token is kept in <code>~/.config/nmhp-harness/claude-setup-token</code>, owner-only, and survives a reboot; press <strong>Test Claude connection</strong> in Settings. On Ubuntu where Chromium is a snap, set <code>HARNESS_BROWSER_BIN</code> to a native browser such as <code>/usr/bin/google-chrome</code> for screen checks.</li>
-            <li><strong>A project is slow to open, or shows a stale red hold:</strong> the app waits while the board makes progress (set <code>HARNESS_WORKER_START_TIMEOUT</code> in seconds, or <code>--worker-start-timeout</code>, to change it). To close a stale hold yourself, with the project resumed, run in your terminal <code>python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE clear-hold --task TASK --source SOURCE</code>; it refuses a wrong source and never changes a certified result.</li>
+            <li><strong>A project is slow to open, or still shows an old red warning:</strong> the app waits while the board makes progress (set <code>HARNESS_WORKER_START_TIMEOUT</code> in seconds, or <code>--worker-start-timeout</code>, to change it). To clear an old warning yourself, with the project resumed, run in your terminal <code>python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE clear-hold --task TASK --source SOURCE</code>; it refuses a wrong source and never changes a result the reviewers already confirmed.</li>
             <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
             <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
           </ul>
@@ -358,7 +372,7 @@ PAGE = r'''<!doctype html>
           <ul class="help-list">
             <li><strong>What you see:</strong> one amber note on the project page (and on the Projects page) in plain words, for example <em>"The Delivery agent (Codex) shows Codex's usage-limit message; it announced 10:06 PM. Nothing is sent to it until the message goes; it continues then."</em> That agent's row reads <strong>WAITING: USAGE LIMIT</strong>. If the program printed no usable time, the note says <strong>(estimated)</strong> and the harness looks again about an hour later. A time on another day shows its date. There is no red alarm, because nothing is needed from you.</li>
             <li><strong>What the harness does:</strong> it holds <strong>that one agent</strong>. Nothing is typed into its window, it is not restarted and not replaced, and its messages wait in line. The other agents keep working. Claude Code continues by itself at the announced time. If the message is still on the screen a minute after the announced time, the harness types <strong>one</strong> short line ("Please continue where you stopped"; a Reviewer is asked to check the board for its current assignment). If it is still there a minute after that, the note says so and the agent keeps waiting.</li>
-            <li><strong>When the message goes away</strong> (the program answered, or the line left the screen) the hold ends, the waiting messages are delivered, and for two minutes the harness will not treat the agent as stuck while it picks up again.</li>
+            <li><strong>When the message goes away</strong> (the program answered, or the line left the screen) the waiting ends, the queued messages are delivered, and for two minutes the harness will not treat the agent as stuck while it picks up again.</li>
             <li><strong>Reviews stay independent.</strong> If the Reviewer is the one waiting, the review waits for it. The harness does not start a second Reviewer against the same allowance, and it never hands a review to the company that wrote the work. A review that was waiting for a long time may be reopened and picked up again; an obsolete assignment is never typed.</li>
             <li><strong>What it does not do:</strong> it does not switch an agent to another company mid-task, use a different account, or use an API key to get around a limit. Gemini's own quota message is handled as before: the banner asks you to choose another provider for that role in Settings.</li>
           </ul>
@@ -369,7 +383,7 @@ PAGE = r'''<!doctype html>
           <h2 id="help-version-title">Check Your Version And Update</h2>
           <ol class="help-steps">
             <li>Your installed version is always visible in the <strong>top bar</strong> — the small pill next to "Manager connected" (for example <strong>v0.1.7</strong>).</li>
-            <li><strong>Click the version pill.</strong> The Software Update dialog opens and checks automatically — it asks only this installation's own GitHub origin; nothing is sent anywhere else. It answers plainly: you are up to date, or a newer version exists, with a <strong>What changed</strong> link to the release notes.</li>
+            <li><strong>Click the version pill.</strong> The Software Update dialog opens and checks automatically — it asks only the GitHub page this copy was installed from; nothing is sent anywhere else. It answers plainly: you are up to date, or a newer version exists, with a <strong>What changed</strong> link to the release notes.</li>
             <li>When a newer version exists and no project is running (<strong>paused is fine</strong>), click <strong>Update now</strong>. The update is fast-forward only, never touches your projects, boards, or settings, and the app restarts itself — the page reloads on the new version.</li>
           </ol>
           <p class="help-callout">If <strong>Update now</strong> does not appear: a project is running — pause or close it and check again. If the dialog reports local changes, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command instead.</p>
@@ -387,6 +401,49 @@ PAGE = r'''<!doctype html>
           <p class="help-callout">This is why a task can look slow while the bars barely move: the time is going into checks designed to catch what a quick demo would hide. Slower to say done — far less likely to be wrong when it does.</p>
         </section>
 
+        <section class="help-section" id="help-windows-vm" aria-labelledby="help-windows-vm-title">
+          <h2 id="help-windows-vm-title">Create The Windows Test Machine</h2>
+          <p><strong>Why.</strong> Some programs only prove themselves on real Windows. The agents build the program (here, or on the machine, whichever works) and run its tests on a Windows machine that you give them. Make it a disposable one, with none of your personal files, no shared folders, no disks of yours attached, and no access to anything on your network you care about: the agents run commands there with the account you give them. Use one machine per project. You create it and, when the project is finished, you destroy it; NoMoreHappyPath never creates, resets or deletes it.</p>
+          <p><strong>Where it runs does not matter.</strong> A virtual machine on a Mac, a Linux computer or a PC, or a spare Windows computer: Windows is Windows. You do four things.</p>
+          <ol class="help-steps">
+            <li><strong>Create it and size it.</strong> In your virtual machine software (or on the spare computer), install Windows 10 or 11 (or Windows Server 2019 or newer) from Microsoft&rsquo;s own installer (<a href="https://www.microsoft.com/software-download/windows11" target="_blank" rel="noopener">Microsoft&rsquo;s Windows 11 download</a>; on a Mac with Apple silicon, <a href="https://docs.getutm.app/guides/windows/" target="_blank" rel="noopener">UTM&rsquo;s Windows guide</a> shows how to get and install the right image; any virtual machine software has a similar guide), make a local account with a password you use nowhere else, and get to its desktop. Give it at least 2 processor cores, 4 GB of memory and 64 GB of disk; comfortable is 4 cores, 8 GB and 100 GB. Delivery restates the exact needs for your project before its first test, so a small machine now can still be enlarged.</li>
+            <li><strong>Turn on the ssh server.</strong> On the Windows machine, open PowerShell as Administrator and run these three lines once (Microsoft&rsquo;s own steps: <a href="https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse" target="_blank" rel="noopener">Get started with OpenSSH Server for Windows</a>; Windows Server 2025 already has it installed):
+              <pre class="help-code">Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd</pre>
+              Password sign-in is on by default. The installer also opens port 22 in the Windows firewall; to check, run <code>Get-NetFirewallRule -Name OpenSSH-Server-In-TCP</code>.</li>
+            <li><strong>Make sure this computer can reach it.</strong> On the Windows machine run <code>ipconfig</code> and note the &ldquo;IPv4 Address&rdquo;. In the Terminal of the computer that runs Mission Control, run <code>ssh -F /dev/null -o PubkeyAuthentication=no account@address</code> (the same plain password sign-in Mission Control uses) (add <code>-p port</code> if you changed the port) and type the password: a Windows prompt means it works (type <code>exit</code>). &ldquo;Connection refused&rdquo; or a timeout means the machine is off, the address is wrong, the ssh service is not running, or its network is not shared or bridged with this computer. &ldquo;Permission denied&rdquo; means it is reachable but the account or password is wrong, or the server has password sign-in turned off. A warning that the host key changed means this address now answers with a different identity: stop, and go on only if you know you rebuilt the machine.</li>
+            <li><strong>Give NoMoreHappyPath access.</strong> In Mission Control, on the <strong>Projects</strong> page, press <strong>Test machine</strong> on the project (or <strong>Connect</strong> on the orange card an agent raised; the same <strong>Test machine</strong> button is also in the project&rsquo;s own Mission Control header), type the address, the account name and the password, and press <strong>Connect</strong>. The first connection trusts the machine&rsquo;s identity as it finds it at that moment, which is why it should be a machine on your own network that you just made; the window then shows the machine&rsquo;s host key, and on the Windows machine <code>ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub</code> prints the same one if you want to compare. The password is used for that one sign-in and forgotten.</li>
+          </ol>
+          <p><strong>Everything else is the agents&rsquo; job.</strong> They find out which Windows it is (including whether it is the ARM or the x86-64 kind), choose the matching toolchain, install the tools they need, and clean up after every test. Some projects need an Administrator account (for example to test changes to the registry) or extra tools; Delivery tells you before its first test, so you never have to guess.</p>
+          <ul class="help-list">
+            <li><strong>Snapshot.</strong> Right after step 3, take a snapshot of the clean machine if your virtual machine software offers it. It is the easy way to start over.</li>
+            <li><strong>After you restore a snapshot, rebuild or change the machine,</strong> press <strong>Test machine</strong> and <strong>Connect</strong> again (the card does not know the machine was swapped under it) and tell Delivery. Connecting again makes every earlier result that depended on the machine stale; Delivery then sends the work for review again and the reviewer runs the tests again. A pause, a close, an app restart or a key that stops working makes the card ask for the password by itself; if you press Connect while the project is paused, the Resume keeps it.</li>
+            <li><strong>If Windows asks to restart</strong> (for example after an update), let it restart: the ssh server starts again by itself. Because an update changes the machine, press <strong>Connect</strong> again afterwards and tell Delivery, as for a restored snapshot.</li>
+            <li><strong>If the address changes,</strong> press Connect with the new address. To avoid it, give the machine a fixed address in your router or virtual machine software.</li>
+            <li><strong>When the project is finished,</strong> press <strong>Release this machine</strong> in the Test machine window (that frees it for another project; the key the agents installed stays on the machine), then destroy the virtual machine in your software, or, for a spare computer, wipe and reinstall Windows (or at least turn the ssh server off with <code>Stop-Service sshd</code> and <code>Set-Service sshd -StartupType Disabled</code>).</li>
+            <li><strong>Optional:</strong> on a Mac with Apple silicon, virtual machine software such as UTM runs the ARM version of Windows 11; on a PC, VMware, VirtualBox or Hyper-V run the usual x86-64 one. Either is fine.</li>
+          </ul>
+        </section>
+
+        <section class="help-section" id="help-windows-tools" aria-labelledby="help-windows-tools-title">
+          <h2 id="help-windows-tools-title">Windows Programs: What To Expect</h2>
+          <p>Once your Windows test machine is connected (above), this is what happens, in plain words. You do not need to know how the program is built.</p>
+          <ol class="help-steps">
+            <li><strong>You say what you want.</strong> For example &ldquo;a small Windows tool that tells me which program is using a port&rdquo;. Delivery says which Windows machine it needs and builds the program.</li>
+            <li><strong>The agents set up the machine themselves.</strong> After the one-time setup above, they connect to it over ssh and install the build and test tools they need there; you do not install those or type commands into the machine to get the work done.</li>
+            <li><strong>The program is tested on the real Windows machine</strong>, and the independent reviewer (from the other AI company) runs the tests again on the same machine in its own folder.</li>
+            <li><strong>You are asked for the password again after any stop.</strong> Pausing, closing or restarting the project, or a key that stops working, makes the <strong>Test machine</strong> card ask for the password again. Enter it and press Connect; the agents carry on. The same <strong>Test machine</strong> button is in the project&rsquo;s own header.</li>
+            <li><strong>If part of the work could not be tested, you are told.</strong> The project says <strong>Not fully tested</strong> as soon as a review ends that way. When the cause is something only you control (for example the machine&rsquo;s account is an administrator, so a &ldquo;permission denied&rdquo; case can never happen there), or when the agents could not settle it between themselves in three rounds, the project says <strong>Waiting for you</strong> and a card asks you to choose: <em>waive this part</em> (say which part), <em>give me a machine where it can happen</em>, or <em>stop this task</em>. Send your choice with <strong>Message the CTO</strong>. The card then says your answer was received, and it stays open until the CTO has applied it (recorded the waiver, arranged the retest, or stopped the task); a paused project must be resumed for the agents to act. Security, the independent review itself and the integrity of the code cannot be waived, and defects the reviewer found are not part of a waiver. The same untouched work is not sent for review again while you decide; a changed version of the code, a reconnected or changed machine, or a replacement reviewer can still trigger a new attempt, and that is expected.</li>
+            <li><strong>When it passes, you get the program: Get the build.</strong> For a new task whose Delivery declared a program build, the acceptance card shows <strong>Get the build</strong> instead of <strong>View app</strong> (a Windows program has nothing to open in a browser; a task that also delivers a web app keeps View app). Projects accepted before this existed keep their old card; a new task is needed to get a program this way. It lists each file with its size and its SHA-256 fingerprint, which machine it was built and tested on, and from which version of the code; it says which Windows it is for, what you need (for example Administrator rights), the steps to try it and what you should see; a line under each file says whether it was started on the test machine before it was collected.</li>
+          </ol>
+          <p><strong>How to try the program.</strong> Press <strong>Download</strong>, then check that the file is the one that was tested: on Windows run <code>Get-FileHash file.exe</code> in PowerShell (on a Mac <code>shasum -a 256 file</code>, on Linux <code>sha256sum file</code>) and compare it with the SHA-256 on the card; they must match. If they do not, stop and report it: do not run the file. Then follow the steps on the card on a compatible Windows machine (the program is for Windows even when Mission Control runs on a Mac or Linux computer). Windows may warn you that the program is from an unknown publisher: the programs are not code-signed, so run one only because you asked for it. The download keeps working after you accept the work and after you destroy the test machine.</p>
+          <ul class="help-list">
+            <li><strong>What the app does not do.</strong> It never creates, resets or deletes your Windows machine; one machine serves one project; keep it a throwaway; it does not run on Windows itself (only the machine under test is Windows); it does not sign or publish your program; it does not run the program for you.</li>
+            <li><strong>What a test can and cannot show.</strong> The tests only prove what that one machine can show. When a case cannot happen there, the reviewer says <strong>NOT TESTED</strong> and you decide, as above.</li>
+          </ul>
+        </section>
+
         <section class="help-section" aria-labelledby="help-reach-title">
           <h2 id="help-reach-title">What The Agents Can Reach</h2>
           <p>These agents run on your own machine, as you. Here is exactly where that stops, without softening:</p>
@@ -395,9 +452,9 @@ PAGE = r'''<!doctype html>
             <li><strong>On Linux, a Claude or Gemini agent (and the test commands the app runs for it) can read only what it needs.</strong> It is launched in a sandbox that holds the system programs and settings (<code>/usr</code>, <code>/etc</code>, the libraries), the project, the app&rsquo;s working folders, the agent&rsquo;s own settings and caches, and the tools it runs with (node, python, the CLI, the app&rsquo;s own install). Your home folder, other projects, ssh keys and tokens are not there at all &mdash; a read fails as &ldquo;no such file&rdquo; &mdash; except the folders of programs found on your PATH (that folder only) and anything you list below. Still visible to it: the shared <code>/tmp</code> and <code>/var/tmp</code>, the shared caches and settings folders of its own CLI, and everything in the system folders above (including any file of yours kept in <code>/etc</code> or <code>/usr</code>, and the install folders of the tools it runs) &mdash; so these are limits, not a guarantee that nothing outside the project can be read. If an agent genuinely needs another folder (for example an ssh key), list it in <code>HARNESS_AGENT_READ_PATHS</code> (folders separated by a colon) before starting the app. This applies to agents started after this update: an agent that was already running keeps its old, wider access until you restart it.</li>
             <li><strong>On macOS, and for Codex agents on any system, an agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: macOS and the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI, Anthropic or Google (for a Gemini agent) as part of doing the work.</li>
             <li><strong>The app&rsquo;s own Git work is sandboxed too</strong>, to the paths that operation needs.</li>
-            <li><strong>An agent can reach the network, including a test machine you name.</strong> If you tell the agents to build here and test on another machine (for example a Windows VM: <code>ssh user@address</code>), they connect to it from this machine with a key you give them, and the board records the test output that comes back. Prepare two files in the project&rsquo;s <em>data</em> folder shown in Settings (the one place every agent and every test command can read; agents cannot write there, and the project folder itself is copied fresh for the reviewer): the private key, with no passphrase, and the machine&rsquo;s host key, made once with <code>ssh-keyscan address &gt; &lt;data&gt;/known_hosts</code> and made again after you rebuild the VM. Use a throwaway machine: anything an agent writes can run there, so keep it away from your files and the other machines on your network, and reset it yourself when you want it clean. The board keeps a passed result for an unchanged test command and unchanged code, so after a reset or a change to the machine, tell Delivery to raise the generation number in the test command (<code>TEST_MACHINE_GEN=2 make test</code>) and ask for a new review: that is a new review cycle, so the reviewer and the release check run again on the reset machine. Each test command the board certifies must finish within five minutes, copying included, so dependencies are installed on the VM beforehand and long batteries are split. Before you trust the host key, compare the fingerprint with the one the VM&rsquo;s own console shows; make a key just for that VM, readable only by you. Agents take new instructions only in a fresh session, not on resume.</li>
+            <li><strong>An agent can reach the network, including a test machine you name.</strong> If you tell the agents to build here and test on another machine (for example a Windows VM), you do one thing: press <em>Connect</em> on the project&rsquo;s <em>Test machine</em> card in this list and enter the machine&rsquo;s address, account name and password. Mission Control itself (not an agent) reads the machine&rsquo;s identity (its host key, shown to you and saved), makes a key for this project, signs in once with the password, installs the key, and proves the key works. The password is used for that one connection and forgotten: it is never saved, logged or shown to an agent, and it is only accepted on the computer that runs Mission Control. Whenever the project stops for any reason (pause, close, restart), or the key stops working, the card asks for the password again (a connection you make while the project is paused stays valid when you resume it), and any test result that depends on the machine waits for it; everything else keeps going. If an agent needs the machine and it is not connected, the card appears here by itself with what the agent said it needs it for; you never have to look in a terminal window. Use a throwaway machine and a password that exists only for it: the agents hold a key with the same power over it as the password gives, so keep it away from your files and the other machines on your network, and use one machine per project. You create it and destroy it when you are done; Delivery tells you what size to make it, and the agents install what they need on it themselves and clean up what their runs leave. The board keeps a passed result for an unchanged test command, unchanged code and an unchanged machine; reconnecting, restarting or changing the machine makes those results stale and the agents re-run them. What Mission Control cannot detect: an agent&rsquo;s own ssh with its key (the reviewer rejects a test that reaches the machine without the machine&rsquo;s test form). Each test command the board certifies must finish within five minutes, copying included, so long batteries are split. The first connection trusts the identity Mission Control reads from the machine at that moment; if it later changes, the card stops before any password is sent and asks you to confirm that you rebuilt the VM.</li>
           </ul>
-          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project everywhere, and from being <em>read</em> by Claude and Gemini agents on Linux. On macOS, and for Codex agents, they are not safe from being <em>read</em>: if there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Judge the app on what it does now, not on what may come.</p>
+          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project on this machine (not on a test machine you name, where the account you give the agents decides), and from being <em>read</em> by Claude and Gemini agents on Linux. On macOS, and for Codex agents, they are not safe from being <em>read</em>: if there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Judge the app on what it does now, not on what may come.</p>
         </section>
 
         <section class="help-section" aria-labelledby="help-key-title">
@@ -417,7 +474,7 @@ PAGE = r'''<!doctype html>
             <li>Settings has one card per role — <strong>Delivery Agent</strong>, <strong>Independent Reviewer</strong>, and <strong>CTO</strong>. Each picks a CLI provider, a model, and a reasoning effort.</li>
             <li>Keep Delivery and Reviewer on <strong>different providers</strong>; that separation is the point of independent review.</li>
             <li>Bigger models and higher effort cost more on your provider plans and think longer. A common setup: strong models for Delivery and Reviewer, a medium setting for the CTO.</li>
-            <li><strong>Test connection</strong> on a card makes one real, tiny request to the provider from inside the agents' sandbox to check that the CLI is installed, signed in and accepts the chosen model. It starts no agent and does not touch your projects, but it does count against your plan (Gemini uses a little of its quota). A stored result is history: it shows when and with what it was made, and asks you to test again if the model, the effort or the CLI has changed. For Gemini the thinking level is part of the model name (<code>-low</code>, <code>-medium</code>, <code>-high</code>), so the effort you choose selects it, and Settings tells you when it changed one.</li>
+            <li><strong>Test connection</strong> on a card sends one tiny real request to the AI service, the way an agent would, to check that its program is installed, signed in and accepts the model you chose. It starts no agent and does not touch your projects, but it does count against your plan (Gemini uses a little of its quota). A stored result is history: it shows when and with what it was made, and asks you to test again if the model, the effort or the CLI has changed. For Gemini the thinking level is part of the model name (<code>-low</code>, <code>-medium</code>, <code>-high</code>), so the effort you choose selects it, and Settings tells you when it changed one.</li>
             <li>Saving applies to <strong>new agent sessions only</strong>; running terminals keep the model and effort they started with.</li>
             <li><strong>Choosing a model for one launch.</strong> The Delivery button in Mission Control opens a small dialog pre-filled with the Delivery card's provider, model and effort. The Model list shows the same models as the Settings card, each with what it is for; pick <strong>Custom model ID…</strong> to type any other id. Change them there and the choice applies to <strong>that launch only</strong>: Settings is not changed, and the next launch is pre-filled from Settings again. Use it to write a spec with a strong model and code with a cheaper one without editing Settings each time. The Independent Reviewer and the CTO always use their Settings values. The provider list offers only providers that keep review independent (never the Reviewer's provider). A replacement the harness opens for a stopped agent, and a project resume, keep the choice. Typing <code>/model</code> inside an agent's terminal is not recorded by the harness, and a relaunch uses the saved model. If the model you typed makes the CLI quit or keep printing an error, the harness does not yet explain it: read the error in that agent's terminal, then Stop it and start again with a corrected model.</li>
           </ul>
@@ -463,7 +520,7 @@ PAGE = r'''<!doctype html>
               <tr><td>Open Mission Control</td><td>Opens the live board for the selected project.</td></tr>
               <tr><td>Pause project</td><td>Stops active work after board writes finish and preserves tasks, reviews, and evidence.</td></tr>
               <tr><td>CODEX CLI - Delivery Agent</td><td>Starts or attaches the implementation agent for owner direction, planning, coding, and Delivery evidence.</td></tr>
-              <tr><td>CLAUDE CLI - Reviewer</td><td>Starts or attaches the independent reviewer. It should test the candidate through its own checks, not repeat Delivery's wording.</td></tr>
+              <tr><td>CLAUDE CLI - Reviewer</td><td>Starts or attaches the independent reviewer. It tests the finished work with its own checks instead of repeating Delivery's.</td></tr>
               <tr><td>CTO</td><td>Starts or attaches the monitoring role that keeps tasks routed, watches release gates, and reports owner action.</td></tr>
               <tr><td>View status</td><td>Shows the selected agent's current task, stage, last update, next step, and whether you need to act.</td></tr>
               <tr><td>Stop terminal / Stop all agents</td><td>Stops visible terminals. Use it when you intentionally want work to stop; saved board records remain.</td></tr>
@@ -477,7 +534,7 @@ PAGE = r'''<!doctype html>
         <section class="help-section" aria-labelledby="help-progress-title">
           <h2 id="help-progress-title">Read The Progress Bars</h2>
           <ul class="help-list">
-            <li><strong>Whole task</strong> shows durable gates completed across the task: direction, implementation evidence, independent review, release checks, owner decision, and acceptance.</li>
+            <li><strong>Whole task</strong> shows the required steps done so far: your direction, the building and its checks, the independent review, the final checks, your test, and your acceptance.</li>
             <li><strong>Current stage</strong> shows progress inside the active phase. It can move while the whole-task bar stays flat.</li>
             <li>The bars are not a timer. Review, repair, release checks, or owner validation can add time without meaning the code is being rewritten.</li>
             <li>Red or repair-colored progress means a gate needs attention or a repair cycle. Open the task or agent status and read <strong>What happens next</strong>.</li>
@@ -489,9 +546,9 @@ PAGE = r'''<!doctype html>
           <h2 id="help-accept-title">Accept Or Reject Completed Work</h2>
           <ol class="help-steps">
             <li>Wait until Mission Control explicitly says the reviewed release is ready for your test. Delivery saying it is done is not enough.</li>
-            <li>Open the candidate app or preview from the release panel when one is provided.</li>
+            <li>Open the app from the release panel (View app) when one is provided.</li>
             <li>Run the visible checklist shown under <strong>What to test before accepting</strong>. Add your own checks when the task needs them.</li>
-            <li>Click <strong>Accepted</strong> only when the exact reviewed candidate works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
+            <li>Click <strong>Accepted</strong> only when the reviewed version works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
             <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation.</li>
           </ol>
         </section>
@@ -595,7 +652,7 @@ PAGE = r'''<!doctype html>
 
   <div id="status" class="notice" role="status" aria-live="polite" hidden></div>
 
-  <dialog id="update-dialog" aria-labelledby="update-dialog-title"><div class="modal"><h2 id="update-dialog-title">Software update</h2><p>Version <strong id="update-installed">…</strong>. The check asks only this installation's own GitHub origin; nothing is sent anywhere else.</p><p class="notice" id="update-status" role="status" aria-live="polite"></p><p id="update-consent" hidden>Updating fast-forwards this installation and restarts the app. Your projects, boards, and settings are not touched.</p><div class="modal-actions"><a id="update-notes" class="button secondary" href="https://github.com/nomorehappypath/nomorehappypath/releases" target="_blank" rel="noopener" hidden>What changed</a><button type="button" class="button secondary" id="update-check">Check again</button><button type="button" class="button" id="update-apply" hidden>Update now</button><button type="button" class="button secondary" id="update-close">Close</button></div></div></dialog>
+  <dialog id="update-dialog" aria-labelledby="update-dialog-title"><div class="modal"><h2 id="update-dialog-title">Software update</h2><p>Version <strong id="update-installed">…</strong>. The check asks only the GitHub page this copy was installed from; nothing is sent anywhere else.</p><p class="notice" id="update-status" role="status" aria-live="polite"></p><p id="update-consent" hidden>Updating fast-forwards this installation and restarts the app. Your projects, boards, and settings are not touched.</p><div class="modal-actions"><a id="update-notes" class="button secondary" href="https://github.com/nomorehappypath/nomorehappypath/releases" target="_blank" rel="noopener" hidden>What changed</a><button type="button" class="button secondary" id="update-check">Check again</button><button type="button" class="button" id="update-apply" hidden>Update now</button><button type="button" class="button secondary" id="update-close">Close</button></div></div></dialog>
 
   <dialog id="create-dialog" aria-labelledby="create-title">
     <form class="modal" id="create-form" novalidate>
@@ -648,6 +705,24 @@ PAGE = r'''<!doctype html>
     </div>
   </dialog>
 
+  <dialog id="machine-dialog" aria-labelledby="machine-title">
+    <form class="modal" id="machine-form" novalidate autocomplete="off">
+      <h2 id="machine-title">Test machine</h2>
+      <p class="modal-copy" id="machine-copy">A machine you name (for example a Windows VM) where the agents test what they build. You type its password here once; the agents never see it.</p>
+      <div class="machine-card" id="machine-state" role="status" aria-live="polite"></div>
+      <p class="field-hint"><a href="?page=help#help-windows-vm" data-help-link>How to create the Windows test machine, why, and what to enter</a></p>
+      <details class="machine-prereq"><summary>What the machine needs before you press Connect</summary><ul id="machine-prereq"></ul></details>
+      <div class="field"><label for="machine-address">Address</label><input id="machine-address" autocomplete="off" spellcheck="false" placeholder="192.168.64.5"></div>
+      <div class="field"><label for="machine-user">Account name on the machine</label><input id="machine-user" autocomplete="off" spellcheck="false" placeholder="WindowsVM"></div>
+      <div class="field"><label for="machine-port">Port</label><input id="machine-port" inputmode="numeric" autocomplete="off" value="22" spellcheck="false"></div>
+      <div class="field"><label for="machine-password">Password for that account</label><input id="machine-password" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="machine-password-hint"><p class="field-hint" id="machine-password-hint">Used for this one connection and then forgotten: it is never saved, logged or shown to an agent. Use a password that exists only for this throwaway machine.</p></div>
+      <div class="machine-identity" id="machine-identity" hidden></div>
+      <div class="machine-busy" id="machine-busy" hidden><div class="spinner" aria-hidden="true"></div><span id="machine-busy-text"></span></div>
+      <p class="form-error" id="machine-error" role="alert" aria-live="polite"></p>
+      <div class="dialog-actions"><button class="button ghost" type="button" id="machine-release" hidden>Release this machine</button><button class="button secondary" type="button" id="machine-check" hidden>Check the machine</button><button class="button secondary" type="button" id="machine-close">Close</button><button class="button" type="submit" id="machine-connect">Connect</button></div>
+    </form>
+  </dialog>
+
   <dialog id="remove-dialog" aria-labelledby="remove-title">
     <form class="modal" id="remove-form">
       <h2 id="remove-title">Remove project?</h2>
@@ -684,6 +759,23 @@ PAGE = r'''<!doctype html>
       if (Number.isNaN(date.getTime())) return 'Activity recorded';
       return new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}).format(date);
     };
+    const machineStrip = (project) => {
+      const m = project.test_machine || {};
+      if (!m.state || m.state === 'unknown') return '';
+      const needsWork = Boolean(m.request && m.request.reason) || (m.connected && !m.usable) || ['damaged', 'reauth_required', 'manager_down', 'baseline_incomplete'].includes(m.state);
+      const where = m.connected ? `${esc(m.user)}@${esc(m.address)}` : '';
+      let text;
+      if (m.request && m.request.reason && !m.usable) text = `<strong>An agent needs the test machine.</strong> ${esc(m.request.by || 'An agent')} said: ${esc(m.request.reason)}`;
+      else if (m.connected && !m.usable && m.state === 'baseline_incomplete') text = `<strong>Test machine ${where}: tools are being changed.</strong> The agents finish this themselves; nothing for you to do.`;
+      else if (m.connected && !m.usable) text = `<strong>Test machine ${where} needs you.</strong> ${esc(m.cause_text || m.message)}`;
+      else if (m.connected) text = `<strong>Test machine connected: ${where}</strong>, ${m.ready ? 'ready for testing' : 'agents are still setting it up'}.`;
+      else if (m.state === 'not_connected' && !(m.request && m.request.reason)) return '';
+      else text = `<strong>Test machine not connected.</strong> ${esc(m.message || '')}`;
+      const recovering = (m.recovering || []).length ? `<small>Recovering ${(m.recovering || []).length} request${(m.recovering || []).length === 1 ? '' : 's'}: the agents are re-running work that depended on the old connection.</small>` : '';
+      const fingerprint = m.connected && m.fingerprint ? `<small>Machine identity ${esc(m.fingerprint)}</small>` : '';
+      const helpLink = m.connected && m.usable ? '' : '<small><a href="?page=help#help-windows-vm" data-help-link>How to create the Windows test machine</a></small>';
+      return `<div class="machine-card ${needsWork ? 'needs' : m.usable ? 'ok' : ''}" data-machine-card="${esc(project.id)}"><div class="machine-line"><span>${text}</span><button class="button ${needsWork ? '' : 'secondary'}" data-act="machine" data-id="${esc(project.id)}">${m.connected && m.usable ? 'Manage' : 'Connect'}</button></div>${fingerprint}${recovering}${helpLink}</div>`;
+    };
     const row = (project) => {
       const starting = Boolean(project.starting);
       const workerStopped = Boolean(project.worker_error);
@@ -712,6 +804,7 @@ PAGE = r'''<!doctype html>
         : `<button class="button" data-act="open" data-id="${esc(project.id)}">${project.paused ? 'Resume project' : 'Open project'}</button>`;
       const reopen = project.reopen_restores
         ? '<p class="description" data-reopen-restores="1">Open it and your agents come back with their saved work.</p>' : '';
+      const machineBtn = machineStrip(project) ? '' : `<button class="button ghost" data-act="machine" data-id="${esc(project.id)}">Test machine</button>`;
       const remove = project.active ? '' : `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Remove</button>`;
       return `<article class="project ${state}" data-project-id="${esc(project.id)}">
         <div>
@@ -726,11 +819,12 @@ PAGE = r'''<!doctype html>
           </div>
           <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) ? esc(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>
           ${reopen}
+          ${machineStrip(project)}
           <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
         </div>
         <div class="project-side">
           <div class="last-active">Last activity<br><strong>${when(project.last_board_activity || project.last_active_at)}</strong></div>
-          <div class="actions">${remove}${primary}</div>
+          <div class="actions">${machineBtn}${remove}${primary}</div>
         </div>
       </article>`;
     };
@@ -764,8 +858,8 @@ PAGE = r'''<!doctype html>
     };
     const settingRoles = [
       {id: 'delivery', label: 'Delivery Agent', copy: 'Builds, designs, tests, and prepares the owner’s work.'},
-      {id: 'reviewer', label: 'Independent Reviewer', copy: 'Challenges completed work from a different CLI provider.'},
-      {id: 'cto', label: 'CTO', copy: 'Monitors evidence, review gates, main health, and release.'},
+      {id: 'reviewer', label: 'Independent Reviewer', copy: 'Checks the finished work using a different AI service from the builder.'},
+      {id: 'cto', label: 'CTO', copy: 'Keeps the work moving and checks it is ready for your test.'},
     ];
     let settingsCatalog = null;
     const settingValue = (role) => {
@@ -891,7 +985,7 @@ PAGE = r'''<!doctype html>
         const result = q(`[data-settings-result="${role}"]`);
         button.disabled = true;
         result.className = 'connection-result';
-        result.textContent = 'Testing the local CLI and flags…';
+        result.textContent = 'Checking the selected AI service…';
         const sent = JSON.stringify(settingValue(role));
         try {
           const tested = await api('/api/settings/connect', {method: 'POST', headers: {'Content-Type':'application/json'}, body: sent});
@@ -987,12 +1081,21 @@ PAGE = r'''<!doctype html>
       } catch (error) { status.textContent = error.message; q('#update-apply').disabled = false; }
     };
     let projectsById = new Map();
+    let pendingMachineProject = new URLSearchParams(window.location.search).get('machine') || '';
     const loadedPageVersion = '__PAGE_VERSION__';
     async function refresh() {
       try {
         const value = await api('/api/projects');
         if (value.page_version && value.page_version !== loadedPageVersion) { window.location.reload(); return; }
         projectsById = new Map(value.projects.map((project) => [project.id, project]));
+        if (pendingMachineProject && projectsById.has(pendingMachineProject)) {
+          // arriving from the project's board card ("Connect the test machine"): open the form for that project once
+          const wanted = projectsById.get(pendingMachineProject); pendingMachineProject = '';
+          setTimeout(() => openMachine(wanted), 0);
+        }
+        if (machineDialog.open && machineProject && !q('#machine-connect').disabled) {   // the open window follows the machine: an install that finishes, a pause that asks again
+          machinePost('status').then((fresh) => { if (machineDialog.open) { machineProject.test_machine = fresh; renderMachineDialog(fresh); } }).catch(() => {});
+        }
         const container = q('#projects');
         container.setAttribute('aria-busy', 'false');
         container.innerHTML = value.projects.length
@@ -1029,6 +1132,15 @@ PAGE = r'''<!doctype html>
     }
 
     document.addEventListener('click', async (event) => {
+      const helpLink = event.target.closest('a[data-help-link]');
+      if (helpLink) {
+        event.preventDefault();
+        if (machineDialog.open) machineDialog.close();
+        await showPage('help', true);
+        const target = q('#help-windows-vm');
+        if (target) target.scrollIntoView({block: 'start'});
+        return;
+      }
       const nav = event.target.closest('button[data-page]');
       if (nav) {
         await showPage(nav.dataset.page, true);
@@ -1064,6 +1176,9 @@ PAGE = r'''<!doctype html>
         }
         if (button.dataset.act === 'repair') {
           openRepair(projectsById.get(id));
+        }
+        if (button.dataset.act === 'machine') {
+          openMachine(projectsById.get(id));
         }
         if (button.dataset.act === 'remove') {
           openRemove(projectsById.get(id));
@@ -1423,7 +1538,122 @@ PAGE = r'''<!doctype html>
       }
     });
 
-    showPage(new URLSearchParams(window.location.search).get('page'));
+    // ---- Test machine (2026-10-20): the owner types address, user and password here, once; the manager does the rest ----
+    const machineDialog = q('#machine-dialog');
+    let machineProject = null, machineBusyTimer = null, machineChallenge = null;
+    const onThisComputer = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(window.location.hostname);
+    const machineStepText = {confirmed: 'confirmed', unknown: 'not confirmed', failed: 'failed'};
+    function machineBusy(on, text) {
+      q('#machine-busy').hidden = !on;
+      clearInterval(machineBusyTimer);
+      if (!on) return;
+      const started = Date.now();
+      const tick = () => { q('#machine-busy-text').textContent = `${text} (${Math.round((Date.now() - started) / 1000)}s; usually well under a minute)`; };
+      tick(); machineBusyTimer = setInterval(tick, 1000);
+    }
+    function renderMachineDialog(m) {
+      m = m || {};
+      const box = q('#machine-state');
+      const steps = m.steps || {};
+      const stepList = Object.keys(steps).some((k) => steps[k] !== 'unknown') || (m.last_attempt && m.last_attempt.ok === false)
+        ? `<ul class="machine-steps">${[['scanned', 'Machine identity read'], ['key_published', 'Automatic sign-in set up'], ['verified', 'Automatic sign-in checked']].map(([k, label]) => `<li class="${esc(steps[k] || 'unknown')}">${label}: ${machineStepText[steps[k] || 'unknown']}</li>`).join('')}</ul>` : '';
+      let html;
+      if (m.connected && m.usable) html = `<strong>Connected: ${esc(m.user)}@${esc(m.address)}</strong>${m.os ? ' (' + esc(m.os) + (m.account_kind ? ', ' + esc(m.account_kind) + ' account' : '') + ')' : ''}.<small>Machine identity ${esc(m.fingerprint)}. ${m.ready ? 'Ready: ' + esc(m.ready_note) : 'Not ready yet: the agents install the tools they need and record them.'}</small>`;
+      else if (m.connected && m.state === 'baseline_incomplete') html = `<strong>The agents are changing this machine.</strong><small>They are installing or changing tools on it. There is nothing for you to do while they work; it becomes ready by itself. Do not press Connect now: reconnecting would mean the earlier tests have to be run again. If this stays for a long time, ask Delivery in the project to finish or redo the setup.</small>`;
+      else if (m.connected) html = `<strong>${esc(m.cause_text || m.message || 'This machine needs you.')}</strong><small>Enter the password again below and press Connect. Everything else keeps running meanwhile.</small>`;
+      else html = `<strong>No machine connected yet.</strong><small>${m.request && m.request.reason ? esc((m.request.by || 'An agent') + ' needs it: ' + m.request.reason) : 'Fill in the three fields below and press Connect.'}</small>`;
+      const failed = m.last_attempt && m.last_attempt.ok === false ? `<small><strong>Last attempt:</strong> ${esc(m.last_attempt.message || '')}</small>` : '';
+      const recovering = (m.recovering || []).length ? `<small>Recovering ${(m.recovering || []).length} request(s) that used the old connection.</small>` : '';
+      box.className = `machine-card ${m.connected && m.usable ? 'ok' : 'needs'}`;
+      box.innerHTML = html + failed + stepList + recovering;
+      q('#machine-prereq').innerHTML = (m.prerequisites || []).map((item) => `<li>${esc(item)}</li>`).join('');
+      q('#machine-release').hidden = !(m.connected || m.reserved);   // a machine held for this project can always be let go, connected or not
+      q('#machine-check').hidden = !m.connected;
+      q('#machine-connect').textContent = m.connected ? 'Connect again' : 'Connect';
+      if (!onThisComputer) {
+        q('#machine-password').disabled = true; q('#machine-connect').disabled = true;
+        q('#machine-error').textContent = 'The password can only be typed on the computer that runs Mission Control. Open Mission Control there (or through an ssh tunnel to 127.0.0.1) and try again.';
+      }
+    }
+    function openMachine(project) {
+      if (!project) return;
+      machineProject = project; machineChallenge = null;
+      const m = project.test_machine || {};
+      q('#machine-title').textContent = `Test machine — ${project.name}`;
+      q('#machine-address').value = m.address || ''; q('#machine-user').value = m.user || ''; q('#machine-port').value = m.port || 22;
+      q('#machine-password').value = ''; q('#machine-identity').hidden = true; q('#machine-error').textContent = '';
+      machineBusy(false); renderMachineDialog(m); machineReleaseDisarm();
+      machineDialog.showModal();
+      (m.address ? q('#machine-password') : q('#machine-address')).focus();
+    }
+    async function machinePost(action, body) {
+      return api(`/api/projects/${machineProject.id}/test-machine/${action}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+    }
+    q('#machine-close').onclick = () => { q('#machine-password').value = ''; machineBusy(false); machineDialog.close(); };
+    machineDialog.addEventListener('close', () => { q('#machine-password').value = ''; machineBusy(false); });
+    async function machineConnect(confirmChanged) {
+      const error = q('#machine-error'); error.textContent = '';
+      let password = q('#machine-password').value;
+      let keepPassword = false;   // the changed-identity Confirm needs the password typed once, so it stays in the field while the identity is shown
+      if (!password) { error.textContent = 'Enter the account password.'; q('#machine-password').focus(); return; }
+      q('#machine-connect').disabled = true;
+      try {
+        if (confirmChanged && machineChallenge && (machineChallenge.address !== q('#machine-address').value.trim() || machineChallenge.user !== q('#machine-user').value.trim() || String(machineChallenge.port) !== String(q('#machine-port').value).trim())) {
+          machineChallenge = null; q('#machine-identity').hidden = true; keepPassword = true;
+          throw new Error('The address, account or port changed after the identity was read. Press Connect again to read the identity of the machine you now mean.');
+        }
+        if (!machineChallenge || !confirmChanged) {
+          machineBusy(true, 'Reading the machine’s identity');
+          machineChallenge = await machinePost('scan', {address: q('#machine-address').value, user: q('#machine-user').value, port: q('#machine-port').value});
+          if (machineChallenge.changed) {
+            machineBusy(false);
+            const box = q('#machine-identity'); box.hidden = false;
+            box.innerHTML = `<strong>This machine’s identity changed.</strong> ${esc(machineChallenge.note)}<br>New identity: <code>${esc(machineChallenge.fingerprint)}</code><br><button class="button" type="button" id="machine-confirm">It is my rebuilt VM — confirm and connect</button>`;
+            q('#machine-confirm').onclick = () => machineConnect(true);
+            keepPassword = true;
+            return;
+          }
+        }
+        q('#machine-identity').hidden = true;
+        machineBusy(true, 'Signing in and installing the key');
+        const result = await machinePost('connect', {challenge: machineChallenge.challenge, password, confirm_changed: Boolean(confirmChanged)});
+        machineChallenge = null; q('#machine-password').value = '';
+        machineBusy(false);
+        renderMachineDialog(result);
+        machineProject.test_machine = result;
+        status(`Test machine connected: ${result.user}@${result.address}.`);
+        await refresh();
+      } catch (problem) {
+        machineBusy(false); machineChallenge = null;
+        error.textContent = problem.message;
+        try { const fresh = await machinePost('status'); renderMachineDialog(fresh); } catch (ignored) { /* the message above stays */ }
+      } finally {
+        password = '';
+        if (!keepPassword) q('#machine-password').value = '';
+        q('#machine-connect').disabled = !onThisComputer;
+      }
+    }
+    q('#machine-form').addEventListener('submit', (event) => { event.preventDefault(); machineConnect(false); });
+    q('#machine-check').onclick = async () => {
+      q('#machine-error').textContent = ''; machineBusy(true, 'Checking the machine');
+      try { const result = await machinePost('check'); q('#machine-error').textContent = result.message; renderMachineDialog(await machinePost('status')); }
+      catch (problem) { q('#machine-error').textContent = problem.message; }
+      finally { machineBusy(false); }
+    };
+    let machineReleaseArmed = false;
+    const machineReleaseDisarm = () => { machineReleaseArmed = false; q('#machine-release').textContent = 'Release this machine'; };
+    q('#machine-release').onclick = async () => {
+      if (!machineReleaseArmed) {   // a designed two-step, never a browser confirm box
+        machineReleaseArmed = true;
+        q('#machine-release').textContent = 'Press again to release (its key stays on the machine until you destroy it)';
+        return;
+      }
+      machineReleaseDisarm();
+      try { const result = await machinePost('release'); q('#machine-error').textContent = result.note; renderMachineDialog(await machinePost('status')); await refresh(); }
+      catch (problem) { q('#machine-error').textContent = problem.message; }
+    };
+
+    showPage(new URLSearchParams(window.location.search).get('page')).then(() => { if (window.location.hash === '#help-windows-vm' && q('#help-page') && !q('#help-page').hidden) q('#help-windows-vm').scrollIntoView({block: 'start'}); });
     refresh();
     setInterval(refresh, 4000);
   </script>
