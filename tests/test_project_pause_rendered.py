@@ -291,7 +291,7 @@ class RenderedPauseTests(unittest.TestCase):
         self.assertIn("project-paused", rendered["bodyClass"].split())
         self.assertGreater(rendered["disabledCount"], 0)
         self.assertEqual(rendered["disabledWithoutReason"], [])
-        self.assertEqual(rendered["enabledButtons"], [])
+        self.assertEqual(rendered["enabledButtons"], ["Give direction (starts the agents)"], "the one exception: saving a direction while paused keeps the words and starts nothing until Resume")
         self.assertIn("PAUSED", rendered["agentsText"])
         self.assertIn("intentionally paused", rendered["agentsText"])
         self.assertIn("PAUSED — REVIEWER PRESERVED", rendered["queueText"])

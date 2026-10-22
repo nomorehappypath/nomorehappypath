@@ -1166,7 +1166,10 @@ class ProjectManager:
         pinned = ((current or {}).get("host_key") or {}) if (current or {}).get("connected") and (current or {}).get("address") == address and int((current or {}).get("port", 22)) == port else {}
         changed = bool(pinned.get("fingerprint")) and pinned.get("fingerprint") != found["fingerprint"]
         challenge = self.machine_challenges.issue(project_id, address, user, port, found, changed, not pinned.get("fingerprint"))
+        from harness import machine_notices
         return {
+            "same_computer": machine_notices.same_computer_warning(self.home, project_id, address, port, found["fingerprint"]),
+            "test_running": machine_notices.running_test_notice(context) if (current or {}).get("connected") else "",
             "challenge": challenge["id"], "address": address, "user": user, "port": port,
             "fingerprint": found["fingerprint"], "key_type": found["type"], "changed": changed,
             "first_use": challenge["first_use"],
@@ -1185,6 +1188,11 @@ class ProjectManager:
         context = self._machine_context(project_id)
         generation = self._machine_stop_generation.get(project_id, 0)   # before the challenge is consumed: a stop after this cancels the Connect
         challenge = self.machine_challenges.consume(str(body.get("challenge", "")), project_id)
+        from harness import machine_notices
+        if not body.get("confirm_running") and (test_machine.read(context) or {}).get("connected"):
+            running = machine_notices.running_test_notice(context)   # a test that started after the scan: the owner has not seen the warning yet
+            if running:
+                raise test_machine.MachineError(running.replace("Press Confirm only", "Press Connect again and Confirm only"), "test_running")
         with self._machine_jobs_guard:
             job = self._machine_jobs.setdefault(project_id, {"running": False})
             if job.get("running"):

@@ -24,6 +24,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Iterator
@@ -252,6 +253,9 @@ def remote_facts(root, task: str, name: str, sha256: str, deadline: float | None
     raise BuildError(f"The machine could not report `{name}` ({detail[0][:200]}). Check that it is running and connected, then collect again.", "machine")
 
 
+_LIMITED_EXEC = ("import os,resource,sys;n=int(sys.argv[1]);resource.setrlimit(resource.RLIMIT_FSIZE,(n,n));os.execvp(sys.argv[2],sys.argv[2:])")
+
+
 def fetch(root, task: str, name: str, sha256: str, destination: Path, size_cap: int, deadline: float | None = None) -> None:
     """scp one output into `destination`, killing the copy if it grows past `size_cap`; the caller checks the bytes."""
     value = _usable(root)
@@ -259,8 +263,14 @@ def fetch(root, task: str, name: str, sha256: str, destination: Path, size_cap: 
     remote = f"{value['user']}@{value['address']}:{_remote_dir(task, sha256)}/{name}"
     argv = [scp_program(), "-q", "-F", "/dev/null", "-P", str(int(value["port"])), *_key_options(paths["known_hosts"], paths["key"]), remote, str(destination)]
     # The folder, digest and name were validated; the account is validated at Connect: nothing here is shell text.
+    # Hard byte limit: the copy program itself may not write more than one byte past the certified
+    # size, so a growing remote file cannot outrun the size check below (which only samples) and fill this computer's disk.
+    if shutil.which(scp_program()) is None:
+        raise BuildError("This computer has no `scp` program, so the build cannot be copied from the machine. Install the OpenSSH client (built into macOS, "
+                         "Windows 10 and later; on Linux install the openssh-client package).", "machine")
+    argv = [sys.executable, "-c", _LIMITED_EXEC, str(int(size_cap) + 1), *argv]
     try:
-        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True,
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", start_new_session=True,
                                    env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C", "LC_ALL": "C", "HOME": os.environ.get("HOME", "/")})
     except FileNotFoundError as error:
         raise BuildError("This computer has no `scp` program, so the build cannot be copied from the machine. Install the OpenSSH client (built into macOS, "
@@ -284,6 +294,13 @@ def fetch(root, task: str, name: str, sha256: str, destination: Path, size_cap: 
     finally:
         if process.stderr:
             process.stderr.close()
+    try:
+        copied = destination.stat().st_size
+    except FileNotFoundError:
+        copied = 0
+    if copied > size_cap:
+        raise BuildError(f"`{name}` is larger on the machine than the {size_cap} bytes the certified run recorded, so the copy was stopped and nothing was kept. "
+                         "It changed after the test; a new certified run is needed.")
     if process.returncode != 0:
         raise BuildError(f"Copying `{name}` from the machine failed ({error_text.strip()[:240] or 'scp exit ' + str(process.returncode)}). "
                          "Check that the machine is running and allows file transfer (OpenSSH's sftp subsystem), then collect again.", "machine")

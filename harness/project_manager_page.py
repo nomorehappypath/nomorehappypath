@@ -174,6 +174,8 @@ PAGE = r'''<!doctype html>
     .machine-steps .unknown::before { content: "? "; }
     .machine-busy { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-weight: 650; }
     .machine-identity { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e3a34a; background: #fff6e6; color: #4a2e00; font-size: 13.5px; }
+    .machine-warning { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; border: 1px solid #e3a34a; background: #fff6e6; color: #4a2e00; font-size: 13.5px; }
+    .machine-warning[hidden] { display: none; }
     .machine-identity code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
     @media (prefers-color-scheme: dark) { .machine-card { background: #1b2433; } .machine-card.needs, .machine-identity { background: #3a2f0d; color: #f4e3a6; border-color: #7a6420; } .machine-card.ok { background: #12301f; color: #cdeedd; border-color: #2d6a47; } }
     dialog { width: min(560px, calc(100% - 32px)); padding: 0; border: 0; border-radius: 18px; color: var(--ink); background: white; box-shadow: 0 30px 90px rgba(8,18,35,.34); }
@@ -513,7 +515,7 @@ Start-Service sshd</pre>
 
         <section class="help-section" aria-labelledby="help-buttons-title">
           <h2 id="help-buttons-title">Main Buttons And What They Show</h2>
-          <p class="help-callout"><strong>A task needs all three roles running: at least one Delivery agent, one Independent Reviewer, and the CTO.</strong> Delivery builds, the Reviewer verifies, and the CTO routes work and watches the gates. With any of them missing, the task stalls at that role's stage — direction with no builder, a finished build with no verdict, or a passed review that never reaches release. Start all three from Mission Control before expecting a task to move end to end.</p>
+          <p class="help-callout"><strong>A task needs all three roles running: at least one Delivery agent, one Independent Reviewer, and the CTO.</strong> Delivery builds, the Reviewer verifies, and the CTO routes work and watches the gates. With any of them missing, the task stalls at that role's stage — direction with no builder, a finished build with no verdict, or a passed review that never reaches release. Pressing <strong>Give direction</strong> in Mission Control when nothing is running starts all three for you (your terminal may ask you to trust the folder once: choose the Yes option it shows); you can also start them one by one with the buttons.</p>
           <table class="help-table">
             <thead><tr><th>Button or area</th><th>What it does</th></tr></thead>
             <tbody>
@@ -716,6 +718,7 @@ Start-Service sshd</pre>
       <div class="field"><label for="machine-user">Account name on the machine</label><input id="machine-user" autocomplete="off" spellcheck="false" placeholder="WindowsVM"></div>
       <div class="field"><label for="machine-port">Port</label><input id="machine-port" inputmode="numeric" autocomplete="off" value="22" spellcheck="false"></div>
       <div class="field"><label for="machine-password">Password for that account</label><input id="machine-password" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="machine-password-hint"><p class="field-hint" id="machine-password-hint">Used for this one connection and then forgotten: it is never saved, logged or shown to an agent. Use a password that exists only for this throwaway machine.</p></div>
+      <p class="machine-warning" id="machine-warning" role="status" hidden></p>
       <div class="machine-identity" id="machine-identity" hidden></div>
       <div class="machine-busy" id="machine-busy" hidden><div class="spinner" aria-hidden="true"></div><span id="machine-busy-text"></span></div>
       <p class="form-error" id="machine-error" role="alert" aria-live="polite"></p>
@@ -1551,6 +1554,17 @@ Start-Service sshd</pre>
       const tick = () => { q('#machine-busy-text').textContent = `${text} (${Math.round((Date.now() - started) / 1000)}s; usually well under a minute)`; };
       tick(); machineBusyTimer = setInterval(tick, 1000);
     }
+    // What happens next, in plain words, for a machine that is connected and usable. The project row says whether the agents
+    // are running or the project is paused, so the sentence is the truthful one for this project right now.
+    function machineNextStep(project) {
+      const row = (project && projectsById.get(project.id)) || project || {};
+      const tasks = row.task_counts || {};
+      if (row.paused) return 'This project is paused. When you Resume it, Delivery will start testing on this machine; nothing else to do here.';
+      if (!((row.agent_counts || {}).delivery > 0)) return 'The project’s agents are not running yet. When you give direction in the project they start by themselves, and then Delivery will start testing on this machine; nothing else to do here.';
+      if (!(tasks.total > 0)) return 'Delivery is running but has not been given anything to build yet. Give direction in the project; Delivery will then test on this machine and nothing else is needed here.';
+      if (tasks.awaiting_owner > 0) return 'Delivery is waiting for your answer in the project. After you answer, it will test on this machine; nothing else to do here.';
+      return 'Delivery will start testing on this machine; nothing else to do.';
+    }
     function renderMachineDialog(m) {
       m = m || {};
       const box = q('#machine-state');
@@ -1558,7 +1572,7 @@ Start-Service sshd</pre>
       const stepList = Object.keys(steps).some((k) => steps[k] !== 'unknown') || (m.last_attempt && m.last_attempt.ok === false)
         ? `<ul class="machine-steps">${[['scanned', 'Machine identity read'], ['key_published', 'Automatic sign-in set up'], ['verified', 'Automatic sign-in checked']].map(([k, label]) => `<li class="${esc(steps[k] || 'unknown')}">${label}: ${machineStepText[steps[k] || 'unknown']}</li>`).join('')}</ul>` : '';
       let html;
-      if (m.connected && m.usable) html = `<strong>Connected: ${esc(m.user)}@${esc(m.address)}</strong>${m.os ? ' (' + esc(m.os) + (m.account_kind ? ', ' + esc(m.account_kind) + ' account' : '') + ')' : ''}.<small>Machine identity ${esc(m.fingerprint)}. ${m.ready ? 'Ready: ' + esc(m.ready_note) : 'Not ready yet: the agents install the tools they need and record them.'}</small>`;
+      if (m.connected && m.usable) html = `<strong>Connected: ${esc(m.user)}@${esc(m.address)}</strong>${m.os ? ' (' + esc(m.os) + (m.account_kind ? ', ' + esc(m.account_kind) + ' account' : '') + ')' : ''}.<small>Machine identity ${esc(m.fingerprint)}. ${m.ready ? 'Ready: ' + esc(m.ready_note) : 'Not ready yet: the agents install the tools they need and record them.'}</small><small class="machine-next" id="machine-next">${esc(machineNextStep(machineProject))}</small>`;
       else if (m.connected && m.state === 'baseline_incomplete') html = `<strong>The agents are changing this machine.</strong><small>They are installing or changing tools on it. There is nothing for you to do while they work; it becomes ready by itself. Do not press Connect now: reconnecting would mean the earlier tests have to be run again. If this stays for a long time, ask Delivery in the project to finish or redo the setup.</small>`;
       else if (m.connected) html = `<strong>${esc(m.cause_text || m.message || 'This machine needs you.')}</strong><small>Enter the password again below and press Connect. Everything else keeps running meanwhile.</small>`;
       else html = `<strong>No machine connected yet.</strong><small>${m.request && m.request.reason ? esc((m.request.by || 'An agent') + ' needs it: ' + m.request.reason) : 'Fill in the three fields below and press Connect.'}</small>`;
@@ -1581,7 +1595,7 @@ Start-Service sshd</pre>
       const m = project.test_machine || {};
       q('#machine-title').textContent = `Test machine — ${project.name}`;
       q('#machine-address').value = m.address || ''; q('#machine-user').value = m.user || ''; q('#machine-port').value = m.port || 22;
-      q('#machine-password').value = ''; q('#machine-identity').hidden = true; q('#machine-error').textContent = '';
+      q('#machine-password').value = ''; q('#machine-identity').hidden = true; q('#machine-warning').hidden = true; q('#machine-error').textContent = '';
       machineBusy(false); renderMachineDialog(m); machineReleaseDisarm();
       machineDialog.showModal();
       (m.address ? q('#machine-password') : q('#machine-address')).focus();
@@ -1591,38 +1605,45 @@ Start-Service sshd</pre>
     }
     q('#machine-close').onclick = () => { q('#machine-password').value = ''; machineBusy(false); machineDialog.close(); };
     machineDialog.addEventListener('close', () => { q('#machine-password').value = ''; machineBusy(false); });
-    async function machineConnect(confirmChanged) {
+    async function machineConnect(confirmChanged, confirmedRunning) {
       const error = q('#machine-error'); error.textContent = '';
       let password = q('#machine-password').value;
       let keepPassword = false;   // the changed-identity Confirm needs the password typed once, so it stays in the field while the identity is shown
       if (!password) { error.textContent = 'Enter the account password.'; q('#machine-password').focus(); return; }
       q('#machine-connect').disabled = true;
       try {
-        if (confirmChanged && machineChallenge && (machineChallenge.address !== q('#machine-address').value.trim() || machineChallenge.user !== q('#machine-user').value.trim() || String(machineChallenge.port) !== String(q('#machine-port').value).trim())) {
+        if ((confirmChanged || confirmedRunning) && machineChallenge && (machineChallenge.address !== q('#machine-address').value.trim() || machineChallenge.user !== q('#machine-user').value.trim() || String(machineChallenge.port) !== String(q('#machine-port').value).trim())) {
           machineChallenge = null; q('#machine-identity').hidden = true; keepPassword = true;
           throw new Error('The address, account or port changed after the identity was read. Press Connect again to read the identity of the machine you now mean.');
         }
-        if (!machineChallenge || !confirmChanged) {
+        if (!machineChallenge || !(confirmChanged || confirmedRunning)) {
           machineBusy(true, 'Reading the machine’s identity');
           machineChallenge = await machinePost('scan', {address: q('#machine-address').value, user: q('#machine-user').value, port: q('#machine-port').value});
-          if (machineChallenge.changed) {
+          // a machine that looks like another project's is a warning only: it stays in the window and Connect carries on
+          const same = q('#machine-warning'); same.textContent = machineChallenge.same_computer || ''; same.hidden = !machineChallenge.same_computer;
+          if (machineChallenge.changed || machineChallenge.test_running) {
             machineBusy(false);
             const box = q('#machine-identity'); box.hidden = false;
-            box.innerHTML = `<strong>This machine’s identity changed.</strong> ${esc(machineChallenge.note)}<br>New identity: <code>${esc(machineChallenge.fingerprint)}</code><br><button class="button" type="button" id="machine-confirm">It is my rebuilt VM — confirm and connect</button>`;
-            q('#machine-confirm').onclick = () => machineConnect(true);
+            const changedPart = machineChallenge.changed ? `<strong>This machine’s identity changed.</strong> ${esc(machineChallenge.note)}<br>New identity: <code>${esc(machineChallenge.fingerprint)}</code><br>` : '';
+            const runningPart = machineChallenge.test_running ? `${esc(machineChallenge.test_running)}<br>` : '';
+            const label = machineChallenge.changed ? 'It is my rebuilt VM — confirm and connect' : 'Confirm — reconnect now';
+            box.innerHTML = `${changedPart}${runningPart}<button class="button" type="button" id="machine-confirm">${label}</button>`;
+            const wasChanged = Boolean(machineChallenge.changed);
+            q('#machine-confirm').onclick = () => machineConnect(wasChanged, true);
             keepPassword = true;
             return;
           }
         }
         q('#machine-identity').hidden = true;
         machineBusy(true, 'Signing in and installing the key');
-        const result = await machinePost('connect', {challenge: machineChallenge.challenge, password, confirm_changed: Boolean(confirmChanged)});
+        const result = await machinePost('connect', {challenge: machineChallenge.challenge, password, confirm_changed: Boolean(confirmChanged), confirm_running: Boolean(confirmedRunning)});
         machineChallenge = null; q('#machine-password').value = '';
         machineBusy(false);
         renderMachineDialog(result);
         machineProject.test_machine = result;
         status(`Test machine connected: ${result.user}@${result.address}.`);
         await refresh();
+        if (machineDialog.open) renderMachineDialog(machineProject.test_machine);   // the project row is fresh now: say what happens next truthfully
       } catch (problem) {
         machineBusy(false); machineChallenge = null;
         error.textContent = problem.message;

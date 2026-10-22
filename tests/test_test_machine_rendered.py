@@ -195,6 +195,81 @@ class TestMachineRenderedTests(unittest.TestCase):
         ])
         self.assert_passed(run)
 
+    def test_after_connect_the_window_says_what_happens_next_and_is_truthful_about_agents_and_pause(self):
+        # open-list item B (finding 25): a silent connected state is gone; the sentence matches the project's real state
+        from harness import board
+        url, manager = self.serve()
+        connected_descriptor(self.context, identity=manager.machine_identity, ready={"state": True, "note": "ok"})
+        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "The project’s agents are not running yet."},
+                              {"expect": "Delivery will start testing on this machine; nothing else to do here."}])
+        self.assert_passed(run)
+        board.register(self.context, "engineering", board.AWAITING_OWNER_DIRECTION, "Delivery", "OpenAI", "s-1")
+        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery is running but has not been given anything to build yet."}])
+        self.assert_passed(run)
+        with board.locked_state(self.context) as state:
+            state["task_owner_directions"]["t1"] = "build it"
+        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery will start testing on this machine; nothing else to do."}])
+        self.assert_passed(run)
+        self.assertNotIn("not running yet", run["final_text"])
+        board.begin_project_pause(self.context, drain_seconds=0)
+        board.finish_project_pause(self.context)
+        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "This project is paused. When you Resume it, Delivery will start testing on this machine"}])
+        self.assert_passed(run)
+
+    def _other_project(self):
+        code = self.base / "beta"
+        code.mkdir()
+        return registry.context_for_entry(registry.register(self.home, "beta", code))
+
+    def test_connecting_a_machine_that_looks_like_another_projects_warns_and_still_connects(self):
+        with FakeMachine(self) as machine:
+            url, manager = self.serve(machine)
+            seen = test_machine.scan_host_key("127.0.0.1", machine.port)
+            connected_descriptor(self._other_project(), identity=manager.machine_identity, address="10.9.9.9", user="WindowsVM",
+                                 host_key={"type": seen["type"], "fingerprint": seen["fingerprint"], "line": "x"})
+            run = self.walk(url, [
+                {"click": {"selector": f"button[data-act='machine'][data-id='{self.entry['id']}']"}},
+                {"type": {"selector": "#machine-address", "text": "127.0.0.1"}},
+                {"type": {"selector": "#machine-user", "text": machine.user}},
+                {"type": {"selector": "#machine-port", "text": str(machine.port)}},
+                {"type": {"selector": "#machine-password", "text": PASSWORD}},
+                {"click": {"selector": "#machine-connect"}},
+                {"expect": f"Connected: {machine.user}@127.0.0.1"},
+                {"expect": "This looks like the same computer as WindowsVM@10.9.9.9 that beta is using."},
+            ])
+            self.assert_passed(run)
+            self.assertTrue(test_machine.read(self.context)["connected"], "a warning never blocks")
+
+    def test_reconnecting_while_a_test_runs_says_so_and_waits_for_confirm(self):
+        from harness import board
+        with FakeMachine(self) as machine:
+            url, manager = self.serve(machine)
+            seen = test_machine.scan_host_key("127.0.0.1", machine.port)
+            connected_descriptor(self.context, identity=manager.machine_identity, address="127.0.0.1", user=machine.user, port=machine.port,
+                                 host_key={"type": seen["type"], "fingerprint": seen["fingerprint"], "line": "x"})
+            agent = board.register(self.context, "engineering", board.AWAITING_OWNER_DIRECTION, "Delivery", "OpenAI", "s-1")
+            board.review_execution_start(self.context, agent["id"], "r1", "challenge execution: /tmp/ledger.json")
+            revision = test_machine.read(self.context)["revision"]
+            run = self.walk(url, [
+                {"click": {"selector": "button[data-act='machine']"}},
+                {"type": {"selector": "#machine-password", "text": PASSWORD}},
+                {"click": {"selector": "#machine-connect"}},
+                {"expect": "A test may be running on this machine right now"},
+                {"expect": "Reconnecting can interrupt it"},
+            ])
+            self.assert_passed(run)
+            self.assertEqual(test_machine.read(self.context)["revision"], revision, "nothing was reconnected before Confirm")
+            run = self.walk(url, [
+                {"click": {"selector": "button[data-act='machine']"}},
+                {"type": {"selector": "#machine-password", "text": PASSWORD}},
+                {"click": {"selector": "#machine-connect"}},
+                {"expect": "A test may be running on this machine right now"},
+                {"click": {"selector": "#machine-confirm"}},
+                {"expect": f"Connected: {machine.user}@127.0.0.1"},
+            ])
+            self.assert_passed(run)
+            self.assertGreater(test_machine.read(self.context)["revision"], revision)
+
     def test_release_is_a_designed_two_step_not_a_browser_confirm_box(self):
         url, manager = self.serve()
         connected_descriptor(self.context, identity=manager.machine_identity)

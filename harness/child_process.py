@@ -107,7 +107,7 @@ def run_bounded(argv, *, cwd, env, timeout: float):
     import subprocess
     process = subprocess.Popen(
         list(argv), cwd=cwd, env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, start_new_session=True,
+        text=True, encoding="utf-8", errors="replace", start_new_session=True,
     )
     try:
         output, _ = process.communicate(timeout=timeout)

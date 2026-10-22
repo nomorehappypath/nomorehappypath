@@ -39,6 +39,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import screen_script as screen_script_runner
 from harness import test_machine
+from harness import failure_words
 from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
@@ -733,6 +734,8 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
         _settle_owner_actions(state, event, agent)
     if kind in _HOLD_ENDING_EVENTS and state.get("control_plane_holds"):
         _resolve_concluded_hold(state, event)
+    if kind == "control_plane_hold_resolved" and state.get("owner_actions"):
+        _close_hold_owner_card(state, event)
     if kind in CTO_ROUTE_REQUIRED_EVENTS or kind in CTO_ROUTING_EVENTS or kind in TASK_PROGRESS_EVENTS or kind == "status_update":
         _track_route_obligation(state, event, agent)
     if agent is not None and kind in PROGRESS_EVENTS:
@@ -1880,6 +1883,7 @@ def recover_interrupted_executions(root: ProjectRoot) -> list[dict[str, Any]]:
     """
     current = datetime.now(timezone.utc)
     recovered: list[dict[str, Any]] = []
+    recovery_wakes: list[dict[str, Any]] = []
     try:
         from harness import control
         live_session_ids: set[str] | None = {
@@ -1913,25 +1917,25 @@ def recover_interrupted_executions(root: ProjectRoot) -> list[dict[str, Any]]:
                 "Delivery evidence execution was interrupted and its exact board "
                 "heartbeat expired; the same scope must be rerun."
             )
-            failed = json.loads(json.dumps(request))
-            failed.update({
-                "status": "cancelled", "delivery_state": "interrupted",
-                "result": "failed", "result_summary": reason,
-                "completed_at": now(),
-                "route_state": "delivery_interrupted_recovered",
-            })
-            failures = state.setdefault("delivery_attempt_failures", [])
-            failures.append(failed)
-            del failures[:-200]
+            # An interrupted run is not a failed test: no failure record (same policy as the cancel path in request_review).
             _reset_interrupted_repair_package(state, request, reason)
             state["qa_requests"].pop(request_id, None)
-            reviewer_id = str(request.get("reserved_by") or request.get("claimed_by") or "")
+            # A request routed to a Reviewer that has not reserved it yet has only `routed_to`: that Reviewer holds a queued assignment too.
+            reviewer_id = str(request.get("reserved_by") or request.get("claimed_by") or request.get("routed_to") or "")
             reviewer = state.get("agents", {}).get(reviewer_id)
             if reviewer:
                 reviewer.update({
                     "task": "REVIEW_QUEUE", "status": "waiting",
                     "status_note": "Interrupted Delivery evidence was cleared; waiting for a replacement request.",
                     "last_status_at": now(),
+                })
+            if reviewer or request.get("route_instruction_id"):
+                recovery_wakes.append({
+                    "request_id": request_id, "task": request.get("task", ""),
+                    "instruction_id": str(request.get("route_instruction_id") or ""),
+                    "session_id": str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or ""),
+                    "reviewer_id": reviewer_id, "reason": reason,
+                    "notice": _interrupted_review_notice(request_id, request.get("task", ""), reason),
                 })
             if developer:
                 developer.update({
@@ -2030,6 +2034,11 @@ def recover_interrupted_executions(root: ProjectRoot) -> list[dict[str, Any]]:
                 ),
             })
             recovered.append(event)
+    for wake in recovery_wakes:
+        try:
+            _withdraw_reviewer_wake(root, wake)
+        except (ValueError, OSError):
+            pass
     return recovered
 
 
@@ -4924,6 +4933,8 @@ def owner_action_expires_at(action: dict[str, Any]) -> datetime | None:
 def owner_action_clears_when(action: dict[str, Any], current: datetime | None = None) -> str:
     """The plain line under a card telling the owner what will clear it."""
     kind = action.get("kind", "other")
+    if action.get("hold_task"):
+        return "Clears when the hold is cleared or the task is cancelled or accepted"
     if action.get("default_action"):
         due = _parsed_timestamp(action.get("default_due_at"))
         when = due.strftime("%H:%M UTC") if due else "the deadline"
@@ -5214,6 +5225,7 @@ def _record_owner_action(
     state: dict[str, Any], agent: dict[str, Any], title: str, command: str, why: str, task: str,
     kind: str = "", for_agent: str = "", default_action: str = "", default_minutes: int = 0,
     links: list[dict[str, Any]] | None = None, location: dict[str, Any] | None = None,
+    hold_task: str = "",
 ) -> dict[str, Any]:
     actions = state.setdefault("owner_actions", {})
     card = _classify_owner_action(state, {
@@ -5223,6 +5235,12 @@ def _record_owner_action(
     })
     for existing in actions.values():
         if existing.get("status") != "open":
+            continue
+        if hold_task or existing.get("hold_task"):
+            # item 24: a control-plane hold's card is its own card. An ordinary request never merges into it
+            # and it never merges into one; the same hold task is the same card.
+            if existing.get("hold_task") == hold_task:
+                return existing
             continue
         if default_action or existing.get("default_action"):
             # A question card is the same card only as the same question, read
@@ -5289,6 +5307,7 @@ def _record_owner_action(
         "agent_id": agent["id"], "status": "open", "recorded_at": recorded_at, "outcome": "", "done_at": "",
         **({"links": list(links)} if links else {}),
         **({"location": location} if location else {}),
+        **({"hold_task": hold_task} if hold_task else {}),
     }
     if default_action:
         action.update({
@@ -7119,6 +7138,80 @@ def _abandon_review_intents(
         request.pop(field, None)
 
 
+def _reopen_reserved_request(
+    state: dict[str, Any], request: dict[str, Any], reviewer: dict[str, Any] | None, abandon_reason: str, event_kind: str,
+    event_message: str, reviewer_note: str, wake_message: str, stale_wakes: list[dict[str, Any]], expired_wakes: list[tuple[str, str]],
+    age_seconds: int, extra_event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a reserved review request to the queue (inside the state lock); shared by expiry and a Reviewer's relinquish."""
+    previous_reviewer = request.get("reserved_by", "")
+    holder_session = str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or "")
+    if holder_session:
+        expired_wakes.append((holder_session, str(request["id"])))
+    if request.get("route_instruction_id"):
+        # The reviewer's wake for this request is obsolete now (a held reviewer never took it): withdraw it below,
+        # outside this lock, so it is not typed after a long wait for an assignment the reviewer no longer owns.
+        stale_wakes.append({
+            "request_id": request["id"], "task": request.get("task", ""), "instruction_id": request["route_instruction_id"],
+            "session_id": str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or ""),
+            "reviewer_id": str(previous_reviewer or ""), "notify": False,
+            "event_message": wake_message,
+        })
+    _abandon_review_intents(request, str(previous_reviewer or ""), abandon_reason)
+    request.update({
+        "status": "authoring" if request.get("delivery_state") == "executing" else "open",
+        "reserved_by": None, "reserved_at": None,
+        "authoring_last_activity_at": None,
+        "routed_to": None, "routed_session_id": "", "routed_at": None,
+        "route_state": "reservation_expired_reopened",
+    })
+    if reviewer and reviewer.get("active"):
+        reviewer.update({"task": "REVIEW_QUEUE", "status": "review_queue", "status_note": reviewer_note, "last_status_at": now()})
+    return _event(state, event_kind, reviewer, {
+        "task": request["task"], "request_id": request["id"],
+        "previous_reviewer": previous_reviewer, "age_seconds": age_seconds,
+        "message": event_message, **(extra_event or {}),
+    })
+
+
+def relinquish_review_reservation(root: Path, agent_id: str, request_id: str, reason: str) -> dict[str, Any]:
+    """A Reviewer that cannot use its reservation gives it back at once; the request returns to the queue for another Reviewer.
+
+    No verdict is recorded and nothing counts as a failed test. The same Reviewer is not offered this request again.
+    """
+    reason = " ".join(str(reason or "").split())
+    if len(reason) < 10:
+        raise ValueError("say in a sentence why this review cannot be done (at least 10 characters)")
+    stale_wakes: list[dict[str, Any]] = []
+    expired_wakes: list[tuple[str, str]] = []
+    with locked_state(root) as state:
+        qa = _require_agent(state, agent_id)
+        request = state.get("qa_requests", {}).get(request_id)
+        if qa.get("role") != "qa" or not request or request.get("status") != "reserved" or request.get("reserved_by") != qa.get("id"):
+            raise ValueError("only the reviewer holding this reservation may relinquish it")
+        request.setdefault("relinquished_by", []).append(qa["id"])
+        event = _reopen_reserved_request(
+            state, request, qa, "reservation relinquished", "qa_reservation_relinquished",
+            "the reviewer gave the review back (" + reason[:300] + "); it is open for another reviewer. No test failed",
+            "gave the review back to the queue", "the reviewer's wake for the relinquished reservation was withdrawn before it could be typed",
+            stale_wakes, expired_wakes, 0, {"reason": reason[:500]},
+        )
+        result = dict(request)
+    from harness import control
+    for wake in stale_wakes:
+        try:
+            _withdraw_reviewer_wake(root, wake)
+        except (ValueError, OSError):
+            pass
+    for session_id, held_request in expired_wakes:
+        try:
+            control.invalidate_review_wakes(root, session_id, held_request, "the reservation it announced was given back")
+        except (ValueError, OSError):
+            pass
+    result["event_id"] = event.get("id") if isinstance(event, dict) else None
+    return result
+
+
 def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIEW_RESERVATION_SECONDS) -> list[dict[str, Any]]:
     """Re-open an abandoned ledger-preparation reservation exactly once."""
     if timeout_seconds < 1:
@@ -7151,34 +7244,13 @@ def release_expired_review_reservations(root: Path, timeout_seconds: int = REVIE
             )
             if age < timeout_seconds:
                 continue
-            previous_reviewer = request.get("reserved_by", "")
-            holder_session = str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or "")
-            if holder_session:
-                expired_wakes.append((holder_session, str(request["id"])))
-            if request.get("route_instruction_id"):
-                # The reviewer's wake for this request is obsolete now (a held reviewer never took it): withdraw it below,
-                # outside this lock, so it is not typed after a long wait for an assignment the reviewer no longer owns.
-                stale_wakes.append({
-                    "request_id": request["id"], "task": request.get("task", ""), "instruction_id": request["route_instruction_id"],
-                    "session_id": str(request.get("routed_session_id") or (reviewer or {}).get("session_id") or ""),
-                    "reviewer_id": str(previous_reviewer or ""), "notify": False,
-                    "event_message": "the reviewer's wake for the expired reservation was withdrawn before it could be typed",
-                })
-            _abandon_review_intents(request, str(previous_reviewer or ""), "reservation expired")
-            request.update({
-                "status": "authoring" if request.get("delivery_state") == "executing" else "open",
-                "reserved_by": None, "reserved_at": None,
-                "authoring_last_activity_at": None,
-                "routed_to": None, "routed_session_id": "", "routed_at": None,
-                "route_state": "reservation_expired_reopened",
-            })
-            if reviewer and reviewer.get("active"):
-                reviewer.update({"task": "REVIEW_QUEUE", "status": "review_queue", "status_note": "review reservation expired before a valid Challenge Ledger was attached", "last_status_at": now()})
-            event = _event(state, "qa_reservation_expired", reviewer, {
-                "task": request["task"], "request_id": request["id"],
-                "previous_reviewer": previous_reviewer, "age_seconds": int(age),
-                "message": "review reservation expired without a valid Challenge Ledger and was reopened for another reviewer",
-            })
+            event = _reopen_reserved_request(
+                state, request, reviewer, "reservation expired", "qa_reservation_expired",
+                "review reservation expired without a valid Challenge Ledger and was reopened for another reviewer",
+                "review reservation expired before a valid Challenge Ledger was attached",
+                "the reviewer's wake for the expired reservation was withdrawn before it could be typed",
+                stale_wakes, expired_wakes, int(age),
+            )
             released.append(event)
     from harness import control
     for wake in stale_wakes:
@@ -7298,6 +7370,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 and routed.get("session_id") not in signed_out
                 and routed.get("session_id") not in off_vendor
                 and routed.get("id") not in held_reviewers
+                and routed.get("id") not in (request.get("relinquished_by") or [])
                 and (routed.get("task") in {"REVIEW_QUEUE", request.get("task")} or _task_finished(state, routed.get("task", "")))
                 and (
                     request.get("stage") != INDEPENDENT_REVIEW
@@ -7330,7 +7403,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                         not candidate.get("vendor") or candidate.get("vendor") == developer_vendor
                     ):
                         continue
-                    if candidate.get("id") in reserved:
+                    if candidate.get("id") in reserved or candidate.get("id") in (request.get("relinquished_by") or []):
                         continue
                     if any(
                         other.get("status") == "claimed" and other.get("claimed_by") == candidate.get("id")
@@ -7356,6 +7429,8 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                         attention.owner_block_sentence("Reviewer", blocked_reviewer) if block else
                         "the Reviewer cannot start because Claude Code's one-time bypass warning has not been accepted: it is waiting for YOU, not for the harness (the card in Mission Control has the exact step)"
                         if consent_refused else
+                        "the Reviewer gave this review back and no other Reviewer is available; start another Reviewer from Mission Control"
+                        if request.get("relinquished_by") else
                         "open review queue has no live eligible reviewer; start one from Mission Control"
                     )
                     needed = state.get("reviewer_needed") or {}
@@ -7650,7 +7725,7 @@ def _run_internal_qa(
         # Security scan finding 2: the agent's command runs inside the agent's own limits.
         completed = subprocess.run(agent_confinement.confine_agent_command(["/bin/sh", "-c", command], root,
                                    claude_config_dir=execution_env.get("CLAUDE_CONFIG_DIR") or None),
-                                   cwd=execution_root, capture_output=True, text=True, timeout=300,
+                                   cwd=execution_root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                                    env=child_process.with_live_board(execution_env, live_board_root) if live_board_root is not None else execution_env)
     except subprocess.TimeoutExpired as error:
         if measurement is not None:
@@ -7781,6 +7856,18 @@ def _execute_scenario_simulations(
     if failures:
         raise ValueError("Scenario Ledger simulations failed: " + " | ".join(failures))
     return results
+
+
+_INTERRUPTED_REVIEW_NOTE = "Delivery's tests were interrupted before they finished; no test failed"
+
+
+def _interrupted_review_notice(request_id: str, task: str, reason: str) -> str:
+    """The one line a Reviewer gets when Delivery's tests were interrupted (the owner's machine was busy, a restart): not a failed test."""
+    return (
+        f"REVIEW WITHDRAWN: request {request_id} for {task} was taken back because Delivery's tests were interrupted before they "
+        f"finished ({reason[:200]}). The tests were interrupted, so whether the program is correct is not yet established. Do not investigate it; stand by for the "
+        "next routed request. USER ACTION: None."
+    )
 
 
 def _withdraw_reviewer_wake(root: ProjectRoot, wake: dict[str, Any]) -> dict[str, Any]:
@@ -9035,7 +9122,45 @@ def record_control_plane_hold(
             "preserved_pass_request_ids": passed_before,
             "message": "control-plane repair is required; certified product PASS remains unchanged",
         })
+        raise_hold_owner_card(state, root, hold)
         return json.loads(json.dumps(hold))
+
+
+def hold_clear_command(root: ProjectRoot, task: str, source: str) -> str:
+    """The complete Terminal command that clears one hold, with this project's real folders (item 24)."""
+    context = project_context(root)
+    return (
+        f"cd {shlex.quote(str(Path(__file__).resolve().parent.parent))} && python3 -m harness.board "
+        f"--root {shlex.quote(str(context.code_root))} --data-root {shlex.quote(str(context.data_root))} "
+        f"--workspace-root {shlex.quote(str(context.workspace_root))} "
+        f"clear-hold --task {shlex.quote(task)} --source {shlex.quote(source)}"
+    )
+
+
+def raise_hold_owner_card(state: dict[str, Any], root: ProjectRoot, hold: dict[str, Any]) -> dict[str, Any] | None:
+    """Item 24: a control-plane hold is never silent. One plain-words owner card per held task, written in the
+    same transaction as the hold; a replacement hold on the task refreshes that card instead of adding another."""
+    task, source = str(hold.get("task") or ""), str(hold.get("source") or "")
+    if not task:
+        return None
+    card = failure_words.hold_card(task, source, hold.get("reason"), hold_clear_command(root, task, source), _redact_secrets)
+    for existing in (state.get("owner_actions") or {}).values():
+        if existing.get("status") == "open" and existing.get("hold_task") == task:
+            if any(existing.get(key) != card[key] for key in ("title", "why", "command")):
+                existing.update({**card, "refreshed_at": now()})
+            return existing
+    return _record_owner_action(
+        state, {"id": "system", "role": "system"}, card["title"], card["command"], card["why"], task,
+        kind="task", hold_task=task,
+    )
+
+
+def _close_hold_owner_card(state: dict[str, Any], event: dict[str, Any]) -> None:
+    """Every way a hold resolves emits control_plane_hold_resolved; the hold's owner card closes with it."""
+    task = str(event.get("task") or "")
+    for action in list((state.get("owner_actions") or {}).values()):
+        if action.get("status") == "open" and action.get("hold_task") == task:
+            _resolve_owner_action(state, action, str(event.get("outcome") or "Resolved: the hold was cleared"), "control_plane_hold_resolved")
 
 
 # Backlog #11: a hold is about a task's orchestration; once the task itself is
@@ -11703,6 +11828,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         if hashlib.sha256(ledger_path.read_bytes()).hexdigest() != ledger_sha256:
             raise ValueError("Scenario Ledger changed while its simulations were executing; rerun internal QA")
     except Exception as error:
+        interrupted = isinstance(error, certified_execution.RetryableInterruption)
         with locked_state(root) as state:
             staged = state.get("qa_requests", {}).get(request_id)
             if staged and staged.get("status") in {"authoring", "open", "reserved"}:
@@ -11711,21 +11837,22 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     "result": "failed", "result_summary": str(error)[:1000],
                     "completed_at": now(), "route_state": "delivery_failed_cancelled",
                 })
-                reviewer = state.get("agents", {}).get(staged.get("reserved_by", ""))
+                reviewer = state.get("agents", {}).get(staged.get("reserved_by") or staged.get("routed_to") or "")
                 if reviewer:
                     reviewer.update({
-                        "status": "review_cancelled", "status_note": "Delivery evidence failed before Reviewer execution",
+                        "status": "review_cancelled",
+                        "status_note": (_INTERRUPTED_REVIEW_NOTE if interrupted else "Delivery evidence failed before Reviewer execution"),
                         "last_status_at": now(),
                     })
                 _event(state, "staged_review_cancelled", developer, {
                     "task": staged["task"], "request_id": request_id,
                     "message": (
                         "Delivery evidence did not run (" + str(error)[:200] + "); no test failed, ask for the review again"
-                        if isinstance(error, certified_execution.RetryableInterruption)
+                        if interrupted
                         else "Delivery evidence failed; staged Reviewer execution and verdict remain blocked"),
                 })
                 failures = state.setdefault("delivery_attempt_failures", [])
-                if not isinstance(error, certified_execution.RetryableInterruption):
+                if not interrupted:
                     # A run that was only waiting behind an identical one, or
                     # held off by owner-machine activity, did not fail.
                     failures.append(json.loads(json.dumps(staged)))
@@ -11737,6 +11864,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     "session_id": str(staged.get("routed_session_id") or ""),
                     "reviewer_id": str(staged.get("routed_to") or staged.get("reserved_by") or ""),
                     "reason": str(error)[:300],
+                    **({"notice": _interrupted_review_notice(request_id, staged.get("task", ""), str(error))} if interrupted else {}),
                 }
             else:
                 cancelled_wake = None
@@ -12041,6 +12169,8 @@ def _reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, An
         routed_to = request.get("routed_to")
         if routed_to and routed_to != qa["id"]:
             raise ValueError(f"review request is already routed to {routed_to}")
+        if qa["id"] in (request.get("relinquished_by") or []):
+            raise ValueError("you gave this review back; it stays open for another reviewer")
         developer = _require_agent(state, request["developer_id"])
         if request.get("stage") == INDEPENDENT_REVIEW:
             if not qa.get("vendor") or qa.get("vendor") == developer.get("vendor"):
@@ -14809,6 +14939,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("claim-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default=""); p.add_argument("--challenge-ledger", default="")
     p = sub.add_parser("reserve-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default="")
     p = sub.add_parser("review-brief"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
+    p = sub.add_parser("relinquish-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("review-intents"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--intent", action="append", required=True); p.add_argument("--amend", action="store_true")
     p = sub.add_parser("attach-challenge-ledger"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--challenge-ledger", required=True); p.add_argument("--correction-reason", default="")
     p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--failure", action="append", default=[], metavar="ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
@@ -14936,6 +15067,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "claim-qa": out = claim_qa(root, args.agent, args.request, args.challenge_ledger)
         elif args.command == "reserve-qa": out = reserve_qa(root, args.agent, args.request)
         elif args.command == "review-brief": out = review_brief(root, args.request, args.agent)
+        elif args.command == "relinquish-qa": out = relinquish_review_reservation(root, args.agent, args.request, args.reason)
         elif args.command == "review-intents": out = record_review_intents(root, args.agent, args.request, args.intent, amendment=args.amend)
         elif args.command == "attach-challenge-ledger": out = attach_challenge_ledger(root, args.agent, args.request, args.challenge_ledger, args.correction_reason)
         elif args.command == "qa-result":

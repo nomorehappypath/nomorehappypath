@@ -169,7 +169,7 @@ class AtomicRecoveryTests(unittest.TestCase):
             thread.join(timeout=5)
         state = board.snapshot(self.root)
         self.assertNotIn("review-task-final-01", state["qa_requests"])
-        self.assertEqual(len(state["delivery_attempt_failures"]), 1)
+        self.assertEqual(state["delivery_attempt_failures"], [])   # an interrupted run is not a failed test
         package = state["repair_packages"][package_id]
         self.assertEqual(package["status"], "ready_for_review")
         self.assertNotIn("review_request_id", package)

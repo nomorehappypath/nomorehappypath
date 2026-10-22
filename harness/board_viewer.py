@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
-from harness import platform_support, web_guard, agent_view, test_machine
+from harness import platform_support, web_guard, agent_view, test_machine, failure_words
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -62,8 +62,9 @@ PAGE = r"""<!doctype html>
 @media (prefers-reduced-motion:reduce){.waiting-banner{animation:none;outline:4px solid #7a1610}}
 .badge.tone-waiting{background:var(--red);color:#fff;animation:waiting-blink 1.1s steps(2,start) infinite}
 @media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
+.attempts{margin:8px 0;padding:8px 10px;border:1px solid #e3b4a8;border-radius:8px;background:#fff6f3;font-size:13px}.attempts summary{cursor:pointer;font-weight:600;margin-top:4px}.attempts ul{margin:6px 0 0;padding-left:18px}.attempt-tech{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:2px 0 8px}
 .harness-actions{border:1px solid #b8c9e8;background:#f7faff}.harness-actions h2{margin:0 0 6px;font-size:16px}.harness-actions ul{margin:0;padding-left:20px}.harness-actions li{margin:4px 0}.harness-actions li.gave-up{color:#8a2c1f;font-weight:700}.harness-actions small{color:var(--muted)}.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
-.delivered-documents{margin:0 0 12px;padding:12px 14px;border:1px solid #b6dfc8;border-radius:9px;background:var(--green-soft)}.delivered-documents strong{display:block;font-size:14px;color:var(--green);margin-bottom:6px}.delivered-documents ul{margin:0;padding-left:20px}.delivered-documents li{margin:5px 0;font-size:14px}.delivered-documents a{font-weight:700;color:#174ea6}.delivered-documents small{display:block;color:var(--muted);margin-top:6px}.delivered-documents .unavailable{color:#8a2c1f}.owner-action .card-links{margin:6px 0 8px}.owner-action .card-links a{font-weight:700;color:#174ea6;margin-right:12px}.owner-action .card-links small{display:block;color:#5b4a46;margin-top:4px}.release-build{margin:0 0 12px;padding:12px 14px;border:1px solid #8fbfa4;border-radius:9px;background:var(--green-soft)}.release-build strong{color:var(--green)}.release-build.failed{border-color:#d58b82;background:var(--red-soft)}.release-build.failed strong{color:var(--red)}.release-build .build-files{margin:6px 0;padding-left:20px}.release-build .build-files li{margin:6px 0;overflow-wrap:anywhere}.release-build .build-download{display:inline-block;margin-left:8px;padding:6px 12px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-build .build-how p{margin:5px 0}.release-build .build-how ol{margin:4px 0 8px;padding-left:22px}.release-build .build-problem{color:var(--red)}
+.delivered-documents{margin:0 0 12px;padding:12px 14px;border:1px solid #b6dfc8;border-radius:9px;background:var(--green-soft)}.delivered-documents strong{display:block;font-size:14px;color:var(--green);margin-bottom:6px}.delivered-documents ul{margin:0;padding-left:20px}.delivered-documents li{margin:5px 0;font-size:14px}.delivered-documents a{font-weight:700;color:#174ea6}.delivered-documents small{display:block;color:var(--muted);margin-top:6px}.delivered-documents .unavailable{color:#8a2c1f}.owner-action .card-links{margin:6px 0 8px}.owner-action .card-links a{font-weight:700;color:#174ea6;margin-right:12px}.owner-action .card-links small{display:block;color:#5b4a46;margin-top:4px}.release-build{margin:0 0 12px;padding:12px 14px;border:1px solid #8fbfa4;border-radius:9px;background:var(--green-soft)}.release-nodownload{margin:0 0 12px;padding:12px 14px;border:1px solid #d9b45a;border-radius:9px;background:#fff8e1;color:#1d1d1f}.release-nodownload strong{display:block;margin-bottom:6px}.release-build strong{color:var(--green)}.release-build.failed{border-color:#d58b82;background:var(--red-soft)}.release-build.failed strong{color:var(--red)}.release-build .build-files{margin:6px 0;padding-left:20px}.release-build .build-files li{margin:6px 0;overflow-wrap:anywhere}.release-build .build-download{display:inline-block;margin-left:8px;padding:6px 12px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-build .build-how p{margin:5px 0}.release-build .build-how ol{margin:4px 0 8px;padding-left:22px}.release-build .build-problem{color:var(--red)}
 .release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
 .release-preview .view-app .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@keyframes view-app-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.release-preview .view-app .spin{animation-duration:2.4s}}.release-preview .preview-log-details{margin-top:6px}.release-preview .preview-log-details summary{cursor:pointer}
 .release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
@@ -94,7 +95,7 @@ PAGE = r"""<!doctype html>
 <section class="limit-notice" id="limit-notice" hidden role="status" aria-live="polite"></section>
 <section class="panel paused-banner" id="paused-banner" hidden role="status"><div><h2>Project paused</h2><p>This board is read-only. Saved work, review ownership, and evidence are preserved exactly where they stopped.</p></div><a class="resume-link" id="resume-project" href="__RESUME_LINK__">Resume project</a></section>
 
-<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div></section>
+<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
@@ -110,7 +111,7 @@ PAGE = r"""<!doctype html>
 <dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Up to 5 files, 10 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
-<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
+<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
 <dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
@@ -142,6 +143,7 @@ let historyLoading=false;
 let pendingLaunchKind='';
 let lastManaged=null;   // the latest /api/control snapshot, for the launch dialog's provider list
 let ownerMessageAgentId='';
+let directionLauncher=false;   // the dialog was opened by Give direction in the launch panel (no Delivery agent exists yet)
 let ownerMessageType='direction';
 const ownerMessageMaxBytes=20000;
 let ownerDirectiveLoading=false;
@@ -324,6 +326,40 @@ function taskGate(state,name,contract,agent,reviews,total,done){
   return{status:'DEVELOPMENT IN PROGRESS',progress:deliveryProgress,progressTone:'active',ctoAction:'CTO: monitoring delivery gates',next};
 }
 
+// item 24: failed test attempts in plain words (count, one sentence, full text behind Details).
+const openAttempts=new Set();
+if(typeof document!=='undefined'&&typeof document.addEventListener==='function')document.addEventListener('toggle',event=>{const node=event.target;if(node&&node.dataset&&node.dataset.attemptKey){if(node.open)openAttempts.add(node.dataset.attemptKey);else openAttempts.delete(node.dataset.attemptKey);}},true);
+function attemptsHtml(summary,key,label){
+  if(!summary)return'';
+  const rows=(summary.details||[]).map(item=>`<li><span>${esc(item.at?relativeUpdate(item.at):'')}</span> ${esc(item.sentence)}<pre class="attempt-tech">${esc(item.technical)}</pre></li>`).join('');
+  return`<div class="attempts" data-attempts="${esc(key)}">${label?`<strong>${esc(label)}</strong> `:''}${esc(summary.headline)}<details data-attempt-key="${esc(key)}"><summary>Details</summary><small>${esc(summary.details_note||'')}. The technical text is exactly as recorded.</small><ul>${rows}</ul></details></div>`;
+}
+function keepAttempts(container,rewrite){
+  if(typeof document==='undefined'||typeof container?.querySelectorAll!=='function'){rewrite();return;}
+  const active=document.activeElement,holder=active&&active.tagName==='SUMMARY'&&container.contains(active)?active.closest('details[data-attempt-key]'):null,key=holder?holder.dataset.attemptKey:'';
+  rewrite();
+  container.querySelectorAll('details[data-attempt-key]').forEach(node=>{if(openAttempts.has(node.dataset.attemptKey))node.open=true;});
+  if(key){const again=[...container.querySelectorAll('details[data-attempt-key]')].find(node=>node.dataset.attemptKey===key);again?.querySelector('summary')?.focus();}
+}
+function deliveryFailures(state,task){return(state.failure_words||{}).delivery?.[task]||null;}
+function staleBrief(state,task,brief){
+  const failures=deliveryFailures(state,task);
+  return Boolean(failures&&brief&&brief.update&&brief.updated_at&&Date.parse(failures.latest_at)>Date.parse(brief.updated_at));
+}
+function currentUpdateText(state,task,brief,stage){
+  if(!staleBrief(state,task,brief))return brief?.update||'';
+  return`Delivery's last note ("${brief.update}", ${relativeUpdate(brief.updated_at)}) is older than the latest failed test, so it may be out of date. Where things stand now: ${stage?`stage "${stage}". `:''}${deliveryFailures(state,task).headline}`;
+}
+function agentAttemptsHtml(agent,state){
+  if(agent.role==='engineering'||agent.role==='development'){
+    return agent.task&&agent.task!=='AWAITING_OWNER_DIRECTION'?attemptsHtml(deliveryFailures(state,agent.task),'a:'+agent.id,''):'';
+  }
+  if(agent.role!=='qa')return'';
+  const task=reviewerAssignment(agent,state)?.task||'';
+  if(!task)return'';
+  const own=((state.failure_words||{}).reviewer||{})[task],delivery=deliveryFailures(state,task);
+  return(own?attemptsHtml(own,'a:'+agent.id,''):'<div class="attempts">No test by this reviewer has failed.</div>')+(delivery?`<div class="attempts"><em>This review waits on Delivery's own test run.</em></div>`+attemptsHtml(delivery,'a:'+agent.id+':d',''):'');
+}
 function taskProgress(state,name,facts,gate,confirmation={}){
   const reviews=orderedReviews(facts.reviews),latest=reviews.at(-1),plan=(state.delivery_plans||{})[name],brief=(state.task_briefs||{})[name];
   const confirmed=Boolean(confirmation.text||(state.requirement_confirmations||{})[name]?.text);
@@ -389,9 +425,10 @@ function releasePreviewHtml(release){
   const run=viewAppRuns[name];
   const starting=Boolean(run)||(preview.status==='starting'&&preview.requested==='view_app');
   const failed=!run&&preview.status==='failed';
+  const notStartable=failed&&/nothing here we know how to start/.test(String(preview.error||''));
   const tone=failed?' failed':(preview.status==='ready'||preview.status==='app_bundle')?' ready':'';
   const line=starting?viewAppStartingText(run?.started||Date.parse(preview.requested_at||'')||Date.now())
-    :failed?`The app could not start: ${esc(preview.error||'unknown reason')}`
+    :failed?(notStartable?`Mission Control could not find a web page to open here, and no download was kept for this release. See the note above for how to get the program.`:`The app could not start: ${esc(preview.error||'unknown reason')}`)
     :preview.status==='ready'?'The reviewed version is running on this computer.':'';
   const log=failed&&preview.log_tail?`<details class="preview-log-details"><summary>Show the log</summary><pre class="preview-log">${esc(preview.log_tail)}</pre></details>`:'';
   // Owner, 2026-09-28: when the app will not start here, the card gives the full command to run it yourself.
@@ -504,9 +541,22 @@ function buildBlockHtml(card){
 function releaseBuildCard(state,name){
   return ((lastBoard&&lastBoard.builds)||{})[name]||(((state.releases||{})[name])||{}).build||null;
 }
+// Owner 2026-10-22 (why-windows): a release made before downloads existed has no file to hand out and View app cannot
+// start it. Said once, in plain words, on the open and on the accepted release card alike; hedged, because the failure
+// itself only proves that no web page was found.
+function noDownloadNoticeHtml(state,name){
+  const release=(state.releases||{})[name];
+  if(!release||release.build||releaseBuildCard(state,name))return'';
+  const preview=release.preview||{};
+  if(preview.status!=='failed'||!/nothing here we know how to start/.test(String(preview.error||'')))return'';
+  return noDownloadHtml(name);
+}
+function noDownloadHtml(name){
+  return `<div class="release-nodownload" role="note"><strong>No download is available for this release</strong><p>Mission Control found no web page to open and no downloadable file was kept. If this is a program (for example a Windows program), it was made before downloads were kept. To get it, resume the project if it is paused, then give Delivery this direction: "Build ${esc(name)} again and publish it for download."</p></div>`;
+}
 function releaseResponseHtml(state,name){
   const inner=releaseResponseCore(state,name);
-  return inner?buildBlockHtml(releaseBuildCard(state,name))+inner:'';
+  return inner?noDownloadNoticeHtml(state,name)+buildBlockHtml(releaseBuildCard(state,name))+inner:'';
 }
 function releaseResponseCore(state,name){
   const release=(state.releases||{})[name];
@@ -597,7 +647,7 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div><div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(brief.update||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div>${attemptsHtml(deliveryFailures(state,name),'p:'+name,'Attempts:')}<div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(currentUpdateText(state,name,brief,progress.current.label)||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
 }
 
@@ -728,7 +778,7 @@ function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements
     // The Live delivery status sub-window is the only region that moves with the
     // refresh, and even it is rewritten only when its own content changed.
     if(dynamicNode&&dynamicNode.dataset.sig!==dynamicSig){
-      dynamicNode.innerHTML=parts.dynamic;
+      keepAttempts(dynamicNode,()=>{dynamicNode.innerHTML=parts.dynamic;});
       dynamicNode.dataset.sig=dynamicSig;
     }
     out.append(node);
@@ -850,7 +900,7 @@ function renderHistory(entries,queryValue){
   if(!visible.length){out.innerHTML='<div class="history-empty">No history item matches this search.</div>';return;}
   const groups=new Map();
   for(const item of visible){const key=historyDateKey(item.completed_at||item.started_at);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
-  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${documentLinksHtml(item.deliverable_links,item.task,'history')}${buildBlockHtml(item.build)}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
+  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${documentLinksHtml(item.deliverable_links,item.task,'history')}${item.no_download?noDownloadHtml(item.task):''}${buildBlockHtml(item.build)}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
   if(typeof out.querySelectorAll==='function')out.querySelectorAll('.history-item').forEach(item=>{const directive=typeof item.querySelector==='function'?item.querySelector('.history-directive-body'):null;if(directive)directive.scrollTop=historyDirectiveScrollTops.get(item.dataset.historyKey)||0;});
   out.scrollTop=Math.min(previousScrollTop,Math.max(0,out.scrollHeight-out.clientHeight));
 }
@@ -998,7 +1048,7 @@ function agentStatusSummaryCore(agent,state,contracts){
   const facts=taskFacts(state,contracts,agent.task);
   const gate=taskGate(state,agent.task,facts.contract,agent,facts.reviews,facts.total,facts.done);
   const brief=(state.task_briefs||{})[agent.task];
-  return{summary:brief?.update||gate.next,next:gate.next};
+  return{summary:currentUpdateText(state,agent.task,brief,gate.status)||gate.next,next:gate.next};
 }
 
 let decisionTask='';
@@ -1214,7 +1264,7 @@ function openAgents(state,contracts,sessionItems=[]){
     const provider=agent.vendor||session?.vendor||'Provider not recorded', model=session?.model||'Model not recorded', effort=session?.effort?(session.effort==='xhigh'?'extra high':session.effort):'';
     const chosen=session?.launch_choice?' (chosen for this launch)':'';
     const plan=session?.cli_launch_reason?`<small class="agent-meta">Planned: ${esc(/^resuming/i.test(session.cli_launch_reason)?'continue the saved conversation':'fresh conversation — '+session.cli_launch_reason)}</small>`:'';
-    row.innerHTML=`<div class="row"><div><strong>${esc(agent.display_name||agent.role)} — ${esc(task)}</strong><small class="agent-meta">Role: ${esc(agent.role)} · Provider: ${esc(provider)} · Model: ${esc(model)}${effort?` · Effort: ${esc(effort)}`:''}${esc(chosen)} · Board stage: ${esc(stage)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div><small class="agent-meta">${esc(wording.summary)}</small>${plan}`;
+    row.innerHTML=`<div class="row"><div><strong>${esc(agent.display_name||agent.role)} — ${esc(task)}</strong><small class="agent-meta">Role: ${esc(agent.role)} · Provider: ${esc(provider)} · Model: ${esc(model)}${effort?` · Effort: ${esc(effort)}`:''}${esc(chosen)} · Board stage: ${esc(stage)}</small>${sessionColorHtml(session)}</div>${waitingBadge(session)}${badge(stage)}</div><small class="agent-meta">${esc(wording.summary)}</small>${plan}${agentAttemptsHtml(agent,state)}`;
     const actions=document.createElement('div');actions.className='actions';actions.append(viewAgentButton(session));
     if(agent.role==='engineering'||agent.role==='development'){
       const waiting=agent.task==='AWAITING_OWNER_DIRECTION', directionSent=Boolean((state.owner_directions||{})[agent.session_id]?.text);
@@ -1266,6 +1316,7 @@ function openAgents(state,contracts,sessionItems=[]){
 
 function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
+  directionLauncher=false; setAttachmentFields(true);
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -1279,6 +1330,12 @@ async function submitOwnerMessage(event){
   const error=el('#owner-message-error'),directiveFile=el('#owner-message-directive-file').files?.[0];
   if(ownerDirectiveLoading){error.textContent='Wait for the directive file to finish loading.';return false;}
   let validated;try{validated=validateOwnerMessageText(el('#owner-message-text').value);}catch(failure){error.textContent=failure.message;return false;}
+  if(directionLauncher){
+    // No Delivery agent exists yet: keep the words, start the three agents with the owner's saved launch settings, then send.
+    writePendingDirection({text:validated.text,savedAt:Date.now()});
+    el('#owner-message-dialog').close(); directionLauncher=false;
+    await advanceDirectionStart(); return false;
+  }
   const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
   for(const file of Array.from(el('#owner-message-attachments').files||[]))form.append('attachments',file,file.name);
   const submit=el('#owner-message-submit'); submit.disabled=true; error.textContent='';
@@ -1288,7 +1345,8 @@ async function submitOwnerMessage(event){
       await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'modify',text:el('#owner-message-text').value});
       requirementsModifyTask='';
     }else await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
-    el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':ownerMessageType==='cto_message'?'Your message was sent to the CTO.':'Your clarification and attachments were sent to the current Delivery Agent.'; await refresh();
+    el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':ownerMessageType==='cto_message'?'Your message was sent to the CTO.':'Your clarification and attachments were sent to the current Delivery Agent.';
+    if(ownerMessageType==='direction')await startMissingAgents(); else await refresh();
   }catch(failure){error.textContent=failure.message;}
   finally{submit.disabled=false;}
   return false;
@@ -1513,7 +1571,7 @@ function render(data,managed){
   if(historyLoaded&&historyLoadedAtVersion!==currentHistoryVersion)loadHistory(true);
   renderWaiting(managed.sessions||[]);
   renderLimitNotice(managed.sessions||[]);
-  openAgents(state,contracts,managed.sessions||[]);
+  keepAttempts(el('#agents'),()=>openAgents(state,contracts,managed.sessions||[]));
   queue(state);
   fitTaskScroller();
   const counts=managed.active_counts||{};
@@ -1541,15 +1599,19 @@ function render(data,managed){
   const activeTotal=Object.values(counts).reduce((total,value)=>total+Number(value||0),0);
   el('#stop-all').disabled=activeTotal===0;
   el('#stop-all').title=activeTotal?`Stop ${activeTotal} live terminal${activeTotal===1?'':'s'}. Every task is kept.`:'No live terminals to stop.';
+  const giveDirection=el('#give-direction');
+  if(giveDirection){giveDirection.hidden=Number(counts.codex_delivery||0)>0&&!readPendingDirection();giveDirection.disabled=false;}
   document.body.classList.toggle('project-paused',projectPaused);
   el('#paused-banner').hidden=!projectPaused;
   if(projectPaused){
     document.querySelectorAll('button').forEach(button=>{
+      if(button.id==='give-direction'||button.id==='direction-discard'||(directionLauncher&&el('#owner-message-dialog').contains(button)))return;   // saving a direction while paused only keeps the words; nothing starts until Resume
       button.disabled=true;
       button.title='Unavailable while this project is paused. Resume the project to make changes.';
     });
   }
   applyChatAvailability(managed.project_chat,projectPaused);
+  advanceDirectionStart();
 }
 
 function applyChatAvailability(state,projectPaused){
@@ -1698,8 +1760,94 @@ async function start(kind,color='black',launchSettings=null){
     el('#notice').textContent = started && started.attach_hint
       ? `${role} started${withModel} in a ${shade} session.${adjust}${memory} Attach to watch it:  ${started.attach_hint}`
       : `${role} launch requested${withModel} with ${shade} terminal.${adjust}${memory}`;
-    await refresh();}
-  catch(error){el('#notice').textContent='Could not launch session: '+error.message;await refresh();}
+    await refresh();return true;}
+  catch(error){el('#notice').textContent='Could not launch session: '+error.message;await refresh();return false;}
+}
+
+// Give direction with no agents running (open-list item B / finding 25): the direction starts Delivery, the Independent
+// Reviewer and the CTO through the same launch path as the three Start buttons, then goes to Delivery once it reports in.
+const DIRECTION_TRUST_NOTE='Your terminal may ask you to trust this folder; choose the Yes option it shows, once (do not just press Enter: the highlighted choice can be No).';
+const DIRECTION_START_WAIT_MS=90000;   // another open window that started the agents this recently is given time to finish
+const directionKey='pending-direction:'+apiPrefix;
+let pendingDirectionMemory=null, directionAdvancing=false;
+let directionStorageBroken=false;   // this browser would not keep the words: they live only in this page until sent
+function readPendingDirection(){
+  if(directionStorageBroken)return pendingDirectionMemory;
+  try{const value=JSON.parse(window.localStorage.getItem(directionKey)||'null');return value&&value.text?value:null;}
+  catch(error){return pendingDirectionMemory;}
+}
+function writePendingDirection(value){
+  pendingDirectionMemory=value;
+  try{if(value)window.localStorage.setItem(directionKey,JSON.stringify(value));else window.localStorage.removeItem(directionKey);}
+  catch(error){directionStorageBroken=true;}
+}
+function setAttachmentFields(visible){
+  for(const id of ['owner-message-attachments-label','owner-message-attachments','owner-message-attachments-help']){const node=el('#'+id);if(node)node.hidden=!visible;}
+}
+function openDirectionStart(){
+  requirementsModifyTask=''; directionLauncher=true; ownerMessageAgentId=''; ownerMessageType='direction'; setAttachmentFields(false);
+  el('#owner-message-title').textContent='Give direction to Delivery';
+  el('#owner-message-help').textContent='Write what you want built. When you press Send, Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives this. '+DIRECTION_TRUST_NOTE+' The words are kept in this browser until Delivery has them. Documents are not part of this first message: add them with Send clarification once Delivery is running.';
+  el('#owner-message-submit').textContent='Send direction and start the agents';
+  const saved=readPendingDirection();
+  el('#owner-message-text').value=saved?saved.text:''; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
+  el('#owner-message-dialog').showModal();
+}
+function developerAgents(state){return Object.values(state.agents||{}).filter(agent=>agent.active&&['engineering','development'].includes(agent.role));}
+function renderDirectionNote(pending){
+  const note=el('#direction-start-note'),discard=el('#direction-discard');if(!note)return;
+  const state=(lastBoard&&lastBoard.state)||{}, paused=['paused','resuming'].includes(state.project_pause?.status);
+  if(!pending){note.hidden=true;note.textContent='';note.classList.remove('bad');discard.hidden=true;discard.disabled=true;return;}
+  note.hidden=false;discard.hidden=false;discard.disabled=false;note.classList.toggle('bad',Boolean(pending.failed));
+  note.textContent=pending.blocked?'Delivery already has work, so your new direction was not sent. Your words are kept: press Give direction to read them, then use Send clarification beside Delivery to add them to its work, or discard them.'
+    :pending.failed?`Your direction is saved, but ${pending.failed} could not start. Fix that (see the message above), then press Give direction again to retry, or discard it.`
+    :paused?'Your direction is saved. This project is paused, so nothing starts yet. When you Resume the project and this page opens, Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it. '+(directionStorageBroken?'This browser would not keep it: do not close this page.':'')
+    :`Starting Delivery, the Independent Reviewer and the CTO, then sending your direction to Delivery. ${DIRECTION_TRUST_NOTE}`;
+}
+async function startMissingAgents(){
+  // Only roles with no live or starting terminal are started, from the fresh count, so nothing is started twice.
+  const response=await fetch(apiPath('/api/control'),{cache:'no-store'}), managed=await response.json(), counts=managed.active_counts||{};
+  const failed=[], started=[], reasons=[];
+  for(const [kind,name] of [['codex_delivery','Delivery'],['claude_reviewer','the Independent Reviewer'],['claude_cto','the CTO']]){
+    if(Number(counts[kind]||0)>0)continue;
+    if(await start(kind,'black'))started.push(name);else{failed.push(name);reasons.push(`${name}: ${el('#notice').textContent.replace(/^Could not launch session:\s*/,'')}`);}
+  }
+  // start() leaves its own notice (on Linux it carries the attach command); keep it and add what the owner must know
+  if(failed.length)el('#notice').textContent=`${reasons.join(' ')} Press that role's Start button to try again; nothing else is lost.`;
+  else if(started.length)el('#notice').textContent=`${el('#notice').textContent} ${DIRECTION_TRUST_NOTE}`;
+  return failed;
+}
+async function advanceDirectionStart(){
+  if(directionAdvancing)return;
+  const pending=readPendingDirection(); renderDirectionNote(pending);
+  if(!pending||!lastBoard)return;
+  const state=lastBoard.state||{};
+  if(['paused','resuming'].includes(state.project_pause?.status))return;
+  directionAdvancing=true;
+  try{
+    const sessionHasDirection=agent=>Boolean((state.owner_directions||{})[agent.session_id]?.text);
+    const waiting=developerAgents(state).find(agent=>agent.task==='AWAITING_OWNER_DIRECTION'&&!sessionHasDirection(agent));
+    if(waiting){
+      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text});
+      writePendingDirection(null); renderDirectionNote(null);
+      el('#notice').textContent='Your complete direction was sent to Delivery.';
+      await startMissingAgents(); return;
+    }
+    if(Object.values(state.owner_directions||{}).some(item=>item&&item.text===pending.text)){
+      writePendingDirection(null); renderDirectionNote(null); return;   // the board already holds exactly these words (a reply was lost): nothing to send again
+    }
+    if(developerAgents(state).length){
+      writePendingDirection({...pending,blocked:true});   // the words are kept, never deleted
+      return;
+    }
+    if(pending.blocked){writePendingDirection({...pending,blocked:false});}
+    if(pending.failed||(pending.startedAt&&Date.now()-pending.startedAt<DIRECTION_START_WAIT_MS))return;   // retried by the owner, or started moments ago (maybe by another window): wait for Delivery to report in
+    writePendingDirection({...pending,startedAt:Date.now()});
+    const failed=await startMissingAgents();
+    if(failed.length)writePendingDirection({...readPendingDirection()||pending,failed:failed.join(' and ')});
+  }catch(error){
+    el('#notice').textContent='Your direction is saved but could not be sent yet: '+error.message;
+  }finally{directionAdvancing=false;renderDirectionNote(readPendingDirection());}
 }
 
 async function refresh(){
@@ -1781,6 +1929,8 @@ el('#codex').onclick=()=>showColorDialog('codex_delivery');
 el('#claude').onclick=()=>showColorDialog('claude_reviewer');
 el('#cto').onclick=()=>showColorDialog('claude_cto');
 el('#stop-all').onclick=stopAllAgents;
+el('#give-direction').onclick=openDirectionStart;
+el('#direction-discard').onclick=()=>{writePendingDirection(null);renderDirectionNote(null);el('#notice').textContent='The saved direction was discarded. Nothing was sent.';};
 el('#relaunch-preserved').onclick=async()=>{
   const ids=(el('#relaunch-preserved').dataset.sessions||'').split(',').filter(Boolean);
   for(const id of ids){
@@ -1884,7 +2034,7 @@ document.addEventListener('change',async event=>{
 });
 let requirementsModifyTask='';
 function openRequirementsModify(task){
-  requirementsModifyTask=task;
+  requirementsModifyTask=task; directionLauncher=false; setAttachmentFields(true);
   el('#owner-message-title').textContent='Modify the requirements';
   el('#owner-message-help').textContent='Describe what should change in the proposed requirements. Delivery revises them and files a new proposal for your Go ahead. Sent as one complete message.';
   el('#owner-message-submit').textContent='Send requirements change';
@@ -2021,14 +2171,21 @@ def _compact_dashboard_state(
     state: dict,
     live_tasks: list[str] | None = None,
     live_session_ids: set[str] | None = None,
+    root: Path | None = None,
 ) -> dict:
     """Project only live UI state; history is served separately on demand."""
     live = set(live_tasks or [])
     connected = set(live_session_ids or [])
     compact = json.loads(json.dumps({
         key: value for key, value in state.items()
-        if key not in {"archive", "events", "qa_requests", "qa_request_index"}
+        # delivery_attempt_failures: whole request copies the page never read; item 24 sends plain-word summaries instead
+        if key not in {"archive", "events", "qa_requests", "qa_request_index", "delivery_attempt_failures"}
     }))
+    # item 24: the plain words come from the complete state, before the live-only filtering below, and are redacted
+    compact["failure_words"] = failure_words.failures_for_state(state, live, board._redact_secrets)
+    for hold in (compact.get("control_plane_holds") or {}).values():
+        if isinstance(hold, dict) and "reason" in hold:
+            hold["reason"] = board._redact_secrets(hold["reason"])
     events = list(state.get("events", []))
     latest: dict[str, str] = {}
     for event in events:
@@ -2105,6 +2262,30 @@ def _compact_dashboard_state(
         if expires is not None and expires <= current:
             continue
         compact["owner_actions"][key] = {**card, "clears_when": board.owner_action_clears_when(card, current)}
+    # item 24: a hold recorded before holds raised their own card (or whose card was lost) is still shown, in plain
+    # words. Display only: nothing is written to the board.
+    concluded = set(state.get("cancelled_tasks") or {}) | {
+        str(task) for task, decision in (state.get("release_decisions") or {}).items()
+        if isinstance(decision, dict) and decision.get("decision") == "accepted"
+    } | {
+        str(task) for task, record in (state.get("releases") or {}).items()
+        if isinstance(record, dict) and record.get("status") in {"VISUAL_TEST_REQUIRED", "ACCEPTED"}
+    }
+    carded = {str(card.get("hold_task")) for card in compact["owner_actions"].values() if card.get("hold_task")}
+    for held_task, hold in (state.get("control_plane_holds") or {}).items():
+        if not isinstance(hold, dict) or hold.get("status") != "open":
+            continue
+        task = str(hold.get("task") or held_task)
+        if task in concluded or task in carded:
+            continue
+        text = failure_words.hold_card(
+            task, hold.get("source"), hold.get("reason"),
+            board.hold_clear_command(root, task, str(hold.get("source") or "")) if root is not None else "", board._redact_secrets)
+        compact["owner_actions"][f"hold-{task}"] = {
+            "id": f"hold-{task}", **text, "task": task, "for_agent": "", "kind": "task", "status": "open",
+            "agent_id": "system", "recorded_at": str(hold.get("recorded_at") or ""), "outcome": "", "done_at": "",
+            "hold_task": task, "clears_when": board.owner_action_clears_when({"hold_task": task}),
+        }
     active_sessions = {value.get("session_id") for value in compact["agents"].values() if value.get("session_id")}
     compact["owner_directions"] = {
         session: value for session, value in (state.get("owner_directions") or {}).items()
@@ -3093,7 +3274,7 @@ def dashboard_payload(
         session_id for session_id, session in sessions_by_id.items()
         if session.get("status") in control.ACTIVE_STATUSES
     }
-    result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids)
+    result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids, root=root)
     return result
 
 
@@ -3169,10 +3350,21 @@ def history_payload(root: Path) -> dict:
         # Owner 2026-10-15: an accepted report stays one click away in History.
         row["deliverable_links"] = board.document_deliverable_links(root, str(row.get("task") or ""), state)
         row["build"] = board.build_cards(root, state, [str(row.get("task") or "")]).get(str(row.get("task") or ""))
+        row["no_download"] = not row["build"] and _view_app_found_nothing_to_start(state, str(row.get("task") or ""))
     return {
         "updated": board.now(),
         "task_history": rows,
     }
+
+
+def _view_app_found_nothing_to_start(state: dict, task: str) -> bool:
+    """A release whose View app found nothing to start and which kept no downloadable build (owner 2026-10-22)."""
+    release = (state.get("releases") or {}).get(task) or {}
+    preview = release.get("preview") or {}
+    return (
+        not release.get("build") and preview.get("status") == "failed"
+        and "nothing here we know how to start" in str(preview.get("error") or "")
+    )
 
 
 def _history_documents_signature(root: Path, tasks: set[str]) -> str:
