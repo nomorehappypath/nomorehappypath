@@ -210,7 +210,7 @@ def _run_observed(
     )
     process = subprocess.Popen(
         guarded, cwd=execution_root, shell=False, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, env=dict(environment),
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=dict(environment),
         start_new_session=True,
     )
     start_token = browser_acceptance._start_token(process.pid)

@@ -466,7 +466,7 @@ review.
   `machine-status`): copy files with `scp` and never embed source in the ssh
   command (the OpenSSH exec channel refuses a long command); run scripts with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <script>` (a fresh
-  Windows refuses `.ps1` files); read a native command's result with
+  Windows refuses `.ps1` files); a Windows native tool may print in the console's OEM code page, not UTF-8, so the harness records bytes it cannot read as UTF-8 with a replacement character (a `�` in the output is the console's encoding, not a defect of your program; `chcp 65001` or a UTF-8 reader gives clean text); read a native command's result with
   `& <cmd>; $LASTEXITCODE`, never `Start-Process`; a native command that writes
   to stderr is not an error (`2>&1`, and `$ErrorActionPreference = 'Continue'`
   only around that command, restored after it; setup and cleanup failures still
@@ -814,7 +814,12 @@ the distinct Challenge Ledger, attach it with `attach-challenge-ledger`, and
 only then execute the review. The board validates distinctness before changing
 the state to “review executing.” A reservation with no valid attached ledger
 expires after ten minutes and visibly reopens, so never use reservation as a
-parking state.
+parking state. If you hold a reservation you cannot use (the check cannot be
+done from here, or the review is not yours to do), give it back at once with
+`relinquish-qa --request <id> --reason "<one plain sentence>"`: the request goes
+back to the queue for another reviewer, no test is counted as failed, and you
+are not offered that request again. It is not a verdict; if you found a real
+failure, record the FAIL instead.
 **What justifies a FAIL (owner, 2026-09-29).** FAIL only when, in normal use,
 the owner would get a wrong, missing or unusable result, or the change causes
 a safety or data-loss harm. Rare edge cases (a coincidence of failures the

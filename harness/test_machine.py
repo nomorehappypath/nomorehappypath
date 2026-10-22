@@ -721,7 +721,7 @@ def _stop_own(process: subprocess.Popen, force: bool = False) -> None:
 def run_key_only(argv: list[str], *, timeout: float = STEP_SECONDS) -> tuple[int, str]:
     try:
         completed = subprocess.run(
-            argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+            argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C", "LC_ALL": "C", "HOME": os.environ.get("HOME", "/")},
         )
     except FileNotFoundError as error:

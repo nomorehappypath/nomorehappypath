@@ -56,7 +56,7 @@ ALL_BOARD_OPERATIONS = {
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "attach-challenge-ledger", "qa-result",
+    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result",
     "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair",
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
@@ -99,7 +99,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
 }
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "execute-challenge", "findings", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "attach-challenge-ledger", "qa-result", "split-repair-package",
+    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package",
     "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
@@ -163,7 +163,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "confirm-requirements", "propose-requirements", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
-    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "attach-challenge-ledger",
+    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger",
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
