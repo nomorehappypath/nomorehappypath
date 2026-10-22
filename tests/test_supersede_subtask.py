@@ -188,7 +188,7 @@ class SupersedeSubtaskTests(unittest.TestCase):
         html = BoardViewerTests.rendered_task_cards(
             BoardViewerTests("run"), state, {"APP": {"task": "APP"}}, {"APP": "Ship the runtime."}, ["APP"],
         )[0]["html"]
-        self.assertIn("1 product subtask independently accepted · 0 remaining", html)
+        self.assertIn("1 product subtask checked by the independent reviewer · 0 remaining", html)
         self.assertIn("<s>Notarized runtime</s> · retired: The owner replaced", html)
         self.assertIn("Work retired", html)
         self.assertIn("replaced by core", html)

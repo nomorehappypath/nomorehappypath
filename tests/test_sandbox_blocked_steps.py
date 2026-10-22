@@ -2,7 +2,7 @@
 """Steps the agent sandbox blocks (defects #6, #12, #16 of 2026-09-25).
 
 The CTO's release check reuses the release coordinator's out-of-sandbox
-record when the nested sandbox refuses the disposable checkout, and every
+record when the reuses checks the app already recorded refuses the disposable checkout, and every
 agent card says in plain words what its sandbox can reach.
 """
 from __future__ import annotations
@@ -250,7 +250,7 @@ class RenderedReachTests(unittest.TestCase):
         self.assertTrue(reading["dialogOpen"], json.dumps(reading, indent=2))
         self.assertIn("Can reach", reading["terms"])
         self.assertTrue(reading["reachVisible"])
-        self.assertIn("nested sandbox", reading["reachText"])
+        self.assertIn("reuses checks the app already recorded", reading["reachText"])
         self.assertIn("Application Support", reading["reachText"])
 
 

@@ -26,7 +26,7 @@ PROBE = r"""
 <script>
 (async () => {
   const visible = node => Boolean(node) && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0;
-  const find = () => Array.from(document.querySelectorAll('#tasks .next')).find(n => n.textContent.includes('A newer version of main was accepted'));
+  const find = () => Array.from(document.querySelectorAll('#tasks .next')).find(n => n.textContent.includes('Other approved work changed the app'));
   for (let attempt = 0; attempt < 400 && !find(); attempt++) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -118,9 +118,9 @@ class RenderedReintegrationTests(unittest.TestCase):
         reading = self.render()
         self.assertTrue(reading["present"], json.dumps(reading, indent=2))
         self.assertTrue(reading["visible"], "the re-integration line has no geometry")
-        self.assertIn("Delivery is merging it in", reading["text"])
+        self.assertIn("Delivery is combining the changes", reading["text"])
         self.assertNotIn("reintegrate-main", reading["text"])
-        self.assertIn("RE-INTEGRATION NEEDED", reading["badges"], json.dumps(reading, indent=2))
+        self.assertIn("UPDATING WITH OTHER APPROVED CHANGES", reading["badges"], json.dumps(reading, indent=2))
 
 
 if __name__ == "__main__":

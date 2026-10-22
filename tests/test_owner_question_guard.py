@@ -398,7 +398,7 @@ class DefaultWhenSilentTests(_Fixture):
         self.assertEqual(self.events("owner_default_applied"), [])
         footer = board.owner_action_clears_when(kept)
         self.assertIn("could not be reached (cannot route to an inactive managed session)", footer)
-        self.assertIn("retries", footer)
+        self.assertIn("keeps trying", footer)
         with patch("harness.control.enqueue_instruction", return_value={"id": "d-2", "source": "owner-default"}) as enqueue:
             board.mark_stalled(self.root)
         self.assertEqual(enqueue.call_count, 1)

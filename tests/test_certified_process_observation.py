@@ -40,6 +40,17 @@ class CertifiedProcessObservationTests(unittest.TestCase):
         records = [json.loads(line) for line in (board.board_dir(self.root) / execution_identity.STORE_NAME).read_text().splitlines()]
         self.assertEqual(records[-1]["metadata"]["process_audit"]["sha256"], manifest["sha256"])
 
+    def test_a_child_that_already_exited_does_not_make_the_run_fail_on_the_process_group_lookup(self):
+        """Seen three times in release gates under load: os.getpgid raised ProcessLookupError for a vanished child."""
+        from unittest import mock
+
+        def vanished(pid):
+            raise ProcessLookupError(pid)
+
+        with mock.patch.object(certified_execution.os, "getpgid", side_effect=vanished):
+            result = self.execute("python3 -c \"print('Ran 1 test in 0.001s'); print('OK')\"")
+        self.assertEqual(result["measurement"]["process_audit"]["path"] and True, True)
+
     def test_nested_owner_browser_launch_is_observed_and_certified_as_failure(self):
         browser = self.root / "OwnerChrome.app" / "Contents" / "MacOS" / "Chrome"
         browser.parent.mkdir(parents=True)

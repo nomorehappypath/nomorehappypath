@@ -395,6 +395,16 @@ print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.a
 PY
 }
 
+machine_note() {
+  "$python_bin" -E - "$harness_root" "$target_root" "$data_root" "$workspace_root" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from harness import test_machine
+from harness.project_context import context_from_roots
+print(test_machine.launch_note(context_from_roots(sys.argv[2], sys.argv[3], sys.argv[4])))
+PY
+}
+
 pause_resume_note() {
   "$python_bin" -E - "$harness_root" "$(conversation_command_for "$session_id")" <<'PY'
 import sys
@@ -463,6 +473,14 @@ $(pause_resume_note)"
 
 ${codex_marker}"
     fi
+  fi
+  # Every fresh launch, restart and resume gets the test machine's connection and the current rule (2026-10-20); a project
+  # that never used a machine prints nothing here.
+  machine_text="$(machine_note 2>/dev/null || true)"
+  if [[ -n "$machine_text" ]]; then
+    prompt="${prompt}
+
+${machine_text}"
   fi
   # THE SAME WRITE GRANT FOR BOTH VENDORS. Codex confines writes to these
   # roots (sandbox below); Claude is told the same roots with --add-dir so a
@@ -544,6 +562,16 @@ if hidden or any(inside(p, w) for p in protected for w in writable):
     # of the app must not have to write its throwaway folder into the owner's Codex configuration
     # (2026-10-15). Verified with the real Codex: without it a fresh git project asks, with it it never does.
     case "$execution_root" in *\"*|*\\*) ;; *) codex_access+=(-c "projects.\"${execution_root}\".trust_level=\"trusted\"") ;; esac
+  fi
+  if [[ "$provider" == "codex" ]]; then
+    # Owner 2026-10-21: a managed agent never gets Codex's bundled browser / computer-use tools (they start the owner's real
+    # Chrome and raise a keychain dialog on his Mac). The harness renders pages itself. See harness/codex_isolation.py.
+    # Run BY PATH (python -E ignores PYTHONPATH, and this script is inside the project's folder): a failure refuses the launch.
+    if ! isolation_out="$("$python_bin" -E "$harness_root/harness/codex_isolation.py")"; then
+      echo "Codex tool isolation could not be prepared; the agent was not started." >&2
+      exit 2
+    fi
+    while IFS= read -r isolation_arg; do [[ -n "$isolation_arg" ]] && codex_access+=("$isolation_arg"); done <<< "$isolation_out"
   fi
   if [[ "$provider" == "codex" && -n "$system_directive" ]]; then
     # Stage 4, Codex: the rules as developer instructions, on every launch.

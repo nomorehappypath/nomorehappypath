@@ -590,6 +590,27 @@ class ControlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "another managed session"):
                 control.acknowledge_instruction(root, second["id"], queued["id"])
 
+    def test_a_message_discarded_while_it_is_being_typed_is_acknowledged_without_error(self):
+        # Windows-walk batch review, Linux: a failed-QA cancellation discarded a taken assignment while the supervisor was typing it.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = control.create(root, "claude_reviewer")
+            queued = control.enqueue_instruction(root, session["id"], "REVIEW REQUEST ROUTED: r-1", "review-assignment")
+            control.take_instructions(root, session["id"])
+            control.discard_instruction(root, session["id"], queued["id"], "the review it announced was reassigned")
+            receipt = control.acknowledge_instruction(root, session["id"], queued["id"])   # used to raise ValueError and end the terminal
+            self.assertEqual(receipt["status"], "discarded", "the discard stays on record")
+            self.assertTrue(receipt["acknowledged_after_discard_at"])
+            # the cancellation that made it obsolete is still delivered
+            cancel = control.enqueue_instruction(root, session["id"], "REVIEW CANCELLED: r-1", "review-cancelled")
+            self.assertEqual([item["id"] for item in control.take_instructions(root, session["id"])], [cancel["id"]])
+            # an unknown or foreign receipt still fails loudly
+            with self.assertRaisesRegex(ValueError, "unknown instruction receipt"):
+                control.acknowledge_instruction(root, session["id"], "nope")
+            other = control.create(root, "codex_delivery")
+            with self.assertRaisesRegex(ValueError, "belongs to another managed session"):
+                control.acknowledge_instruction(root, other["id"], queued["id"])
+
     def test_terminal_receipts_are_bounded_without_pruning_inflight_work(self):
         with TemporaryDirectory() as tmp, patch.object(control, "MAX_INSTRUCTION_RECEIPTS", 2):
             root = Path(tmp)

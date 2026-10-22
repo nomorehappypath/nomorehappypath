@@ -129,13 +129,13 @@ class RenderedBrokerRefusalTests(unittest.TestCase):
         reason = self.refuse_a_real_write()
         self.assertIn("replay refused", reason)
         reading = self.render()
-        self.assertIn("BLOCKED — GIT WRITE REFUSED", reading["badges"], json.dumps(reading, indent=2))
-        self.assertIn("BLOCKED — GIT WRITE REFUSED", reading["tasksText"])
+        self.assertIn("SAVING CHANGES FAILED, THE CTO IS FIXING IT", reading["badges"], json.dumps(reading, indent=2))
+        self.assertIn("SAVING CHANGES FAILED, THE CTO IS FIXING IT", reading["tasksText"])
         self.assertNotIn("stopped checking the board", reading["agentsText"])
         self.assertTrue(reading["dialogOpen"], "View status did not open the status dialog")
-        self.assertIn("refused by the Git broker", reading["dialogText"])
+        self.assertIn("could not be saved", reading["dialogText"])
         self.assertIn("replay refused", reading["dialogText"])
-        self.assertIn("recover-git", reading["dialogText"])
+        self.assertIn("The CTO repairs this", reading["dialogText"])
 
 
 if __name__ == "__main__":

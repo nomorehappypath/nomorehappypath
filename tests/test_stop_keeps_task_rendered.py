@@ -2,7 +2,7 @@
 """Rendered proof of backlog #10 in headless Chrome, on the real Mission Control page.
 
 The owner presses Stop on a working Delivery: the prompt and the notice say the
-task is kept, the task card stays with "STOPPED — TASK KEPT" and a Cancel task
+task is kept, the task card stays with "STOPPED, YOUR WORK IS KEPT" and a Cancel task
 button, and only pressing Cancel task (with its plain confirm) removes it.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ PROBE = r"""
   reading.stopPrompt = prompts[0] || '';
   reading.stopNotice = notice();
   reading.noticeVisible = visible(document.querySelector('#notice'));
-  await wait(() => /STOPPED — TASK KEPT/.test(card()?.textContent || ''));
+  await wait(() => /STOPPED, YOUR WORK IS KEPT/.test(card()?.textContent || ''));
   reading.cardAfterStop = card() ? card().textContent.replace(/\s+/g, ' ') : '';
   reading.cardVisible = visible(card());
   const cancel = () => card()?.querySelector('button.cancel-task');
@@ -109,7 +109,7 @@ class RenderedStopKeepsTaskTests(_stop_tests._Fixture):
         self.assertTrue(reading["noticeVisible"])
         # criterion 1: the task stays, and says what to do
         self.assertTrue(reading["cardVisible"], dump)
-        self.assertIn("STOPPED — TASK KEPT", reading["cardAfterStop"])
+        self.assertIn("STOPPED, YOUR WORK IS KEPT", reading["cardAfterStop"])
         self.assertIn("Start a new Delivery agent to carry on", reading["cardAfterStop"])
         # criterion 3: Cancel task is on the task, asks plainly, and only it removes the task
         self.assertTrue(reading["cancelVisible"], dump)

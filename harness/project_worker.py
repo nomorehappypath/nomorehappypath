@@ -203,17 +203,34 @@ class StartupMaintenance:
         self.lock = threading.Lock()
         self.complete = False
 
-    def run(self) -> None:
+    def run(self, operation: Callable[[], str] | None = None) -> None:
+        """`operation` names the board operation lazily, and is only consulted while a resume is still finishing."""
         with self.lock:
             if self.complete:
                 return
-            if board.pause_state(self.root).get("status") != "active":
+            status = board.pause_state(self.root).get("status")
+            if status == "resuming" and operation is not None and operation() == "register":
+                # A terminal the resume relaunched re-attaches while the resume is still finishing. The board's own check admits
+                # ONLY a session this very resume saved (every other register and every other write stays refused), so the
+                # maintenance simply waits for the first later command once the project is active (review 2026-10-20, F1: on a
+                # freshly started worker every relaunched agent used to exit at registration).
+                return
+            if status != "active":
                 raise SurfaceAuthorizationError(
-                    "project resume must complete before board commands are accepted"
+                    "project resume must complete before board commands are accepted "
+                    "(if Resume was interrupted, open Projects and press Resume again)"
                 )
             board.recover_git_transactions(self.root)
             release_coordinator.coordinate(self.root)
             self.complete = True
+
+
+def make_before_command(authority, maintenance: "StartupMaintenance") -> Callable[..., None]:
+    """The worker's pre-command hook: authenticate first (an unauthenticated caller never triggers recovery), then maintenance."""
+    def before_command(token: str, operation: Callable[[], str] | None = None) -> None:
+        authority.authenticate(token)
+        maintenance.run(operation)
+    return before_command
 
 
 class ProjectWatchdog:
@@ -387,7 +404,7 @@ def make_handler(
     project_id: str = "",
     settings_home: Path | None = None,
     ready_token: str = "",
-    before_command: Callable[[str], None] = lambda _token: None,
+    before_command: Callable[..., None] = lambda _token, _operation=None: None,
     chat_service: ProjectChatService | None = None,
     chat_action_token: str = "",
     runtime: dict | None = None,
@@ -504,8 +521,16 @@ def make_handler(
                     if not authorization.startswith("Bearer ") or authorization.count(" ") != 1:
                         raise SurfaceAuthenticationError("session authentication failed")
                     token = authorization.removeprefix("Bearer ")
-                    before_command(token)
-                    result = gateway.execute(token, self._small_json(COMMAND_LIMIT))
+                    parsed: list = []
+
+                    def operation_name() -> str:
+                        # the request is parsed once, and only when the hook asks (a resume is still finishing)
+                        if not parsed:
+                            parsed.append(self._small_json(COMMAND_LIMIT))
+                        return str(parsed[0].get("operation", "")) if isinstance(parsed[0], dict) else ""
+
+                    before_command(token, operation_name)
+                    result = gateway.execute(token, parsed[0] if parsed else self._small_json(COMMAND_LIMIT))
                     self.send_json(200, result)
                 except SurfaceAuthenticationError as error:
                     self.send_json(401, {"error": str(error)})
@@ -620,10 +645,8 @@ def serve(
     if browser_prefix and not manager_proxy_token:
         raise ValueError("Projects worker requires its manager proxy credential")
 
-    def before_command(token: str) -> None:
-        # Do not let an unauthenticated local caller trigger trusted recovery.
-        authority.authenticate(token)
-        maintenance.run()
+    # Do not let an unauthenticated local caller trigger trusted recovery.
+    before_command = make_before_command(authority, maintenance)
 
     address: dict[str, str] = {"endpoint": ""}
     bootstrap_directory = Path(tempfile.mkdtemp(prefix=f"harness-bootstrap-{authority.project_id[:12]}-"))

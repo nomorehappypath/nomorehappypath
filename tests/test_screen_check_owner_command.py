@@ -336,7 +336,7 @@ class RenderedOwnerCommandTests(unittest.TestCase):
         self.assertIn(COMMAND, reading["pageText"])
         self.assertIn("Copy", reading["pageText"])
         self.assertIn("Paste it into Terminal and press Return.", reading["pageText"])
-        self.assertIn("browser cannot run inside the agent's sandbox", reading["pageText"])
+        self.assertIn("browser could not run in the protected area where agents work", reading["pageText"])
 
 
 if __name__ == "__main__":

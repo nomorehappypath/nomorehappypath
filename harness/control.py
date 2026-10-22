@@ -1556,6 +1556,12 @@ def acknowledge_instruction(root: Path, session_id: str, instruction_id: str) ->
             raise ValueError("instruction receipt belongs to another managed session")
         if receipt.get("status") == "delivered":
             return dict(receipt)
+        if receipt.get("status") == "discarded":
+            # The message was discarded (its request was cancelled) while the supervisor was already typing it: it is in the CLI and
+            # cannot be recalled. The discard stays on record, the late-acknowledgment time is added, and the supervisor carries on; the
+            # cancellation that made it obsolete is still queued for the terminal.
+            receipt.setdefault("acknowledged_after_discard_at", now())   # a late acknowledgment: it says nothing about how the message travelled
+            return dict(receipt)
         if receipt.get("status") not in {"taken", "posted"}:
             raise ValueError("instruction must be taken by its supervisor before delivery is acknowledged")
         receipt.update({"status": "delivered", "delivered_at": now()})
@@ -1731,6 +1737,7 @@ def pause_sessions(
 
 
 PAUSE_NOTICE_SOURCE = "project-pause"
+RESUME_COMPLETE_SOURCE = "project-resumed"
 
 
 def _withdraw_pause_notices(state: dict[str, Any], session_id: str) -> None:

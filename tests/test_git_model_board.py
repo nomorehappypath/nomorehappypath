@@ -264,7 +264,7 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
         response = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
         self.assertEqual(response["git_acceptance"]["status"], "failed")
         self.assertIn("product.txt", response["git_acceptance"]["reason"])
-        self.assertIn("unsaved changes", response["git_acceptance"]["reason"])
+        self.assertIn("files in the project folder were changed", response["git_acceptance"]["reason"])
         self.assertEqual(self.git("rev-parse", "main").strip(), self.base_commit)
         self.git("checkout", "--", "product.txt")
         retried = board.record_release_decision(self.root, "GIT-MODEL", "accepted")
@@ -377,9 +377,9 @@ class GitModelBoardIntegrationTests(unittest.TestCase):
 
     def test_owner_ui_exposes_two_distinct_push_steps_without_browser_confirm(self):
         page = board_viewer.PAGE
-        self.assertIn("Push accepted commit", page)
+        self.assertIn("Upload approved version", page)
         self.assertIn("Record push instruction", page)
-        self.assertIn("Confirm push now", page)
+        self.assertIn("Confirm upload now", page)
         self.assertIn("/push-instruction", page)
         self.assertIn("/push-confirm", page)
         push_flow = page.split("function openPushDialog", 1)[1].split("async function submitRejection", 1)[0]

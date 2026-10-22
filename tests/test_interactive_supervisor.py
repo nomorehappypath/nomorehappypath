@@ -77,6 +77,22 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 process.wait(timeout=8)
                 os.close(master)
 
+    def test_an_acknowledgment_that_cannot_be_recorded_is_noted_and_never_ends_the_terminal(self):
+        notes = []
+        transcript = type("T", (), {"note": lambda _s, text: notes.append(text)})()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = control.create(root, "claude_reviewer")
+            queued = control.enqueue_instruction(root, session["id"], "REVIEW REQUEST ROUTED: r-1", "review-assignment")
+            control.take_instructions(root, session["id"])
+            control.discard_instruction(root, session["id"], queued["id"], "cancelled while it was being typed")
+            interactive_supervisor._acknowledge(root, session["id"], queued["id"], transcript, "was typed")          # discarded: recorded, no note
+            interactive_supervisor._acknowledge(root, session["id"], "instruction-unknown", transcript, "was typed")  # unknown: noted, no raise
+            self.assertEqual(len(notes), 1)
+            self.assertIn("instruction-unknown", notes[0])
+            self.assertIn("could not be acknowledged", notes[0])
+            self.assertEqual(control.instruction_receipt(root, queued["id"])["status"], "discarded")
+
     def test_controller_instruction_submits_with_the_real_terminal_enter_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -280,8 +280,8 @@ class RenderedWaitingGuardTests(unittest.TestCase):
         with board.locked_state(self.root) as state:
             state["agents"][self.cto["id"]].update({"liveness": "stalled", "liveness_note": "no poll"})  # another CTO state applies at the same time
         before = self.render()
-        self.assertIn("CTO must route: staged_review_cancelled on DECK", before["ctoRowText"])
-        self.assertIn("stopped checking the board", before["ctoRowText"], "the recovery explanation still shows beside the obligation")
+        self.assertIn("The CTO has follow-up work to arrange on DECK", before["ctoRowText"])
+        self.assertIn("stopped reporting", before["ctoRowText"], "the recovery explanation still shows beside the obligation")
         board.record_finding(self.root, "DECK", "Evidence run fails on export", "the export step and its fix", True)
         after = self.render()
         self.assertNotIn("CTO must route", after["ctoRowText"])

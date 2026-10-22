@@ -42,6 +42,7 @@ if __package__ in {None, ""}:
 from harness import board, board_surface, cli_capabilities, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
 from harness import workspace_settings
+from harness import test_machine
 from harness import platform_support, web_guard
 from harness.project_manager_page import PAGE
 
@@ -358,7 +359,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             }
             for held_task, hold in sorted((state.get("control_plane_holds") or {}).items()):
                 if isinstance(hold, dict) and hold.get("status") == "open" and str(hold.get("task") or held_task) not in concluded:
-                    control_plane_hold = str(hold.get("reason") or "control-plane repair is required")[:300]
+                    control_plane_hold = str(hold.get("reason") or "the app needs a repair before this task can move on")[:300]
                     control_plane_hold_task = str(hold.get("task") or held_task)
                     break
 
@@ -397,7 +398,14 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                 and str(task) not in accepted_tasks and str(task) not in cancelled
                 and not (confirmations.get(str(task)) or {}).get("text")
             }
-            awaiting_owner = awaiting_owner | awaiting_requirements
+            # Windows walk 2026-10-21: work that could not be fully tested for a cause only the owner can settle is waiting on him too.
+            open_gaps = [
+                gap for gap in (state.get("verification_gaps") or {}).values()
+                if isinstance(gap, dict) and gap.get("state") in {"diagnosing", "owner_decision", "answered"}
+                and str(gap.get("task")) not in accepted_tasks and str(gap.get("task")) not in cancelled
+            ]
+            owner_gaps = [gap for gap in open_gaps if gap.get("state") == "owner_decision"]
+            awaiting_owner = awaiting_owner | awaiting_requirements | {str(gap.get("task")) for gap in owner_gaps}
             counts["awaiting_owner"] = len(awaiting_owner)
             counts["open"] = len({task for task in live if str(task) not in awaiting_owner})
             running = bool({task for task in live if str(task) not in awaiting_owner})
@@ -454,6 +462,18 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                     "Your decision needed: the requirements are ready. Open Mission Control and "
                     "press Go ahead, or Modify to ask for changes."
                 )
+            if owner_gaps:
+                gap = owner_gaps[0]
+                latest_task = str(gap.get("task"))
+                latest_progress = (
+                    ("Your answer was received; the CTO is applying it. " if gap.get("owner_replied_at") else "Waiting for you: ")
+                    + f"{gap.get('task')} could not be fully tested ({str(gap.get('reason') or '')[:200]}). Open Mission Control and choose: "
+                    "waive this part, give me a machine where it can happen, or stop."
+                )
+            elif open_gaps:
+                gap = open_gaps[0]
+                latest_task = str(gap.get("task"))
+                latest_progress = f"Not fully tested: the CTO is deciding what to do ({str(gap.get('reason') or '')[:200]})."
             # Batch 2 item C: a review waiting on a signed-out reviewer stops all
             # progress; the card says so before anything else.
             needed = state.get("reviewer_needed") or {}
@@ -573,6 +593,20 @@ class ProjectManager:
         self._starting_thread = None
         self.worker_starting_since = 0.0
         self._start_cancel = threading.Event()
+        # Test machine (2026-10-20): one identity per manager process; a new instance never inherits an authorization.
+        self.machine_identity = test_machine.manager_identity()
+        self.machine_challenges = test_machine.Challenges()
+        self._machine_jobs: dict[str, dict[str, Any]] = {}
+        self._machine_jobs_guard = threading.Lock()
+        self._machine_stop_generation: dict[str, int] = {}   # moved by every stop and release; a Connect compares it (works with no descriptor)
+        for entry in registered:
+            try:
+                context = registry.context_for_entry(entry)
+                test_machine.reconcile_on_start(context, self.machine_identity)
+                # no Connect is running at start: a leftover pending reservation (the app died mid-Connect) is dropped
+                test_machine.reconcile_reservation(context, self.home, entry["id"]) if test_machine.descriptor_path(context).exists() else None
+            except (OSError, ValueError, KeyError):
+                pass
 
     # -- render ------------------------------------------------------------
     def projects_payload(self) -> dict[str, Any]:
@@ -586,6 +620,7 @@ class ProjectManager:
             row["starting"] = self.worker_starting == entry["id"]
             row["starting_seconds"] = int(time.monotonic() - self.worker_starting_since) if row["starting"] else 0
             row["board_url"] = self._browser_board_url() if row["active"] else ""
+            row["test_machine"] = self._machine_summary(entry)
             row["worker_error"] = (
                 self.worker_failure.get("message", "")
                 if self.worker_failure.get("project_id") == entry["id"] else ""
@@ -1053,6 +1088,7 @@ class ProjectManager:
 
     @_one_lifecycle_step
     def close_project(self, project_id: str) -> dict[str, Any]:
+        self._machine_stop(project_id, "project_stopped")
         if self.worker_project == project_id:
             self._stop_worker()
         registry.deactivate(self.home, project_id)
@@ -1072,6 +1108,11 @@ class ProjectManager:
                 project_id = str(active.get("project_id") or "")
         keep = bool(project_id) and self._paused(project_id)
         self._stop_worker()
+        try:
+            for entry in registry.entries(self.home):
+                self._machine_stop(entry["id"], "manager_restarted")
+        except (OSError, ValueError, KeyError):
+            pass
         if project_id:
             if not (keep and registry.hold_for_restart(self.home, project_id)):
                 registry.deactivate(self.home, project_id)
@@ -1086,6 +1127,139 @@ class ProjectManager:
             return board.pause_state(registry.context_for_entry(entry)).get("status") == "paused"
         except (OSError, ValueError, KeyError):
             return False
+
+    # -- test machine ------------------------------------------------------------
+    def _machine_context(self, project_id: str):
+        return registry.context_for_entry(registry._find(registry.load(self.home), project_id))
+
+    def _machine_summary(self, entry: dict[str, Any]) -> dict[str, Any]:
+        try:
+            context = registry.context_for_entry(entry)
+            status = test_machine.public_status(context)
+            if status.get("usable"):
+                test_machine.heartbeat(context, self.machine_identity)
+            if status.get("usable"):
+                self._machine_handoff_if_pending(entry["id"], context)
+            if status.get("recovering"):
+                from harness import test_machine_followup
+                status["recovering"] = test_machine_followup.refresh_recovering(context)
+        except (OSError, ValueError, KeyError):
+            return {"state": "unknown"}
+        try:
+            status["reserved"] = test_machine.reserved_for(self.home, entry["id"])
+        except OSError:
+            status["reserved"] = False
+        job = self._machine_jobs.get(entry["id"])
+        status["busy"] = bool(job and job.get("running"))
+        status["busy_seconds"] = int(time.monotonic() - job["since"]) if status["busy"] else 0
+        return status
+
+    def machine_status(self, project_id: str) -> dict[str, Any]:
+        return self._machine_summary(registry._find(registry.load(self.home), project_id))
+
+    def machine_scan(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Step 1 of Connect: read the machine's identity and show it. No password is involved."""
+        context = self._machine_context(project_id)
+        address, user, port = test_machine.validate_target(body.get("address"), body.get("user"), body.get("port", 22))
+        found = test_machine.scan_host_key(address, port)
+        current = test_machine.read(context) if test_machine.descriptor_path(context).exists() else None
+        pinned = ((current or {}).get("host_key") or {}) if (current or {}).get("connected") and (current or {}).get("address") == address and int((current or {}).get("port", 22)) == port else {}
+        changed = bool(pinned.get("fingerprint")) and pinned.get("fingerprint") != found["fingerprint"]
+        challenge = self.machine_challenges.issue(project_id, address, user, port, found, changed, not pinned.get("fingerprint"))
+        return {
+            "challenge": challenge["id"], "address": address, "user": user, "port": port,
+            "fingerprint": found["fingerprint"], "key_type": found["type"], "changed": changed,
+            "first_use": challenge["first_use"],
+            "note": ("This machine's identity is different from the one saved. If you rebuilt or restored the VM, confirm it; if not, stop."
+                     if changed else "First connection to this machine: the identity shown here is saved and checked on every later connection."),
+        }
+
+    def machine_connect(self, project_id: str, body: dict[str, Any], *, loopback: bool) -> dict[str, Any]:
+        if not loopback:
+            raise test_machine.MachineError(
+                "The password is only accepted on the computer that runs Mission Control. Open Mission Control there "
+                "(or through an ssh tunnel to 127.0.0.1) and press Connect again.", "not_loopback")
+        password = body.get("password")
+        if not isinstance(password, str) or not password or len(password) > 512 or "\n" in password or "\r" in password:
+            raise test_machine.MachineError("Enter the machine account's password.", "invalid")
+        context = self._machine_context(project_id)
+        generation = self._machine_stop_generation.get(project_id, 0)   # before the challenge is consumed: a stop after this cancels the Connect
+        challenge = self.machine_challenges.consume(str(body.get("challenge", "")), project_id)
+        with self._machine_jobs_guard:
+            job = self._machine_jobs.setdefault(project_id, {"running": False})
+            if job.get("running"):
+                raise test_machine.MachineError("A Connect is already running for this project.", "busy")
+            if self._machine_stop_generation.get(project_id, 0) != generation:
+                raise test_machine.MachineError("Connect was stopped (the project was paused, closed or restarted). Nothing was kept.", "cancelled")
+            job.update({"running": True, "since": time.monotonic(), "cancel": threading.Event()})
+        started = time.monotonic()
+        try:
+            connector = test_machine.Connector(context, self.home, project_id, self.machine_identity, cancel=job["cancel"])
+            try:
+                connector.run(challenge, password, bool(body.get("confirm_changed")))
+            except test_machine.MachineError as error:
+                if error.code == "key_refused":
+                    # the password worked but the key did not: this project's machine record can no longer be trusted
+                    # (a mistyped password proves nothing about the key, so it changes nothing)
+                    test_machine.mark_reauth(context, "key_failed")
+                raise
+            self._machine_after_connect(project_id, context)
+        finally:
+            password = ""
+            job["running"] = False
+            self._machine_jobs.pop(project_id, None) if self._machine_jobs.get(project_id) is job else None
+        status = self._machine_summary(registry._find(registry.load(self.home), project_id))
+        status["seconds"] = int(time.monotonic() - started)
+        return status
+
+    def machine_check(self, project_id: str) -> dict[str, Any]:
+        return test_machine.diagnose(self._machine_context(project_id))
+
+    def machine_release(self, project_id: str) -> dict[str, Any]:
+        context = self._machine_context(project_id)
+        with self._machine_jobs_guard:
+            self._machine_stop_generation[project_id] = self._machine_stop_generation.get(project_id, 0) + 1
+        job = self._machine_jobs.get(project_id)
+        if job and job.get("cancel") is not None:
+            job["cancel"].set()   # a running Connect is stopped, not allowed to publish after the release
+        self.machine_challenges.void(project_id)
+        return test_machine.release(context, self.home, project_id)
+
+    def _machine_stop(self, project_id: str, cause: str = "project_stopped", *, resume: bool = False) -> str:
+        """A project stop (pause, close, resume, shutdown) voids any open Connect and requires the password again. A RESUME keeps the
+        authorization of a Connect the owner made after the last stop (during the pause); it still cancels a Connect that is running.
+        Returns "kept", "required" or "none"."""
+        with self._machine_jobs_guard:
+            self._machine_stop_generation[project_id] = self._machine_stop_generation.get(project_id, 0) + 1
+        job = self._machine_jobs.get(project_id)
+        if job and job.get("cancel") is not None:
+            job["cancel"].set()
+        self.machine_challenges.void(project_id)
+        try:
+            context = self._machine_context(project_id)
+            if resume:
+                return test_machine.mark_resume(context)
+            test_machine.mark_reauth(context, cause)
+            return "required"
+        except (OSError, ValueError, KeyError):
+            return "none"
+
+    def _machine_handoff_if_pending(self, project_id: str, context) -> None:
+        """Retry an owed announcement (after a Connect or a kept Resume) until it completes for the authorization that stands."""
+        from harness import test_machine_followup
+        try:
+            if test_machine_followup.handoff_pending(context):
+                self._machine_after_connect(project_id, context)
+        except (OSError, ValueError, KeyError):
+            pass
+
+    def _machine_after_connect(self, project_id: str, context) -> bool:
+        """Tell every running agent the current rule and connection, and hand stale work back to its owner (X1, S8)."""
+        from harness import test_machine_followup
+        try:
+            return bool(test_machine_followup.after_connect(context)["completed"])
+        except (OSError, ValueError, KeyError, RuntimeError):
+            return False   # `handoff_pending` stays set: the status refresh and the next Resume retry it
 
     @_one_lifecycle_step
     def pause_project(
@@ -1122,12 +1296,40 @@ class ProjectManager:
             time.sleep(remaining)
         paused = board.finish_project_pause(context)
         stopped = control.pause_sessions(context, session_ids, timeout=stop_timeout)
+        self._machine_stop(project_id, "project_stopped")
         return {
             "project_id": project_id,
             "pause": paused,
             "signalled_sessions": signalled,
             "sessions": stopped,
         }
+
+    def _wake_after_resume(self, context) -> list[str]:
+        """Tell every live session that the board accepts commands again (plan check 2026-10-20).
+
+        A relaunched agent registers while the resume is still finishing and may have had its first poll refused; agents poll once and
+        return to the prompt, so without this the first turn would wait for the stall ladder. Every ACTIVE session is told, including a
+        survivor a retried Resume re-adopted and one that attached late. A duplicate wake is harmless (it only asks for a poll), so
+        none of this needs bookkeeping; a wake lost to a crash is the stall ladder's to recover, as before."""
+        woken: list[str] = []
+        try:
+            sessions = control.snapshot(context).get("sessions", [])
+        except (OSError, ValueError):
+            return woken
+        for session in sessions:
+            if session.get("status") not in control.ACTIVE_STATUSES or session.get("read_only") or session.get("superseded_by_session_id"):
+                continue
+            try:
+                control.enqueue_instruction(
+                    context, str(session["id"]),
+                    "[SYSTEM CONTROL — project-resumed] The project resume has completed and the board accepts commands again. "
+                    "Poll the board now and continue your preserved task and next action. USER ACTION: None.",
+                    source=control.RESUME_COMPLETE_SOURCE,
+                )
+                woken.append(str(session["id"]))
+            except ValueError:
+                continue   # the session ended while the resume finished; nothing to wake
+        return woken
 
     @_one_lifecycle_step
     def resume_project(self, project_id: str) -> dict[str, Any]:
@@ -1137,12 +1339,21 @@ class ProjectManager:
         transaction = board.begin_project_resume(context)
         resume_id = str(transaction.get("resume_id") or transaction.get("last_resume", {}).get("resume_id", ""))
         already_complete = transaction.get("status") == "active"
+        woken: list[str] = []
+        if not already_complete:
+            # A real resume is a stop-and-start: the password again, unless the owner connected the machine during the pause (after the
+            # last stop), which is the natural moment; that authorization is kept. A repeated resume changes nothing.
+            self._machine_stop(project_id, "project_stopped", resume=True)
 
         if already_complete:
             completed = transaction["last_resume"]
             memory = completed.get("checkpoints", {}).get("board_authority", {}).get("details", {})
             evidence_reuse = completed.get("checkpoints", {}).get("evidence_reconciled", {}).get("details", {})
         else:
+            try:
+                board.reconcile_verification_gaps(context)   # work that ended NOT TESTED before this existed still reaches the owner
+            except (OSError, ValueError, KeyError):
+                pass
             memory = project_memory.reconcile_from_board(context, board.snapshot(context))
             board.record_project_resume_checkpoint(context, resume_id, "board_authority", {
                 **memory,
@@ -1274,6 +1485,11 @@ class ProjectManager:
             })
             completed = board.finish_project_resume(context, resume_id)
 
+        # Every Resume press ends by telling the live sessions the board is open: also a repeated press after a crash between the
+        # finish and the wake (a duplicate wake only asks for a poll, so nothing needs bookkeeping).
+        woken = self._wake_after_resume(context)
+        self._machine_handoff_if_pending(project_id, context)
+
         return {
             "project_id": project_id,
             "resume": completed,
@@ -1282,6 +1498,7 @@ class ProjectManager:
             "sessions": prepared,
             "relaunched": relaunched,
             "relaunch_failures": relaunch_failures,
+            "woken": woken,
             **worker,
         }
 
@@ -1575,6 +1792,21 @@ def make_handler(manager: ProjectManager):
                         raise
                     return self._send(201, entry)
                 parts = self.path.strip("/").split("/")
+                if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "test-machine":
+                    project_id, action = unquote(parts[2]), parts[4]
+                    value = self._body()
+                    if action == "scan":
+                        return self._send(200, manager.machine_scan(project_id, value))
+                    if action == "connect":
+                        peer = str(self.client_address[0])
+                        return self._send(200, manager.machine_connect(
+                            project_id, value, loopback=peer in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}))
+                    if action == "check":
+                        return self._send(200, manager.machine_check(project_id))
+                    if action == "release":
+                        return self._send(200, manager.machine_release(project_id))
+                    if action == "status":
+                        return self._send(200, manager.machine_status(project_id))
                 if len(parts) == 4 and parts[:2] == ["api", "projects"]:
                     project_id, action = parts[2], parts[3]
                     if action == "open":

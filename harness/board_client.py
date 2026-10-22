@@ -30,7 +30,7 @@ UPLOAD_ARGUMENTS = {
     "request-review": ("--ledger", "ledger", True),
     "attach-challenge-ledger": ("--challenge-ledger", "challenge_ledger", True),
     "claim-qa": ("--challenge-ledger", "challenge_ledger", False),
-    "qa-result": ("--evidence", "evidence", True),
+    "qa-result": ("--evidence", "evidence", False),
     "contract-evidence": ("--evidence", "evidence", True),
     "screen-script": ("--steps", "steps", True),
 }
@@ -131,22 +131,38 @@ def _replace_option(arguments: list[str], name: str, value: str) -> list[str]:
     return result
 
 
+class ArtifactError(ValueError):
+    """A problem with a file the agent asked to upload, on the agent's own computer. Its text is the reason, printed as it is."""
+
+
+TRUSTED_REFERENCE_PREFIX = "trusted://"
+
+
 def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
     """Read one regular single-link file entirely inside the agent process."""
+    try:
+        return _read_artifact_checked(path_value, field)
+    except ArtifactError:
+        raise
+    except OSError as error:
+        raise ArtifactError(f"artifact could not be read: {error.strerror or 'file error'}") from error
+
+
+def _read_artifact_checked(path_value: str, field: str) -> dict[str, Any]:
     path = Path(path_value)
     try:
         before = os.lstat(path)
     except OSError as error:
-        raise ValueError("artifact file is unavailable") from error
+        raise ArtifactError(f"artifact file is unavailable: {path_value}") from error
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-        raise ValueError("artifact must be a regular single-link file")
+        raise ArtifactError("artifact must be a regular single-link file")
     if before.st_size < 0 or before.st_size > MAX_ARTIFACT_BYTES:
-        raise ValueError(f"artifact exceeds the {MAX_ARTIFACT_BYTES}-byte limit")
+        raise ArtifactError(f"artifact exceeds the {MAX_ARTIFACT_BYTES}-byte limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
-        raise ValueError("artifact file could not be opened safely") from error
+        raise ArtifactError("artifact file could not be opened safely") from error
     try:
         opened = os.fstat(descriptor)
         if (
@@ -156,7 +172,7 @@ def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
             or opened.st_mtime_ns != before.st_mtime_ns
             or opened.st_ctime_ns != before.st_ctime_ns
         ):
-            raise ValueError("artifact changed while it was being opened")
+            raise ArtifactError("artifact changed while it was being opened")
         chunks: list[bytes] = []
         remaining = MAX_ARTIFACT_BYTES + 1
         while remaining:
@@ -188,7 +204,7 @@ def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
             verify.append(chunk)
             remaining -= len(chunk)
         if b"".join(verify) != payload:
-            raise ValueError("artifact changed while it was being read")
+            raise ArtifactError("artifact changed while it was being read")
         # DECLARED LIMIT, so nobody mistakes this guard for more than it is:
         # a same-LENGTH rewrite in place, completing inside the filesystem's
         # timestamp granularity, is NOT detectable here. dev, ino and size are
@@ -205,17 +221,17 @@ def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
     finally:
         os.close(descriptor)
     if len(payload) != before.st_size or len(payload) > MAX_ARTIFACT_BYTES:
-        raise ValueError("artifact changed while it was being read")
+        raise ArtifactError("artifact changed while it was being read")
     if (
         not stat.S_ISREG(after.st_mode) or after.st_nlink != 1
         or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
         != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
     ):
-        raise ValueError("artifact changed while it was being read")
+        raise ArtifactError("artifact changed while it was being read")
     try:
         payload.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ValueError("artifact must be valid UTF-8") from error
+        raise ArtifactError("artifact must be valid UTF-8") from error
     digest = hashlib.sha256(payload).hexdigest()
     return {
         "content": base64.b64encode(payload).decode("ascii"),
@@ -230,11 +246,19 @@ def _prepare_artifacts(operation: str, arguments: list[str]) -> tuple[list[str],
     if not specification:
         return arguments, {}
     option, field, required = specification
-    path = _option_value(arguments, option)
+    try:
+        path = _option_value(arguments, option)
+    except ValueError as error:
+        raise ArtifactError(str(error)) from error
     if path is None:
         if required:
-            raise ValueError(f"{option} is required")
+            raise ArtifactError(f"{option} is required")
         return arguments, {}
+    if path.startswith(TRUSTED_REFERENCE_PREFIX):
+        raise ArtifactError(
+            f"{option} {path[:60]} is how the board names a file in its own private folder, not a path on this computer. "
+            + ("Omit --evidence to use the certified evidence of your execute-challenge, or pass " if option == "--evidence" else "Pass ")
+            + "the real path of a file you wrote.")
     artifact = _read_artifact(path, field)
     return _replace_option(arguments, option, f"upload:{field}"), {field: artifact}
 
@@ -316,7 +340,7 @@ def invoke(argv: list[str]) -> int:
         arguments, artifacts = _prepare_artifacts(arguments[0], arguments)
         # A screen script has its own 90 second run budget plus bounded browser start and clean-up waits; the
         # agent must not give up (and rerun clicks) while it is still running.
-        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release"} else 240 if arguments[0] == "screen-script" else 30
+        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release", "collect-build"} else 240 if arguments[0] == "screen-script" else 30
         attempts = POLL_TRANSPORT_ATTEMPTS if arguments[0] == "poll" else 1
         value = None
         for attempt in range(attempts):
@@ -350,6 +374,8 @@ def invoke(argv: list[str]) -> int:
         print(f"error: {_error_message(error)}", file=sys.stderr)
     except WorkerTransportError:
         print("error: authenticated board worker is unavailable or temporarily busy", file=sys.stderr)
+    except ArtifactError as error:
+        print(f"error: {error}", file=sys.stderr)
     except (ValueError, json.JSONDecodeError):
         print("error: authenticated board worker response is invalid or incompatible", file=sys.stderr)
     return 2

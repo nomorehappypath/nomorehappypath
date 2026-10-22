@@ -132,7 +132,7 @@ class BoardReintegrationTests(test_git_model_board.GitModelBoardIntegrationTests
         state = board.snapshot(self.root)
         marker = state["git_reintegration_required"]["SECOND"]
         self.assertIn("main advanced", marker["reason"])
-        self.assertIn("A newer version of main was accepted", marker["owner_line"])
+        self.assertIn("Other approved work changed the app", marker["owner_line"])
         self.assertEqual(marker["delivery"], "active")
         self.assertTrue(marker["delivery_notified_at"])
         self.assertNotIn("GIT-MODEL", state["git_reintegration_required"])

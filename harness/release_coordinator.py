@@ -209,6 +209,33 @@ def _record_trusted_checks(root: Path, task: str, checks: dict[str, Any]) -> Pat
     return path
 
 
+def _collect_declared_build(root: Path, state: dict[str, Any], task: str, request: dict[str, Any]) -> dict[str, Any] | None:
+    """Owner 2026-10-21 ("Get the build"): collect a declared program build before the release is prepared.
+
+    None means go on (no build declared, or it is collected and intact). Otherwise the task waits, with the reason on
+    the board; temporary failures are retried on the board's retry rule, never forgotten.
+    """
+    from harness import build_collection, contract
+    declaration = contract.build_declaration(root, task)
+    if not declaration:
+        return None
+    digest = build_collection.declaration_digest(declaration)
+    record = (state.get("builds") or {}).get(task) or {}
+    if record.get("final_request_id") == request.get("id") and record.get("declaration_sha256") == digest and build_collection.intact(root, task, record)[0]:
+        return None
+    try:
+        _output, stamp = board._unit_test_build_source(root, request)
+    except ValueError:
+        stamp = {}
+    if not board.build_collection_due(state, task, request, digest, stamp):
+        return {"task": task, "status": "build_waiting"}
+    try:
+        board.collect_build(root, task)
+    except (build_collection.BuildError, ValueError) as error:
+        return {"task": task, "status": "build_not_collected", "class": getattr(error, "klass", "output"), "error": str(error)}
+    return None
+
+
 def _coordinatable_tasks(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     cancelled = state.get("cancelled_tasks") or {}
     found: list[tuple[str, dict[str, Any]]] = []
@@ -248,6 +275,11 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
     for task, request in _coordinatable_tasks(state):
         commit = str(request.get("reviewed_commit") or "")
         try:
+            held = _collect_declared_build(root, state, task, request)
+            if held is not None:
+                outcomes.append(held)
+                continue
+            state = board.snapshot(root)   # a collected build is part of what this pass decides on
             records = _journal_records(root, task, commit)
             workspace = state.get("task_workspaces", {}).get(task, "")
             repo = Path(workspace) if workspace else root

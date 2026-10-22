@@ -71,6 +71,31 @@ The first run needs a few sign-ins; the sections below explain each one.
 - **Mission Control.** A local web app to watch every project, preview the finished app, ask questions about your project (project chat uses your own OpenAI API key), accept the result, and update itself with one click.
 - **Over 2,000 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
 
+## Windows programs, end to end
+
+A Windows program is built and proven on a real Windows machine you give the agents, and you get the finished file from Mission Control. In plain words:
+
+1. **Make a throwaway Windows machine, anywhere** (a virtual machine on a Mac, Linux or PC, or a spare computer): a local account, at least 2 cores, 4 GB of memory and 64 GB of disk, and the OpenSSH Server turned on (three PowerShell lines; the Help page shows them). Note its address.
+2. **Connect it once** from Mission Control: press *Test machine* on the project, enter the address, the account name and the password, and press *Connect*. The password is used for that one sign-in and forgotten.
+3. **The agents do the rest.** After the one-time setup they install their own build and test tools on the machine over ssh, build the program, and run its tests there; the independent reviewer, from the other AI company, runs them again on the same machine. After any stop (pause, close, restart, or a key that stops working) the card asks for the password again.
+4. **If part of the work could not be tested, you are told.** The project says *Not fully tested*, and when the cause is yours to decide a *Waiting for you* card asks you to choose: waive that part, give a machine where it can happen, or stop the task. Security and the independent review cannot be waived.
+5. **You get the program.** The acceptance card shows *Get the build*: each file with its size and SHA-256, the machine and version it was built and tested on, what Windows it is for, what you need, the steps to try it and what you should see. Compare the SHA-256 (`Get-FileHash` on Windows, `shasum -a 256` on a Mac, `sha256sum` on Linux) before you run it, and do not run the file if it differs. Programs are not code-signed, so Windows may warn you.
+
+What it does not do: it never creates, resets or deletes the machine, one machine serves one project, the harness itself does not run on Windows, and a test only proves what that one machine can show.
+
+**The first Windows tool built this way: `why.exe`.** `why --port <N>` tells you which program is listening on a local TCP port. It was built by the agents, tested on a real Windows virtual machine, and reviewed by an independent reviewer from the other AI company who ran it there. The proof trail is the board of that project, and it is not a clean sweep: six reviews ran. The first three also found real defects, including that the error report could send a bearer token over plain HTTP to another computer, which the agents fixed and the reviewer re-ran on Windows. Five of the six ended *NOT TESTED* because the case where Windows refuses access to a protected process could not happen on the test machine (its account was an administrator). The owner then waived only that part, in writing, and the sixth review passed on fresh Windows runs of everything else. Accepting an untested part does not bypass security or defect findings. Those rounds are why *Not fully tested* and the *Waiting for you* card now exist.
+
+Existing projects keep their old acceptance card: *Get the build* appears only for a new task whose Delivery declared the build, so `why.exe` itself would need a new task to be downloadable this way. A task that declares a build and also a web app keeps *View app*.
+
+## What's new in v0.10.0
+
+- **Windows programs, end to end:** *Get the build* (download the tested program with its SHA-256 and steps), a *Test machine* button in the project's own header, and agents that install their own tools on the machine over ssh.
+- **You are told when work could not be fully tested:** *Not fully tested* and *Waiting for you*, with three choices, instead of a silent loop.
+- **Safer machine handling:** one OS-held lock per machine, the password asked again after any stop, and Resume keeps a pending Connect.
+- **Plain words:** the app's messages, cards and Help were rewritten to say what happened, what it means and what to do, without technical terms.
+- **Windows closes itself:** finished agent terminal windows close on their own, and the AI reviewer's browser tools no longer open on your screen.
+- **Clearer evidence rules for reviewers and agents,** and a repeated-failure alert for the CTO.
+
 ## Why
 
 AI is excellent at the happy path: the demo works. The failed login, the empty screen and the raw error message appear in front of customers. NoMoreHappyPath exists so software built by AI is built, checked and accepted like a product, not shown like a demo.
@@ -262,17 +287,53 @@ interchangeable labor — is the point; the code is how we prove it works.
 ## FAQ
 
 **Can it build and test a Windows program?**
-Build on this machine, test on one you name. Set up a throwaway Windows VM
-with an ssh server, put its private key and its host key (`ssh-keyscan`) in
-the project's data folder shown in Settings, then tell Delivery: "build
-here, test on `ssh user@address`". The agents add a `make test` target that
-copies the code there and runs the tests over ssh; the board certifies that
-output, and the reviewer, from the other AI company, reruns it on the same
-VM in its own folder. Reset the VM yourself when you want it clean, then
-tell Delivery to raise the generation number in the test command and ask
-for a new review, so the checks run again on the clean VM. Keep the VM away from your files and your other
-machines: anything the agents write can run there. The harness itself does
-not run on Windows, and it has not yet been walked through a Windows task.
+Build on this machine, test on one you name. Make a throwaway Windows VM with
+OpenSSH Server turned on, then tell Delivery: "build here, test on the VM".
+When the agents need it, a *Test machine* card appears on the project in
+Mission Control; you enter the VM's address, account name and password there
+once and press Connect. Mission Control reads and saves the VM's identity,
+makes a key for the project, signs in once with the password (used for that
+one connection and forgotten, never logged or shown to an agent), installs
+the key and checks that it works. Nothing is pasted and nothing is installed
+by you: Delivery tells you what size to make the VM, the agents install the
+tools themselves, add a `make test` target that copies the code there and
+runs the tests over ssh, and the board certifies that output; the reviewer,
+from the other AI company, reruns it on the same VM in its own folder. The
+agents clean up what their runs leave behind before every test, and say so if
+they cannot. Whenever the project stops for any reason, or the key stops
+working, the card asks for the password again and machine-dependent results
+wait for it. If you rebuild or change the VM, the card and the agents
+re-run what depended on it. Use a password that exists only for that VM and
+keep the VM away from your files and your other machines: anything the agents
+write can run there. The harness itself does not run on Windows. See
+[Windows programs, end to end](#windows-programs-end-to-end) for what you see
+from the first request to the downloaded program.
+
+**How do I create the Windows test machine?** (Mission Control's Help page has the same
+steps: *Create The Windows Test Machine*.) Some programs only prove themselves on real
+Windows, so the agents build (here or there) and test on a Windows machine you give them,
+one per project. Make it disposable, with none of your personal files, no shared folders
+or attached disks, and no access to anything on your network you care about: the agents run
+commands there with the account you give them. You create it and destroy it; the app never
+creates, resets or deletes it. Where it runs does not matter (a virtual machine on a Mac,
+Linux or PC, or a spare Windows computer). You do four things: (1) create it from
+Microsoft's installer with a local account and a password used nowhere else, at least 2
+cores, 4 GB of memory and 64 GB of disk, comfortably 4 cores, 8 GB, 100 GB (Delivery
+restates the exact needs for the project); (2) in PowerShell as Administrator, run once
+`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`,
+`Set-Service -Name sshd -StartupType Automatic`, `Start-Service sshd`; (3) find its address
+with `ipconfig` and check that `ssh -F /dev/null -o PubkeyAuthentication=no account@address` works from
+the Terminal of the computer that runs Mission Control; (4) in Mission Control's Projects
+page press *Test machine* on the project, enter the address, account name and password, and
+press *Connect*. Everything else (which Windows it is, ARM or x86-64, the toolchain, the
+tools) is the agents' job; some projects need an Administrator account or extra tools and
+Delivery tells you before the first test. Take a snapshot of the clean machine if your
+software offers it. After you restore a snapshot, rebuild or change the machine, press
+Connect again and tell Delivery (also after a Windows update and restart): that makes earlier results stale, Delivery sends the work for review again and the reviewer runs the tests again; a
+pause, close, restart or a failing key makes the card ask for the password by itself. If
+the address changes, press Connect with the new one. When the project is finished press
+*Release this machine* (the installed key stays on the machine) and destroy the machine, or
+wipe a spare computer.
 
 **Is this for real, serious products, or for toys?**
 Serious products - that is the design center. This platform is for
