@@ -500,6 +500,8 @@ def _certified_delivery_health(
         return failed
     if browser_acceptance.blocked_note(output):
         return failed   # a reported browser failure is never release health (review r2 B3)
+    if certified_execution.final_check_problem(output):
+        return failed   # a stored run whose own final check did not pass is never release health
     return {
         "verified": True,
         "source": "certified_delivery_full_suite",

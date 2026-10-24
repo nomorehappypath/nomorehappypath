@@ -489,6 +489,11 @@ def contract_complete(root, task):
     return (not problems, problems, value)
 
 
+# Owner (2026-10-23): "the owner never runs or verifies a test". A deliverable that is about the agents' own tests is their job, not a step.
+AGENT_TEST_DELIVERABLE = re.compile(
+    r"\b(automated|unit|integration|regression|e2e|end-to-end)\b.*\btests?\b|\btests?\b.*\b(pass|passing|suite|coverage)\b|\btest suite\b|\bpytest\b|\bunittest\b|\blint", re.I)
+
+
 def owner_test_steps(root, task, limit=8):
     """Derive a bounded owner checklist from the immutable deliverable names."""
     try:
@@ -507,6 +512,8 @@ def owner_test_steps(root, task, limit=8):
                 waived += 1
                 continue
             name = " ".join(str(item.get("name", "")).split())[:500].strip(" .")
+            if AGENT_TEST_DELIVERABLE.search(name):
+                continue
             if name and name not in steps:
                 steps.append(name)
             if len(steps) >= max(1, min(int(limit), 8)):

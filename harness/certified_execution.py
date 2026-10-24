@@ -55,6 +55,60 @@ def executed_test_count(output: str) -> int | None:
     return 0 if _ZERO_MARKERS.search(output) else None
 
 
+# A project's own quality gate may have a soft route ("warnings only; continuing") that reports passed without its final
+# check (owner 2026-10-23: "a generic harness issue"; the Studio Proposal + SOW run of 2026-10-16 is the example). A certified
+# test that exercises such a gate prints one `FINAL CHECK: <status> <name>` line per gate, the TEST's verdict on that check (a
+# negative test that watches the gate correctly refuse prints PASS). Every line must be PASS or the run is not certified,
+# whatever the exit code. Output with no such line is untouched: the convention is opt-in.
+FINAL_CHECK_STATUSES = ("PASS", "FAIL", "NOT RUN", "WARNINGS ONLY", "SKIPPED")
+_FINAL_CHECK_LINE = re.compile(r"(?m)^\s*FINAL CHECK:(?P<rest>.*)$")
+_FINAL_CHECK_STATUS = re.compile(r"^\s*(PASS|FAIL|NOT RUN|WARNINGS ONLY|SKIPPED)\b\s*(?P<name>.*)$")
+FINAL_CHECK_MAX_LINES = 20
+FINAL_CHECK_MAX_CHARS = 200
+
+
+def final_check_lines(output: str) -> list[dict[str, str]]:
+    """Every `FINAL CHECK:` line in the output, in order: {"status", "name", "line"}; a line the board cannot read has status "MALFORMED"."""
+    found = []
+    for match in _FINAL_CHECK_LINE.finditer(output or ""):
+        rest = match.group("rest").strip()
+        parsed = _FINAL_CHECK_STATUS.match(rest)
+        line = ("FINAL CHECK: " + rest)[:FINAL_CHECK_MAX_CHARS]
+        if parsed:
+            found.append({"status": parsed.group(1), "name": parsed.group("name").strip(), "line": line})
+        else:
+            found.append({"status": "MALFORMED", "name": rest, "line": line})
+    return found
+
+
+def final_check_summary(output: str) -> list[str]:
+    """The lines, bounded for storage and the review brief, so the Reviewer reads them whatever the output's length."""
+    return [item["line"] for item in final_check_lines(output)[:FINAL_CHECK_MAX_LINES]]
+
+
+def final_check_problem(output: str) -> str:
+    """The plain reason this run is NOT certified by its own final checks, or "" (all PASS, or no line at all).
+
+    Aggregated over the whole output: one non-PASS or unreadable line is enough. FAIL is refused even with exit code 0; that is
+    the point. Decided before the result is stored and before any retry classification, so no such run is ever stored as a
+    success and a known failure is never mistaken for an interruption.
+    """
+    reasons = []
+    for item in final_check_lines(output):
+        status, name = item["status"], item["name"] or "unnamed check"
+        if status == "PASS":
+            continue
+        if status == "FAIL":
+            reasons.append(f"the project's final check failed: {name}")
+        elif status in ("NOT RUN", "SKIPPED"):
+            reasons.append(f"the project's final check did not run: {name}")
+        elif status == "WARNINGS ONLY":
+            reasons.append(f"the project's gate approved with warnings only, its final check did not pass: {name}")
+        else:
+            reasons.append(f"a FINAL CHECK line could not be read: {item['line']}")
+    return "; ".join(reasons)
+
+
 def _reports_zero_executed_tests(output: str) -> bool:
     """Did this command run no tests at all?
 
@@ -344,6 +398,9 @@ def run(
             # A success stored before 2026-09-28 could carry a reported browser
             # failure (review r2 B3); it is never reused as a pass.
             decision = {"status": "miss", "reason": "cached_success_reported_a_blocked_browser"}
+        if decision["status"] == "hit" and final_check_problem(cached):
+            # A stored success whose own output says a final check did not pass is never reused as one.
+            decision = {"status": "miss", "reason": "cached_success_reported_a_failed_final_check"}
         if decision["status"] == "hit":
             output = cached
             timestamp = _at()
@@ -358,6 +415,7 @@ def run(
                     "execution_identity": identity["sha256"],
                     "execution_record_id": decision["entry"].get("record_id", ""),
                     "process_audit": (decision["entry"].get("metadata") or {}).get("process_audit", {}),
+                    "final_checks": final_check_summary(output),
                     **({"machine": machine} if machine else {}),
                 },
             }
@@ -387,7 +445,13 @@ def run(
         duration = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
         problem = ""
         real_problems = [p for p in process_audit["problems"] if p not in _AMBIENT_PROBLEMS]
-        if process_audit["problems"] and not real_problems and exit_code == 0 and not browser_acceptance.blocked_note(output):
+        # A final check the project's own test reports as not passed is a deterministic failure: it is decided first, before
+        # the ambient-interruption classification (it is not a retryable interruption) and before anything is stored.
+        final_check = final_check_problem(output)
+        if final_check:
+            exit_code = exit_code or 6
+            problem = final_check
+        if not final_check and process_audit["problems"] and not real_problems and exit_code == 0 and not browser_acceptance.blocked_note(output):
             # Only owner-machine activity the command cannot be shown to have
             # caused (a prompt, a handler change), and the command itself
             # succeeded: nothing is certified, nothing failed, ask again.
@@ -400,7 +464,7 @@ def run(
                 + "). Nothing was certified and nothing failed; ask again once the machine is idle."
             )
         if (
-            exit_code != 0 and not real_problems
+            not final_check and exit_code != 0 and not real_problems
             and browser_acceptance.OWNER_MACHINE_ACTIVITY_MARKER in output
         ):
             # The acceptance browser inside the tests saw owner-machine activity
@@ -411,7 +475,7 @@ def run(
             )
         if process_audit["problems"]:
             exit_code = exit_code or 3
-            problem = "; ".join(process_audit["problems"])
+            problem = "; ".join([final_check] * bool(final_check) + process_audit["problems"])
         # Review r2 B3: a check whose browser could not run inside the sandbox
         # is not a pass, even when its tests reported OK. Decided before the
         # result is certified, so no such run is ever stored as a success.
@@ -473,4 +537,5 @@ def run(
             raise ValueError(browser_acceptance.with_blocked_note(
                 problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}", output,
             ))
+        measurement["final_checks"] = final_check_summary(output)
         return {"output": output, "measurement": measurement}

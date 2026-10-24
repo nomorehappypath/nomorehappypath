@@ -71,6 +71,12 @@ The first run needs a few sign-ins; the sections below explain each one.
 - **Mission Control.** A local web app to watch every project, preview the finished app, ask questions about your project (project chat uses your own OpenAI API key), accept the result, and update itself with one click.
 - **Over 2,000 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
 
+## Before work starts: the reviewer reads your requirements
+
+When Delivery writes down the final requirements, the Reviewer reads them first and writes tests for them before any work starts. If it cannot write a test without guessing, it asks you at most four questions, once, on a single card in Mission Control, each with a recommended answer and an Other box; your answers are added to the requirements under "Decided before coding". You can always go ahead without waiting. Later, each requirement is marked checked, partly checked or not checked in advance. Agents ask you product questions only in Mission Control (a banner at the top counts them), never in their own terminal windows.
+
+**A passing flag is not proof.** When a project runs its own final check before it is called done, it prints one `FINAL CHECK` line for each check: passed, failed, not run, warnings only or skipped. The board reads those lines and does not accept "done" on anything but passed, even when the program exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.
+
 ## Windows programs, end to end
 
 A Windows program is built and proven on a real Windows machine you give the agents, and you get the finished file from Mission Control. In plain words:

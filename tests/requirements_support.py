@@ -12,7 +12,11 @@ from harness import board, control
 
 def agreed_requirements(root, agent_id: str, text: str):
     event = board.record_requirement_proposal(root, agent_id, text)
-    board.record_requirements_decision(root, event["task"], "go_ahead")
+    # like the page: the decision names the version and card state the owner was shown
+    proposal = board.snapshot(root)["requirement_proposals"][event["task"]]
+    board.record_requirements_decision(
+        root, event["task"], "go_ahead", version=proposal["version"], token=(proposal.get("contract_check") or {}).get("token", ""),
+    )
     confirmation = board.record_requirement_confirmation(root, agent_id, text)
     state = board.snapshot(root)
     agents = state.get("agents") or {}

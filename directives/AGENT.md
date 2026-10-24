@@ -54,7 +54,15 @@ to pin as an owner-action card, and continue with the rest of the work. A
 config folder isolated for hermeticity (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
 pointed at a temporary folder) stays empty of logins.
 
-Everything the owner reads (an owner card, a clarification question, a status note, release and acceptance text) is written for a non-technical person: say what happened, what it means for them and what to do, in that order, in plain words, with at most one question per card. Leave out words they would have to look up (hold, ledger, candidate, certified, repair package, stale, commit, merge); the technical detail belongs in the evidence, not in the card.
+Everything the owner reads (an owner card, a clarification question, a status note, release and acceptance text) is written for a non-technical person: say what happened, what it means for them and what to do, in that order, in plain words, with at most one question per card (the one exception: the Reviewer's early contract check is ONE card of at most four product questions, each with a recommended answer; see the Independent Reviewer workflow). Leave out words they would have to look up (hold, ledger, candidate, certified, repair package, stale, commit, merge); the technical detail belongs in the evidence, not in the card.
+
+**Questions for the owner go through the board, never the terminal (owner, 2026-10-23).** The owner works in Mission Control and does not
+watch your window, so a question asked in the terminal (or with the CLI's own question widget, which is denied for you) is never seen. Ask
+with `ask-owner --agent <your-id> --question "<one plain question>" [--option "<answer>" --option "<answer>"]` (2 to 4 options, or none for a
+free answer; one open question at a time). Mission Control shows it in a banner at the top with the options and an answer box; the answer
+arrives in your session as `[OWNER ANSWER]` and the card closes. Keep working on what does not depend on it. The Reviewer's product questions
+about requirements still go in `contract-check-submit` during its early look. Account sign-in, folder trust and one-time setup screens are
+not product questions and keep their own instructions.
 
 **What the app gives you, and what it does not (owner, 2026-10-07 and 2026-10-08).** The Reviewer's commands carry the
 token the app already holds, as `HARNESS_REVIEWER_CLAUDE_TOKEN`: that is the sanctioned route for the Reviewer, and it
@@ -115,7 +123,8 @@ The controller will submit the next assigned action automatically.
 ## Delivery Agent workflow
 
 After receiving the exact owner direction, Product Management may ask
-clarifying questions in the visible CLI. When the requirements are agreed in
+clarifying questions, one at a time, with `ask-owner` (see "Questions for the owner"
+below); the CLI's own question widget is not available to you and is never used. When the requirements are agreed in
 conversation, FILE them as a proposal with
 `propose-requirements --agent <agent-id> --text "..."` and WAIT. The owner
 decides on the board with the Go ahead / Modify buttons — terminal prose such
@@ -127,6 +136,17 @@ with `confirm-requirements --agent <agent-id> --text "..."`. On an
 request and file a new proposal. Keep the original owner direction unchanged;
 the confirmation is an additional archived section after it. Do not define the
 delivery plan or implement until the confirmation is recorded.
+
+**The Reviewer's early look (2026-10-23).** After you file a proposal an idle Reviewer may read it before the owner decides and
+write runnable checks for its acceptance criteria. The owner is never held by this and you do nothing for it. File the
+proposal with `--no-program` when the task makes documents only and no program (nothing is checked in advance then). After the
+GO AHEAD and your `confirm-requirements`, read the checks with `contract-checks --agent <agent-id>`: they are your target, so
+make them pass. Never edit, move, delete or work around a check. The board itself runs them against your committed work when you ask
+for the final review, so your own test command cannot replace them and a check that fails refuses the request with the requirement
+named. If a check contradicts the requirements rather than your work, post a blocked status naming that requirement: the CTO has
+the Reviewer correct it. If the Reviewer suggested sharper wording for a criterion you may replace the waiting proposal once with
+a revised `propose-requirements`; the owner's answers, if any, arrive appended to the requirements under "Decided before
+coding" and the GO AHEAD message carries the exact accepted text to record.
 
 1. **Before owner direction:** register as a visible standing-by Delivery Agent
    with task `AWAITING_OWNER_DIRECTION`, poll the board, and print that you are
@@ -223,7 +243,10 @@ delivery plan or implement until the confirmation is recorded.
    Every concrete row must contain a targeted `Simulation command`, a
    substantive `Expected system response`, the `Observed system response`, and
    its `QA result`. A scenario description, code inspection, generic smoke
-   command, or self-reported `PASS` is not execution evidence. The board runs
+   command, or self-reported `PASS` is not execution evidence. A certified test for a gate that has a soft route
+   ("warnings only", "continuing", skipped) prints one `FINAL CHECK: <PASS|FAIL|NOT RUN|WARNINGS ONLY|SKIPPED> <name>`
+   line per such gate, the TEST's verdict on that check (a negative test that sees the gate correctly refuse prints PASS),
+   and the board refuses the run unless every such line is PASS, whatever the exit code. The board runs
    every declared command before opening review, records scenario-linked output
    and hashes, and rejects the whole request if any command fails, runs zero
    tests, uses shell-control masking, or the ledger changes during execution.
@@ -820,6 +843,40 @@ done from here, or the review is not yours to do), give it back at once with
 back to the queue for another reviewer, no test is counted as failed, and you
 are not offered that request again. It is not a verdict; if you found a real
 failure, record the FAIL instead.
+### Contract check before coding (advisory preparation)
+
+When the board routes `CONTRACT CHECK ROUTED`, a Delivery Agent has filed requirements and the owner has not decided yet. This is
+advisory preparation, not a review round: reserve and claim nothing, no code exists, and nothing here counts as a PASS or a FAIL.
+Work only from the owner's original direction and the requirements text in the message (black box: what the finished program prints,
+answers or shows). Submit ONCE, with `contract-check-submit --agent <your-id> --task <task> --version <n> --submission <file.json>`.
+The owner may go ahead without waiting; a submission after that, after the wait ends, or for an older version is refused.
+Put every question in this file: never ask one in your terminal or with the CLI's question widget (it is denied), because the owner only sees
+Mission Control.
+
+The file is JSON:
+
+    {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
+                   "checks": [{"coverage": "checked", "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
+                   "why_not_checked": "<required when there is no check>",
+                   "sharper": "<optional: a sharper sentence for a vague criterion>"}],
+     "questions": [{"text": "<product question>", "options": ["A", "B"], "recommended": 0, "affects": [1]}]}
+
+- List EVERY acceptance criterion exactly once. `coverage` is `checked` when the checks fully cover it and `partly` otherwise; a
+  criterion you cannot test needs `why_not_checked` (and a `sharper` sentence if wording would fix it).
+- Each check is a test file that really asserts the expected result (printed output and exit code, an HTTP answer, or visible text on a page
+  through the screen-check) using only what the contract names. The program is started by the test itself on a free port and stopped by it.
+  The ledger is a normal scenario ledger (same columns as the Delivery Scenario Ledger); its command runs the files with a recognized test
+  runner from the finished program's root, where the board puts the files for criterion N, check K in `.contract-checks/cN-K/`, for example
+  `python3 -m unittest discover -s .contract-checks/c1-1 -p "test_*.py"`.
+- Ask the owner at most four questions, ONCE, and only product questions (what the owner would see or get) where you cannot write a check
+  without guessing. Each has two to four options and one `recommended`; `affects` lists the criteria whose checks assumed the recommended
+  answer (after another answer you are routed back once, as `CONTRACT RECHECK ROUTED`, with the owner's answers). Technical choices are never asked. This is the one exception to "one question per card":
+  the owner sees these as a single card with a recommended answer for every question.
+- After Go ahead the board runs your checks unchanged against Delivery's committed work. Your review later reruns the same checks and still
+  adds at least one scenario of your own. If a stored check turns out to be wrong, correct it with
+  `contract-check-correct --agent <your-id> --task <task> --criterion <n> --reason "<why>" --submission <file.json with {"checks": [...]}>`;
+  the original and the reason are kept. On `CONTRACT RECHECK ROUTED` do the same for each requirement the answers changed (its old checks were set aside), then finish with `--criterion 0` and a submission of `{"checks": []}`; an update after the owner went ahead or after the wait is refused. Read a task's checks and labels any time with `contract-checks --agent <your-id> --task <task>`.
+
 **What justifies a FAIL (owner, 2026-09-29).** FAIL only when, in normal use,
 the owner would get a wrong, missing or unusable result, or the change causes
 a safety or data-loss harm. Rare edge cases (a coincidence of failures the
@@ -854,6 +911,17 @@ Code-level and fixture checks may supplement this check but never replace it.
 The material-only rule limits what blocks; it never limits how thoroughly the
 owner-visible result is checked. A missing or unusable promised result is always
 material.
+
+A project's own status flag (passed, approved, "warnings only", "continuing") is a claim, never proof. Before relying on
+it, read the final-check output that run itself produced (the audit or verdict line, the test result, the claim register)
+and say what it says; if that output is absent or unreadable, the claim is unproven. A project gate that can reach a passed
+state without its final check having run or succeeded is a MATERIAL finding when the owner's result depends on it. Prove it
+from the complete run record you inspected: quote the approval and the termination point, and name the required check that
+is absent or failed. Record it in your verdict. The CTO routes the repair to Delivery as for any in-scope finding; an owner
+card exists only if the owner must decide or act (the CTO's triage rule), never created by the Reviewer. After the repair,
+repeat the same scenario against the corrected candidate; the original run stays as separate evidence of the defect.
+Where the board shows `FINAL CHECK` lines for the run (see Delivery step 5), read them; where it does not, Delivery quotes
+the gate's own final-check lines in the row's Observed system response, and a row without them is unproven.
 
 Text deliverables: for text a human reads (deck, copy, strategy, report) the
 substance is the product, and reading it is the evidence. A quoted passage that

@@ -352,6 +352,18 @@ PAGE = r'''<!doctype html>
           <p class="help-callout">Best practice: one NoMoreHappyPath project should map to one real code folder and one clear product objective. Create a separate project when the code, audience, or release path is different.</p>
         </section>
 
+        <section class="help-section" aria-labelledby="help-reviewer-first-title">
+          <h2 id="help-reviewer-first-title">Before Work Starts: The Reviewer Reads Your Requirements</h2>
+          <ul class="help-list">
+            <li><strong>What happens:</strong> when Delivery writes down the final requirements, the Reviewer reads them first, before any work starts. It works out how each requirement can be tested and writes those tests. You do not have to wait for it: <strong>Go ahead without waiting</strong> is always there, and <strong>Wait for the review</strong> just leaves the card as it is until the review is in.</li>
+            <li><strong>Questions from the Reviewer:</strong> if it cannot write a test without guessing, it asks you, once, at most four questions on one card in Mission Control. Every question has a recommended answer already chosen, a few other choices, and <strong>Other</strong> for your own words. Press <strong>Answer the questions</strong>, or <strong>Go ahead using the recommended answers</strong>. After you answer, the Reviewer updates its tests for anything your answers changed; the card then asks whether you want to go ahead without waiting or wait for the review.</li>
+            <li><strong>Decided before coding:</strong> your answers are added to the end of the requirements under that heading, so the agreement itself says them, and your Go ahead covers them.</li>
+            <li><strong>What was checked:</strong> when the work is ready, each requirement says <strong>checked</strong>, <strong>partly checked</strong> or <strong>not checked in advance</strong>. This is information only; there is nothing for you to do.</li>
+            <li><strong>Where questions appear:</strong> an agent's questions about your product always appear in Mission Control, under a banner at the top that says how many questions need your answer. Agents never ask them in their own terminal windows. Signing in to an account and one-time setup steps are different and keep their own instructions.</li>
+            <li><strong>A passing flag is not proof:</strong> when a project runs its own final check before it is called done, it prints one <code>FINAL CHECK</code> line saying passed, failed, not run, warnings only or skipped. The board reads those lines. Anything other than passed stops the project from being called done, even if the program itself exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.</li>
+          </ul>
+        </section>
+
         <section class="help-section" aria-labelledby="help-setup-title">
           <h2 id="help-setup-title">What This App Needs To Run</h2>
           <ul class="help-list">

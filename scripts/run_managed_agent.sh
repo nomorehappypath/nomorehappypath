@@ -564,6 +564,11 @@ if hidden or any(inside(p, w) for p in protected for w in writable):
     case "$execution_root" in *\"*|*\\*) ;; *) codex_access+=(-c "projects.\"${execution_root}\".trust_level=\"trusted\"") ;; esac
   fi
   if [[ "$provider" == "codex" ]]; then
+    # Codex's structured question tool is off by default and is switched off explicitly, so an owner-enabled setting cannot put a
+    # question in the agent's terminal where the board and the owner never see it.
+    codex_access+=(--disable default_mode_request_user_input)
+  fi
+  if [[ "$provider" == "codex" ]]; then
     # Owner 2026-10-21: a managed agent never gets Codex's bundled browser / computer-use tools (they start the owner's real
     # Chrome and raise a keychain dialog on his Mac). The harness renders pages itself. See harness/codex_isolation.py.
     # Run BY PATH (python -E ignores PYTHONPATH, and this script is inside the project's folder): a failure refuses the launch.
@@ -829,6 +834,11 @@ sys.stdout.write("\0".join(wrapped) + "\0")
     # The granted roots are also added as working directories so the CLI's
     # own path checks never stop it either.
     claude_access=(--permission-mode bypassPermissions)
+    # NO QUESTIONS IN THE TERMINAL (owner, live test 2026-10-23): the CLI's own question widget ("press Tab to accept") shows only
+    # in the agent's window, which the owner is not watching, and the board never hears the question. Every managed Claude agent
+    # (Delivery, Reviewer, CTO; fresh or resumed - they all pass this line) has that tool denied; questions go through the board.
+    # The option is variadic, so it always sits directly before another option in the assembled line.
+    claude_access+=(--disallowedTools AskUserQuestion)
     claude_access+=(${board_mcp_args[@]+"${board_mcp_args[@]}"})
     # PLUMBING STAGE 1 (docs/specs/PLUMBING_MODERNIZATION.md): session-scoped
     # hooks, passed INLINE so no file exists for any agent to alter. Only when

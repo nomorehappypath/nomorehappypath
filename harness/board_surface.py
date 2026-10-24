@@ -52,6 +52,7 @@ ALL_BOARD_OPERATIONS = {
     "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
     "owner-direction", "clear-hold", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
+    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
@@ -81,6 +82,8 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # Owner 2026-10-21: a program built on the test machine reaches the owner; Delivery declares it and may collect it.
     "declare-build", "collect-build",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
+    # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
+    "contract-checks", "ask-owner",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "resolve-repair-package", "complete", "claim-release-repair",
@@ -98,11 +101,14 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "bind-repository",
 }
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
+    # 2026-10-23: the Reviewer's one early look at the requirements, and the correction of a stored check.
+    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
     "execute-challenge", "findings", "claim-qa", "reserve-qa",
     "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package",
     "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
+    "contract-checks", "ask-owner",   # contract-checks is read-only: the CTO can see what a failing early check says
     "record-finding", "finding-triage", "finding-resolved", "findings",
     # Owner 2026-10-14: the CTO sets an in-scope finding aside as not material,
     # and records the owner's waiver of a contract deliverable.
@@ -151,6 +157,8 @@ UPLOAD_ARGUMENTS = {
     "qa-result": ("--evidence", "evidence", False),
     "contract-evidence": ("--evidence", "evidence", True),
     "screen-script": ("--steps", "steps", True),
+    "contract-check-submit": ("--submission", "submission", True),
+    "contract-check-correct": ("--submission", "submission", True),
 }
 RAW_PATH_OPERATIONS = {"attach-workspace", "bind-repository"}
 IDENTITY_AGENT_ARGUMENT = "--agent"
@@ -160,7 +168,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger",
@@ -199,7 +207,7 @@ CONCURRENT_BOARD_OPERATIONS = {
 # board's own file lock still orders every state access.
 SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status"}
 # A refused read changes nothing, so it never opens a hold (backlog #15).
-READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view"}
+READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks"}
 
 
 # Reserved legacy frame sentinel (pre-1.0 wire format); kept for compatibility.
