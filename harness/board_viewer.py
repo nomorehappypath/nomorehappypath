@@ -78,7 +78,7 @@ PAGE = r"""<!doctype html>
 </style>
 <style>.progress-heading{display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:13px}.progress-heading span{color:var(--muted);text-align:right}.task-dynamic .progress{margin-top:6px}</style>
 <style>.launch-choice{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.launch-choice label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink)}.launch-choice select,.launch-choice input{font:inherit;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);min-width:0;max-width:100%}.launch-choice input[hidden]{display:none}.launch-choice-note{margin:8px 0 0;font-size:13px;color:var(--ink)}.launch-choice-note.bad{color:#9b1c1c}.launch-choice-origin{margin:6px 0 0;font-size:13px}.modal-links{margin-top:8px;font-size:13px}@media(max-width:600px){.launch-choice{grid-template-columns:1fr}}.color-options{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.color-choice{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff;color:var(--ink);cursor:pointer}.color-choice:hover{border-color:var(--blue)}.color-choice input{accent-color:var(--blue)}.color-swatch{width:24px;height:24px;border-radius:6px;border:1px solid #9aa6b2;display:inline-block}</style>
-<style>.requirements-confirmation{margin:12px 0;border:1px solid #b6dfc8;border-radius:8px;background:var(--green-soft);padding:10px 12px}.requirements-title{color:var(--green);font-weight:800;font-size:13px}.requirements-body{margin-top:5px;font-size:13px}.requirements-body p{margin:4px 0;color:var(--ink)}.requirements-confirmation small{display:block;margin-top:8px;color:var(--muted)}.requirements-pending{border-left-color:var(--amber);background:var(--amber-soft);color:#6b3a08}</style>
+<style>.requirements-confirmation{margin:12px 0;border:1px solid #b6dfc8;border-radius:8px;background:var(--green-soft);padding:10px 12px}.requirements-title{color:var(--green);font-weight:800;font-size:13px}.requirements-body{margin-top:5px;font-size:13px}.requirements-body p{margin:4px 0;color:var(--ink)}.requirements-confirmation small{display:block;margin-top:8px;color:var(--muted)}.requirements-pending{border-left-color:var(--amber);background:var(--amber-soft);color:#6b3a08}.contract-questions{margin:10px 0;padding:10px 12px;border:1px solid #b8c9e8;border-radius:8px;background:#f7faff}.cq{border:0;margin:10px 0;padding:0}.cq legend{font-weight:700;padding:0}.cq-option{display:block;margin:5px 0;font-weight:500}.cq-option input[type=text]{width:min(100%,360px);margin-left:6px;font:inherit}.checked-in-advance{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff}.checked-in-advance-list{margin:6px 0;padding-left:20px}</style>
 <style>.requirements-section{border-top:1px solid #cce6d7;padding-top:8px;margin-top:8px}.requirements-section:first-child{border-top:0;padding-top:0;margin-top:0}.requirements-section h4{font-size:12px;color:#286344;margin:0 0 3px;text-transform:uppercase}.requirements-section ul,.requirements-section ol{margin:5px 0 8px;padding-left:22px}.requirements-section li{margin:5px 0;overflow-wrap:anywhere}.scope-change{border-left:3px solid var(--amber);padding:7px 10px;margin-top:8px;background:var(--amber-soft)}.scope-change small{display:block}.cto-task-list{max-height:min(52vh,520px);overflow:auto;overscroll-behavior:contain;border-top:1px solid var(--line);margin-top:14px}.cto-task{padding:12px 0;border-bottom:1px solid var(--line)}.cto-task:last-child{border-bottom:0}.cto-task h3{font-size:14px}.cto-task p{margin:5px 0}.cto-task .row{align-items:center}.task-counts{font-weight:750;color:#27476f}</style>
 <style>.history-requirements{margin-top:10px;border:1px solid #b6dfc8;border-radius:8px;background:var(--green-soft);padding:9px 11px}.history-requirements-title{color:var(--green);font-size:12px;font-weight:800}.history-requirements-body{margin-top:5px;font-size:13px}.history-requirements-body p{margin:4px 0}.history-requirements small{display:block;margin-top:6px;color:var(--muted)}</style>
 <style>.test-ledger{margin-top:12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;padding:10px 12px;min-width:0;max-width:100%}.test-ledger+.test-ledger{margin-top:8px}.test-ledger h3{font-size:13px;color:#27476f;margin:0}.test-ledger-list{list-style:none;margin:7px 0 0;padding:0}.test-ledger-list li{display:grid;grid-template-columns:1.35em minmax(0,1fr);gap:2px 7px;margin:7px 0;align-items:start}.test-ledger-description{grid-column:2;min-width:0;overflow-wrap:anywhere;word-break:break-word}.test-ledger-check{grid-row:1 / span 2;display:inline-block;width:1.35em;font-weight:900;line-height:1.45}.test-ledger-check.passed{color:var(--green)}.test-ledger-check.failed{color:var(--red)}.test-ledger-check.pending{color:var(--muted)}.test-ledger-check.exception{color:var(--amber)}.test-ledger-state{grid-column:2;color:var(--muted);font-size:12px;font-weight:700}.test-ledger-check.failed+.test-ledger-description+.test-ledger-state{color:var(--red)}.test-ledger-check.exception+.test-ledger-description+.test-ledger-state{color:var(--amber)}.test-ledger-empty{margin:7px 0 0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.evidence-attempt{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.evidence-attempt:first-of-type{border-top:0}.evidence-attempt-label{font-size:12px;font-weight:800;color:var(--muted)}.evidence-attempt-status{margin:3px 0 0;color:var(--muted);font-size:12px}@media(max-width:480px){dialog{width:calc(100% - 16px)}.modal{padding:18px}.test-ledger{padding:9px}.history-date-items{padding-left:6px}.history-item-head{display:block}.history-time{display:block;margin-top:4px;white-space:normal}}</style>
@@ -98,6 +98,7 @@ PAGE = r"""<!doctype html>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
+<section id="agent-questions" class="panel section owner-actions agent-questions" role="alert" hidden></section>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
 <section id="decision-banner" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="claude-auth-actions" class="panel section owner-actions" role="alert" hidden></section>
@@ -238,7 +239,7 @@ function directionHtml(text){
 
 function requirementsHtml(text){
   const value=displayMultilineText(text).replace(/\x1b\[200~/g,'').replace(/\x1b\[201~/g,'');
-  const pattern=/(^|(?:[\n.!?]\s+))(Objective|Requirements?|Deliverables|Acceptance|Approved exclusions|Status|Remaining work):\s*/gim;
+  const pattern=/(^|(?:[\n.!?]\s+))(Objective|Requirements?|Deliverables|Acceptance|Approved exclusions|Status|Remaining work|Decided before coding):\s*/gim;
   const matches=[...value.matchAll(pattern)];
   if(matches.length<2)return directionHtml(value);
   const labels={requirement:'Requirements',status:'Status when requirements were confirmed','remaining work':'Remaining work when requirements were confirmed'};
@@ -517,7 +518,10 @@ function deliveredDocumentsHtml(name,where){
 }
 function ownerTestPlanHtml(release){
   const fallback='Verify the released result against the final agreed requirements shown above.';
-  const steps=Array.isArray(release?.owner_test_steps)&&release.owner_test_steps.length?release.owner_test_steps.slice(0,8):[fallback];
+  // the owner never runs or verifies a test: a step about the agents' own tests (older records carry them) is not shown
+  const agentTests=/\b(automated|unit|integration|regression|e2e|end-to-end)\b.*\btests?\b|\btests?\b.*\b(pass|passing|suite|coverage)\b|\btest suite\b|\bpytest\b|\bunittest\b|\blint/i;
+  const listed=Array.isArray(release?.owner_test_steps)?release.owner_test_steps.filter(step=>!agentTests.test(String(step))):[];
+  const steps=listed.length?listed.slice(0,8):[fallback];
   return `<div class="owner-test-plan"><strong>What to test before accepting</strong><ol>${steps.map(step=>`<li>${esc(step)}</li>`).join('')}</ol></div>`;
 }
 // Owner 2026-10-21 ("Get the build"): a program built on the test machine is downloaded from the card, never previewed.
@@ -582,7 +586,7 @@ function releaseResponseCore(state,name){
     return `<div class="release-response recorded" aria-live="polite"><strong>OWNER REJECTED / REPAIR REQUIRED</strong><div class="release-reason"><span>Reason</span><p>${reasonText}</p></div><p>Your explanation and ${files} are saved. Delivery will use them in a new repair, review, and release cycle.</p></div>`;
   }
   const task=esc(JSON.stringify(name));
-  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${releasePreviewHtml(release)}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
+  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${releasePreviewHtml(release)}${checkedInAdvanceHtml((state.requirement_confirmations||{})[name])}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
 }
 
 function taskLatestTimestamp(state,name){
@@ -613,6 +617,56 @@ function taskNames(state,contracts,directions,liveTasks){
   return orderTasksByLatest(state,[...names]);
 }
 
+// The Reviewer's early look at a filed proposal (spec 2026-10-23_contract-first-checks): the Go ahead is never held; the card says what the
+// reviewer is doing, shows its questions ONCE, and every decision names the version and card state the owner was shown.
+function proposalLabels(cc){
+  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
+}
+function contractCheckLabels(cc){
+  const list=Array.isArray(cc?.labels)?cc.labels:(Array.isArray(cc?.criteria)?cc.criteria.map(item=>{const checks=item.checks||[];return{criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};}):[]);
+  if(!list.length)return'';
+  return `<ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.criterion)} — <strong>${esc(item.label)}</strong></li>`).join('')}</ul>`;
+}
+function testedListHtml(labels,results,title){
+  const list=Array.isArray(labels)?labels:[];
+  if(!list.length)return'';
+  const said=value=>value==='passed'?' · passed when the board ran it':value==='failed'?' · failed when the board ran it':'';
+  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.criterion)} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)]))}</li>`).join('')}</ul><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started.</small></div>`;
+}
+function checkedInAdvanceHtml(confirmation){
+  const cc=confirmation?.contract_check;
+  if(!cc)return'';
+  const list=testedListHtml(cc.labels,cc.results);
+  const reason=cc.reason?` (${esc(cc.reason)})`:'';
+  return list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`;
+}
+function proposalQuestionsHtml(name,proposal){
+  const cc=proposal.contract_check||{};
+  const questions=Array.isArray(cc.questions)?cc.questions:[];
+  const recommended=questions.map(q=>`${esc(q.text)} → ${esc(q.options[q.recommended])}`).join('; ');
+  const cards=questions.map(q=>{
+    const order=[q.recommended,...q.options.map((_,index)=>index).filter(index=>index!==q.recommended)];
+    const radios=order.map((index,position)=>`<label class="cq-option"><input type="radio" name="cq-${esc(name)}-${q.n}" value="${index}"${position===0?' checked':''}> ${esc(q.options[index])}${index===q.recommended?' <small>(recommended)</small>':''}</label>`).join('');
+    return `<fieldset class="cq" data-cq="${q.n}"><legend>${q.n}. ${esc(q.text)}</legend>${radios}<label class="cq-option"><input type="radio" name="cq-${esc(name)}-${q.n}" value="other"> Other: <input type="text" maxlength="300" data-cq-other aria-label="Your own answer to question ${q.n}"></label></fieldset>`;
+  }).join('');
+  return `<div class="contract-questions" data-contract-questions="${esc(name)}"><div class="requirements-title">The reviewer needs a few choices from you</div><p>It cannot write a test for these without guessing. The recommended answer is already chosen; change it only if you want something different. You will not be asked again.</p>${cards}<p><small>The recommended answers: ${recommended}</small></p><div class="actions"><button type="button" data-cq-answer="${esc(name)}">Answer the questions</button><button type="button" class="secondary" data-req-go="${esc(name)}">Go ahead using the recommended answers</button></div></div>`;
+}
+function proposalCardHtml(name,proposal){
+  const cc=proposal.contract_check||{};
+  const status=cc.status||'';
+  const reading=status==='reading',rechecking=status==='rechecking',questions=status==='questions';
+  const note=rechecking?`<div class="next contract-check-note" data-contract-check="rechecking"><strong>The reviewer is reviewing the contract based on your answers.</strong> It is updating the tests for the requirements your answers changed. Do you want to go ahead without waiting, or wait?</div>${testedListHtml(proposalLabels(cc))}`
+    :reading?`<div class="next contract-check-note" data-contract-check="reading"><strong>The reviewer is reviewing the contract.</strong> It is checking how each requirement can be tested before any work starts. Do you want to go ahead without waiting, or wait?</div>`
+    :questions?proposalQuestionsHtml(name,proposal)+testedListHtml(proposalLabels(cc))
+    :status==='ready'?`<div class="next contract-check-note" data-contract-check="ready"><strong>${(cc.answers||[]).length?'Your answers are recorded under “Decided before coding”, and the reviewer has updated the tests.':'The reviewer read this first and wrote tests for it.'}</strong>${cc.reason?` ${esc(cc.reason)}.`:''}</div>${testedListHtml(proposalLabels(cc))}`
+    :status==='not_checked'?`<div class="next contract-check-note" data-contract-check="not_checked"><strong>Not checked in advance.</strong> ${esc(cc.reason||'The reviewer did not look at this first.')} The work will be judged after it is built, as before.</div>`
+    :'';
+  const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
+  const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
+    :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review</button>`:''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${note}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+}
+
 // A task card is split into two independently-refreshed regions so the window
 // stops jumping.  The STATIC region (title, the full user directive, the final
 // agreed requirements, owner clarifications) is the settled agreement: it is
@@ -635,11 +689,11 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const changeHistory=structureChanges.map(change=>{const retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}</small></div>`;}).join('');
   const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
   const proposal=(state.requirement_proposals||{})[name]||{};
-  const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?`<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small><div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">Go ahead — this is the contract</button><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div><p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`
+  const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?proposalCardHtml(name,proposal)
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
-    :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.</div>`
+    :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.${(proposal.contract_check?.answers||[]).length?` Your answers were added at the end of the requirements under “Decided before coding”${proposal.contract_check.used_recommended?' (the recommended answers were used)':''}.`:''}</div>`
     :'';
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div><div class="requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small></div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div><div class="requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
@@ -721,6 +775,47 @@ function renderDecisionBanner(state){
   section.querySelectorAll('[data-show-decision]').forEach(button=>button.onclick=()=>{
     const target=document.getElementById(`req-decision-${button.dataset.showDecision}`);
     if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.querySelector('[data-req-go]')?.focus({preventScroll:true});}
+  });
+}
+
+function agentQuestionAnswerHtml(item){
+  const id=esc(item.id);
+  const options=(item.options||[]).map((option,index)=>`<button type="button" data-aq-choice="${index}" data-aq="${id}">${esc(option)}</button>`).join('');
+  return `<div class="actions" data-aq-box="${id}">${options}</div><div class="actions"><input type="text" maxlength="1000" data-aq-text="${id}" placeholder="${(item.options||[]).length?'Or write your own answer':'Write your answer'}" aria-label="Your answer" style="min-width:260px;font:inherit"><button type="button" class="secondary" data-aq-send="${id}">Send answer</button></div><p class="notice" data-aq-note="${id}" role="status" aria-live="polite"></p>`;
+}
+// One loud banner for everything an agent needs the owner to answer (owner, live test 2026-10-23): each task or card once, with what is asked.
+function renderAgentQuestions(state){
+  const section=el('#agent-questions');if(!section)return;
+  const found=document.getElementById?selector=>document.querySelector(selector):()=>true;
+  const rows=[];
+  for(const item of Object.values(state.owner_actions||{})){
+    if(item.status!=='open'||!(item.default_action||item.kind==='decision'))continue;
+    rows.push({who:'The CTO asks',text:`${item.title||'A question'}${item.clears_when?` (${item.clears_when})`:''}`,target:`[data-action-id="${CSS.escape(String(item.id))}"]`});
+  }
+  for(const item of Object.values(state.agent_questions||{})){
+    if(item.status!=='open'||!(state.agents||{})[item.agent_id]?.active)continue;
+    rows.push({who:`${item.role==='qa'?'The reviewer':item.role==='cto'?'The CTO':'Delivery'} asks`,text:item.question,question:item,target:'#agent-questions'});
+  }
+  const confirmations=state.requirement_confirmations||{};
+  for(const [name,proposal] of Object.entries(state.requirement_proposals||{})){
+    if(proposal?.status!=='awaiting_owner'||(confirmations[name]||{}).text)continue;
+    const check=proposal.contract_check||{},count=(check.questions||[]).length;
+    const target=`#req-decision-${CSS.escape(name)}`;
+    if(check.status==='questions'&&count)rows.push({who:'The reviewer asks',text:`${count} question${count===1?'':'s'} about “${objectiveSummary(name)}”. Pick an answer for each; the recommended one is already chosen.`,target});
+    else rows.push({who:'Delivery asks',text:`Your Go ahead on the requirements for “${objectiveSummary(name)}”.`,target});
+  }
+  const shown=rows.filter(row=>found(row.target));
+  if(!shown.length){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  section.hidden=false;
+  const heading=shown.length===1?'1 question from your agents needs your answer':`${shown.length} questions from your agents need your answer`;
+  const html=`<h2>${heading}</h2><p>Agents ask only here in Mission Control, never in their own windows.</p>${shown.map((row,index)=>`<div class="owner-action" data-agent-question="${index}"><strong>${esc(row.who)}</strong><p>${esc(row.text)}</p>${row.question?agentQuestionAnswerHtml(row.question):`<div class="actions"><button type="button" data-jump-question="${esc(row.target)}">Show me</button></div>`}</div>`).join('')}`;
+  const signature=_cardSignature(html);
+  if(section.dataset.signature===signature)return;
+  section.dataset.signature=signature;
+  section.innerHTML=html;
+  section.querySelectorAll('[data-jump-question]').forEach(button=>button.onclick=()=>{
+    const node=document.querySelector(button.dataset.jumpQuestion);
+    if(node)node.scrollIntoView({behavior:'smooth',block:'center'});
   });
 }
 
@@ -1567,6 +1662,7 @@ function render(data,managed){
   tasks(state,contracts,data.owner_directions||{},data.live_tasks,data.in_scope_findings||[],data.requirement_confirmations||{});
   renderSignInBanner(state);
   renderDecisionBanner(state);
+  renderAgentQuestions(state);
   currentHistoryVersion=String(data.history_version||'');
   if(historyLoaded&&historyLoadedAtVersion!==currentHistoryVersion)loadHistory(true);
   renderWaiting(managed.sessions||[]);
@@ -2011,14 +2107,52 @@ document.addEventListener('click',async event=>{
     if(!confirm('Accept these requirements as the task contract? Delivery will record them and begin work.'))return;
     go.disabled=true;
     const note=el(`#req-decision-note-${CSS.escape(task)}`);
+    const box=go.closest('.requirements-proposal');
     try{
-      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead'});
+      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||''});
       if(note)note.textContent='Recorded. Delivery has been told to record the contract and begin.';
       await refresh();
     }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;}
     return;
   }
   openRequirementsModify(task);
+});
+document.addEventListener('click',event=>{
+  const wait=event.target.closest('[data-req-wait]');
+  if(!wait)return;
+  const note=el(`#req-decision-note-${CSS.escape(wait.dataset.reqWait)}`);
+  if(note)note.textContent='Okay, nothing was changed. This card updates by itself when the review is in, or when its time runs out; then you can go ahead as usual.';
+});
+document.addEventListener('click',async event=>{
+  const answer=event.target.closest('[data-cq-answer]');
+  if(!answer)return;
+  const task=answer.dataset.cqAnswer,box=answer.closest('.requirements-proposal'),note=el(`#req-decision-note-${CSS.escape(task)}`);
+  const answers=[];
+  for(const field of box.querySelectorAll('[data-cq]')){
+    const picked=field.querySelector('input[type=radio]:checked'),other=field.querySelector('[data-cq-other]').value.trim();
+    if(picked&&picked.value==='other'&&!other){if(note)note.textContent='Write your own answer in the box next to “Other”, or pick one of the listed answers.';return;}
+    answers.push({question:Number(field.dataset.cq),choice:picked&&picked.value!=='other'?Number(picked.value):null,other:picked&&picked.value==='other'?other:''});
+  }
+  if(!confirm('Send your answers? They are added to the requirements, and you can still go ahead or wait for the reviewer to update its tests.'))return;
+  answer.disabled=true;
+  try{
+    await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'answer',version:box.dataset.version,token:box.dataset.token||'',answers});
+    if(note)note.textContent='Recorded. Your answers were added to the requirements.';
+    await refresh();
+  }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;answer.disabled=false;}
+});
+document.addEventListener('click',async event=>{
+  const choice=event.target.closest('[data-aq-choice]'),send=event.target.closest('[data-aq-send]');
+  if(!choice&&!send)return;
+  const id=(choice||send).dataset.aq||send.dataset.aqSend;
+  const note=document.querySelector(`[data-aq-note="${CSS.escape(id)}"]`);
+  const text=document.querySelector(`[data-aq-text="${CSS.escape(id)}"]`)?.value.trim()||'';
+  if(send&&!text){if(note)note.textContent='Write your answer first, or press one of the listed answers.';return;}
+  (choice||send).disabled=true;
+  try{
+    await call(`/api/agent-questions/${encodeURIComponent(id)}/answer`,choice?{choice:Number(choice.dataset.aqChoice)}:{answer:text});
+    await refresh();
+  }catch(error){if(note)note.textContent='Could not send the answer: '+error.message;(choice||send).disabled=false;}
 });
 document.addEventListener('change',async event=>{
   const box=event.target.closest?event.target.closest('[data-security-task]'):null;
@@ -2229,6 +2363,8 @@ def _compact_dashboard_state(
             task: value for task, value in (state.get(key) or {}).items()
             if task in live
         }
+    # an agent's open question to the owner (shown in the banner with its answer box)
+    compact["agent_questions"] = {key: value for key, value in (state.get("agent_questions") or {}).items() if value.get("status") == "open"}
     # Owner 2026-10-12: the page shows the COMPUTED enhanced-security record
     # (a task reviewed before this feature is locked even without an entry).
     compact["task_security"] = {task: board.task_security_state(state, task) for task in live}
@@ -3973,8 +4109,18 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(self.rfile.read(length) or b"{}")
                     event = board.record_requirements_decision(
                         root, task, str(data.get("decision", "")), str(data.get("text", "")),
+                        version=data.get("version"), answers=data.get("answers"), token=str(data.get("token", "")),
                     )
                     self.send_json(201, {"decision": event}); return
+                ask_prefix, ask_suffix = "/api/agent-questions/", "/answer"
+                if path.startswith(ask_prefix) and path.endswith(ask_suffix):
+                    question_id = unquote(path[len(ask_prefix):-len(ask_suffix)])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 16 * 1024:
+                        raise ValueError("the answer is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    event = board.record_agent_question_answer(root, question_id, str(data.get("answer", "")), data.get("choice"))
+                    self.send_json(201, {"answer": event}); return
                 owner_prefix, owner_suffix = "/api/agents/", "/owner-message"
                 if path.startswith(owner_prefix) and path.endswith(owner_suffix):
                     agent_id = unquote(path[len(owner_prefix):-len(owner_suffix)])

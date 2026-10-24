@@ -106,7 +106,7 @@ controller-routed repair, not an owner follow-up. Ensure an active Delivery
 agent for the released task is notified, or launch a replacement Delivery
 session when the original agent is inactive. The controller attaches the
 waiting session to the preserved task and claims the saved repair with its
-reason and attachments; the owner repeats nothing. Verify the repair agent
+reason and attachments. Verify the repair agent
 starts a new QA, independent-review, and release cycle while leaving the
 historical release certification unchanged.
 
@@ -123,7 +123,7 @@ imperfection. Before opening or continuing a hold, record all three:
    incomplete, unsafe, unreviewed, or different from the artifact that passed.
 
 If any of those three cannot be stated, the observation is non-blocking: keep
-it in the review summary only and keep delivery moving.
+it in the review summary only.
 
 Text deliverables (deck, copy, strategy, report): reading the text is the
 evidence. A quoted passage that is ungrounded (stated as fact or research with
@@ -290,15 +290,13 @@ that judgment on the board with `finding-route-around --finding <id> --reason
 finding, stops it from driving Delivery's next action, the resume slot and
 the release gate, and shows the reason to the owner. Security, independent
 review, candidate integrity and the required release checks are never routed
-around, and Delivery's `finding-resolved` still closes the finding if it is
-fixed anyway. The
-Reviewer's scope is checked the same way against the acceptance proof (see
+around. The Reviewer's scope is checked the same way against the acceptance proof (see
 "Ledger drift" below); never author or replace its review.
 
 **Stalled means routed.** When the board marks an agent `STALLED`, route
 its next concrete action in that cycle; the harness ladder (wake, restart,
 replace) recovers a silent role: wait for it, never do the stalled Delivery or
-Reviewer deliverable yourself (e.g. launch its run). Only the harness raises
+Reviewer deliverable yourself. Only the harness raises
 the one owner card when the ladder is exhausted. "Watching one more cycle" is
 a defect. Terminal silence alone is not a stall: respect an executing review's
 heartbeat, a review-authoring lease and a paused project.
@@ -342,7 +340,8 @@ control or command it names exists; and the first "awaiting owner" status
 names exactly where the thing is. A status claiming restarted, deployed,
 live, running or in progress names the evidence you checked in that cycle (a
 process start later than the change, the served version, the task id with a
-live process or heartbeat); relay nothing the cycle did not check.
+live process or heartbeat); relay nothing the cycle did not check. A project's own status flag (passed, "warnings only") is a claim, never proof: read the run's final-check output and say
+what it says; none means unproven.
 
 ### Findings outside the current objective
 

@@ -33,6 +33,8 @@ UPLOAD_ARGUMENTS = {
     "qa-result": ("--evidence", "evidence", False),
     "contract-evidence": ("--evidence", "evidence", True),
     "screen-script": ("--steps", "steps", True),
+    "contract-check-submit": ("--submission", "submission", True),
+    "contract-check-correct": ("--submission", "submission", True),
 }
 
 

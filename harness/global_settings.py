@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import child_process, control
+from harness import child_process, contract_check, control
 from harness import platform_support
 
 SETTINGS_VERSION = 1
@@ -90,6 +90,8 @@ PLUMBING_LIMITS = {
     # How long the supervisor looks for the conversation a Gemini session started (the CLI creates it only
     # when the first turn runs, which can wait on a sign-in or trust answer).
     "gemini_conversation_wait_seconds": (1800, 60, 7200),
+    # How long the Reviewer's early look at the requirements may take before the owner's Go ahead is plain (the owner can always go ahead sooner).
+    "contract_check_wait_seconds": (contract_check.WAIT_DEFAULT_SECONDS, contract_check.WAIT_MIN_SECONDS, contract_check.WAIT_MAX_SECONDS),
 }
 
 

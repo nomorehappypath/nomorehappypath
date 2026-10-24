@@ -41,6 +41,23 @@ class OwnerTestPlanTests(unittest.TestCase):
             release["owner_test_steps"],
         )
 
+    def test_the_owner_is_never_told_to_verify_the_agents_own_tests(self):
+        contract.create_contract(self.root, "NOTESTS", "Ship it.", ["Weather page shows five days", "Meaningful automated tests", "Unit tests pass"])
+        release = self.release("NOTESTS")
+        self.assertEqual(release["owner_test_steps"], ["Verify Weather page shows five days."])
+        contract.create_contract(self.root, "ONLYTESTS", "Ship it.", ["Meaningful automated tests"])
+        self.assertEqual(self.release("ONLYTESTS")["owner_test_steps"], ["Verify the released result against the final agreed requirements shown above."])
+
+    def test_an_older_release_that_already_stored_a_test_step_does_not_show_it(self):
+        script = board_viewer.rendered_page().split("<script>", 1)[1].split("</script>", 1)[0].split("el('#status-dialog-close')", 1)[0]
+        state = {"releases": {"TASK": {"status": "VISUAL_TEST_REQUIRED",
+                                       "owner_test_steps": ["Verify Meaningful automated tests.", "Verify Open the settings menu."]}}}
+        invocation = "globalThis.document={querySelector(){return null;}};\nprocess.stdout.write(releaseResponseHtml(%s,'TASK'));\n" % json.dumps(state)
+        completed = subprocess.run(["node", "--input-type=commonjs", "-"], input=script + "\n" + invocation, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Open the settings menu", completed.stdout)
+        self.assertNotIn("automated tests", completed.stdout)
+
     def test_missing_or_malformed_contract_still_gets_an_explicit_step(self):
         (self.root / ".harness" / "tasks").mkdir(parents=True, exist_ok=True)
         (self.root / ".harness" / "tasks" / "LEGACY.json").write_text("{broken")

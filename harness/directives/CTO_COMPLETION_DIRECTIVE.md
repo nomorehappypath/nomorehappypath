@@ -116,7 +116,7 @@ act on is a defect, and the first "awaiting owner" status names exactly where
 the thing is. A status claiming restarted, deployed, live, running or in
 progress names the evidence the CTO checked in that cycle (a process start later
 than the change, the served version, the task id with a live process or
-heartbeat); relay nothing the cycle did not check.
+heartbeat); relay nothing the cycle did not check. A project's own status flag (passed, "warnings only") is a claim, never proof: read the run's final-check output and say what it says; none means unproven.
 
 Legitimate blockers include a failed required scenario or health check on the
 exact candidate, a missing required outcome or independent final review, a

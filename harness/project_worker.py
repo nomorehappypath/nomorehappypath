@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from harness import board, board_viewer, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity, self_heal
+from harness import board, board_viewer, contract_check, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity, self_heal
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -638,6 +638,7 @@ def serve(
         # the owner's owner_questions section (deadline and phrase lists for a
         # CTO question to the owner) reaches the board once per worker start
         board.configure_owner_questions(global_settings.load(settings_home).get("owner_questions"))
+        contract_check.configure((global_settings.load(settings_home).get("plumbing") or {}).get("contract_check_wait_seconds"))
     watchdog = ProjectWatchdog(root)
     preview_supervisor = release_preview.ReleasePreviewSupervisor(root)
     chat_action_token = secrets.token_urlsafe(32)
