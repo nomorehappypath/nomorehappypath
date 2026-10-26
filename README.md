@@ -15,8 +15,8 @@ NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-b
 ![Mission Control: a task ready for the owner's test](https://nomorehappypath.com/assets/shot-ready.png)
 *A small weather app built from one request: review passes recorded, then "ready for your test".*
 
-![How a task becomes accepted work: twenty steps in six phases](https://nomorehappypath.com/assets/process-infographic.png)
-*Twenty steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; the board locks them and checks they fail on the project as it was before the work; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
+![How a task becomes accepted work: twenty-one steps in six phases](https://nomorehappypath.com/assets/process-infographic.png)
+*Twenty-one steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; a coverage check confirms every requirement has a test (the board checks the reviewer's labels); the board locks them and checks they fail on the project as it was before the work; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
 
 ![Why every test must fail first](https://nomorehappypath.com/assets/red-proof.png)
 *A test that passes on nothing proves nothing, so it is flagged "did not distinguish" and does not count. This shows a test can fail before the work, not that it covers every requirement.*
