@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import child_process, contract_check, control, review_cost
+from harness import child_process, contract_check, control, difficulty_note, review_cost
 from harness import platform_support
 
 SETTINGS_VERSION = 1
@@ -96,6 +96,8 @@ PLUMBING_LIMITS = {
     "review_input_max_files": (review_cost.MAX_FILES_DEFAULT, review_cost.MAX_FILES_LOW, review_cost.MAX_FILES_HIGH),
     "review_input_max_bytes": (review_cost.MAX_BYTES_DEFAULT, review_cost.MAX_BYTES_LOW, review_cost.MAX_BYTES_HIGH),
     "review_input_measure_seconds": (review_cost.MEASURE_SECONDS_DEFAULT, review_cost.MEASURE_SECONDS_LOW, review_cost.MEASURE_SECONDS_HIGH),
+    # The longest difficulty note kept (2026-10-26): longer text is trimmed, never refused.
+    "difficulty_note_max_chars": (difficulty_note.MAX_CHARS_DEFAULT, difficulty_note.MAX_CHARS_LOW, difficulty_note.MAX_CHARS_HIGH),
     "contract_check_wait_seconds": (contract_check.WAIT_DEFAULT_SECONDS, contract_check.WAIT_MIN_SECONDS, contract_check.WAIT_MAX_SECONDS),
 }
 

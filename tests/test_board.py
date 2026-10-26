@@ -985,11 +985,11 @@ class BoardTests(unittest.TestCase):
         chunk = board.request_review(self.root, dev["id"], ledger, "chunk review", chunk="delivery", test_command=self.qa_command())
         board.claim_qa(self.root, qa["id"], chunk["id"], self.ledger("chunk-challenge.md"))
         board.execute_challenge(self.root, qa["id"], chunk["id"])
-        board.qa_result(self.root, qa["id"], chunk["id"], "passed", "chunk passed", self.evidence("chunk.txt"))
+        board.qa_result(self.root, qa["id"], chunk["id"], "passed", "TASK DONE: YES - chunk passed", self.evidence("chunk.txt"))
         final = board.request_review(self.root, dev["id"], ledger, "final review", phase="final_acceptance", test_command=self.qa_command())
         board.claim_qa(self.root, qa["id"], final["id"], self.ledger("final-challenge.md"))
         board.execute_challenge(self.root, qa["id"], final["id"])
-        board.qa_result(self.root, qa["id"], final["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, qa["id"], final["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         board.complete(self.root, dev["id"], "merged candidate and evidence ready")
         self.assertEqual(board.snapshot(self.root)["agents"][dev["id"]]["status"], "done")
         with self.assertRaises(ValueError):
@@ -1004,7 +1004,7 @@ class BoardTests(unittest.TestCase):
         qa = board.register(self.root, "qa", "QA-QUEUE")
         board.claim_qa(self.root, qa["id"], request["id"])
         with self.assertRaises(ValueError):
-            board.qa_result(self.root, dev["id"], request["id"], "passed", "not allowed", self.evidence("forbidden.txt"))
+            board.qa_result(self.root, dev["id"], request["id"], "passed", "TASK DONE: YES - not allowed", self.evidence("forbidden.txt"))
 
     def test_open_review_actively_wakes_one_eligible_managed_reviewer(self):
         dev = self.delivery("TASK-REVIEW-WAKE")
@@ -1135,7 +1135,7 @@ class BoardTests(unittest.TestCase):
         ledger = self.ledger("ledger.md")
         request = board.request_qa(self.root, dev["id"], ledger, "ready")
         board.claim_qa(self.root, qa["id"], request["id"])
-        board.qa_result(self.root, qa["id"], request["id"], "passed", "all scenarios pass", self.evidence("qa-pass.txt"))
+        board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - all scenarios pass", self.evidence("qa-pass.txt"))
         cleaned = board.cleanup(self.root)
         self.assertEqual(cleaned["archived_qa_requests"], 1)
         self.assertEqual(cleaned["active_qa_requests"], 0)
@@ -1162,7 +1162,7 @@ class BoardTests(unittest.TestCase):
         ledger = self.ledger("spec-ledger.md")
         request = board.request_qa(self.root, dev["id"], ledger, "development QA")
         board.claim_qa(self.root, development_qa["id"], request["id"])
-        board.qa_result(self.root, development_qa["id"], request["id"], "passed", "spec ledger executed", self.evidence("dev-qa.txt"))
+        board.qa_result(self.root, development_qa["id"], request["id"], "passed", "TASK DONE: YES - spec ledger executed", self.evidence("dev-qa.txt"))
         review = board.request_independent_review(self.root, dev["id"], "challenge the development assumptions")
         same_vendor = board.register(self.root, "qa", "QA-QUEUE", vendor="OpenAI")
         with self.assertRaises(ValueError):
@@ -1172,7 +1172,7 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(reservation["status"], "reserved")
         board.claim_qa(self.root, reviewer["id"], review["id"], self.ledger("review-ledger.md"))
         board.execute_challenge(self.root, reviewer["id"], review["id"])
-        passed = board.qa_result(self.root, reviewer["id"], review["id"], "passed", "independent scenarios executed", self.evidence("reviewer.txt"))
+        passed = board.qa_result(self.root, reviewer["id"], review["id"], "passed", "TASK DONE: YES - independent scenarios executed", self.evidence("reviewer.txt"))
         self.assertEqual(passed["stage"], board.INDEPENDENT_REVIEW)
         self.assertEqual(passed["challenge_ledger"], "docs/review-ledger.md")
 
@@ -1197,7 +1197,7 @@ class BoardTests(unittest.TestCase):
         still_reserved = board.snapshot(self.root)["qa_requests"][request["id"]]
         self.assertEqual(still_reserved["status"], "reserved")
         with self.assertRaisesRegex(ValueError, "claimed"):
-            board.qa_result(self.root, first["id"], request["id"], "passed", "not executed", self.evidence("reserved-pass.txt"))
+            board.qa_result(self.root, first["id"], request["id"], "passed", "TASK DONE: YES - not executed", self.evidence("reserved-pass.txt"))
 
         with board.locked_state(self.root) as state:
             old = (datetime.now(timezone.utc) - timedelta(
@@ -1382,7 +1382,7 @@ class BoardTests(unittest.TestCase):
         challenge = self.ledger("challenge.md", "OPEN")
         board.claim_qa(self.root, reviewer["id"], request["id"], challenge)
         with self.assertRaisesRegex(ValueError, "Challenge Ledger is incomplete"):
-            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "claimed pass without proof", self.evidence("bad-pass.txt"))
+            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - claimed pass without proof", self.evidence("bad-pass.txt"))
 
     def test_reviewer_cannot_claim_with_a_copied_ledger_or_unexecuted_internal_qa(self):
         dev = self.delivery("TASK-6C")
@@ -1584,7 +1584,7 @@ class BoardTests(unittest.TestCase):
         )
         board.claim_qa(self.root, reviewer["id"], request["id"], str(challenge.relative_to(self.root)))
         board.execute_challenge(self.root, reviewer["id"], request["id"])
-        passed = board.qa_result(self.root, reviewer["id"], request["id"], "passed", "challenge simulations pass", self.evidence("review-pass.txt"))
+        passed = board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - challenge simulations pass", self.evidence("review-pass.txt"))
         simulations = passed["reviewer_simulations"]
         self.assertEqual(simulations["scenario_ids"], ["S-101", "S-102"])
         self.assertEqual(simulations["executed_count"], 2)
@@ -1626,7 +1626,7 @@ class BoardTests(unittest.TestCase):
         board.execute_challenge(self.root, reviewer["id"], request["id"])
         board.qa_result(
             self.root, reviewer["id"], request["id"], "passed",
-            "independent final checks passed", self.evidence("immediate-final.txt"),
+            "TASK DONE: YES - independent final checks passed", self.evidence("immediate-final.txt"),
         )
         delivery_routes = control.take_instructions(self.root, dev["session_id"])
         cto_routes = control.take_instructions(self.root, cto_session["id"])
@@ -1698,7 +1698,7 @@ class BoardTests(unittest.TestCase):
         chunk = board.request_review(self.root, dev["id"], self.ledger("ledger.md"), "chunk review", chunk="core", test_command=self.qa_command())
         board.claim_qa(self.root, qa["id"], chunk["id"], self.ledger("chunk-challenge.md"))
         board.execute_challenge(self.root, qa["id"], chunk["id"])
-        board.qa_result(self.root, qa["id"], chunk["id"], "passed", "chunk passed", self.evidence("chunk.txt"))
+        board.qa_result(self.root, qa["id"], chunk["id"], "passed", "TASK DONE: YES - chunk passed", self.evidence("chunk.txt"))
         final = board.request_review(self.root, dev["id"], cite("final-ledger.md", "screen-20261010T090000-d1d1d1d1"),
                                      "final review", phase="final_acceptance", test_command=self.qa_command())
         board.claim_qa(self.root, qa["id"], final["id"], cite("final-challenge.md", "screen-20261010T090001-e2e2e2e2"))
@@ -1714,12 +1714,12 @@ class BoardTests(unittest.TestCase):
             with self.subTest(damage=damage):
                 qa, final = self._cited_review(f"TASK-CITE-{damage.upper()}", damage=damage)
                 with self.assertRaisesRegex(ValueError, words):
-                    board.qa_result(self.root, qa["id"], final["id"], "passed", "final passed", self.evidence("final.txt"))
+                    board.qa_result(self.root, qa["id"], final["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
                 self.assertNotEqual(board.snapshot(self.root)["qa_requests"][final["id"]]["status"], "passed")
 
     def test_a_certified_pass_with_intact_cited_captures_is_recorded(self):
         qa, final = self._cited_review("TASK-CITE-INTACT")
-        board.qa_result(self.root, qa["id"], final["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, qa["id"], final["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         request = board.snapshot(self.root)["qa_requests"][final["id"]]
         self.assertEqual(request["status"], "passed")
         self.assertEqual([c["id"] for c in request["cited_screen_checks"]], ["screen-20261010T090000-d1d1d1d1"])
@@ -1755,7 +1755,7 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(second["cycle"], 2)
         board.claim_qa(self.root, reviewer["id"], second["id"], str(challenge.relative_to(self.root)))
         board.execute_challenge(self.root, reviewer["id"], second["id"])
-        passed = board.qa_result(self.root, reviewer["id"], second["id"], "passed", "repaired simulation passed", self.evidence("repair-passed.txt"))
+        passed = board.qa_result(self.root, reviewer["id"], second["id"], "passed", "TASK DONE: YES - repaired simulation passed", self.evidence("repair-passed.txt"))
         self.assertEqual(passed["status"], "passed")
         self.assertEqual(passed["reviewer_simulations"]["scenario_ids"], ["S-101"])
 
@@ -1770,7 +1770,7 @@ class BoardTests(unittest.TestCase):
             request = board.request_review(self.root, dev["id"], ledger, f"review {chunk}", chunk=chunk, test_command=self.qa_command())
             board.claim_qa(self.root, reviewer["id"], request["id"], self.ledger(f"{chunk}-challenge.md"))
             board.execute_challenge(self.root, reviewer["id"], request["id"])
-            board.qa_result(self.root, reviewer["id"], request["id"], "passed", f"{chunk} passed", self.evidence(f"{chunk}.txt"))
+            board.qa_result(self.root, reviewer["id"], request["id"], "passed", f"TASK DONE: YES - {chunk} passed", self.evidence(f"{chunk}.txt"))
         final = board.request_review(self.root, dev["id"], ledger, "full objective final acceptance", phase="final_acceptance", test_command=self.qa_command())
         self.assertEqual(final["phase"], "final_acceptance")
         self.assertEqual(final["chunk"], "final")

@@ -684,6 +684,21 @@ def _is_cosmetic_refusal(operation: str, error: str) -> bool:
     return False
 
 
+# Refusals whose own text already tells the agent the exact fix (a verdict correction with "To fix it:", the "Test changed:" line, the ledger
+# wording list). Repeating one is the agent still typing, not a wedge: it never puts a task on hold or sends the owner a card (owner's order
+# 2026-10-26: paperwork never holds a task).
+_SELF_EXPLAINING_REFUSALS = (
+    "To fix it:",
+    "Test changed: <file> - <why",
+    "Scenario Ledger simulation plan is invalid:",
+    "its scenario ledger is not usable:",
+)
+
+
+def _names_its_own_fix(error: str) -> bool:
+    return any(marker in error for marker in _SELF_EXPLAINING_REFUSALS)
+
+
 class CommandGateway:
     """Authenticate, authorize, serialize, and execute board CLI commands."""
 
@@ -712,7 +727,7 @@ class CommandGateway:
         control-plane hold so Mission Control shows the diagnosis in red.
         """
         import time as _time
-        if _is_cosmetic_refusal(operation, error):
+        if _is_cosmetic_refusal(operation, error) or _names_its_own_fix(error):
             # A formatting slip (a task brief or a status/offline note over its stated length, or an empty note): the refusal already
             # names the fix, so it is not a wedge and must never freeze a task. Only these exact messages on these operations.
             return

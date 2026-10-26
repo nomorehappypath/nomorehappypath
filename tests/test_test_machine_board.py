@@ -420,9 +420,7 @@ class CtoReleaseHealthTests(MachineBoardFixture):
             "unit_test_command": command,
             "certified_artifacts": {"delivery_ledger": {"path": str(ledger), "sha256": ledger_sha256}}, "command_executions": [],
         }
-        candidate = execution_identity.candidate_evidence_identity(
-            request["reviewed_commit"], request["reviewed_tree_hash"], "c" * 64,
-            {"delivery_ledger": ledger_sha256, "review_scope": board._review_scope_identity(request)["sha256"]})
+        candidate = execution_identity.run_candidate_identity(request["reviewed_commit"], request["reviewed_tree_hash"])
         run = execution_identity.command_run_identity(
             candidate, command.split(), ".", "d" * 64, {}, role="delivery", gate="final_acceptance::", machine=stamp)
         audit = {"problems": [], "timed_out": False, "forbidden_owner_browser_descendants": {},

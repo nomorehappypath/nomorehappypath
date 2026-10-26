@@ -74,7 +74,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         board.execute_challenge(self.root, self.reviewer["id"], request["id"])
         return board.qa_result(
             self.root, self.reviewer["id"], request["id"], "passed",
-            f"{scope} independently accepted", self.evidence(scope),
+            f"TASK DONE: YES - {scope} independently accepted", self.evidence(scope),
         )
 
     def test_atomic_task_uses_unit_tests_then_one_final_review_without_chunks(self):

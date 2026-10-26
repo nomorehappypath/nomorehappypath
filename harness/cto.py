@@ -455,13 +455,7 @@ def _certified_delivery_health(
             return failed
     except OSError:
         return failed
-    candidate = execution_identity.candidate_evidence_identity(
-        commit, tree, contract_sha256,
-        {
-            "delivery_ledger": ledger_sha256,
-            "review_scope": board._review_scope_identity(request)["sha256"],
-        },
-    )
+    candidate = execution_identity.run_candidate_identity(commit, tree)
     expected_gate = (
         f"{request.get('phase', '')}:{request.get('subtask', '')}:"
         f"{request.get('chunk', '')}"

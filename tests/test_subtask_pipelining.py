@@ -134,7 +134,7 @@ class SubtaskPipeliningTests(unittest.TestCase):
         board.execute_challenge(self.root, reviewer["id"], request["id"])
         return board.qa_result(
             self.root, reviewer["id"], request["id"], "passed",
-            f"{name} passed", self.evidence(name),
+            f"TASK DONE: YES - {name} passed", self.evidence(name),
         )
 
     def assert_fold_crash_recovers(self, crash_point: str) -> None:
@@ -159,7 +159,7 @@ class SubtaskPipeliningTests(unittest.TestCase):
         self.assertFalse(recovery["holds"])
         passed = board.qa_result(
             self.root, reviewer["id"], request["id"], "passed",
-            f"alpha recovered after {crash_point}", self.evidence(f"retry-{crash_point}"),
+            f"TASK DONE: YES - alpha recovered after {crash_point}", self.evidence(f"retry-{crash_point}"),
         )
         task_workspace = Path(board.snapshot(self.root)["task_workspaces"]["PIPELINE"])
         self.assertEqual(
@@ -307,11 +307,11 @@ class SubtaskPipeliningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit accepted or rejected"):
             board.qa_result(
                 self.root, reviewer["id"], final["id"], "passed",
-                "final application passed", self.evidence("final-missing-classification"),
+                "TASK DONE: YES - final application passed", self.evidence("final-missing-classification"),
             )
         passed = board.qa_result(
             self.root, reviewer["id"], final["id"], "passed",
-            "The empty finalization diff adds no new product capability.",
+            "TASK DONE: YES - The empty finalization diff adds no new product capability.",
             self.evidence("final-classified"), "accepted",
         )
         self.assertEqual(passed["finalization_classification"]["decision"], "accepted")

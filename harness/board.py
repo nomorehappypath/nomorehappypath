@@ -38,6 +38,7 @@ from typing import Any, Iterator
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import screen_script as screen_script_runner
+from harness import difficulty_note
 from harness import test_machine
 from harness import failure_words
 from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, red_proof, reference_chapters
@@ -4750,7 +4751,10 @@ def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], ch
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / name
     _atomic_write_bytes(path, data)
-    return {"coverage": check["coverage"], "file": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+    stored = {"coverage": check["coverage"], "file": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+    if check.get("covers"):
+        stored["covers"] = list(check["covers"])      # kept beside the file (not inside it), so the coverage can be recomputed whenever the checks change
+    return stored
 
 
 def record_contract_check_submission(root: Path, agent_id: str, task: str, version: Any, submission: str) -> dict[str, Any]:
@@ -4765,6 +4769,7 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
     parsed = contract_check.parse_submission(raw)
     _validate_contract_check_files(parsed["criteria"])
     follow_up: dict[str, Any] = {}
+    coverage_wake: dict[str, Any] = {}
     with locked_state(root) as state:
         qa = _require_writable_agent(state, agent_id)
         if qa.get("role") != "qa":
@@ -4794,6 +4799,8 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             criteria.append({
                 "n": criterion["n"], "text": criterion["text"], "sharper": criterion["sharper"],
                 "why_not_checked": criterion["why_not_checked"], "plain": criterion["plain"], "stale": False, "checks": stored,
+                "failure_paths": criterion["failure_paths"], "no_failure_paths_because": criterion["no_failure_paths_because"],
+                "mapped": criterion["mapped"], "new": criterion["new"], "also_by": criterion["also_by"], "coverage_line": criterion["coverage_line"],
             })
         check.update({
             "criteria": criteria, "questions": parsed["questions"], "submitted_at": now(), "token": secrets.token_hex(4),
@@ -4802,6 +4809,10 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
         if parsed["questions"]:
             state.setdefault("contract_question_batches", {})[str(task)] = True
             state.setdefault("contract_open_questions", {})[str(task)] = json.loads(json.dumps(parsed["questions"]))
+        gaps = contract_check.apply_coverage(criteria)
+        if gaps:       # asked ONCE through the correction path; the owner's Go ahead is never held by it
+            check["coverage_requested"] = gaps
+            coverage_wake = {"session_id": str(qa.get("session_id") or ""), "text": contract_check.coverage_request(str(task), gaps, criteria)}
         sharper = [f"{item['text']} -> {item['sharper']}" for item in criteria if item["sharper"]]
         developer = (state.get("agents") or {}).get(str(proposal.get("agent_id")), {})
         if sharper and developer.get("session_id"):
@@ -4813,12 +4824,13 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             "message": "the Reviewer's early look at the requirements was recorded; the owner's Go ahead is not held by it",
         })
         result = {"status": check["status"], "criteria": len(criteria), "questions": len(parsed["questions"])}
-    if follow_up:
-        try:
-            from harness import control
-            control.enqueue_instruction(root, follow_up["session_id"], follow_up["text"], source="contract-check")
-        except (OSError, ValueError):
-            pass
+    for wake in (follow_up, coverage_wake):
+        if wake.get("session_id"):
+            try:
+                from harness import control
+                control.enqueue_instruction(root, wake["session_id"], wake["text"], source="contract-check")
+            except (OSError, ValueError):
+                pass
     return result
 
 
@@ -4833,7 +4845,8 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
     except (OSError, ValueError, UnicodeDecodeError) as error:
         raise ValueError("the correction must be a requirement number and a JSON file with a checks list") from error
     new_checks, _size = contract_check.parse_checks((data or {}).get("checks") if isinstance(data, dict) else None, f"requirement {number}")
-    if not new_checks and number != 0:
+    paths, none_because, said_paths = contract_check.parse_failure_paths(data if isinstance(data, dict) else {}, f"requirement {number}")
+    if not new_checks and number != 0 and not said_paths:
         raise ValueError("the correction needs at least one check")
     _validate_contract_check_files([{"n": number, "checks": new_checks}])
     with locked_state(root) as state:
@@ -4843,6 +4856,10 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         waiting = (state.get("requirement_proposals") or {}).get(str(task)) or {}
         if (waiting.get("contract_check") or {}).get("status") == "rechecking" and waiting.get("status") == "awaiting_owner":
             return _recheck_update(root, state, qa, waiting, number, new_checks, reason)
+        if number in ((waiting.get("contract_check") or {}).get("coverage_requested") or []) and waiting.get("status") == "awaiting_owner" and waiting["contract_check"].get("status") in {"ready", "questions"}:
+            return _coverage_update(root, state, qa, waiting, number, new_checks, (paths, none_because), reason)
+        if not new_checks and number != 0:
+            raise ValueError("the correction needs at least one check")
         block = ((state.get("requirement_confirmations") or {}).get(str(task)) or {}).get("contract_check") or {}
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
         if not old:
@@ -4863,7 +4880,8 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         criteria = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria") or []
         for item in criteria:
             if item["n"] == number:
-                item["checks"] = [{"coverage": entry["coverage"], "file": entry["file"], "sha256": entry["sha256"]} for entry in new]
+                item["checks"] = [{k: entry[k] for k in ("coverage", "file", "sha256", "covers") if k in entry} for entry in new]
+        contract_check.apply_coverage(criteria)
         block["labels"] = contract_check.labels(criteria)
         (block.get("results") or {}).pop(str(number), None)   # the corrected check has not run yet
         _event(state, "contract_check_corrected", qa, {
@@ -4874,6 +4892,29 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         (block.get("compare") or {}).pop(str(number), None)      # the old label was about the old check
     run_red_proof(root, str(task), [number], "correction")      # the corrected check is seen once more on the unbuilt project; it is never asked about again
     return corrected
+
+
+def _coverage_update(root: Path, state: dict[str, Any], qa: dict[str, Any], proposal: dict[str, Any], number: int, new_checks: list[dict[str, Any]],
+                     said: tuple[list[str], str], reason: str) -> dict[str, Any]:
+    """The Reviewer's one answer to a coverage gap, before the owner decides (inside the board lock). Nothing here holds the Go ahead."""
+    task = str(proposal["task"])
+    check = proposal["contract_check"]
+    if check.get("reviewer_id") != qa["id"]:
+        raise ValueError("this coverage request was given to another Reviewer")
+    if datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
+        raise ValueError("the time for the early look ran out; nothing was recorded")
+    criterion = next(item for item in check["criteria"] if item["n"] == number)
+    if new_checks:
+        folder = _contract_check_folder(root, task, f"v{proposal['version']}-coverage")
+        criterion["checks"] = [_store_contract_check(folder, f"c{number}-k{position}.json", criterion, item) for position, item in enumerate(new_checks, 1)]
+    if said[0] or said[1]:
+        criterion["failure_paths"], criterion["no_failure_paths_because"] = said
+    if new_checks or said[0] or said[1]:
+        criterion["mapped"] = True      # the Reviewer has now said which tests cover this requirement
+    check["coverage_requested"] = [n for n in check["coverage_requested"] if n != number]     # asked once, answered once
+    contract_check.apply_coverage(check["criteria"])
+    _event(state, "contract_check_coverage_updated", qa, {"task": task, "criterion": number, "reason": reason, "message": "the Reviewer answered a coverage gap; the owner's Go ahead is not held"})
+    return {"criterion": number, "coverage": criterion["coverage_line"]}
 
 
 def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], proposal: dict[str, Any], number: int, new_checks: list[dict[str, Any]], reason: str) -> dict[str, Any]:
@@ -4895,6 +4936,7 @@ def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], propo
         folder = _contract_check_folder(root, task, f"v{proposal['version']}-recheck")
         criterion["checks"] = [_store_contract_check(folder, f"c{number}-k{position}.json", criterion, item) for position, item in enumerate(new_checks, 1)]
         criterion["stale"] = False
+    contract_check.apply_coverage(check.get("criteria") or [])
     open_ones = [c["n"] for c in check.get("criteria") or [] if c.get("stale") and c.get("checks")]
     done = number == 0 or not open_ones
     if done:
@@ -4942,6 +4984,7 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
             if item["n"] == number:
                 item["stale"] = True
                 item["skipped_reason"] = reason
+        contract_check.apply_coverage(criteria)
         block["labels"] = contract_check.labels(criteria)
         (block.get("results") or {}).pop(str(number), None)
         (block.get("did_not_run") or {}).pop(str(number), None)
@@ -4997,6 +5040,28 @@ def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, st
         pass
 
 
+def _lockfiles_identity(certification: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(certification.get("lockfile_digests") or {}, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _board_already_passed_these_checks(request: dict[str, Any], certification: dict[str, Any], block: dict[str, Any], checks: list[dict[str, Any]], commit: str) -> bool:
+    """True only when a PASSING board run (the Delivery gate) of every stored check, with these exact bytes, on this exact commit and
+    environment, is already on this request. A failed or partial run, a changed commit, check or environment is never reused."""
+    if not request.get("contract_check_simulations"):
+        return False
+    for run in request.get("contract_check_runs") or []:
+        if run.get("role") != "delivery" or run.get("status") != "passed" or run.get("did_not_run") or run.get("reused"):
+            continue
+        if run.get("commit") != commit or run.get("checks_sha256") != block.get("checks_sha256"):
+            continue
+        if run.get("environment_sha256") != str(certification.get("environment_sha256") or "") or run.get("lockfiles_sha256") != _lockfiles_identity(certification):
+            continue
+        passed = run.get("passed_checks") or {}
+        if all(passed.get(item["n"]) == item["sha256"] for item in checks):
+            return True
+    return False
+
+
 def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certification: dict[str, Any], role: str) -> dict[str, Any] | None:
     """The board runs the task's stored checks against the committed candidate itself (final review only); None when there are none.
 
@@ -5012,9 +5077,15 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
     if not commit:
         return {"run": {"role": role, "at": now(), "status": "skipped", "reason": "could not be run: the work has no saved version"},
                 "checks_sha256": block["checks_sha256"]}
+    if role == "reviewer" and _board_already_passed_these_checks(request, certification, block, checks, commit):
+        # the board ran exactly these checks on exactly this commit a moment ago and they passed: not run a second time
+        return {"run": {"role": role, "at": now(), "status": "passed", "checks_sha256": block["checks_sha256"], "reused": True, "commit": commit,
+                        "note": "already run by the board on this exact commit", "scenario_ids": []},
+                "checks_sha256": block["checks_sha256"]}
     simulations: list[dict[str, Any]] = []
     outcomes: dict[int, str] = {}
     reasons: dict[int, str] = {}
+    passed_checks: dict[str, str] = {}
     with tempfile.TemporaryDirectory(prefix="harness-contract-probe-") as probe_directory:
         probe = Path(probe_directory) / "contract-check-probe.md"
         probe.write_text("probe\n", encoding="utf-8")
@@ -5040,9 +5111,9 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                 ledger = own / "ledger.md"
                 # a command stored with escaped quotes (-p \"test_*.py\") would hand the quote marks to the test finder and find nothing
                 ledger.write_text(_repair_escaped_pattern(item["ledger"]), encoding="utf-8")
-                candidate = execution_identity.candidate_evidence_identity(
+                candidate = execution_identity.run_candidate_identity(
                     commit, str(request.get("reviewed_tree_hash") or request.get("reviewed_worktree_digest") or ""),
-                    str((request.get("contract_revision") or {}).get("sha256") or ""), {"contract_check": item["sha256"]},
+                    {"contract_check": item["sha256"]},
                 )
                 try:
                     try:
@@ -5059,6 +5130,7 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                                            "retry_reason": "automatic second try: the first run could not run the check"},
                         )
                     simulations.extend(found)
+                    passed_checks[item["n"]] = item["sha256"]
                     if outcomes.get(item["criterion_index"]) not in {"failed", "did_not_run"}:
                         outcomes[item["criterion_index"]] = "passed"
                 except certified_execution.RetryableInterruption:
@@ -5081,7 +5153,9 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
     if role == "delivery":
         _compare_passed_checks_with_base(root, task, [number for number, outcome in outcomes.items() if outcome == "passed"])
     partly = bool(reasons)
-    return {"run": {"role": role, "at": now(), "status": "partly" if partly else "passed", "checks_sha256": block["checks_sha256"],
+    return {"run": {"role": role, "at": now(), "status": "partly" if partly else "passed", "checks_sha256": block["checks_sha256"], "commit": commit,
+                    "environment_sha256": str(certification.get("environment_sha256") or ""),
+                    "lockfiles_sha256": _lockfiles_identity(certification), "passed_checks": passed_checks,
                     "scenario_ids": [item["id"] for item in simulations], **({"did_not_run": {str(n): r for n, r in reasons.items()}} if partly else {})},
             "bundle": _simulation_bundle(root, "contract checks", simulations), "checks_sha256": block["checks_sha256"]}
 
@@ -5111,7 +5185,7 @@ def _contract_check_stale_reason(state: dict[str, Any], request: dict[str, Any])
 _RED_PROOF_RETRY = "the board's own run of a stored check on the project before the work"
 
 
-def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | None = None) -> tuple[dict[str, dict[str, str]], str] | None:
+def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | None = None, skip_known: bool = False) -> tuple[dict[str, dict[str, str]], str] | None:
     """The stored checks run on the project as it was before the work: {check number: {outcome, sha256, reason}} and the base commit.
 
     outcome is "failed" (the check really ran and the test runner reported a failure: the good result here), "passed" (it passes on
@@ -5125,6 +5199,14 @@ def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | Non
     if not checks:
         return None
     base = str(((state.get("task_baselines") or {}).get(task) or {}).get("head") or "")
+    if skip_known and base:
+        # a check already seen on this same base commit with these same bytes is not run again; "could not compare" is never reused
+        known = (((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check") or {}).get("red_proof", {}).get("checks") or {}
+        checks = [item for item in checks if not (
+            (known.get(item["n"]) or {}).get("sha256") == item["sha256"] and (known.get(item["n"]) or {}).get("base_commit") == base
+            and (known.get(item["n"]) or {}).get("label") in {red_proof.FAILS_BEFORE, red_proof.PASSES_ON_NOTHING})]
+        if not checks:
+            return None
     found: dict[str, dict[str, str]] = {}
 
     def settle(item: dict[str, Any], outcome: str, reason: str = "") -> None:
@@ -5288,7 +5370,7 @@ def _compare_passed_checks_with_base(root: Path, task: str, passed: list[int]) -
     if not passed:
         return
     try:
-        probed = _probe_stored_checks_on_base(root, task, passed)
+        probed = _probe_stored_checks_on_base(root, task, passed, skip_known=True)
         if probed is not None:
             _store_compare(root, task, probed[0], probed[1], "review")
     except Exception:   # noqa: BLE001 - never a failure of the work
@@ -9867,10 +9949,8 @@ def _evidence_reuse_checks(
         ]
     else:
         checks = [
-            _reuse_check(
-                "commit hash", str(candidate.get("commit", "")),
-                str(current_git.get("base_commit", "")),
-            ),
+            # The commit hash is not compared: an empty recommit or a rebase that leaves the tree byte-identical is the same code
+            # (owner's order 2026-10-26: paperwork never forces a fresh review). The tree and working-tree hashes are the code.
             _reuse_check(
                 "tree hash", str(candidate.get("tree_hash", "")),
                 str(current_git.get("tree_hash", "")),
@@ -9962,8 +10042,9 @@ def _evidence_reuse_checks(
         if not manifest.get("sha256"):
             checks.append(_incomplete_identity_check(label, "reuse identity lacks sha256"))
             continue
-        path = Path(str(manifest.get("path", "")))
-        actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
+        # Compare the board's own certified copy (the bytes that were judged), not the source file the author may have re-saved since.
+        path = Path(str(certified.get("path") or ""))
+        actual = hashlib.sha256(path.read_bytes()).hexdigest() if str(certified.get("path") or "") and path.is_file() else "missing"
         checks.append(_reuse_check(
             label, str(manifest.get("sha256", "")), actual,
         ))
@@ -9986,11 +10067,7 @@ def _evidence_reuse_checks(
             if contract_matched else "contract revision diverged from reviewed value"
         ),
     })
-    checks.append(_reuse_check(
-        "environment identity",
-        str(identity.get("environment_identity", {}).get("sha256", "")),
-        str(_environment_identity().get("sha256", "")),
-    ))
+    # The machine's OS release and Python version are not compared: a system update is not a change to the reviewed code.
     return checks
 
 
@@ -12936,12 +13013,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         "task": task_name, "structure_revision": structure_revision,
         "phase": phase, "subtask": subtask, "chunk": chunk,
     }
-    delivery_candidate = execution_identity.candidate_evidence_identity(
+    delivery_candidate = execution_identity.run_candidate_identity(
         str(review_artifact.get("commit") or ""),
         str(review_artifact.get("tree_hash") or review_artifact.get("working_tree_digest") or ""),
-        str(contract_revision.get("sha256") or ""),
-        {"delivery_ledger": ledger_sha256,
-         "review_scope": _review_scope_identity(delivery_scope)["sha256"]},
     )
     delivery_certification = {
         "board_root": root, "candidate": delivery_candidate,
@@ -13958,10 +14032,7 @@ def _execute_challenge_locked(
     environment_sha256 = str(
         (review_request.get("environment_identity") or {}).get("sha256") or ""
     )
-    candidate_artifacts = {
-        "challenge_ledger": simulation_digest,
-        "review_scope": _review_scope_identity(review_request)["sha256"],
-    }
+    candidate_artifacts = {}
     if review_request.get("challenge_support_sha256"):
         candidate_artifacts["challenge_support"] = review_request["challenge_support_sha256"]
     if not (
@@ -13972,10 +14043,9 @@ def _execute_challenge_locked(
         # Legacy non-Git reviews cannot prove byte identity across requests. Keep
         # retries within one request linked, but never cross-reuse another cycle.
         candidate_artifacts["legacy_review_request"] = request_id
-    candidate = _xid.candidate_evidence_identity(
+    candidate = _xid.run_candidate_identity(
         str(review_request.get("reviewed_commit") or ""),
         str(review_request.get("reviewed_tree_hash") or review_request.get("reviewed_worktree_digest") or ""),
-        str((review_request.get("contract_revision") or {}).get("sha256") or ""),
         candidate_artifacts,
     )
     try:
@@ -14291,6 +14361,18 @@ def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, s
     return review_rounds.judge(
         request, prior, result, summary, failure_members, _frozen_scope_context(state, request, requests, prior),
         early_fail=early_fail, certified=bool(request.get("challenge_execution")))
+
+
+def _keep_difficulty_note(root: Path, args: argparse.Namespace, out: Any) -> None:
+    """Store the optional difficulty note after the command itself succeeded. Paperwork never blocks: any problem here is dropped silently."""
+    try:
+        step = str(out.get("id") or "") if args.command == "request-review" and isinstance(out, dict) else str(args.request)
+        with locked_state(root, operation="difficulty note") as state:
+            request = (state.get("qa_requests") or {}).get(step) or {}
+            agent = state["agents"].get(args.agent)
+            difficulty_note.record(state, agent, str(request.get("task") or (agent or {}).get("task") or ""), step, args.difficulty)
+    except Exception:  # noqa: BLE001 - a note is information only
+        pass
 
 
 def qa_result(
@@ -16599,7 +16681,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("git-commit"); p.add_argument("--agent", required=True); p.add_argument("--path", action="append", required=True); p.add_argument("--message", required=True); p.add_argument("--subtask", default="")
     p = sub.add_parser("reopen-candidate-scope"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("declare-chunks"); p.add_argument("--agent", required=True); p.add_argument("--chunk", action="append", required=True, metavar="NAME:DESCRIPTION"); p.add_argument("--reason", default="")
-    p = sub.add_parser("request-review"); p.add_argument("--agent", required=True); p.add_argument("--ledger", required=True); p.add_argument("--summary", required=True); p.add_argument("--unit-test-command", "--test-command", dest="test_command", required=True, help="unit-test command executed before acceptance scenarios and captured by the board; --test-command remains a compatibility alias"); p.add_argument("--phase", choices=["chunk", "subtask_acceptance", "final_acceptance"], default="chunk"); p.add_argument("--subtask", default=""); p.add_argument("--chunk", default=""); p.add_argument("--changes", default=""); p.add_argument("--test-scope", default="full", choices=sorted(TEST_SCOPES)); p.add_argument("--scope-reason", default=""); p.add_argument("--repair-package", default="")
+    p = sub.add_parser("request-review"); p.add_argument("--agent", required=True); p.add_argument("--ledger", required=True); p.add_argument("--summary", required=True); p.add_argument("--unit-test-command", "--test-command", dest="test_command", required=True, help="unit-test command executed before acceptance scenarios and captured by the board; --test-command remains a compatibility alias"); p.add_argument("--phase", choices=["chunk", "subtask_acceptance", "final_acceptance"], default="chunk"); p.add_argument("--subtask", default=""); p.add_argument("--chunk", default=""); p.add_argument("--changes", default=""); p.add_argument("--test-scope", default="full", choices=sorted(TEST_SCOPES)); p.add_argument("--scope-reason", default=""); p.add_argument("--repair-package", default=""); p.add_argument("--difficulty", default="", help="optional: one line on what slowed you down (vague requirement, broken build, missing tool); never required")
     p = sub.add_parser("claim-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default=""); p.add_argument("--challenge-ledger", default="")
     p = sub.add_parser("reserve-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default="")
     p = sub.add_parser("review-brief"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
@@ -16609,7 +16691,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("retained-plan"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
     p = sub.add_parser("reference"); p.description = "Read one named chapter of your role's reference directive (the card names it, or a board message says: Open reference: <chapter>)."; p.add_argument("--agent", required=True); p.add_argument("--name", required=True, help="the chapter name, for example enhanced-security")
     p = sub.add_parser("attach-challenge-ledger"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--challenge-ledger", required=True); p.add_argument("--correction-reason", default="")
-    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--failure", action="append", default=[], metavar="JSON finding, or ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
+    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--difficulty", default="", help="optional: one line on what slowed you down (vague requirement, broken build, missing tool); never required"); p.add_argument("--failure", action="append", default=[], metavar="JSON finding, or ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
     p = sub.add_parser("resolve-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--resolution", action="append", required=True, metavar="MEMBER_ID|RESOLUTION|REGRESSION_CHECK")
     p = sub.add_parser("split-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--group", action="append", required=True, metavar="MEMBER_ID,MEMBER_ID"); p.add_argument("--reason", required=True)
     p = sub.add_parser("complete"); p.add_argument("--agent", required=True); p.add_argument("--note", required=True)
@@ -16799,6 +16881,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)
         elif args.command == "reevaluate-finalization": out = reevaluate_finalization(root, args.task, args.finding, args.reason)
         else: out = watch(root, args.status_interval, args.stale_after)
+        if args.command in {"request-review", "qa-result"} and str(getattr(args, "difficulty", "") or "").strip():
+            _keep_difficulty_note(root, args, out)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

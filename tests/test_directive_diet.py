@@ -210,7 +210,7 @@ class RoutedMessageTests(unittest.TestCase):
         request = board.request_review(self.root, dev["id"], self.ledger("hint-delivery.md"), "final candidate", phase="final_acceptance", test_command=self.qa_command())
         board.claim_qa(self.root, reviewer["id"], request["id"], self.ledger("hint-challenge.md"))
         board.execute_challenge(self.root, reviewer["id"], request["id"])
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final checks passed", self.evidence("hint-final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final checks passed", self.evidence("hint-final.txt"))
         delivery_text = " ".join(row["text"] for row in control.take_instructions(self.root, dev["session_id"]))
         cto_text = " ".join(row["text"] for row in control.take_instructions(self.root, cto_session["id"]))
         self.assertIn("Open reference: release", delivery_text)

@@ -22,6 +22,7 @@ MAX_SUPPORT_FILES = 20
 MAX_SUPPORT_BYTES = 512 * 1024
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _SUPPORT_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,79}")
+END_TO_END_RULE_FROM = "2026-09-30"   # same date as cto.END_TO_END_RULE_FROM
 _DECLARATION = re.compile(r"^\s*TASK DONE:\s*(?P<what>[^\n]*)", re.I | re.M)
 FINDING_EXAMPLE = (
     '{"id": "B1", "summary": "what is wrong", "harm": "in normal use the owner would see or lose ...", '
@@ -227,6 +228,12 @@ def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, sum
         decision["round"] = 0
         return decision
     if result == "passed":
+        if request.get("phase") == "final_acceptance" and str(request.get("requested_at") or "")[:10] >= END_TO_END_RULE_FROM \
+                and not _first_line_says_yes(summary):
+            # The release check requires a final PASS to open with TASK DONE: YES. Say so now, inside this review, instead of recording it
+            # and holding the task later (a hold, an owner card and a whole new final review for one missing line).
+            raise _correction("a final PASS must start with the line TASK DONE: YES (the expected result against what happened)",
+                              "put TASK DONE: YES - <expected result> vs <what happened> as the first line of the summary and record PASS again; if the task is not done, record FAIL")
         if members:
             raise _correction("a PASS cannot carry blocking findings", "remove the findings from the PASS (put what you saw in the summary as NON-BLOCKING notes), or record FAIL with them")
         return decision

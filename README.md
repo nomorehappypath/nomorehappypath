@@ -96,6 +96,12 @@ What it does not do: it never creates, resets or deletes the machine, one machin
 
 Existing projects keep their old acceptance card: *Get the build* appears only for a new task whose Delivery declared the build, so `why.exe` itself would need a new task to be downloadable this way. A task that declares a build and also a web app keeps *View app*.
 
+## What's new in v0.14.0
+
+- **Every requirement now shows whether a test covers it.** Before delivery, the reviewer labels each requirement, including what should happen when things go wrong, as *covered* or *gap*. A gap goes back to the reviewer once to be filled. You are never asked, and *Go ahead* is never held. The honest limit: the board checks the reviewer's labels, it cannot judge how clever a test is.
+- **Agents can say what slowed them down.** Delivery and the Reviewer may add one line on what slowed them down, and the latest one is shown on the task card.
+- **No repeated checks.** Reviews no longer run the same checks twice on the same code. Formatting or bookkeeping never causes a re-run or a hold: only a real bug or a security leak blocks.
+
 ## What's new in v0.13.0
 
 - **The tests come first, and they must be able to fail.** The reviewer from the other AI company writes the tests before any building starts. The board then runs those locked tests on the project as it was before the work began. A test that passes there is flagged *did not distinguish* and does not count as proof; if the board cannot compare, it says so and does not hold delivery. This shows a test can fail before the work; it does not show the tests cover every requirement.

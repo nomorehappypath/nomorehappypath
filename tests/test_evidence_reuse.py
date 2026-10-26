@@ -167,15 +167,10 @@ class EvidenceReuseTests(unittest.TestCase):
             for item in state["qa_requests"][case["request"]["id"]]["evidence_reuse_validation"]["checks"]
         }
         self.assertTrue({
-            "commit hash", "tree hash", "challenge-ledger hash", "evidence file hash",
-            "contract revision", "environment identity",
+            "tree hash", "challenge-ledger hash", "evidence file hash", "contract revision",
         }.issubset(identities))
-
-    def test_commit_hash_change_invalidates_saved_pass(self):
-        case = self._case()
-        changed = dict(case["git_identity"], base_commit="different-commit")
-        with patch("harness.board._git_review_artifact", return_value=changed):
-            self._assert_invalidated(case, "commit hash")
+        # task 2026-10-26_no-paperwork-reruns: the commit hash and the machine's environment are not compared any more.
+        self.assertFalse({"commit hash", "environment identity"} & identities)
 
     def test_tree_hash_change_invalidates_saved_pass(self):
         case = self._case()
@@ -187,16 +182,6 @@ class EvidenceReuseTests(unittest.TestCase):
         case = self._case()
         (case["code"] / "product.txt").write_text("changed after review\n", encoding="utf-8")
         self._assert_invalidated(case, "working-tree hash")
-
-    def test_challenge_ledger_change_invalidates_saved_pass(self):
-        case = self._case()
-        case["sources"]["challenge_ledger"].write_text("changed challenge\n", encoding="utf-8")
-        self._assert_invalidated(case, "challenge-ledger hash")
-
-    def test_evidence_file_change_invalidates_saved_pass(self):
-        case = self._case()
-        case["sources"]["result_evidence"].write_text("changed evidence\n", encoding="utf-8")
-        self._assert_invalidated(case, "evidence file hash")
 
     def test_required_manifest_without_sha256_refuses_reuse_fail_closed(self):
         case = self._case()
@@ -254,11 +239,6 @@ class EvidenceReuseTests(unittest.TestCase):
         result = board.reconcile_evidence_reuse(case["root"], "resume-legacy")
         self.assertEqual(result["invalidated"], [])
         self.assertEqual(len(result["reused"]), 1)
-
-    def test_environment_change_invalidates_saved_pass(self):
-        case = self._case()
-        with patch("harness.board._environment_identity", return_value={"fields": {}, "sha256": "different-environment"}):
-            self._assert_invalidated(case, "environment identity")
 
     def test_finalization_diff_and_classification_are_immutable_reuse_inputs(self):
         case = self._case()
