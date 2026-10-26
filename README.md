@@ -1,8 +1,8 @@
 # NoMoreHappyPath
 
-**Build commercial software with AI agents, from a plain-English idea toward a release-ready product, with the governance built in.**
+**Be a software company of one. Make "done" mean done.**
 
-NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-built software. You describe what you want. A team of AI agents plans it, builds it, tests it and reviews it, inside a governed project board and a local control room (Mission Control). Nothing moves forward without recorded evidence, and "done" stays your word. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
+NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for building commercial software with AI agents. A builder, an independent reviewer from a different AI company and a CTO take your idea through 21 quality steps: tests written before any code and proven able to fail, a board the agents cannot edit, reviews that end, and security built in and enhanced on demand. Mission Control shows every step in plain English, and nothing is done until you accept it. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
 
 ## See it working
 
