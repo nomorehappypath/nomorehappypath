@@ -67,7 +67,7 @@ class CompletionObjectiveGateTests(unittest.TestCase):
             phase="final_acceptance", test_command="python3 -m unittest test_smoke")
         board.claim_qa(root, qa["id"], review["id"], str(challenge))
         board.execute_challenge(root, qa["id"], review["id"])
-        board.qa_result(root, qa["id"], review["id"], "passed", "review pass", str(review_evidence))
+        board.qa_result(root, qa["id"], review["id"], "passed", "TASK DONE: YES - review pass", str(review_evidence))
         if not confirm:
             with board.locked_state(root) as state:
                 state.get("requirement_confirmations", {}).pop(task, None)

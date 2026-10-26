@@ -69,10 +69,8 @@ class ExecuteOnceTests(unittest.TestCase):
             stamped["candidate_identity"]["fields"]["tree"],
             request["reviewed_tree_hash"] or request["reviewed_worktree_digest"],
         )
-        self.assertEqual(
-            stamped["candidate_identity"]["fields"]["contract_revision"],
-            request["contract_revision"]["sha256"],
-        )
+        # task 2026-10-26_no-paperwork-reruns: a command run is keyed on the tree, not the contract revision, ledger or scope.
+        self.assertEqual(stamped["candidate_identity"]["fields"]["contract_revision"], "")
         self.assertTrue(stamped["environment_sha256"])
         self.assertEqual(len(stamped["scenario_identities"]), 1)
         self.assertTrue((board.board_dir(self.root) / "execution-store.jsonl").is_file())
@@ -86,7 +84,7 @@ class ExecuteOnceTests(unittest.TestCase):
         with patch.object(board, "_execute_scenario_simulations",
                           side_effect=AssertionError("re-execution is forbidden")) as run:
             recorded = board.qa_result(self.root, qa["id"], request["id"],
-                                       "passed", "verdict on certified execution",
+                                       "passed", "TASK DONE: YES - verdict on certified execution",
                                        str(review_evidence))
         run.assert_not_called()
         self.assertEqual(recorded["status"], "passed")
@@ -98,7 +96,7 @@ class ExecuteOnceTests(unittest.TestCase):
         challenge.write_text(challenge.read_text().replace("S-101", "S-999"))
         with self.assertRaisesRegex(ValueError, "execute-challenge again"):
             board.qa_result(self.root, qa["id"], request["id"],
-                            "passed", "verdict on stale execution", str(review_evidence))
+                            "passed", "TASK DONE: YES - verdict on stale execution", str(review_evidence))
 
     # ---- S-P1-004: PASS without pre-execution is refused, never run at verdict ----
     def test_pass_without_execute_challenge_is_refused_without_execution(self):
@@ -107,7 +105,7 @@ class ExecuteOnceTests(unittest.TestCase):
                           side_effect=AssertionError("verdict execution is forbidden")) as run:
             with self.assertRaisesRegex(ValueError, "requires execute-challenge"):
                 board.qa_result(self.root, qa["id"], request["id"],
-                                "passed", "uncertified verdict",
+                                "passed", "TASK DONE: YES - uncertified verdict",
                                 str(review_evidence))
         run.assert_not_called()
 

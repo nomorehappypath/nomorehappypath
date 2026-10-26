@@ -70,7 +70,7 @@ def correction_request(task: str, numbers: list[int], criteria: list[str], check
     return (
         f"CONTRACT CHECK SHARPEN: task {task}. The board ran your stored checks once on the project as it is before any work. "
         f"These pass on nothing (checks {', '.join(checks)}), so they cannot tell finished work from unfinished work: {named}. "
-        f"Replace or sharpen each requirement's checks, once, with contract-check-correct --task {task} --criterion <n> --reason \"passes before the work; now it must fail on an empty project\" "
+        f"Replace or sharpen each requirement's checks, once, with contract-check-correct --task {task} --criterion <n> --reason \"passes before the work; now it must fail on the project as it was before the work\" "
         f"--submission <JSON file with {{\"checks\": [...]}}> (for example criterion {first}). The corrected checks must fail now and pass once the requirement is met. "
         "You will not be asked again: if a check cannot be made to fail first, leave it and it stays marked as not distinguishing. "
         "Do not start any polling or background helper. Never ask the owner anything. USER ACTION: None."

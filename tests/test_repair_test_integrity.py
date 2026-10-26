@@ -82,7 +82,7 @@ class _Project(unittest.TestCase):
         return board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
 
     def inbox(self):
-        return [item["text"] for item in control.take_instructions(self.root, self.rsession["id"])]
+        return [item["text"] for item in control.take_instructions(self.root, self.rsession["id"]) if "CONTRACT CHECK COVERAGE" not in item["text"]]   # the coverage request has its own tests
 
     def build(self, files):
         workspace = Path(board.snapshot(self.root)["task_workspaces"][TASK])

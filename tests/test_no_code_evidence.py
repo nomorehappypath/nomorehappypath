@@ -136,13 +136,13 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
         reviewer, request = self.claimed_final()
         self.report.write_text("# Audit\nclaims checked: FAILED\n")
         with self.assertRaisesRegex(ValueError, r"cannot record PASS: This task changes no product code.*report\.md - the file changed"):
-            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         self.assertEqual(board.snapshot(self.root)["qa_requests"][request["id"]]["status"], "claimed")
 
     def test_evidence_changed_after_the_pass_blocks_completion(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         self.report.unlink()
         with self.assertRaisesRegex(ValueError, r"delivery cannot complete: .*changes no product code.*report\.md - the file is missing"):
             board.complete(self.root, self.dev["id"], "done")
@@ -150,7 +150,7 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
     def test_intact_evidence_passes_and_completes(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         board.complete(self.root, self.dev["id"], "done")
         self.assertEqual(board.snapshot(self.root)["agents"][self.dev["id"]]["status"], "done")
 
@@ -171,12 +171,12 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
         other.write_text("# Late\nattached after the request\n")
         self.attach(path=other)
         with self.assertRaisesRegex(ValueError, r"late\.md was attached or selected after the review was requested"):
-            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+            board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
 
     def test_restoring_the_exact_reviewed_bytes_keeps_the_pass(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         original = self.report.read_bytes()
         self.report.unlink()
         self.report.write_bytes(original)
@@ -185,7 +185,7 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
     def test_a_pass_whose_proof_changed_does_not_block_a_new_request_for_the_same_commit(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         self.report.write_text("# Audit\nre-run after the fix: supported\n")
         with self.assertRaises(ValueError):
             board.complete(self.root, self.dev["id"], "done")
@@ -206,7 +206,7 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
     def test_a_saved_pass_reuse_check_names_missing_proof(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         self.report.unlink()
         state = board.snapshot(self.root)
         checks = board._evidence_reuse_checks(self.root, state, state["qa_requests"][request["id"]])
@@ -236,7 +236,7 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
     def test_the_resume_path_rechecks_the_proof_even_with_a_cached_resume_id(self):
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         first = board.reconcile_evidence_reuse(self.root, "resume-1")
         self.assertTrue(any(item["status"] == "reused" and item["request_id"] == request["id"] for item in first["reused"]), first)
         self.report.unlink()
@@ -248,7 +248,7 @@ class NoProductCodeEvidenceTests(unittest.TestCase):
         from unittest import mock
         self.attach()
         reviewer, request = self.claimed_final()
-        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "final passed", self.evidence("final.txt"))
+        board.qa_result(self.root, reviewer["id"], request["id"], "passed", "TASK DONE: YES - final passed", self.evidence("final.txt"))
         real = board._obligation_identity
         calls = []
         def shifting(root, task):

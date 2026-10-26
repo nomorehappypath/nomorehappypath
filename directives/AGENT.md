@@ -192,6 +192,8 @@ The file is JSON:
     {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
                    "plain": "<one sentence the OWNER can read: what this protects for them>",
                    "checks": [{"coverage": "checked", "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
+                   "failure_paths": ["<a failure or edge case the checks cover>"],
+                   "no_failure_paths_because": "<or, instead of failure_paths, why none apply>",
                    "why_not_checked": "<required when there is no check>",
                    "sharper": "<optional: a sharper sentence for a vague criterion>"}],
      "questions": [{"text": "<product question>", "options": ["A", "B"], "recommended": 0, "affects": [1]}]}
@@ -200,6 +202,9 @@ The file is JSON:
   owner reads this list under "What will be tested" and the developer wording sits behind a Details toggle. The board refuses a submission
   whose `plain` is missing or names a spec section, a file, a function or code name, a commit, GIVEN/WHEN/THEN, "spec" or "delta".
   Good: "Every service except film gets the questions step." Bad: "The spec's section 15 coverage table holds (GIVEN mapped to a test)."
+- Coverage: a check may add `"covers": [<other requirement numbers>]`. Give every requirement `failure_paths` (the failures and edge cases its
+  checks cover) or `no_failure_paths_because`. The board marks a requirement `covered`, or `gap` (no check, or the normal case only) and asks you ONCE
+  to close each gap: `contract-check-correct --criterion <n>` with `{"checks": [...], "failure_paths": [...]}` (`checks` may be empty). The owner is never held.
 - Quote the test pattern with plain double quotes: `-p "test_*.py"`, so the shell cannot expand it against other files. Never write the quotes with
   backslashes (`-p \"test_*.py\"`): the test finder then looks for file names that contain quote marks, finds nothing, and the board reports the check as
   did not run. The board refuses a pattern written with backslash-escaped quotes.

@@ -84,6 +84,16 @@ def candidate_evidence_identity(
     return {"kind": "candidate_evidence", "fields": fields, "sha256": _sha(fields)}
 
 
+def run_candidate_identity(commit: str, tree: str, artifact_digests: dict[str, str] | None = None) -> dict[str, Any]:
+    """The code a plain command run is keyed on: the tree (the bytes), never the commit hash, the ledger's digest or the review scope.
+
+    An empty recommit or a reworded ledger leaves the tree unchanged, so the same command on the same bytes is not run again (owner's order
+    2026-10-26: paperwork never re-runs anything). Only a run with no tree at all falls back to the commit. The ledger digest stays in
+    `scenario_certification`; `artifact_digests` carries only real inputs of the run (support files, a stored contract check's bytes)."""
+    tree = str(tree or "")
+    return candidate_evidence_identity("" if tree else commit, tree, "", artifact_digests)
+
+
 def runtime_versions() -> dict[str, str]:
     return {
         "python": ".".join(str(v) for v in sys.version_info[:3]),

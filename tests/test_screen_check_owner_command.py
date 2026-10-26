@@ -217,10 +217,7 @@ class StoredSuccessWithABlockedBrowserTests(unittest.TestCase):
                 "reviewed_commit": "c" * 40, "reviewed_tree_hash": "t" * 40, "subtask": "", "chunk": "",
                 "command_executions": [{"kind": "unit_test", "exit_code": 0, "execution_identity": "i", "execution_record_id": "r"}],
             }
-            candidate = execution_identity.candidate_evidence_identity(
-                "c" * 40, "t" * 40, "k" * 64,
-                {"delivery_ledger": ledger_sha, "review_scope": board._review_scope_identity(request)["sha256"]},
-            )
+            candidate = execution_identity.run_candidate_identity("c" * 40, "t" * 40)
             entry = {"identity_fields": {
                 "candidate_sha256": candidate["sha256"], "argv": ["python3", "-m", "unittest"], "cwd": ".",
                 "environment_sha256": "e" * 64, "role": "delivery", "gate": "final_acceptance::",

@@ -722,10 +722,10 @@ class FinalReviewFlowTests(unittest.TestCase):
         evidence = self.base / "evidence.txt"
         evidence.write_text("command: python3 -m unittest\nresult: PASS\n")
         with self.assertRaisesRegex(ValueError, "stored checks changed after they were run"):
-            board.qa_result(self.root, self.qa["id"], request["id"], "passed", "all good", str(evidence))
+            board.qa_result(self.root, self.qa["id"], request["id"], "passed", "TASK DONE: YES - all good", str(evidence))
         board.execute_challenge(self.root, self.qa["id"], request["id"])
         self.assertNotEqual(board.snapshot(self.root)["qa_requests"][request["id"]]["contract_check_sha256"], digest)
-        board.qa_result(self.root, self.qa["id"], request["id"], "passed", "all good: the checks and my own scenario hold", str(evidence))
+        board.qa_result(self.root, self.qa["id"], request["id"], "passed", "TASK DONE: YES - all good: the checks and my own scenario hold", str(evidence))
         passed = board.snapshot(self.root)["qa_requests"][request["id"]]
         self.assertEqual(passed["status"], "passed")
         self.assertTrue(passed["contract_check_simulations"]["scenario_ids"])

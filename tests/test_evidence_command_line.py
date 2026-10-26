@@ -73,7 +73,7 @@ class MakeTestThroughTheBoardTests(ExecuteOnceTests):
 
     def submit(self, qa, request, path):
         with patch.object(board, "_execute_scenario_simulations", side_effect=AssertionError("no rerun")) as run:
-            recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "certified make test", str(path))
+            recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - certified make test", str(path))
         run.assert_not_called()
         self.assertEqual(recorded["status"], "passed")
 

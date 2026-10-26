@@ -156,7 +156,7 @@ class DirectVerdictOverHistoricalBundleTests(base.ExecuteOnceTests):
     def test_a_passed_verdict_over_a_stored_skipped_final_check_is_refused(self):
         qa, request = self._historical_state("FINAL CHECK: SKIPPED audit")
         with self.assertRaises(ValueError) as caught:
-            board.qa_result(self.root, qa["id"], request["id"], "passed", "verdict on the stored evidence", "")
+            board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - verdict on the stored evidence", "")
         self.assertIn("did not run: audit", str(caught.exception))
         self.assertIn("execute-challenge", str(caught.exception))
 
@@ -166,11 +166,11 @@ class DirectVerdictOverHistoricalBundleTests(base.ExecuteOnceTests):
 
     def test_a_stored_pass_line_still_passes(self):
         qa, request = self._historical_state("FINAL CHECK: PASS audit")
-        self.assertEqual("passed", board.qa_result(self.root, qa["id"], request["id"], "passed", "ok", "")["status"])
+        self.assertEqual("passed", board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - ok", "")["status"])
 
     def test_a_stored_bundle_with_no_line_still_passes(self):
         qa, request = self._historical_state("no marker here")
-        self.assertEqual("passed", board.qa_result(self.root, qa["id"], request["id"], "passed", "ok", "")["status"])
+        self.assertEqual("passed", board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - ok", "")["status"])
 
 
 class CachedMeasurementTests(unittest.TestCase):

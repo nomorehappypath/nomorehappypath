@@ -33,6 +33,13 @@ CRITERION_CHARS = 400
 REQUIREMENTS_LIMIT = 12000          # the same limit propose-requirements and confirm-requirements apply
 DECIDED_HEADING = "Decided before coding:"
 
+MAX_FAILURE_PATHS = 10
+COVERED = "covered"
+NOT_MAPPED = "not mapped"
+NOT_MAPPED_NEW = "not mapped: the reviewer did not say which test covers this"
+GAP_NO_TEST = "gap: no test covers this yet"
+GAP_NORMAL_ONLY = "gap: only the normal case is tested, no failure or unusual case"
+
 NOT_CHECKED = "not checked in advance"
 PARTLY_CHECKED = "partly checked"
 CHECKED = "checked"
@@ -168,8 +175,70 @@ def parse_checks(checks_raw: Any, label: str) -> tuple[list[dict[str, Any]], int
             files[relative] = body
             total_bytes += len(body.encode("utf-8"))
         total_bytes += len(ledger.encode("utf-8"))
-        checks.append({"coverage": coverage, "ledger": ledger, "files": files})
+        entry = {"coverage": coverage, "ledger": ledger, "files": files}
+        if "covers" in check:
+            covers = check["covers"]
+            if not isinstance(covers, list) or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in covers):
+                raise ValueError(f"{where}: covers must list requirement numbers")
+            entry["covers"] = sorted(set(covers))
+        checks.append(entry)
     return checks, total_bytes
+
+
+def parse_failure_paths(item: dict[str, Any], label: str) -> tuple[list[str], str, bool]:
+    """(failure paths and edge cases the checks cover, the reason none apply, whether the Reviewer said anything about it)."""
+    said = "failure_paths" in item or "no_failure_paths_because" in item
+    raw = item.get("failure_paths") or []
+    if not isinstance(raw, list) or len(raw) > MAX_FAILURE_PATHS:
+        raise ValueError(f"{label} failure_paths must be a list of at most {MAX_FAILURE_PATHS} short sentences")
+    paths = [_text(entry, f"{label} failure path", CRITERION_CHARS) for entry in raw]
+    none = _text(item["no_failure_paths_because"], f"{label} no_failure_paths_because", CRITERION_CHARS, minimum=3) if item.get("no_failure_paths_because") else ""
+    return paths, none, said
+
+
+def covered_by_others(criteria: list[dict[str, Any]]) -> dict[int, int]:
+    """How many current (non-stale) checks of OTHER requirements say they also cover each requirement; always recomputed from the stored checks."""
+    counts: dict[int, int] = {}
+    for item in criteria:
+        if item.get("stale"):
+            continue
+        for check in item.get("checks") or []:
+            for target in check.get("covers") or []:
+                if target != item["n"]:
+                    counts[target] = counts.get(target, 0) + 1
+    return counts
+
+
+def coverage_line(criterion: dict[str, Any], extra: int = 0) -> str:
+    """Mechanical, no judgment: covered, a gap with a plain reason, or not mapped (an older submission that never said)."""
+    if not (criterion.get("mapped") or extra):
+        return NOT_MAPPED_NEW if criterion.get("new") else NOT_MAPPED       # only a submission recorded now is held to the question
+    checks = len(criterion.get("checks") or []) + extra
+    if criterion.get("stale") or not checks:
+        return GAP_NO_TEST
+    if not (criterion.get("failure_paths") or criterion.get("no_failure_paths_because")):
+        return GAP_NORMAL_ONLY
+    return COVERED
+
+
+def apply_coverage(criteria: list[dict[str, Any]]) -> list[int]:
+    """Stamp each requirement with its coverage line from the checks as they are now; returns the numbers that have a gap."""
+    counts = covered_by_others(criteria)
+    for item in criteria:
+        item["also_by"] = counts.get(item["n"], 0)
+        item["coverage_line"] = coverage_line(item, item["also_by"])
+    return [item["n"] for item in criteria if item["coverage_line"].startswith(("gap", "not mapped:"))]
+
+
+def coverage_request(task: str, numbers: list[int], criteria: list[dict[str, Any]]) -> str:
+    named = "; ".join(f"{item['n']}. {item['text']} ({item['coverage_line']})" for item in criteria if item["n"] in numbers)
+    return (
+        f"CONTRACT CHECK COVERAGE: task {task}. The board matched your checks to the requirements and found gaps: {named}. "
+        f"Once, for each, send contract-check-correct --task {task} --criterion <n> --reason \"closing a coverage gap\" "
+        "--submission <JSON file with {\"checks\": [...], \"failure_paths\": [\"<failure or edge case a check covers>\"], "
+        "\"no_failure_paths_because\": \"<or why none apply>\"}> (checks may be empty when the existing ones already cover it). "
+        "You will not be asked again and the owner is not held. Do not start any polling or background helper. Never ask the owner anything. USER ACTION: None."
+    )
 
 
 def parse_submission(raw: str) -> dict[str, Any]:
@@ -204,13 +273,24 @@ def parse_submission(raw: str) -> dict[str, Any]:
         if problem:
             raise ValueError(f"criterion {number} needs a `plain` sentence the owner can read (what this protects for them, at most {PLAIN_LIMIT} characters): {problem}")
         checks, check_bytes = parse_checks(checks_raw, f"criterion {number}")
+        paths, none_because, said = parse_failure_paths(item, f"criterion {number}")
         total_bytes += check_bytes
         total_checks += len(checks)
-        criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks})
+        criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks,
+                         "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said})
     if total_checks > MAX_CHECKS:
         raise ValueError(f"at most {MAX_CHECKS} checks in one submission")
     if total_bytes > MAX_TOTAL_BYTES:
         raise ValueError(f"the checks are larger than {MAX_TOTAL_BYTES // 1024} KB together")
+    mapped = any(item.pop("_said") or any("covers" in check for check in item["checks"]) for item in criteria)
+    for item in criteria:
+        item["mapped"] = mapped
+        item["new"] = True
+        for check in item["checks"]:
+            for target in check.get("covers") or []:
+                if target > len(criteria):
+                    raise ValueError(f"criterion {item['n']}: covers names requirement {target}, which is not in the list")
+    apply_coverage(criteria)
     questions_raw = data.get("questions") or []
     if not isinstance(questions_raw, list):
         raise ValueError("questions must be a list")
@@ -288,7 +368,9 @@ def criterion_label(criterion: dict[str, Any]) -> str:
 
 
 def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", "")} for item in criteria]
+    counts = covered_by_others(criteria)
+    return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", ""),
+             "coverage": coverage_line(item, counts.get(item["n"], 0))} for item in criteria]
 
 
 def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int) -> str:

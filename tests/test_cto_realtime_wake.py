@@ -77,7 +77,7 @@ class CtoRealtimeWake(unittest.TestCase):
         if result == "passed":
             board.execute_challenge(self.root, self.qa["id"], request["id"])
         return board.qa_result(self.root, self.qa["id"], request["id"], result,
-                               f"S-1 {result}", self._evidence(f"qa-{result}.txt"))
+                               (f"TASK DONE: YES - S-1 {result}" if result == "passed" else f"S-1 {result}"), self._evidence(f"qa-{result}.txt"))
 
     # ---- S-RT-001: final PASS wakes Delivery; completion wakes the CTO ----
     def test_final_pass_wakes_cto_immediately(self):

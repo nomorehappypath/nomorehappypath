@@ -35,7 +35,7 @@ class VerdictWithoutEvidenceTests(base.ExecuteOnceTests):
         self.assertEqual(again["status"], "already_certified")
         self.assertEqual(again["output_excerpt"], outcome["output_excerpt"])
         with mock.patch.object(board, "_execute_scenario_simulations", side_effect=AssertionError("no rerun")):
-            recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "verdict on the board's own evidence", "")
+            recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - verdict on the board's own evidence", "")
         self.assertEqual(recorded["status"], "passed")
 
     def test_the_excerpt_is_bounded_marked_and_never_echoes_a_login_token(self):
@@ -78,13 +78,13 @@ class VerdictWithoutEvidenceTests(base.ExecuteOnceTests):
         second = board.execute_challenge(self.root, qa["id"], request["id"])
         self.assertNotEqual(second.get("status"), "already_certified", "a reference to broken evidence is never returned again")
         self.assertNotEqual(second["execution_id"], first["execution_id"])
-        recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "after the board executed again", "")
+        recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - after the board executed again", "")
         self.assertEqual(recorded["status"], "passed")
 
     def test_a_real_path_still_works_exactly_as_before(self):
         qa, request, _, review_evidence = self._claimed_review()
         board.execute_challenge(self.root, qa["id"], request["id"])
-        recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "own evidence", str(review_evidence))
+        recorded = board.qa_result(self.root, qa["id"], request["id"], "passed", "TASK DONE: YES - own evidence", str(review_evidence))
         self.assertEqual(recorded["status"], "passed")
 
 

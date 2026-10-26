@@ -43,14 +43,7 @@ class CtoLedgerTests(unittest.TestCase):
                 },
                 "command_executions": [],
             }
-            candidate = execution_identity.candidate_evidence_identity(
-                request["reviewed_commit"], request["reviewed_tree_hash"],
-                request["contract_revision"]["sha256"],
-                {
-                    "delivery_ledger": ledger_sha256,
-                    "review_scope": board._review_scope_identity(request)["sha256"],
-                },
-            )
+            candidate = execution_identity.run_candidate_identity(request["reviewed_commit"], request["reviewed_tree_hash"])
             run = execution_identity.command_run_identity(
                 candidate, request["unit_test_command"].split(), ".",
                 request["environment_identity"]["sha256"], {},
@@ -106,8 +99,12 @@ class CtoLedgerTests(unittest.TestCase):
                 root, request, False, request["unit_test_command"],
             )["verified"])
 
-            request["reviewed_commit"] = "e" * 40
+            request["reviewed_commit"] = "e" * 40      # same tree: an empty recommit is the same code and stays certified
+            self.assertTrue(cto._certified_delivery_health(root, request)["verified"])
+            original_tree = request["reviewed_tree_hash"]
+            request["reviewed_tree_hash"] = "f" * 40      # a different tree is different code
             self.assertFalse(cto._certified_delivery_health(root, request)["verified"])
+            request["reviewed_tree_hash"] = original_tree
             request["reviewed_commit"] = "a" * 40
             audit_path.write_bytes(audit_payload + b"tampered\n")
             self.assertFalse(cto._certified_delivery_health(root, request)["verified"])
@@ -250,7 +247,7 @@ class CtoLedgerTests(unittest.TestCase):
             )
             board.claim_qa(root, qa["id"], review["id"], str(challenge))
             board.execute_challenge(root, qa["id"], review["id"])
-            passed_review = board.qa_result(root, qa["id"], review["id"], "passed", "review pass", str(review_evidence))
+            passed_review = board.qa_result(root, qa["id"], review["id"], "passed", "TASK DONE: YES - review pass", str(review_evidence))
             # Not a Git repo, so the complete gate cannot be green overall; the
             # development sub-gate should still prove the CTO does not accept
             # unfinished engineering work.

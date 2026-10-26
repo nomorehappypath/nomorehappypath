@@ -88,10 +88,10 @@ class EndToEndHarnessTests(unittest.TestCase):
                         "TASK DONE: NO — expected a finished document, got nothing",
                         "challenge scenarios passed"):
             with self.subTest(summary=summary[:40]):
-                result = self._release_check_after_final_review(summary)
-                self.assertTrue(result["independent_review_passed"], "the review itself passed")
-                self.assertFalse(result["final_review_says_task_done_yes"], result)
-                self.assertFalse(result["ready_for_owner_test"], result)
+                # since 2026-10-26 (no-paperwork-reruns) the board corrects such a PASS inside the review instead of recording it and
+                # holding the task later; the release check (final_review_says_task_done_yes) stays as the backstop for older records
+                with self.assertRaisesRegex(ValueError, "must start with the line TASK DONE: YES"):
+                    self._release_check_after_final_review(summary)
 
 
 if __name__ == "__main__":
