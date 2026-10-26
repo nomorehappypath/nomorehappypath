@@ -16,10 +16,10 @@ NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-b
 *A small weather app built from one request: review passes recorded, then "ready for your test".*
 
 ![How a task becomes accepted work: twenty steps in six phases](https://nomorehappypath.com/assets/process-infographic.png)
-*Twenty steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; the board locks them and checks they fail on the empty project; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
+*Twenty steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; the board locks them and checks they fail on the project as it was before the work; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
 
 ![Why every test must fail first](https://nomorehappypath.com/assets/red-proof.png)
-*A test that passes on nothing proves nothing, so it is flagged "did not distinguish" and never counts. This shows a test can fail on an empty project, not that it covers every requirement.*
+*A test that passes on nothing proves nothing, so it is flagged "did not distinguish" and does not count. This shows a test can fail before the work, not that it covers every requirement.*
 
 ![Three roles, each filled by Codex, Claude or Gemini](https://nomorehappypath.com/assets/readme-roles.png)
 *Builder, independent reviewer and CTO can each be Codex, Claude or Gemini. Only the platform software writes the project board; agents change it through governed commands, and the reviewer is never from the builder's company.*
@@ -98,7 +98,7 @@ Existing projects keep their old acceptance card: *Get the build* appears only f
 
 ## What's new in v0.13.0
 
-- **The tests come first, and they must be able to fail.** The reviewer from the other AI company writes the tests before any building starts. The board then runs those locked tests on the empty project. A test that passes on nothing is flagged *did not distinguish* and never counts as proof. This shows a test can fail on an empty project; it does not show the tests cover every requirement.
+- **The tests come first, and they must be able to fail.** The reviewer from the other AI company writes the tests before any building starts. The board then runs those locked tests on the project as it was before the work began. A test that passes there is flagged *did not distinguish* and does not count as proof; if the board cannot compare, it says so and does not hold delivery. This shows a test can fail before the work; it does not show the tests cover every requirement.
 - **A repair that edits a test must say why.** The reason is written down and shown to the reviewer.
 - **Reviews now end.** Round 1 lists every real blocker, with the harm it does and the steps to reproduce it. Later rounds block only on four things: a blocker not fixed yet, something the fix broke, an agreed requirement still unmet, or a risk to safety or data. New nitpicks become notes and do not block.
 - **Two safety nets, chosen up front in Settings.** If a review cannot be completed, the reviewer retries once on a model you pick. After the third failed review, a fresh builder retries once on a model you pick. If it still fails, the task says *could not finish* and nothing ships. There is no owner card and no question for you.
