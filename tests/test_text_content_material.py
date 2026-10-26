@@ -6,7 +6,6 @@ stay non-material and the CTO payload stays inside the Gemini rules budget."""
 import unittest
 from pathlib import Path
 
-from harness import claude_inbox, gemini_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
@@ -47,11 +46,6 @@ class TextContentIsMaterial(unittest.TestCase):
     def test_software_style_exclusions_are_kept(self):
         self.assertIn("A misplaced comma, naming preference, cosmetic defect", flat("directives/CTO.md"))
         self.assertIn("test housekeeping, wording and style are NON-BLOCKING notes", flat("directives/AGENT.md"))
-
-    def test_cto_payload_fits_the_gemini_rules_budget(self):
-        size = len((ROOT / "directives/CTO.md").read_bytes()) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES)
-
 
 if __name__ == "__main__":
     unittest.main()

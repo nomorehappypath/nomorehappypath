@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
-from harness import platform_support, web_guard, agent_view, test_machine, failure_words
+from harness import platform_support, web_guard, agent_view, test_machine, failure_words, review_rounds, review_cost
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -61,7 +61,7 @@ PAGE = r"""<!doctype html>
 @keyframes waiting-blink{50%{background:#7a1610}}
 @media (prefers-reduced-motion:reduce){.waiting-banner{animation:none;outline:4px solid #7a1610}}
 .badge.tone-waiting{background:var(--red);color:#fff;animation:waiting-blink 1.1s steps(2,start) infinite}
-@media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
+@media (prefers-reduced-motion:reduce){.badge.tone-waiting{animation:none}}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{padding:16px}.stat strong{display:block;font-size:29px;letter-spacing:-.05em}.stat span{color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr);gap:18px}.section{margin-top:18px}.empty{border:1px dashed #c7d1db;border-radius:10px;padding:24px;color:var(--muted);text-align:center}.task,.queue,.session,.agent-row{border-top:1px solid var(--line);padding:16px 0}.task:first-of-type,.queue:first-of-type,.session:first-of-type,.agent-row:first-of-type{border-top:0}.task-key{font-size:12px;font-weight:700;color:var(--muted);margin-top:4px}.task-static{display:block}.task-dynamic{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:#f7f9fc;padding:11px 14px 14px}.task-dynamic .progress{margin-top:10px}.live-label{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--blue)}.live-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.task-usage{margin:6px 0 0;font-size:13px;color:var(--ink)}.task-usage:empty{display:none}.badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tone-ready{background:var(--green-soft);color:var(--green)}.tone-repair{background:var(--red-soft);color:var(--red)}.tone-active{background:var(--amber-soft);color:var(--amber)}.tone-muted{background:#edf1f4;color:#596775}.progress{height:8px;background:#e8edf1;border-radius:8px;overflow:hidden;margin:13px 0 7px}.progress i{display:block;height:8px;border-radius:8px;background:var(--blue)}.progress i.repair{background:var(--red)}.progress i.ready{background:var(--green)}.meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px}.cto-chip{display:inline-flex;align-items:center;border:1px solid #b8c9e8;border-radius:999px;background:var(--blue-soft);color:#174ea6;padding:4px 9px;font-size:12px;font-weight:800}.next{margin-top:13px;background:#f5f8ff;border-left:3px solid var(--blue);padding:10px 12px;border-radius:0 7px 7px 0;color:#27476f;font-size:13px}.delivery-brief{margin-top:12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}.delivery-brief strong{color:#27476f}.delivery-brief p{margin:3px 0 8px;color:var(--ink)}.directive{margin:12px 0;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}.directive-title{padding:9px 11px;color:#27476f;font-size:13px;font-weight:800;border-bottom:1px solid var(--line)}.directive-body{height:180px;max-height:180px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.directive-body h4{font-size:14px;margin:12px 0 5px}.directive-body p{margin:6px 0;color:var(--ink)}.directive-body ul,.directive-body ol{margin:5px 0 8px;padding-left:22px}.directive-body li{margin:3px 0}.directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.agent-row .meta-line{color:var(--muted);font-size:12px;margin-top:3px}.status-button{padding:7px 10px;font-size:13px}.session{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}.session strong{display:block}.session small{display:block;margin-top:4px}.audit{margin-top:18px}.audit summary{cursor:pointer;color:var(--muted);font-weight:700}.audit pre{margin:12px 0 0;padding:14px;border-radius:8px;background:#111827;color:#e5edf6;overflow:auto;white-space:pre-wrap;font-size:12px}dialog{border:0;border-radius:14px;box-shadow:0 24px 64px #10182844;width:min(560px,calc(100% - 32px));padding:0}dialog::backdrop{background:#10182866}.modal{padding:24px}.modal h2{margin:0 0 6px;font-size:20px}.modal dl{margin:0}.modal dt{font-size:12px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:12px}.modal dd{margin:3px 0 0}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}@media(max-width:900px){.top,.launch{display:block}.actions{margin-top:15px}.stats,.layout{grid-template-columns:1fr}.wrap{padding:24px 16px}}
 .attempts{margin:8px 0;padding:8px 10px;border:1px solid #e3b4a8;border-radius:8px;background:#fff6f3;font-size:13px}.attempts summary{cursor:pointer;font-weight:600;margin-top:4px}.attempts ul{margin:6px 0 0;padding-left:18px}.attempt-tech{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:2px 0 8px}
 .harness-actions{border:1px solid #b8c9e8;background:#f7faff}.harness-actions h2{margin:0 0 6px;font-size:16px}.harness-actions ul{margin:0;padding-left:20px}.harness-actions li{margin:4px 0}.harness-actions li.gave-up{color:#8a2c1f;font-weight:700}.harness-actions small{color:var(--muted)}.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
 .delivered-documents{margin:0 0 12px;padding:12px 14px;border:1px solid #b6dfc8;border-radius:9px;background:var(--green-soft)}.delivered-documents strong{display:block;font-size:14px;color:var(--green);margin-bottom:6px}.delivered-documents ul{margin:0;padding-left:20px}.delivered-documents li{margin:5px 0;font-size:14px}.delivered-documents a{font-weight:700;color:#174ea6}.delivered-documents small{display:block;color:var(--muted);margin-top:6px}.delivered-documents .unavailable{color:#8a2c1f}.owner-action .card-links{margin:6px 0 8px}.owner-action .card-links a{font-weight:700;color:#174ea6;margin-right:12px}.owner-action .card-links small{display:block;color:#5b4a46;margin-top:4px}.release-build{margin:0 0 12px;padding:12px 14px;border:1px solid #8fbfa4;border-radius:9px;background:var(--green-soft)}.release-nodownload{margin:0 0 12px;padding:12px 14px;border:1px solid #d9b45a;border-radius:9px;background:#fff8e1;color:#1d1d1f}.release-nodownload strong{display:block;margin-bottom:6px}.release-build strong{color:var(--green)}.release-build.failed{border-color:#d58b82;background:var(--red-soft)}.release-build.failed strong{color:var(--red)}.release-build .build-files{margin:6px 0;padding-left:20px}.release-build .build-files li{margin:6px 0;overflow-wrap:anywhere}.release-build .build-download{display:inline-block;margin-left:8px;padding:6px 12px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-build .build-how p{margin:5px 0}.release-build .build-how ol{margin:4px 0 8px;padding-left:22px}.release-build .build-problem{color:var(--red)}
@@ -340,7 +340,7 @@ function keepAttempts(container,rewrite){
   const active=document.activeElement,holder=active&&active.tagName==='SUMMARY'&&container.contains(active)?active.closest('details[data-attempt-key]'):null,key=holder?holder.dataset.attemptKey:'';
   rewrite();
   container.querySelectorAll('details[data-attempt-key]').forEach(node=>{if(openAttempts.has(node.dataset.attemptKey))node.open=true;});
-  if(key){const again=[...container.querySelectorAll('details[data-attempt-key]')].find(node=>node.dataset.attemptKey===key);again?.querySelector('summary')?.focus();}
+  if(key){const again=[...container.querySelectorAll('details[data-attempt-key]')].find(node=>node.dataset.attemptKey===key);again?.querySelector('summary')?.focus({preventScroll:true});}
 }
 function deliveryFailures(state,task){return(state.failure_words||{}).delivery?.[task]||null;}
 function staleBrief(state,task,brief){
@@ -620,23 +620,42 @@ function taskNames(state,contracts,directions,liveTasks){
 // The Reviewer's early look at a filed proposal (spec 2026-10-23_contract-first-checks): the Go ahead is never held; the card says what the
 // reviewer is doing, shows its questions ONCE, and every decision names the version and card state the owner was shown.
 function proposalLabels(cc){
-  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
+  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,plain:item.plain||'',label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
 }
 function contractCheckLabels(cc){
   const list=Array.isArray(cc?.labels)?cc.labels:(Array.isArray(cc?.criteria)?cc.criteria.map(item=>{const checks=item.checks||[];return{criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};}):[]);
   if(!list.length)return'';
   return `<ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.criterion)} — <strong>${esc(item.label)}</strong></li>`).join('')}</ul>`;
 }
-function testedListHtml(labels,results,title){
+// Plain words first (owner 2026-10-24): a stored requirements text that starts with "In plain words:" shows that block, the owner's recorded
+// choices and the full text behind a toggle. Text stored before this rule gets a plain notice and the same toggle - never an error.
+function splitPlainBlock(text){
+  const lines=String(text||'').replace(/\r\n/g,'\n').trim().split('\n');
+  if(!lines.length||lines[0].trim().toLowerCase()!=='in plain words:')return null;
+  const block=[];let index=1;
+  while(index<lines.length&&lines[index].trim()){block.push(lines[index].trim());index++;}
+  if(block.length<1||block.length>3||!lines.slice(index).join('\n').trim())return null;
+  return block;
+}
+function plainRequirementsHtml(text,answers,kind,copyHtml){
+  const block=splitPlainBlock(text);
+  const given=Array.isArray(answers)?answers:[];
+  const choices=given.length?`<div class="plain-choices" data-plain-choices><strong>Your choices</strong> (they replace anything above that says otherwise)<ul>${given.map(item=>`<li>${esc(item.text)} — ${esc(item.answer)}</li>`).join('')}</ul></div>`:'';
+  const summary=block?`<div class="plain-summary" data-plain-summary="plain"><strong>In plain words</strong>${block.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`
+    :`<div class="plain-summary" data-plain-summary="legacy"><p>This agreement was written in developer language, before plain summaries existed. To get a plain summary, press <strong>Send clarification</strong> and ask Delivery for one.</p></div>`;
+  return `${summary}${choices}<div class="full-requirements-head" style="display:flex;gap:10px;align-items:flex-start"><details class="full-requirements" data-keep="full-requirements-${esc(kind)}" style="flex:1"><summary>${block?'Full requirements':'Full requirements (developer language)'}</summary><div class="requirements-body">${requirementsHtml(text||'')}</div></details>${copyHtml||''}</div>`;
+}
+function testedListHtml(labels,results,title,compare){
   const list=Array.isArray(labels)?labels:[];
   if(!list.length)return'';
-  const said=value=>value==='passed'?' · passed when the board ran it':value==='failed'?' · failed when the board ran it':'';
-  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.criterion)} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)]))}</li>`).join('')}</ul><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started.</small></div>`;
+  const proof={fails_before:'fails before the work (good)',passes_on_nothing:'passes on nothing: did not distinguish, so it proves nothing yet',could_not_compare:'could not compare with the project before the work (no failure of the work)'};
+  const said=(value,mark)=>{const before=proof[mark]?` · ${proof[mark]}`:'';if(mark==='passes_on_nothing')return before;return(value==='passed'?' · passed when the board ran it':value==='failed'?' · failed when the board ran it':value==='did_not_run'?' · the board could not run this check (no failure of the work)':'')+before;};
+  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.plain||'A check the developer wrote; open Details to read it.')} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)],(compare||{})[String(item.n)]))}${item.note?` <small>(skipped: ${esc(item.note)})</small>`:''}</li>`).join('')}</ul><details class="tested-details" data-keep="tested-details"><summary>Details</summary><ul>${list.map(item=>`<li>${esc(item.criterion)}</li>`).join('')}</ul></details><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started, or a test the board could not run was set aside with a recorded reason.</small></div>`;
 }
 function checkedInAdvanceHtml(confirmation){
   const cc=confirmation?.contract_check;
   if(!cc)return'';
-  const list=testedListHtml(cc.labels,cc.results);
+  const list=testedListHtml(cc.labels,cc.results,'',cc.compare);
   const reason=cc.reason?` (${esc(cc.reason)})`:'';
   return list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`;
 }
@@ -646,8 +665,8 @@ function proposalQuestionsHtml(name,proposal){
   const recommended=questions.map(q=>`${esc(q.text)} → ${esc(q.options[q.recommended])}`).join('; ');
   const cards=questions.map(q=>{
     const order=[q.recommended,...q.options.map((_,index)=>index).filter(index=>index!==q.recommended)];
-    const radios=order.map((index,position)=>`<label class="cq-option"><input type="radio" name="cq-${esc(name)}-${q.n}" value="${index}"${position===0?' checked':''}> ${esc(q.options[index])}${index===q.recommended?' <small>(recommended)</small>':''}</label>`).join('');
-    return `<fieldset class="cq" data-cq="${q.n}"><legend>${q.n}. ${esc(q.text)}</legend>${radios}<label class="cq-option"><input type="radio" name="cq-${esc(name)}-${q.n}" value="other"> Other: <input type="text" maxlength="300" data-cq-other aria-label="Your own answer to question ${q.n}"></label></fieldset>`;
+    const radios=order.map((index,position)=>`<label class="cq-option"><input type="radio" data-keep="cq-${esc(name)}-${q.n}-${index}" name="cq-${esc(name)}-${q.n}" value="${index}"${position===0?' checked':''}> ${esc(q.options[index])}${index===q.recommended?' <small>(recommended)</small>':''}</label>`).join('');
+    return `<fieldset class="cq" data-cq="${q.n}"><legend>${q.n}. ${esc(q.text)}</legend>${radios}<label class="cq-option"><input type="radio" data-keep="cq-${esc(name)}-${q.n}-other" name="cq-${esc(name)}-${q.n}" value="other"> Other: <input type="text" maxlength="300" data-keep="cq-${esc(name)}-${q.n}-text" data-cq-other aria-label="Your own answer to question ${q.n}"></label></fieldset>`;
   }).join('');
   return `<div class="contract-questions" data-contract-questions="${esc(name)}"><div class="requirements-title">The reviewer needs a few choices from you</div><p>It cannot write a test for these without guessing. The recommended answer is already chosen; change it only if you want something different. You will not be asked again.</p>${cards}<p><small>The recommended answers: ${recommended}</small></p><div class="actions"><button type="button" data-cq-answer="${esc(name)}">Answer the questions</button><button type="button" class="secondary" data-req-go="${esc(name)}">Go ahead using the recommended answers</button></div></div>`;
 }
@@ -664,7 +683,7 @@ function proposalCardHtml(name,proposal){
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
     :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review</button>`:''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`;
-  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div><div class="requirements-body">${requirementsHtml(proposal.text||'')}</div><small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${note}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${note}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
 // A task card is split into two independently-refreshed regions so the window
@@ -687,21 +706,23 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const structureLabel=facts.mode==='application'?'Full application with product subtasks':facts.mode==='chunked'?'One task split into logical chunks':'One cohesive task with no artificial chunks';
   const structureChanges=Array.isArray(facts.plan.structure_changes)?facts.plan.structure_changes.slice(-3):[];
   const changeHistory=structureChanges.map(change=>{const retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}</small></div>`;}).join('');
-  const structurePlan=`<div class="delivery-brief"><strong>Product Management structure</strong><p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}</div>`;
+  const technicalStructure=`<p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>`;
+  const structureBody=`${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}`;
+  const structurePlan=structureBody?`<div class="delivery-brief">${structureBody}</div>`:'';
   const proposal=(state.requirement_proposals||{})[name]||{};
   const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?proposalCardHtml(name,proposal)
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
     :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.${(proposal.contract_check?.answers||[]).length?` Your answers were added at the end of the requirements under “Decided before coding”${proposal.contract_check.used_recommended?' (the recommended answers were used)':''}.`:''}</div>`
     :'';
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div><div class="requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
-  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div></div>${badge(gate.status)}</div>`;
-  const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
+  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3></div>${badge(gate.status)}</div><details class="technical-details" data-keep="technical-details"><summary>Technical details</summary><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div>${technicalStructure}</details>`;
+  const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive ${copyButtonHtml('directive',name,directive)}</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div>${attemptsHtml(deliveryFailures(state,name),'p:'+name,'Attempts:')}<div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(currentUpdateText(state,name,brief,progress.current.label)||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><p class="task-usage" data-task-usage="${esc(name)}">${esc(((state.task_usage||{})[name]||{}).line||'')}</p><div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div>${attemptsHtml(deliveryFailures(state,name),'p:'+name,'Attempts:')}<div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(currentUpdateText(state,name,brief,progress.current.label)||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
 }
 
@@ -743,14 +764,16 @@ async function confirmCancelTask(task){
 function renderSignInBanner(state){
   const section=el('#sign-in-banner');if(!section)return;
   const needed=state.reviewer_needed||{};
-  if(!needed.sign_in){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  if(!needed.sign_in){if(ownerHolds(section))return;section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
   section.hidden=false;
   const since=needed.sign_in_since?` A review has been waiting since ${esc(historyTimestamp(needed.sign_in_since))}.`:'';
   const html=`<h2>Reviewer needs sign-in: nothing will progress</h2><p>Open the Reviewer's terminal and ${needed.sign_in_how&&needed.sign_in_how!=='run /login'?esc(needed.sign_in_how):'run <strong>/login</strong>'}.${since} Work continues by itself once it is signed in.</p>`;
-  const signature=_cardSignature(html);
+  const signature=stamp(html);
   if(section.dataset.signature===signature)return;
+  if(ownerHolds(section))return;
   section.dataset.signature=signature;
-  section.innerHTML=html;
+  keepOwnerState(section,()=>{section.innerHTML=html;});
+  domWrites+=1;
 }
 
 // Backlog #4 (2026-09-27): a requirements proposal waiting for the owner is
@@ -763,15 +786,17 @@ function renderDecisionBanner(state){
     .filter(([name,proposal])=>proposal?.status==='awaiting_owner'&&!(confirmations[name]||{}).text)
     .map(([name])=>name)
     .filter(name=>typeof document.getElementById!=='function'||document.getElementById(`req-decision-${name}`));
-  if(!waiting.length){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  if(!waiting.length){if(ownerHolds(section))return;section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
   section.hidden=false;
   const html=`<h2>Your decision needed</h2>${waiting.map(name=>`<p>Delivery has written the final requirements for <strong>${esc(objectiveSummary(name))}</strong>. Nothing is built until you press <strong>Go ahead</strong> or <strong>Modify…</strong>.</p><div class="actions"><button type="button" data-show-decision="${esc(name)}">Show me the requirements</button></div>`).join('')}`;
   // Rewrite only on a real change: every refresh re-announcing the live region
   // (and dropping keyboard focus on its button) is noise for the owner.
-  const signature=_cardSignature(html);
+  const signature=stamp(html);
   if(section.dataset.signature===signature)return;
+  if(ownerHolds(section))return;
   section.dataset.signature=signature;
-  section.innerHTML=html;
+  keepOwnerState(section,()=>{section.innerHTML=html;});
+  domWrites+=1;
   section.querySelectorAll('[data-show-decision]').forEach(button=>button.onclick=()=>{
     const target=document.getElementById(`req-decision-${button.dataset.showDecision}`);
     if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.querySelector('[data-req-go]')?.focus({preventScroll:true});}
@@ -781,7 +806,7 @@ function renderDecisionBanner(state){
 function agentQuestionAnswerHtml(item){
   const id=esc(item.id);
   const options=(item.options||[]).map((option,index)=>`<button type="button" data-aq-choice="${index}" data-aq="${id}">${esc(option)}</button>`).join('');
-  return `<div class="actions" data-aq-box="${id}">${options}</div><div class="actions"><input type="text" maxlength="1000" data-aq-text="${id}" placeholder="${(item.options||[]).length?'Or write your own answer':'Write your answer'}" aria-label="Your answer" style="min-width:260px;font:inherit"><button type="button" class="secondary" data-aq-send="${id}">Send answer</button></div><p class="notice" data-aq-note="${id}" role="status" aria-live="polite"></p>`;
+  return `<div class="actions" data-aq-box="${id}">${options}</div><div class="actions"><input type="text" maxlength="1000" data-keep="aq-${id}" data-aq-text="${id}" placeholder="${(item.options||[]).length?'Or write your own answer':'Write your answer'}" aria-label="Your answer" style="min-width:260px;font:inherit"><button type="button" class="secondary" data-aq-send="${id}">Send answer</button></div><p class="notice" data-aq-note="${id}" role="status" aria-live="polite"></p>`;
 }
 // One loud banner for everything an agent needs the owner to answer (owner, live test 2026-10-23): each task or card once, with what is asked.
 function renderAgentQuestions(state){
@@ -805,20 +830,87 @@ function renderAgentQuestions(state){
     else rows.push({who:'Delivery asks',text:`Your Go ahead on the requirements for “${objectiveSummary(name)}”.`,target});
   }
   const shown=rows.filter(row=>found(row.target));
-  if(!shown.length){section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
+  if(!shown.length){if(ownerHolds(section))return;section.hidden=true;section.innerHTML='';section.dataset.signature='';return;}
   section.hidden=false;
   const heading=shown.length===1?'1 question from your agents needs your answer':`${shown.length} questions from your agents need your answer`;
   const html=`<h2>${heading}</h2><p>Agents ask only here in Mission Control, never in their own windows.</p>${shown.map((row,index)=>`<div class="owner-action" data-agent-question="${index}"><strong>${esc(row.who)}</strong><p>${esc(row.text)}</p>${row.question?agentQuestionAnswerHtml(row.question):`<div class="actions"><button type="button" data-jump-question="${esc(row.target)}">Show me</button></div>`}</div>`).join('')}`;
-  const signature=_cardSignature(html);
+  const signature=stamp(html);
   if(section.dataset.signature===signature)return;
+  if(ownerHolds(section))return;
   section.dataset.signature=signature;
-  section.innerHTML=html;
+  keepOwnerState(section,()=>{section.innerHTML=html;});
+  domWrites+=1;
   section.querySelectorAll('[data-jump-question]').forEach(button=>button.onclick=()=>{
     const node=document.querySelector(button.dataset.jumpQuestion);
     if(node)node.scrollIntoView({behavior:'smooth',block:'center'});
   });
 }
 
+// ---- Page stability (owner 2026-10-24): a box is rewritten only when its content changed and the owner is not holding it (a selection or
+// typing inside it); drafts and the focused control survive any rewrite; nothing a refresh does scrolls the page.
+let layoutEpoch=0,domWrites=0,renderWasPaused=false,layoutDirty=true;
+const copyTexts=new Map();
+function stamp(html){return _cardSignature(html)+':'+layoutEpoch;}
+function ownerHolds(node){
+  if(typeof window==='undefined'||typeof document==='undefined'||!node||typeof node.contains!=='function')return false;
+  try{
+    const selection=typeof window.getSelection==='function'?window.getSelection():null;
+    if(selection&&!selection.isCollapsed&&selection.rangeCount&&(node.contains(selection.anchorNode)||node.contains(selection.focusNode)))return true;
+    const active=document.activeElement;
+    return Boolean(active&&active!==document.body&&node.contains(active)&&/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+  }catch(error){return false;}
+}
+function focusPath(node,root){const path=[];let current=node;while(current&&current!==root){const parent=current.parentNode;if(!parent)return null;path.unshift(Array.prototype.indexOf.call(parent.children,current));current=parent;}return path;}
+function keepOwnerState(node,write){
+  if(typeof document==='undefined'||!node||typeof node.querySelectorAll!=='function'){write();return;}
+  const saved=[...node.querySelectorAll('[data-keep]')].map(item=>[item.dataset.keep,item.tagName==='DETAILS'?item.open:item.type==='radio'||item.type==='checkbox'?item.checked:item.value]);
+  const active=document.activeElement,inside=Boolean(active&&active!==document.body&&node.contains(active));
+  const activeKey=inside&&active.dataset?active.dataset.keep||'':'',path=inside&&!activeKey?focusPath(active,node):null;
+  write();
+  for(const [key,value] of saved){
+    const target=node.querySelector(`[data-keep="${CSS.escape(key)}"]`);
+    if(!target)continue;
+    if(target.tagName==='DETAILS')target.open=Boolean(value);else if(target.type==='radio'||target.type==='checkbox')target.checked=Boolean(value);else target.value=value;
+  }
+  let again=null;
+  if(activeKey)again=node.querySelector(`[data-keep="${CSS.escape(activeKey)}"]`);
+  else if(path){again=node;for(const index of path){again=again&&again.children?again.children[index]:null;}}
+  if(again&&again!==document.activeElement&&typeof again.focus==='function')again.focus({preventScroll:true});
+}
+function writeHtml(node,html){
+  if(!node)return false;
+  const tracked=Boolean(node.dataset)&&typeof node.contains==='function';
+  const sig=tracked?stamp(html):'';
+  if(tracked&&node.dataset.sig===sig)return false;
+  if(tracked&&ownerHolds(node))return false;
+  keepOwnerState(node,()=>{node.innerHTML=html;});
+  if(tracked)node.dataset.sig=sig;
+  domWrites+=1;
+  return true;
+}
+// Copy: the raw stored text (not its formatted display), kept by what the button was rendered with so a card the owner is holding
+// copies what that card shows. 'task' only names it.
+function copyButtonHtml(kind,task,text){
+  const raw=String(text||'');
+  if(!raw)return'';
+  const key=`${kind}|${task}|${_cardSignature(raw)}`;
+  copyTexts.set(key,raw);
+  if(copyTexts.size>200)copyTexts.delete(copyTexts.keys().next().value);
+  return `<button type="button" class="secondary copy-text" data-copy-key="${esc(key)}" aria-label="Copy this text">Copy</button>`;
+}
+function writeText(node,text){if(node&&node.textContent!==String(text))node.textContent=text;}
+// A list that rebuilds node by node (so its buttons keep their handlers) is built off to the side and swapped in only when it changed.
+function commitList(target,fill){
+  if(!target||typeof document==='undefined'||typeof Node==='undefined'||!(target instanceof Node)){fill(target);return;}   // a stand-in page (tests) is filled directly
+  const stage=document.createElement('div');
+  fill(stage);
+  const sig=stamp(stage.innerHTML);
+  if(target.dataset&&target.dataset.sig===sig)return;
+  if(ownerHolds(target))return;
+  keepOwnerState(target,()=>target.replaceChildren(...stage.childNodes));
+  if(target.dataset)target.dataset.sig=sig;
+  domWrites+=1;
+}
 function _cardSignature(html){let hash=5381;for(let i=0;i<html.length;i++){hash=((hash<<5)+hash+html.charCodeAt(i))|0;}return String(hash);}
 
 function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements){
@@ -828,12 +920,16 @@ function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements
   const names=taskNames(state,contracts,directions,liveTasks);
   if(!names.length){
     const waiting=Object.values(state.agents||{}).some(agent=>agent.active&&agent.task==='AWAITING_OWNER_DIRECTION');
-    out.replaceChildren();
-    out.innerHTML=waiting?'<div class="empty"><strong>Delivery Agent is standing by.</strong><br>Use Give direction beside the waiting agent.</div>':'<div class="empty"><strong>No active delivery task.</strong><br>Completed work is preserved in Task history below.</div>';
-    out.scrollTop=0;
+    if(!ownerHolds(out)){
+      out.replaceChildren();
+      out.innerHTML=waiting?'<div class="empty"><strong>Delivery Agent is standing by.</strong><br>Use Give direction beside the waiting agent.</div>':'<div class="empty"><strong>No active delivery task.</strong><br>Completed work is preserved in Task history below.</div>';
+      out.scrollTop=0;
+    }
     return;
   }
   const seen=new Set();
+  const anyHeld=ownerHolds(out);
+  let position=0;
   for(const name of names){
     const facts=taskFacts(state,contracts,name);
     const gate=taskGate({...state,requirement_confirmations:requirements||state.requirement_confirmations||{}},name,facts.contract,facts.agent,facts.reviews,facts.total,facts.done);
@@ -842,8 +938,8 @@ function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements
     const confirmation=(requirements||{})[name]||{};
     const clarifications=(state.owner_clarifications||{})[name]||[];
     const parts=_taskCardParts(state,name,facts,gate,brief,directive,confirmation,clarifications,inScopeFindings);
-    const staticSig=_cardSignature(parts.static);
-    const dynamicSig=_cardSignature(parts.dynamic);
+    const staticSig=stamp(parts.static);     // the pause epoch is part of it: a card re-renders once when the project pauses or resumes
+    const dynamicSig=stamp(parts.dynamic);
     let node=existing.get(name);
     let staticNode,dynamicNode;
     if(!node){
@@ -863,23 +959,30 @@ function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements
     // ONLY when it actually changes — never on the two-second tick — so a long
     // directive you are reading is never rebuilt underneath you.  Its scroll
     // position is carried across the rare rewrite.
-    if(staticNode&&staticNode.dataset.sig!==staticSig){
+    const held=Boolean(node)&&ownerHolds(node);
+    if(staticNode&&staticNode.dataset.sig!==staticSig&&!held){
+      domWrites+=1;
       const priorDirectiveScroll=(typeof staticNode.querySelector==='function'?staticNode.querySelector('.directive-body')?.scrollTop:0)||0;
-      staticNode.innerHTML=parts.static;
+      keepOwnerState(staticNode,()=>{staticNode.innerHTML=parts.static;});   // drafts and the chosen option survive, deferred rewrites included
       staticNode.dataset.sig=staticSig;
       const directiveNode=typeof staticNode.querySelector==='function'?staticNode.querySelector('.directive-body'):null;
       if(directiveNode)directiveNode.scrollTop=priorDirectiveScroll;
     }
     // The Live delivery status sub-window is the only region that moves with the
     // refresh, and even it is rewritten only when its own content changed.
-    if(dynamicNode&&dynamicNode.dataset.sig!==dynamicSig){
-      keepAttempts(dynamicNode,()=>{dynamicNode.innerHTML=parts.dynamic;});
+    if(dynamicNode&&dynamicNode.dataset.sig!==dynamicSig&&!held){
+      domWrites+=1;
+      keepAttempts(dynamicNode,()=>{keepOwnerState(dynamicNode,()=>{dynamicNode.innerHTML=parts.dynamic;});});
       dynamicNode.dataset.sig=dynamicSig;
     }
-    out.append(node);
+    // a card is moved only when its place changed, and nothing moves while the owner is holding text in the list
+    if(typeof out.insertBefore==='function'&&out.children){
+      if(out.children[position]!==node&&!anyHeld){out.insertBefore(node,out.children[position]||null);domWrites+=1;}
+    }else out.append(node);
+    position+=1;
     seen.add(name);
   }
-  for(const[cardName,node]of existing){if(!seen.has(cardName)&&typeof node.remove==='function')node.remove();}
+  for(const[cardName,node]of existing){if(!seen.has(cardName)&&typeof node.remove==='function'&&!ownerHolds(node)){node.remove();domWrites+=1;}}
   // Keep the user's place unless the refreshed content became shorter.
   out.scrollTop=Math.min(previousScrollTop,Math.max(0,out.scrollHeight-out.clientHeight));
 }
@@ -936,7 +1039,17 @@ function highlightHistory(text,query){
 function requirementsHistoryHtml(item){
   const confirmation=item.requirements_confirmation||{};
   if(!confirmation.text)return'';
-  return`<div class="history-requirements"><div class="history-requirements-title">Final agreed requirements</div><div class="history-requirements-body">${requirementsHtml(confirmation.text)}</div><small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Historical status wording describes that confirmation moment.</small></div>`;
+  return`<div class="history-requirements"><div class="history-requirements-title">Final agreed requirements</div><div class="history-requirements-body">${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'history',copyButtonHtml('history-requirements',item.task||item.title||'',confirmation.text))}</div>${confirmation.contract_check?testedListHtml(confirmation.contract_check.labels,confirmation.contract_check.results,'',confirmation.contract_check.compare):''}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Historical status wording describes that confirmation moment.</small></div>`;
+}
+
+function usageLineHtml(item){return item.usage_line?`<p class="task-usage" data-task-usage-history>${esc(item.usage_line)}</p>`:'';}
+
+function reviewNotesHtml(item){
+  // Information only (2026-10-25): what the checks judged minor and left as notes, and, if the harness stopped repairing a part, the plain outcome. Nothing here asks the owner to act.
+  const notes=Array.isArray(item.review_notes)?item.review_notes:[];
+  const outcome=String(item.review_outcome||'');
+  if(!notes.length&&!outcome)return'';
+  return`<div class="history-review-notes" data-review-notes>${outcome?`<p class="review-outcome"><strong>${esc(outcome)}</strong></p>`:''}${notes.length?`<div><strong>Left as notes (judged minor; nothing for you to do):</strong><ul>${notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></div>`:''}</div>`;
 }
 
 function historyResultLabel(value){
@@ -983,6 +1096,7 @@ function agentChecklistHtml(checklist){
 function renderHistory(entries,queryValue){
   const out=el('#history-list'),count=el('#history-count'),search=el('#history-search'),status=el('#history-search-status');
   if(!out||!count)return;
+  if(ownerHolds(out)){setTimeout(()=>renderHistory(entries,queryValue),2000);return;}   // the owner is selecting in the history: apply the update when he lets go
   const previousScrollTop=out.scrollTop;
   const historyDirectiveScrollTops=new Map((typeof out.querySelectorAll==='function'?[...out.querySelectorAll('.history-item')]:[]).map(item=>[item.dataset.historyKey,(typeof item.querySelector==='function'?item.querySelector('.history-directive-body')?.scrollTop:0)||0]));
   const openDates=new Set(out.querySelectorAll?[...out.querySelectorAll('.history-date-group[open]')].map(group=>group.dataset.historyDate):[]);
@@ -995,7 +1109,7 @@ function renderHistory(entries,queryValue){
   if(!visible.length){out.innerHTML='<div class="history-empty">No history item matches this search.</div>';return;}
   const groups=new Map();
   for(const item of visible){const key=historyDateKey(item.completed_at||item.started_at);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
-  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${documentLinksHtml(item.deliverable_links,item.task,'history')}${item.no_download?noDownloadHtml(item.task):''}${buildBlockHtml(item.build)}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
+  out.innerHTML=[...groups.entries()].map(([key,group])=>`<details class="history-date-group" data-history-date="${esc(key)}"${query||openDates.has(key)?' open':''}><summary><span>${esc(historyDateLabel(key))}</span><span class="history-date-count">${group.length} ${group.length===1?'task':'tasks'}</span></summary><div class="history-date-items">${group.map(item=>{const directive=String(item.owner_direction||''),match=historyMatch(item,query),structure=item.delivery_mode==='application'?`${Number(item.subtasks_passed||0)}/${Number(item.subtasks_total||0)} work areas completed`:item.delivery_mode==='atomic'?'Single focused change':`${Number(item.chunks_passed||0)}/${Number(item.chunks_total||0)} focused changes completed`,historyKey=`${item.task}|${item.completed_at||item.started_at||''}`;return`<article class="history-item" data-history-key="${esc(historyKey)}"><div class="history-item-head"><div><h3>${esc(objectiveSummary(item.task))}</h3><div class="task-key">Task: ${esc(item.task)}</div></div><span class="history-time">${esc(historyTimestamp(item.completed_at||item.started_at))}</span></div>${match?`<div class="history-match"><strong>Matching line:</strong> ${highlightHistory(match,query)}</div>`:''}<div class="history-directive"><div class="history-directive-title">Full user directive ${copyButtonHtml('history-directive',item.task||item.title||'',directive)}</div><div class="history-directive-body">${directive?directionHtml(directive):'<p>No user directive was recorded for this older task.</p>'}</div></div>${requirementsHistoryHtml(item)}${documentLinksHtml(item.deliverable_links,item.task,'history')}${item.no_download?noDownloadHtml(item.task):''}${buildBlockHtml(item.build)}${(Array.isArray(item.test_ledgers)&&item.test_ledgers.length?item.test_ledgers:[item.test_ledger]).map(testLedgerHtml).join('')}${usageLineHtml(item)}${reviewNotesHtml(item)}<div class="history-meta"><span>${esc(historyResultLabel(item.result))}</span><span>${esc(structure)}</span><span>${Number(item.review_passes||0)} independent checks completed</span>${item.owner_decision?`<span>Owner response recorded</span>`:''}</div></article>`;}).join('')}</div></details>`).join('');
   if(typeof out.querySelectorAll==='function')out.querySelectorAll('.history-item').forEach(item=>{const directive=typeof item.querySelector==='function'?item.querySelector('.history-directive-body'):null;if(directive)directive.scrollTop=historyDirectiveScrollTops.get(item.dataset.historyKey)||0;});
   out.scrollTop=Math.min(previousScrollTop,Math.max(0,out.scrollHeight-out.clientHeight));
 }
@@ -1252,9 +1366,9 @@ function waitingSessions(sessionItems){
 function renderLimitNotice(sessionItems){
   const box=el('#limit-notice'); if(!box)return;
   const held=(sessionItems||[]).filter(session=>isUsageLimit(session)&&session.limit_notice&&['launching','running','stopping','pausing'].includes(session.status));
-  if(!held.length){box.hidden=true;box.replaceChildren();return;}
+  if(!held.length){box.hidden=true;writeHtml(box,'');return;}
   box.hidden=false;
-  box.innerHTML=held.map(session=>`<p>${esc(session.limit_notice)}</p>`).join('');
+  writeHtml(box,held.map(session=>`<p>${esc(session.limit_notice)}</p>`).join(''));
 }
 function waitingSince(session){
   const started=new Date(session.attention_since); if(Number.isNaN(started.getTime()))return '';
@@ -1264,17 +1378,17 @@ function waitingSince(session){
 function renderWaiting(sessionItems){
   const banner=el('#waiting-banner'); if(!banner)return;
   const waiting=waitingSessions(sessionItems);
-  if(!waiting.length){banner.hidden=true;banner.replaceChildren();return;}
+  if(!waiting.length){banner.hidden=true;writeHtml(banner,'');return;}
   banner.hidden=false;
   // 2026-09-27 backlog #8: a signed-out agent is not a stray prompt. Say who
   // needs signing in and how, and nothing else, and do not call it a bug.
   const signedOut=waiting.filter(session=>{const reason=String(session.attention_reason||'');return reason.includes('/login')||reason.includes('Gemini needs you to sign in')||reason.includes('Gemini ran out of quota');});
   const prompts=waiting.filter(session=>!signedOut.includes(session));
   const roleName=session=>({'Independent Reviewer':'Reviewer','Delivery Agent':'Delivery agent'})[session.role]||session.role||session.label;
-  banner.innerHTML=`<div>${waiting.length===1?'An agent is waiting for you':`${waiting.length} agents are waiting for you`} — nothing moves until you answer in its Terminal window.</div>`+
+  writeHtml(banner,`<div>${waiting.length===1?'An agent is waiting for you':`${waiting.length} agents are waiting for you`} — nothing moves until you answer in its Terminal window.</div>`+
     signedOut.map(session=>`<p class="sign-in-needed">The ${esc(roleName(session))} ${String(session.attention_reason||'').includes('Gemini ran out of quota')?'is out of Gemini quota — open Settings and choose another provider for it, or upgrade your Google plan':'needs you to sign in again: open its terminal and '+(String(session.attention_reason||'').includes('Gemini')?'follow the sign-in prompt in its window':'run /login')}. Its work is paused, not lost — waiting ${esc(waitingSince(session))}.</p>`).join('')+
     prompts.map(session=>`<p>${esc(session.role||session.label)} (${esc(session.label)}) ${esc(session.attention_reason||'is waiting for you')} — waiting ${esc(waitingSince(session))}.</p>`).join('')+
-    (prompts.length?`<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`:`<small>Signing in is the only thing needed; the harness holds its messages until then and carries on by itself.</small>`);
+    (prompts.length?`<small>Switch to that Terminal window and answer the prompt. Managed agents are launched so this should not happen; if it keeps happening, tell your developer which prompt you saw.</small>`:`<small>Signing in is the only thing needed; the harness holds its messages until then and carries on by itself.</small>`));
 }
 function waitingBadge(session){
   if(isUsageLimit(session))return '<span class="badge tone-limit">WAITING: USAGE LIMIT</span>';
@@ -1337,8 +1451,8 @@ async function viewAgent(session){
   }catch(error){el('#notice').textContent=error.message;}
 }
 
-function openAgents(state,contracts,sessionItems=[]){
-  const out=el('#agents');
+function openAgents(state,contracts,sessionItems=[]){commitList(el('#agents'),stage=>openAgentsInto(stage,state,contracts,sessionItems));}
+function openAgentsInto(out,state,contracts,sessionItems=[]){
   const attachableSessions=(sessionItems||[]).filter(sessionCanRepresentAgent);
   const visibleSessions=attachableSessions.filter(sessionIsVisibleTerminal);
   const sessionsById=new Map(attachableSessions.map(session=>[session.id,session]));
@@ -1451,9 +1565,9 @@ function renderHarnessActions(state){
   // Backlog #7: one plain line for each thing the harness did by itself.
   const section=el('#harness-actions');
   const lines=Array.isArray(state.harness_actions)?state.harness_actions:[];
-  if(!lines.length){section.hidden=true;section.innerHTML='';return;}
+  if(!lines.length){section.hidden=true;writeHtml(section,'');return;}
   section.hidden=false;
-  section.innerHTML='<h2>What the harness did for you</h2><ul>'+lines.map(item=>`<li class="${item.kind==='self_heal_gave_up'?'gave-up':''}">${esc(item.message)} <small>${esc(relativeUpdate(item.at))}</small></li>`).join('')+'</ul>';
+  writeHtml(section,'<h2>What the harness did for you</h2><ul>'+lines.map(item=>`<li class="${item.kind==='self_heal_gave_up'?'gave-up':''}">${esc(item.message)} <small>${esc(relativeUpdate(item.at))}</small></li>`).join('')+'</ul>');
 }
 
 function renderClaudeAuthActions(managed){
@@ -1468,9 +1582,9 @@ function renderClaudeAuthActions(managed){
     const who=roles[item.kind]||'Delivery agent';
     if(!groups.get(key).who.includes(who))groups.get(key).who.push(who);
   });
-  section.innerHTML=actions.length?'<h2>Claude needs your attention</h2>'+[...groups.values()].map(({card,who})=>{
+  writeHtml(section,actions.length?'<h2>Claude needs your attention</h2>'+[...groups.values()].map(({card,who})=>{
     return `<div class="owner-action"><strong>${esc(card.title)}</strong><p>${esc(card.why)}</p><p>Needed by: ${esc(who.sort().join(', '))}</p><pre>${esc(card.instructions)}</pre><p>After setup, retry the agent from Mission Control.</p></div>`;
-  }).join(''):'';
+  }).join(''):'');
 }
 
 function renderMachineLink(machine){
@@ -1495,31 +1609,31 @@ function renderMachineCard(machine){
   // itself the moment it is connected. The form itself lives in the manager's Projects page (one place that handles the password).
   const section=el('#machine-card');if(!section)return;
   const m=machine||{};
-  if(m.connected&&m.state==='baseline_incomplete'){section.hidden=true;section.innerHTML='';return;}   // the agents are installing tools: nothing for the owner (the header says so), and a reconnect would make their results stale
+  if(m.connected&&m.state==='baseline_incomplete'){section.hidden=true;writeHtml(section,'');return;}   // the agents are installing tools: nothing for the owner (the header says so), and a reconnect would make their results stale
   const asked=m.request&&m.request.reason;
   const needs=!m.usable&&m.state&&m.state!=='unknown'&&(asked||(m.connected&&m.state!=='baseline_incomplete')||m.state==='damaged');
-  if(!needs){section.hidden=true;section.innerHTML='';return;}
+  if(!needs){section.hidden=true;writeHtml(section,'');return;}
   const where=m.connected?`${esc(m.user)}@${esc(m.address)}`:'';
   const head=asked&&!m.connected?'An agent needs the test machine':m.connected?`The test machine ${where} needs you`:'The test machine needs you';
   const why=asked?`${esc(m.request.by||'An agent')} said: ${esc(m.request.reason)}`:esc(m.cause_text||m.message||'');
   const link=machineManagerRoot&&machineProjectId?`<a style="display:inline-block;padding:9px 16px;border-radius:9px;background:#1d4fd8;color:#fff;font-weight:700;text-decoration:none" href="${esc(machineManagerRoot)}/?machine=${encodeURIComponent(machineProjectId)}" data-machine-connect="1">${m.connected?'Enter the password again':'Connect the test machine'}</a>`:'<small>Open this project from the Projects page to connect the machine.</small>';
   const recovering=(m.recovering||[]).length?`<small>Recovering ${(m.recovering||[]).length} request(s) that used the old connection.</small>`:'';
   section.hidden=false;
-  section.innerHTML=`<h2>${head}</h2><div class="owner-action"><strong>${m.connected?'Enter the password again':'Enter the machine\u2019s address, account and password once'}</strong><p>${why}</p><p>Everything that does not need the machine keeps going while this waits. The password is used for one connection and forgotten.</p><div class="actions">${link}</div>${recovering}${machineManagerRoot?`<p><small><a href="${esc(machineManagerRoot)}/?page=help#help-windows-vm">How to create the Windows test machine, and why</a></small></p>`:''}</div>`;
+  writeHtml(section,`<h2>${head}</h2><div class="owner-action"><strong>${m.connected?'Enter the password again':'Enter the machine\u2019s address, account and password once'}</strong><p>${why}</p><p>Everything that does not need the machine keeps going while this waits. The password is used for one connection and forgotten.</p><div class="actions">${link}</div>${recovering}${machineManagerRoot?`<p><small><a href="${esc(machineManagerRoot)}/?page=help#help-windows-vm">How to create the Windows test machine, and why</a></small></p>`:''}</div>`);
 }
 
 function renderOwnerActions(state){
   const section=el('#owner-actions');
   const open=Object.values(state.owner_actions||{}).filter(item=>item.status==='open').sort((a,b)=>String(a.recorded_at).localeCompare(String(b.recorded_at)));
-  if(!open.length){section.hidden=true;section.innerHTML='';return;}
+  if(!open.length){section.hidden=true;writeHtml(section,'');return;}
   section.hidden=false;
-  section.innerHTML=`<h2>${open.length===1?'One thing the CTO needs you to do':`${open.length} things the CTO needs you to do`}</h2>`+open.map(item=>{
+  writeHtml(section,`<h2>${open.length===1?'One thing the CTO needs you to do':`${open.length} things the CTO needs you to do`}</h2>`+open.map(item=>{
     const id=esc(JSON.stringify(item.id));
     const command=item.command?`<pre id="command-${esc(item.id)}">${esc(item.command)}</pre><div class="actions"><button type="button" onclick="copyOwnerActionCommand(${id})">Copy</button><small>Paste it into Terminal and press Return.</small></div>`:'';
     const loc=item.location&&Array.isArray(item.location.urls)?item.location:null;const locLine=loc?`<small data-card-location="${esc(item.id)}">Checked by the board ${esc(String(loc.checked_at||'').slice(11,16))} UTC: ${loc.urls.map(u=>`${esc(u.url)} — ${esc(u.verdict==='owner'?'the owner\'s instance':u.reason)}`).join('; ')}${loc.verified_how?`. CTO: ${esc(loc.verified_how)}`:''}</small>`:'';
     const links=Array.isArray(item.links)?item.links:[];const cardLinks=links.length?`<div class="card-links">${links.map(link=>link.available===false?`<span class="unavailable">${esc(link.label)}: cannot be shown (${esc(link.reason||'')})</span>`:`<a href="${esc(apiPath(link.url))}" target="_blank" rel="noopener" data-card-link="${esc(item.id)}">${esc(link.label)}</a>`).join('')}${item.links_note?`<small>${esc(item.links_note)}</small>`:''}</div>`:'';
     return `<div class="owner-action" data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
-  }).join('');
+  }).join(''));
 }
 
 async function copyOwnerActionCommand(actionId){
@@ -1557,8 +1671,8 @@ function showAgentStatus(agentId){
   dialog.scrollTop=0;
 }
 
-function queue(state){
-  const out=el('#queue');
+function queue(state){commitList(el('#queue'),stage=>queueInto(stage,state));}
+function queueInto(out,state){
   const items=Object.values(state.qa_requests||{}).filter(item=>['authoring','open','reserved','claimed','suspended'].includes(item.status));
   out.replaceChildren();
   if(!items.length){out.innerHTML='<div class="empty">No review is waiting right now.</div>';return;}
@@ -1582,8 +1696,8 @@ function terminalDetails(session,state,contracts){
   return{task:humanTask(agent,state),stage,summary};
 }
 
-function sessions(items,state,contracts){
-  const out=el('#sessions');
+function sessions(items,state,contracts){commitList(el('#sessions'),stage=>sessionsInto(stage,items,state,contracts));}
+function sessionsInto(out,items,state,contracts){
   const live=items.filter(sessionIsVisibleTerminal);
   out.replaceChildren();
   if(!live.length){out.innerHTML='<div class="empty">No live CLI sessions.</div>';return;}
@@ -1639,26 +1753,30 @@ async function recoverAgent(agentId,task){
 
 function render(data,managed){
   lastManaged=managed;
+  const pausedNow=['paused','resuming'].includes((data.state||{}).project_pause?.status);
+  if(pausedNow!==renderWasPaused){layoutEpoch+=1;renderWasPaused=pausedNow;}   // pausing or resuming re-renders every box once, so controls recover
+  const writesBefore=domWrites;
   const state=data.state||{},contracts=data.contracts||{},agents=Object.values(state.agents||{}),reviews=Object.values(state.qa_requests||{});
   const projectPaused=['paused','resuming'].includes(state.project_pause?.status);
   state.live_tasks=Array.isArray(data.live_tasks)?[...data.live_tasks]:[];
   state.in_scope_findings=Array.isArray(data.in_scope_findings)?[...data.in_scope_findings]:[];
   lastBoard=data;
-  el('#project').textContent=data.path||'Local project';
-  el('#updated').textContent='Updated '+new Date(data.updated).toLocaleTimeString();
-  el('#active').textContent=agents.filter(agent=>agent.active).length;
-  el('#open').textContent=reviews.filter(review=>['authoring','open'].includes(review.status)).length;
-  el('#claimed').textContent=reviews.filter(review=>review.status==='claimed').length;
+  writeText(el('#project'),data.path||'Local project');
+  writeText(el('#updated'),'Updated '+new Date(data.updated).toLocaleTimeString());
+  writeText(el('#active'),agents.filter(agent=>agent.active).length);
+  writeText(el('#open'),reviews.filter(review=>['authoring','open'].includes(review.status)).length);
+  writeText(el('#claimed'),reviews.filter(review=>review.status==='claimed').length);
   const liveTasks=new Set(data.live_tasks||[]);
-  el('#passed').textContent=reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length;
+  writeText(el('#passed'),reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length);
   renderOwnerActions(state);
   renderMachineCard(data.test_machine);
   renderHarnessActions(state);
   const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
   const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!(recentOutputActive(agent)&&!agent.stall_exhausted)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
-  if(unresponsive.length)el('#attention').innerHTML=`<h2>CTO is not responding - it may need /login</h2><p><strong>Your action:</strong> open the CTO terminal window. If it shows a login prompt, run <code>/login</code> and sign in; the CTO picks up where it left off once it checks the board again. Automatic wake-ups are paused until then.</p>`;
-  else if(stalled.length)el('#attention').innerHTML=`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`;
-  else el('#attention').innerHTML='<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
+  const attentionHtml=unresponsive.length?`<h2>CTO is not responding - it may need /login</h2><p><strong>Your action:</strong> open the CTO terminal window. If it shows a login prompt, run <code>/login</code> and sign in; the CTO picks up where it left off once it checks the board again. Automatic wake-ups are paused until then.</p>`
+  :stalled.length?`<h2>Automation recovery in progress</h2><p><strong>Your action: none.</strong> ${esc(stalled.map(agent=>`${agent.display_name||agent.role} for ${humanTask(agent,state)}`).join(', '))} stopped checking the board. The harness must recover the saved work.</p>`
+  :'<h2>What you need to do</h2><p>Nothing while Delivery, independent review, or CTO release checks are in progress. The viewer will explicitly say <strong>READY FOR YOUR TEST</strong> when the exact tested version is clean and pushed to main.</p>';
+  writeHtml(el('#attention'),attentionHtml);
   tasks(state,contracts,data.owner_directions||{},data.live_tasks,data.in_scope_findings||[],data.requirement_confirmations||{});
   renderSignInBanner(state);
   renderDecisionBanner(state);
@@ -1669,7 +1787,7 @@ function render(data,managed){
   renderLimitNotice(managed.sessions||[]);
   keepAttempts(el('#agents'),()=>openAgents(state,contracts,managed.sessions||[]));
   queue(state);
-  fitTaskScroller();
+  if(domWrites!==writesBefore||layoutDirty){fitTaskScroller();layoutDirty=false;}
   const counts=managed.active_counts||{};
   const limits=managed.limits||{codex_delivery:2,claude_reviewer:2,claude_cto:1};
   const configured=managed.agent_settings||{};
@@ -1701,7 +1819,7 @@ function render(data,managed){
   el('#paused-banner').hidden=!projectPaused;
   if(projectPaused){
     document.querySelectorAll('button').forEach(button=>{
-      if(button.id==='give-direction'||button.id==='direction-discard'||(directionLauncher&&el('#owner-message-dialog').contains(button)))return;   // saving a direction while paused only keeps the words; nothing starts until Resume
+      if((button.dataset&&button.dataset.copyKey)||button.id==='give-direction'||button.id==='direction-discard'||(directionLauncher&&el('#owner-message-dialog').contains(button)))return;   // saving a direction while paused only keeps the words; nothing starts until Resume
       button.disabled=true;
       button.title='Unavailable while this project is paused. Resume the project to make changes.';
     });
@@ -1951,13 +2069,23 @@ async function refresh(){
   refreshing=true;
   try{
     const [dashboard,managed]=await Promise.all(['/api/dashboard','/api/control'].map(async path=>{
-      const response=await fetch(apiPath(path),{cache:'no-store'});
+      // a request that never answers must not freeze the page: after 15 seconds it fails and the offline notice can appear
+      const limit=typeof AbortController==='function'?new AbortController():null,timer=limit?setTimeout(()=>limit.abort(),15000):null;
+      let response;
+      try{response=await fetch(apiPath(path),{cache:'no-store',...(limit?{signal:limit.signal}:{})});}finally{if(timer)clearTimeout(timer);}
       const value=await response.json();
       if(!response.ok)throw Error(value.error||'Project status is unavailable');
       return value;
     }));
-    if(dashboard.viewer_version&&dashboard.viewer_version!==loadedViewerVersion){window.location.reload();return;}
+    if(dashboard.viewer_version&&dashboard.viewer_version!==loadedViewerVersion){
+      // a new page version replaces this page; not while the owner holds a selection or an unsent answer
+      if(ownerHolds(document.body)){el('#notice').textContent='A new version of this page is ready. It will load when you finish what you are doing.';return;}
+      window.location.reload();return;
+    }
+    // the page position as it is right now (after the network wait): a render may not move it
+    const pinX=window.scrollX,pinY=window.scrollY;
     render(dashboard,managed);
+    if((window.scrollX!==pinX||window.scrollY!==pinY)&&typeof window.scrollTo==='function')window.scrollTo(pinX,pinY);
     renderClaudeAuthActions(managed);
     boardFailures=0;
     if(el('#notice').textContent.startsWith('Board unavailable:'))el('#notice').textContent='';
@@ -2020,7 +2148,7 @@ el('#owner-message-text').oninput=editOwnerMessageText;
 el('#owner-message-directive-file').onchange=loadOwnerDirectiveFile;
 el('#history-search').addEventListener('input',async event=>{if(!historyLoaded||!historyLoading)await loadHistory(true);renderHistory(historyEntries,event.target.value);});
 el('#history').addEventListener('toggle',event=>{if(event.target.open)loadHistory(true);});
-window.addEventListener('resize',fitTaskScroller);
+window.addEventListener('resize',()=>{layoutDirty=true;fitTaskScroller();});
 el('#codex').onclick=()=>showColorDialog('codex_delivery');
 el('#claude').onclick=()=>showColorDialog('claude_reviewer');
 el('#cto').onclick=()=>showColorDialog('claude_cto');
@@ -2153,6 +2281,24 @@ document.addEventListener('click',async event=>{
     await call(`/api/agent-questions/${encodeURIComponent(id)}/answer`,choice?{choice:Number(choice.dataset.aqChoice)}:{answer:text});
     await refresh();
   }catch(error){if(note)note.textContent='Could not send the answer: '+error.message;(choice||send).disabled=false;}
+});
+document.addEventListener('click',async event=>{
+  const button=event.target.closest?event.target.closest('[data-copy-key]'):null;
+  if(!button)return;
+  const text=copyTexts.get(button.dataset.copyKey);
+  if(text===undefined)return;
+  let done=false;
+  try{if(navigator.clipboard&&typeof navigator.clipboard.writeText==='function'){await navigator.clipboard.writeText(text);done=true;}}catch(error){done=false;}
+  if(done){button.textContent='Copied';setTimeout(()=>{button.textContent='Copy';},2000);return;}
+  // no clipboard (or it refused): the same text is put in a box and selected, one keystroke away from the owner's clipboard
+  const parent=button.parentElement;
+  parent?.querySelector('.copy-fallback')?.remove();
+  const area=document.createElement('textarea');
+  area.value=text;area.readOnly=true;area.className='copy-fallback';area.setAttribute('aria-label','The text to copy');area.style.cssText='display:block;width:100%;height:120px;margin-top:6px';
+  button.insertAdjacentElement('afterend',area);
+  area.focus({preventScroll:true});area.select();
+  let ok=false;try{ok=document.execCommand('copy');}catch(error){ok=false;}
+  button.textContent=ok?'Copied':(/Mac/i.test(navigator.platform||'')?'The text is selected: press ⌘C':'The text is selected: press Ctrl+C');
 });
 document.addEventListener('change',async event=>{
   const box=event.target.closest?event.target.closest('[data-security-task]'):null;
@@ -2368,6 +2514,8 @@ def _compact_dashboard_state(
     # Owner 2026-10-12: the page shows the COMPUTED enhanced-security record
     # (a task reviewed before this feature is locked even without an entry).
     compact["task_security"] = {task: board.task_security_state(state, task) for task in live}
+    # 2026-10-25: one plain line per task of what it has used so far, counted from the board's own records (information only)
+    compact["task_usage"] = {task: review_cost.usage(state, task) for task in live}
     # 2026-09-27: an accepted task is no longer live, so its decision is not in
     # the projection above; the Stop prompt still has to know its Delivery is
     # finished. Only tasks whose Delivery agent is still on the page.
@@ -3051,6 +3199,17 @@ def _live_task_names(state: dict, contracts: dict) -> list[str]:
     return sorted(live)
 
 
+def _review_notes(requests: list[dict]) -> list[str]:
+    """The findings the board kept as notes (plain sentence each), newest review last; the reviewer's own words, never edited."""
+    notes: list[str] = []
+    for request in sorted(requests, key=lambda value: int(value.get("cycle", 0) or 0)):
+        for note in (request.get("board_decision") or {}).get("notes") or []:
+            text = " ".join(str(note.get("summary") or "").split())
+            if text and text not in notes:
+                notes.append(text[:300])
+    return notes[:20]
+
+
 def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledgers: dict[str, dict] | None = None, test_ledgers_all: dict[str, list] | None = None) -> list[dict]:
     """Build an unbounded, restart-safe history view from persisted board data."""
     live = set(live_tasks)
@@ -3110,6 +3269,9 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
             "subtasks_passed": sum(value.get("status") == "passed" for value in subtasks.values()),
             "subtasks_total": sum(value.get("status") != "superseded" for value in subtasks.values()),
             "review_passes": sum(request.get("status") == "passed" for request in requests),
+            "review_notes": _review_notes(requests),
+            "usage_line": review_cost.usage(state, task)["line"],
+            "review_outcome": next((e.get("outcome", "") for e in review_rounds.terminal_for(state.get("review_escalations") or {}, task)), ""),
             "release_status": release.get("status", ""),
             "owner_decision": decision.get("decision", ""),
             "requirements_confirmation": (state.get("requirement_confirmations") or {}).get(task, {}),

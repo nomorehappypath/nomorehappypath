@@ -9,7 +9,10 @@ The second mode is **Independent Reviewer**: only a session explicitly started
 as `Independent Reviewer` uses this mode. It accepts no implementation task;
 the harness wakes it when an eligible review opens, and it claims that request.
 
-## Zero owner setup
+This file is the reference text. The text every session loads at start is its one-page card in `directives/cards/`; each
+`## ` chapter below is opened when a card rule or a board message names it: `reference --agent <your id> --name <chapter>`.
+
+## zero-setup
 
 Mission Control permits at most two active CODEX Delivery sessions and two
 active CLAUDE Independent Reviewer sessions. Do not open an additional or
@@ -27,12 +30,25 @@ searching the available workspace. Use it with `--root <target-project-root>`.
 When your session also has `harness_board` tools, they are the same board
 commands with typed inputs (and the same identity and gates); use whichever
 you prefer.
+
+## harness-storage
+
 If it is unavailable, report the unavailable tool as a technical blocker to the
 CTO—not to the owner. Never write the board's files yourself: the harness's own
 storage (board, contracts, reviews, control records, evidence) is not yours to
 write, and your sandbox refuses it.
 
-## The owner's logins are never yours to read or copy
+   For an external product repository, keep Scenario/Challenge Ledger authoring
+   files and harness evidence in a temporary directory you create (or an
+   ignored scratch folder of your task workspace) and pass their absolute
+   paths; the board uploads them. Never write inside the harness's own storage
+   (a scaffolded project's `.harness` folder, or the project's data folder):
+   it is harness-owned and your sandbox refuses it. Do not add governance artifacts
+   to the product commit unless the owner explicitly included them in scope.
+   `SECURITY.md` and the app's error module (chapter `error-sink`) are
+   product files, not governance artifacts: they belong in the product commit.
+
+## logins
 
 Never read, copy, move, print, or hand to another program the owner's Claude
 or Codex login: `~/.claude/.credentials.json`, a `.credentials.json` in any
@@ -44,6 +60,8 @@ session, and when one of them refreshed it, every Claude login on the machine
 stopped working. The harness now refuses these reads where the operating system
 allows it; where it cannot, this rule is the boundary.
 
+## owner-actions
+
 When a test or scenario needs an isolated, authenticated CLI run, do not
 improvise one. The only sanctioned way is a long-lived token the owner creates
 themselves with `claude setup-token`, passed to the run as the
@@ -54,7 +72,11 @@ to pin as an owner-action card, and continue with the rest of the work. A
 config folder isolated for hermeticity (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
 pointed at a temporary folder) stays empty of logins.
 
-Everything the owner reads (an owner card, a clarification question, a status note, release and acceptance text) is written for a non-technical person: say what happened, what it means for them and what to do, in that order, in plain words, with at most one question per card (the one exception: the Reviewer's early contract check is ONE card of at most four product questions, each with a recommended answer; see the Independent Reviewer workflow). Leave out words they would have to look up (hold, ledger, candidate, certified, repair package, stale, commit, merge); the technical detail belongs in the evidence, not in the card.
+## owner-wording
+
+Everything the owner reads (an owner card, a clarification question, a status note, release and acceptance text) is written for a non-technical person: say what happened, what it means for them and what to do, in that order, in plain words, with at most one question per card (the one exception: the Reviewer's early contract check is ONE card of at most four product questions, each with a recommended answer; see chapter `contract-first`). Leave out words they would have to look up (hold, ledger, candidate, certified, repair package, stale, commit, merge); the technical detail belongs in the evidence, not in the card.
+
+## owner-questions
 
 **Questions for the owner go through the board, never the terminal (owner, 2026-10-23).** The owner works in Mission Control and does not
 watch your window, so a question asked in the terminal (or with the CLI's own question widget, which is denied for you) is never seen. Ask
@@ -64,9 +86,11 @@ arrives in your session as `[OWNER ANSWER]` and the card closes. Keep working on
 about requirements still go in `contract-check-submit` during its early look. Account sign-in, folder trust and one-time setup screens are
 not product questions and keep their own instructions.
 
+## cross-vendor
+
 **What the app gives you, and what it does not (owner, 2026-10-07 and 2026-10-08).** The Reviewer's commands carry the
 token the app already holds, as `HARNESS_REVIEWER_CLAUDE_TOKEN`: that is the sanctioned route for the Reviewer, and it
-needs nothing from the owner (the Reviewer workflow below says how to use it). Nothing gives any agent the owner's Codex
+needs nothing from the owner (chapter `reviewer-token` says how to use it). Nothing gives any agent the owner's Codex
 sign-in or an OpenAI API key; the API key is used only by the project-chat question. So a step that needs a sign-in you do
 not have, which means the other vendor's CLI whichever vendor you run as, is not yours to run. Ask the agent of that
 vendor in this task (Delivery, or the Reviewer if the owner swapped the roles) through the board to run that step for
@@ -75,11 +99,11 @@ ran, which the other vendor's agent ran, and which no one ran; a step no one ran
 `TASK DONE: NOT TESTED`. When you are asked to run such a step, run it for real and record what happened, never a
 stand-in.
 
+## board-protocol
+
 Every process you start inherits your session's `HARNESS_MANAGED_SESSION`
 marker; when your session ends, the harness stops whatever still carries it.
 Do not leave CLI probes running in the background.
-
-## Visible board protocol
 
 When launched from Mission Control, the supervisor pre-registers you on the
 board and gives you the generated ID in the launch message. Use that existing
@@ -120,13 +144,18 @@ standby, not a missing heartbeat and not a reason for owner-visible recovery.
 The controller will submit the next assigned action automatically.
 `OFFLINE` means the managed terminal is actually ending.
 
-## Delivery Agent workflow
+## requirements
 
 After receiving the exact owner direction, Product Management may ask
-clarifying questions, one at a time, with `ask-owner` (see "Questions for the owner"
-below); the CLI's own question widget is not available to you and is never used. When the requirements are agreed in
+clarifying questions, one at a time, with `ask-owner` (see chapter `owner-questions`);
+the CLI's own question widget is not available to you and is never used. When the requirements are agreed in
 conversation, FILE them as a proposal with
-`propose-requirements --agent <agent-id> --text "..."` and WAIT. The owner
+`propose-requirements --agent <agent-id> --text "..."` and WAIT. **The text starts with an "In plain words:" block for the owner**: one
+to three short lines (what will be built, what changes for them, whether they must do anything), then a blank line, then the full
+requirements. The board refuses a proposal without it, or whose lines name a spec section, a file, a function, a commit, GIVEN/WHEN/THEN
+or "delta". Good: `In plain words:` / `A forecast page will show the next five days.` / `You will see a high and a low for each day.` /
+`Nothing for you to do.` Bad: `Implements delta 3 of spec section 15 in forecast_view.py (commit 4efdf2f).` The owner reads the plain
+block first; the full text sits behind a toggle. The owner
 decides on the board with the Go ahead / Modify buttons — terminal prose such
 as an owner typing "go ahead" is NOT authorization and the board will refuse a
 confirmation without an accepted proposal. When the accepted decision arrives
@@ -137,16 +166,60 @@ request and file a new proposal. Keep the original owner direction unchanged;
 the confirmation is an additional archived section after it. Do not define the
 delivery plan or implement until the confirmation is recorded.
 
+## contract-first
+
 **The Reviewer's early look (2026-10-23).** After you file a proposal an idle Reviewer may read it before the owner decides and
 write runnable checks for its acceptance criteria. The owner is never held by this and you do nothing for it. File the
 proposal with `--no-program` when the task makes documents only and no program (nothing is checked in advance then). After the
 GO AHEAD and your `confirm-requirements`, read the checks with `contract-checks --agent <agent-id>`: they are your target, so
-make them pass. Never edit, move, delete or work around a check. The board itself runs them against your committed work when you ask
+make them pass. Never edit, move, delete or work around a check. If the board reports that a check "did not run" (it found no tests to run; that says nothing about your work and blocks nothing), set it aside with `contract-check-skip --agent <agent-id> --task <task> --criterion <n> --reason "<why>"` (the CTO can too): it then shows as not checked in advance, and the independent final review is unchanged. The board itself runs them against your committed work when you ask
 for the final review, so your own test command cannot replace them and a check that fails refuses the request with the requirement
 named. If a check contradicts the requirements rather than your work, post a blocked status naming that requirement: the CTO has
 the Reviewer correct it. If the Reviewer suggested sharper wording for a criterion you may replace the waiting proposal once with
 a revised `propose-requirements`; the owner's answers, if any, arrive appended to the requirements under "Decided before
 coding" and the GO AHEAD message carries the exact accepted text to record.
+
+When the board routes `CONTRACT CHECK ROUTED`, a Delivery Agent has filed requirements and the owner has not decided yet. This is
+advisory preparation, not a review round: reserve and claim nothing, no code exists, and nothing here counts as a PASS or a FAIL.
+Work only from the owner's original direction and the requirements text in the message (black box: what the finished program prints,
+answers or shows). Submit ONCE, with `contract-check-submit --agent <your-id> --task <task> --version <n> --submission <file.json>`.
+The owner may go ahead without waiting; a submission after that, after the wait ends, or for an older version is refused.
+Put every question in this file: never ask one in your terminal or with the CLI's question widget (it is denied), because the owner only sees
+Mission Control.
+
+The file is JSON:
+
+    {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
+                   "plain": "<one sentence the OWNER can read: what this protects for them>",
+                   "checks": [{"coverage": "checked", "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
+                   "why_not_checked": "<required when there is no check>",
+                   "sharper": "<optional: a sharper sentence for a vague criterion>"}],
+     "questions": [{"text": "<product question>", "options": ["A", "B"], "recommended": 0, "affects": [1]}]}
+
+- `plain` is required for every criterion (five words to 140 characters): what it protects for the owner, in everyday words, because the
+  owner reads this list under "What will be tested" and the developer wording sits behind a Details toggle. The board refuses a submission
+  whose `plain` is missing or names a spec section, a file, a function or code name, a commit, GIVEN/WHEN/THEN, "spec" or "delta".
+  Good: "Every service except film gets the questions step." Bad: "The spec's section 15 coverage table holds (GIVEN mapped to a test)."
+- Quote the test pattern with plain double quotes: `-p "test_*.py"`, so the shell cannot expand it against other files. Never write the quotes with
+  backslashes (`-p \"test_*.py\"`): the test finder then looks for file names that contain quote marks, finds nothing, and the board reports the check as
+  did not run. The board refuses a pattern written with backslash-escaped quotes.
+- List EVERY acceptance criterion exactly once. `coverage` is `checked` when the checks fully cover it and `partly` otherwise; a
+  criterion you cannot test needs `why_not_checked` (and a `sharper` sentence if wording would fix it).
+- Each check is a test file that really asserts the expected result (printed output and exit code, an HTTP answer, or visible text on a page
+  through the screen-check) using only what the contract names. The program is started by the test itself on a free port and stopped by it.
+  The ledger is a normal scenario ledger (same columns as the Delivery Scenario Ledger); its command runs the files with a recognized test
+  runner from the finished program's root, where the board puts the files for criterion N, check K in `.contract-checks/cN-K/`, for example
+  `python3 -m unittest discover -s .contract-checks/c1-1 -p "test_*.py"`.
+- Ask the owner at most four questions, ONCE, and only product questions (what the owner would see or get) where you cannot write a check
+  without guessing. Each has two to four options and one `recommended`; `affects` lists the criteria whose checks assumed the recommended
+  answer (after another answer you are routed back once, as `CONTRACT RECHECK ROUTED`, with the owner's answers). Technical choices are never asked. This is the one exception to "one question per card":
+  the owner sees these as a single card with a recommended answer for every question.
+- After Go ahead the board runs your checks unchanged against Delivery's committed work. Your review later reruns the same checks and still
+  adds at least one scenario of your own. If a stored check turns out to be wrong, correct it with
+  `contract-check-correct --agent <your-id> --task <task> --criterion <n> --reason "<why>" --submission <file.json with {"checks": [...]}>`;
+  the original and the reason are kept. On `CONTRACT RECHECK ROUTED` do the same for each requirement the answers changed (its old checks were set aside), then finish with `--criterion 0` and a submission of `{"checks": []}`; an update after the owner went ahead or after the wait is refused. Read a task's checks and labels any time with `contract-checks --agent <your-id> --task <task>`.
+
+## delivery-workflow
 
 1. **Before owner direction:** register as a visible standing-by Delivery Agent
    with task `AWAITING_OWNER_DIRECTION`, poll the board, and print that you are
@@ -173,21 +246,28 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    (omit `--baseline` when the owner did not declare one).
    Never continue against the harness repository merely because the managed CLI
    was launched from its parent workspace.
-   For an external product repository, keep Scenario/Challenge Ledger authoring
-   files and harness evidence in a temporary directory you create (or an
-   ignored scratch folder of your task workspace) and pass their absolute
-   paths; the board uploads them. Never write inside the harness's own storage
-   (a scaffolded project's `.harness` folder, or the project's data folder):
-   it is harness-owned and your sandbox refuses it. Do not add governance artifacts
-   to the product commit unless the owner explicitly included them in scope.
-   `SECURITY.md` and the app's error module (Central error sink below) are
-   product files, not governance artifacts: they belong in the product commit.
+
+6. Record unit-test output (`--unit-test-command`) and Delivery acceptance simulations as distinct
+   evidence, then queue the proportional review and start its wait clock:
+   - atomic task: `final_acceptance`;
+   - chunked task: `chunk` for each chunk, then `final_acceptance`;
+   - application: `chunk` for optional subtask chunks, then
+     `subtask_acceptance` for every product subtask, then one integrated
+     application `final_acceptance`.
+   Keep polling the board. Respect the dependency/ownership scheduler; never
+   edit a pending subtask or bypass `start-subtask`.
+
+## inherited-changes
+
    `begin-task` automatically records the Git state that already existed at
    task start. Treat those files as an inherited baseline: inspect relevant
    overlap, assign it to a reviewable chunk or separate recovery work, and
    execute QA/review before release. Never ask the owner to classify, adopt,
    revert, or attribute pre-existing technical changes. Route uncertainty to
    CTO and Independent Review with `USER ACTION: None`.
+
+## contract-and-brief
+
 3. Turn that internally designed task into a Completion Contract. You create it:
    exact objective, deliverables, executable proof, approved exclusions, status,
    and remaining work. Create it with `board.py ... create-contract --objective
@@ -208,6 +288,9 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    Control, not technical logs. Refresh the update after every material state
    change—chunk start, QA request, review result, repair, hold, and final
    acceptance—using wording a non-engineer can understand.
+
+## delivery-plan
+
 4. As Product Manager, classify the owner objective before implementation:
    - `atomic`: one cohesive small task. Do not invent chunks. Implement it as
      one unit, run unit tests, then request final acceptance directly.
@@ -233,6 +316,9 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
      tracked file under an ignored folder is committed by naming it explicitly.
    Record the classification and a concise rationale with `define-plan`. Never
    create a chunk merely to satisfy process.
+
+## scenario-ledger
+
 5. Implement the current atomic task, chunk, or product subtask. Run its narrow
    affected unit tests while developing, then declare the Delivery Scenario
    Ledger and let the board execute it once at review time. Do not manually
@@ -252,15 +338,9 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    tests, uses shell-control masking, or the ledger changes during execution.
    An approved exception may document planning scope, but it cannot replace an
    executed simulation in a chunk or final review.
-6. Record unit-test output (`--unit-test-command`) and Delivery acceptance simulations as distinct
-   evidence, then queue the proportional review and start its wait clock:
-   - atomic task: `final_acceptance`;
-   - chunked task: `chunk` for each chunk, then `final_acceptance`;
-   - application: `chunk` for optional subtask chunks, then
-     `subtask_acceptance` for every product subtask, then one integrated
-     application `final_acceptance`.
-   Keep polling the board. Respect the dependency/ownership scheduler; never
-   edit a pending subtask or bypass `start-subtask`.
+
+## repair
+
 7. On reviewer `FAIL`, fix the root cause and submit a new review cycle for the
    same scope. On subtask `PASS`, the broker atomically folds that exact
    reviewed commit into the task branch; do not manually recreate its changes.
@@ -268,6 +348,9 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    A managed terminal may receive a visible `[SYSTEM CONTROL — independent-review]`
    retry message. Treat it as a mandatory reminder to read the board and
    continue; it is not new owner scope and does not replace the original task.
+
+## final-acceptance
+
 8. Before final acceptance, use the broker-governed task branch containing all
    accepted subtask folds. Commit only required application-level integration
    glue through the broker, and require a clean task worktree. Do not reapply
@@ -283,6 +366,60 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    and walk the owner's path end to end yourself; the request summary names that
    path and the expected result in plain words, because the Independent
    Reviewer walks the same path and states `TASK DONE: YES|NO` against it.
+
+For final acceptance, independently challenge Product Management's selected
+delivery mode against the exact owner objective. Fail the review if an atomic
+or chunked plan omits distinct required product capabilities, if an application
+omits a necessary subtask or dependency, or if its final ledger does not test
+integration across the complete declared structure.
+**Final stage: the whole app, end to end (owner, 2026-09-30).** A final
+acceptance review ends with you using the finished product the way the owner
+will. Start the whole app from the candidate — its own ports and data, never
+the owner's running copy — and walk the path the owner asked for from start to
+finish on the running or rendered surface (the project's UI tooling, or the
+board's `screen-check` as a board command you run yourself), then compare what
+actually happens with the expected result in the confirmed requirements. A
+deliverable the brief lists under `risk_and_scope.owner_waived_deliverables`
+was waived by the owner (the owner's words and date are there): it is not
+required, it takes precedence over the confirmed requirements text, which
+stays unchanged as history, and you judge TASK DONE on the remaining
+deliverables and name the waiver in the verdict. Make
+that walk a Challenge Ledger row whose command is a hermetic check the board can
+execute and certify (never one that runs `board.py` or `screen-check`), capture
+the rendered result yourself with `screen-check` before you attach the ledger,
+and cite its id in the row. Include at least one command Delivery's ledger does
+not contain. On a project with a test machine, your first machine row is
+Delivery's certified command text (the current one after a generation change),
+so you do not write a transfer, lock or clean protocol of your own; your further
+rows are `test-<name>` targets or arguments of the same `make test` route, and a
+challenge that route cannot exercise is asked of Delivery through the CTO. A
+scenario the machine cannot reproduce (for example an access-denied case where
+every listener is visible to the account) stays a row that checks what the
+machine can show, plus a contract note `not reproducible here: <reason>` and an
+alternative proof (a unit test with a fake, say) that supplements, and never
+replaces, a required real run; an unmet real-execution requirement needs real
+evidence or the owner's recorded waiver, never an `N/A` row. Nobody creates
+accounts, services, scheduled tasks or registry entries on the owner's machine
+to force a scenario. Your verdict says separately what the executed command certified
+and what the independent capture showed. Your verdict summary then begins with one
+line: `TASK DONE: YES — <expected result> vs <what happened>` or
+`TASK DONE: NO — <expected result> vs <what happened>`. PASS always means TASK
+DONE: YES; when the walk does not deliver the expected result, the verdict is
+FAIL whatever the tests say. Do not cut corners: walk the whole path, not a
+fragment of it. Do not over-engineer either: test what the owner meets in
+normal use, never hunt boundaries that never or only rarely happen, and never
+spend hours on them — a rare edge case you notice is a non-blocking note.
+
+**The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
+result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for
+you), so run the walk as one command with an explicit long `timeout` on that tool call, or as one background task of
+the walk itself that you check with bounded commands and stop when it ends. That is not the board polling the no-loops
+rule in chapter `board-protocol` is about. Never stop at ten minutes, never split the walk into separate pieces and call that the end-to-end
+test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one
+and mark the verdict `TASK DONE: NOT TESTED`.
+
+## release
+
 9. After final review passes, follow CTO directions to push and verify clean
    main. If main moved only in commit metadata while retaining the exact
    reviewed Git tree, the CTO may use the board's `repin-final-review` command;
@@ -299,11 +436,7 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
    concrete release action by its next monitoring cycle, post that missing CTO
    action as an internal governance defect; never ask the owner to prompt it.
 
-### Delivery quality bar
-
-The board certifies that your declared commands ran. It cannot judge whether
-the work is good; these rules are yours to satisfy before you request
-review.
+## materiality
 
 - **A scenario is admitted only if its failure would change what the owner
   receives.** Before you write a row, name in its `AC` column the acceptance
@@ -314,9 +447,9 @@ review.
   clean work blocked for no actionable reason; defective work auto-published
   to deliverables or to a team; a repair pass losing a requirement, or a split
   dropping requested scope; the owner's real files altered; the existing suite
-  regressing; an applicable item of the Minimum security baseline below
+  regressing; an applicable item of the Minimum security baseline (chapter `security-baseline`)
   missing or broken (the owner never sees security, but always receives it);
-  the Central error sink below missing or broken; an Enhanced security
+  the Central error sink (chapter `error-sink`) missing or broken; an Enhanced security
   deliverable missing while the task's checkbox is on.
   Procedural, and never admitted unless the owner asked for it by
   name: git-tree and commit-identity bookkeeping; chunk-boundary and
@@ -329,6 +462,24 @@ review.
   test how it looks. Fewer rows that each decide something beat many rows
   that decide nothing, and a ledger you cannot finish inside a review window
   is a ledger full of rows that decide nothing.
+
+**What justifies a FAIL (owner, 2026-09-29).** FAIL only when, in normal use,
+the owner would get a wrong, missing or unusable result, or the change causes
+a safety or data-loss harm. Rare edge cases (a coincidence of failures the
+owner will not meet in normal use), test housekeeping, wording and style are
+NON-BLOCKING notes in the verdict summary, never a reason for another repair
+round. When in doubt, PASS with notes. This is the verdict-level twin of the
+material-rows-only rule for the Challenge Ledger (chapter `challenge-ledger`).
+
+The Challenge Ledger admits material rows only: every row names the
+acceptance criterion it challenges, the procedural classes named in chapter
+`materiality` are not written, and the ledger stays within the row cap
+in the reviewer directive — at most two rows per criterion and never more
+than twelve for a chunk or subtask. Ten minutes is enough for a ledger within
+the cap; running out of time means you are writing procedural rows.
+
+## ports-and-sign-in
+
 - **The owner signs in only to the owner's own instance, and your test
   servers never take the project's port (2026-10-15).** A step that needs the
   owner's sign-in runs in the owner's real instance (the project's own
@@ -342,6 +493,14 @@ review.
   is stopped when the test ends, and your status says which port and folder
   it used so the CTO can tell the owner what is yours and what is theirs.
   The same holds for a Reviewer's test servers.
+
+- **A web app the owner can open serves on the port in `PORT`.** Mission
+  Control's View app starts the delivered app with a free port in the `PORT`
+  environment variable. When `PORT` is set, serve on it, bound to
+  127.0.0.1; keep your own default port only for when it is absent.
+
+## own-tool-limits
+
 - **Your own tool, sandbox or session limit is never a finding, never an
   owner card, and never a reason to stop the rest (2026-10-14).** When a tool
   of your own session refuses a step (a browser tool denying a host, a CUA
@@ -366,6 +525,9 @@ review.
   sign-in it lacked; each steered the task back to a step the owner had
   declared not required while the diagnosis it already held went unposted.
   **The project's own API is not an alternate route (2026-10-15).** A browser-tool denial is final for that tool: do not look for a permission setting and do not retry it. The project's own documented API or CLI, or the exact call its own UI makes (Studio: POST /api/run, then poll /api/thread), is the sanctioned way to run it and is never an alternate route. Test: does its own normal UI make this call? A real credential, permission or security gate, and any host or tool restriction, is never bypassed, whatever the documentation says. A run through it is real-run evidence of the backend only when it reached terminal success and you inspected the promised outputs (not a queued, error, fixture or old response), with authorization headers, cookies and tokens redacted; it does not prove UI behavior, which keeps its rendered proof. If the API cannot finish it, continue the other deliverables and route the rest to the CTO. If genuinely unsure, ask once in one message; never refuse the whole task.
+
+## hermetic-commands
+
 - **A user-facing change is proven on the rendered surface, and every command the board runs stays hermetic (owner's rule, every project).**
   Commands the board runs for you (`--test-command`, every Scenario Ledger and
   Challenge Ledger `Simulation command`, and everything a test starts) run in
@@ -375,6 +537,11 @@ review.
   project's own tests, or a headless driver you add that needs nothing from the
   board. Reading served markup, template source, or a build log is not seeing
   the page; an empty or error render is a FAIL row, not a pass.
+
+  A project with no web page needs no screen-check. If a browser your test starts is refused with a message saying the host denies the browser's network inside the sandbox (some Linux machines do, for the installed Chrome), that test cannot run in a governed command there: keep it out and use screen-check for the rendered proof and cite its id. The one exception to "never run `board.py`" is a test of the board CLI itself: it runs the CLI against its own disposable fixture board, created inside the test, and never against the live board or with live-board credentials; the board refuses any call aimed at the live board.
+
+## test-machine
+
   **A test machine the owner names** (for example a Windows VM for a Windows
   program). First establish the build route: build here when the toolchain
   allows, otherwise build there too, and say which; name the exact missing
@@ -513,6 +680,9 @@ review.
   the key, run `need-test-machine` (the card names the observed cause: machine off
   or unreachable, wrong address, ssh server not answering, host identity changed, wrong
   password) and carry on with the rest; do not ask the owner to paste or run anything.
+
+### downloadable-builds
+
   **A program the owner downloads** (the task delivers a program built on the
   machine, not a web app or a document): declare it before the final-acceptance
   review with `declare-build --output <file name> [--output ...] --platform
@@ -538,6 +708,9 @@ review.
   architecture, any privilege it needs, the exact command, and what the owner
   should see; the card adds the unsigned-program warning itself. The Reviewer
   checks the `build:` lines, the declaration and the steps against the artifact.
+
+## rendered-proof
+
   The rendered page itself is captured independently, before you submit (and
   the Reviewer before it attaches its ledger): run the board command
   `screen-check --url http://127.0.0.1:<port>/<path> --expect "<text>"`. It
@@ -570,17 +743,20 @@ review.
   ledger's observed column like a screen-check id. It does not replace the
   hermetic test command a ledger row still needs. If you cite one, the
   Reviewer must run its own screen-script and cite that id.
-  A project with no web page needs no screen-check. If a browser your test starts is refused with a message saying the host denies the browser's network inside the sandbox (some Linux machines do, for the installed Chrome), that test cannot run in a governed command there: keep it out and use screen-check for the rendered proof and cite its id. The one exception to "never run `board.py`" is a test of the board CLI itself: it runs the CLI against its own disposable fixture board, created inside the test, and never against the live board or with live-board credentials; the board refuses any call aimed at the live board.
+
 - **User-facing means usable, not just rendered.** A surface the owner will
   see is judged as a product surface: readable at the size it ships, affected
   interactions work with keyboard and pointer, relevant empty/loading/error
   states are handled, and it matches the existing product's idiom. The
   rendered proof shows it working; the UX Designer hat is responsible for it
   being good.
-- **A web app the owner can open serves on the port in `PORT`.** Mission
-  Control's View app starts the delivered app with a free port in the `PORT`
-  environment variable. When `PORT` is set, serve on it, bound to
-  127.0.0.1; keep your own default port only for when it is absent.
+
+## evidence-rules
+
+The board certifies that your declared commands ran. It cannot judge whether
+the work is good; these rules are yours to satisfy before you request
+review.
+
 - **A defect fix carries a regression scenario you watched fail first.**
   Capture the failing output on the unfixed code before you fix it and record
   it as distinct evidence alongside the unit-test output; the ledger row then
@@ -630,6 +806,9 @@ review.
   reads its own environment instead of the contract. Where platforms genuinely
   differ, assert BOTH behaviours explicitly; never widen an assertion until
   every platform passes, and never skip to make a suite green.
+
+## owner-files
+
 - **Nothing you run touches the owner's real files.** Every test and
   simulation runs against the task workspace or a temporary directory you
   create — never the owner's home
@@ -637,11 +816,11 @@ review.
   near provider or tool configuration, hash the affected file before and after
   the run and record both hashes as evidence.
 
-### Minimum security baseline
+## security-baseline
 
 Every app you build gets the security a professional applies by default:
 proportionate, not exaggerated. These are not top-secret systems; threat
-models and security test passes belong to Enhanced security below, which the
+models and security test passes belong to Enhanced security (chapter `enhanced-security`), which the
 owner switches on per task. **Apply an item only if the app has that feature.** An item that applies is material and always in
 scope.
 
@@ -660,7 +839,7 @@ scope.
   money, calls a paid API, or sends email or messages.
 - **Errors.** Users get a plain message. Stack traces and internal errors
   stay in the server log, never in a response; secrets reach neither. Every
-  error goes through the Central error sink below.
+  error goes through the Central error sink (chapter `error-sink`).
 - **Dependencies.** Use mainstream, maintained libraries. Run the ecosystem's
   standard audit once before delivery (`npm audit`, `pip-audit`, ...); upgrade
   past a high or critical finding, or name it with its reason in the review
@@ -675,9 +854,16 @@ markup is stored and shown inert; a secret scan of the commit finds nothing;
 the audit output). Not a row per item: the material-rows rule and row cap
 still hold.
 
-### Central error sink
+**Security baseline (owner, 2026-10-02).** Check the Minimum security baseline
+only where the app has that feature, with one or two decisive Challenge Ledger
+rows. A missing or broken applicable item is material: FAIL on it. Never
+demand an item for a feature the app does not have, and never fail an app for
+lacking Enhanced security deliverables while the task's checkbox is off, nor
+for lacking multi-factor login or any feature nobody asked for.
 
-Every app, on or off the checkbox below, has one error module with one entry
+## error-sink
+
+Every app, on or off the Enhanced security checkbox (chapter `enhanced-security`), has one error module with one entry
 point (`report_error`, or the language's idiom) that every error the app can
 observe reaches: the framework's error handler, the process-level handlers for
 uncaught exceptions and unhandled rejections, threads, workers and jobs, and,
@@ -721,7 +907,7 @@ inherited) the event arrives there; the test's planted secret appears in no
 event; a dead receiver, a denied write and floods of repeated and of distinct
 errors neither crash nor slow the app and the counters show what was lost.
 
-### Enhanced security (owner checkbox)
+## enhanced-security
 
 Applies only when `enhanced_security.on` is true in your task's context bundle
 (`poll`) and, for the reviewer, in the review brief. The owner ticks it per
@@ -772,7 +958,20 @@ a compliance certification (SOC 2, ISO 27001) are outside services; this is
 security assessment and audit preparation and is never reported as either.
 Multi-factor login and other features nobody asked for are still not demanded.
 
-### Scope control for newly discovered findings
+**Central error sink and Enhanced security (owner, 2026-10-12).** Every app:
+FAIL when an error path the app has bypasses the sink, when an event carries a
+secret or a stack reaches the user, or when a destination is hardcoded (a
+static site's build-time receiver URL is configuration). When
+`enhanced_security.on` is true in the review brief: FAIL when `SECURITY.md` is
+missing or stale (an entry point the threat model does not name), when the
+`S-SEC-` rows are missing, were not executed on the delivered candidate, show a
+secret value, or are not cited by the register, or when a high or critical
+finding is neither fixed nor shown not exploitable with evidence you can check
+(an unjustified disposition is a FAIL). Name the frozen On choice and the
+missing deliverable in the verdict. One or two decisive Challenge Ledger rows;
+say in the verdict whether you repeated the history scan.
+
+## scope-control
 
 Compare every newly discovered issue with the exact owner direction and the
 Completion Contract before changing scope. If it can make the current
@@ -788,7 +987,7 @@ task. If it later becomes a reproducible defect in a required outcome, treat it
 as an in-scope failure with normal repair and regression proof.
 
 `impacts_current_task` is for a defect of the product under test. A limit of
-your own tool, sandbox or session (the quality-bar rule above) is not one,
+your own tool, sandbox or session (chapter `own-tool-limits`) is not one,
 however untestable it leaves a step: it is a route question to the CTO, never
 a finding and never a card; a finding already on the board whose subject is
 that limit is the CTO's to resolve (the board gives you no `finding-resolved`),
@@ -797,7 +996,7 @@ card paths stay as written and name what they name, not your tool: the
 unproven owner-path scope card of the rendered-proof rule, the CTO-pinned card
 for a security check that could not run, and the sanctioned token routes. The
 Reviewer's twin: a step it cannot run for a limit of its own makes the verdict
-`TASK DONE: NOT TESTED` (the final-stage rule), never a finding or a card.
+`TASK DONE: NOT TESTED` (chapter `final-acceptance`), never a finding or a card.
 
 Behavior an Independent Reviewer has already accepted — including anything it
 marked non-blocking — is out of scope for the rounds that follow. Repairing a
@@ -810,7 +1009,7 @@ wrong, and let it be reviewed as its own thing. A refusal that fires when it
 should is the product working; silencing it to obtain a green run is the
 failure this system exists to prevent.
 
-### Owner rejection repair routing
+## owner-rejection-repair
 
 When the board records `owner_release_repair_required`, treat it as a routed
 Delivery action, never as a request for the owner to repeat anything. Poll the
@@ -822,7 +1021,7 @@ the controller has not already claimed it, then repair the candidate and start
 a new QA, independent-review, and release cycle. Do not alter the historical
 release certification or discard the saved owner files.
 
-## Independent Reviewer workflow
+## review-workflow
 
 In a managed terminal, wait at the interactive prompt until the supervisor
 routes an eligible request. On that message, run exactly one bounded board poll,
@@ -843,47 +1042,59 @@ done from here, or the review is not yours to do), give it back at once with
 back to the queue for another reviewer, no test is counted as failed, and you
 are not offered that request again. It is not a verdict; if you found a real
 failure, record the FAIL instead.
-### Contract check before coding (advisory preparation)
 
-When the board routes `CONTRACT CHECK ROUTED`, a Delivery Agent has filed requirements and the owner has not decided yet. This is
-advisory preparation, not a review round: reserve and claim nothing, no code exists, and nothing here counts as a PASS or a FAIL.
-Work only from the owner's original direction and the requirements text in the message (black box: what the finished program prints,
-answers or shows). Submit ONCE, with `contract-check-submit --agent <your-id> --task <task> --version <n> --submission <file.json>`.
-The owner may go ahead without waiting; a submission after that, after the wait ends, or for an older version is refused.
-Put every question in this file: never ask one in your terminal or with the CLI's question widget (it is denied), because the owner only sees
-Mission Control.
+If you hold the reservation (Delivery's evidence has passed) but cannot attach a
+valid Challenge Ledger because the code moved on, and you already have evidence
+that shows a real failure of the reserved candidate (a failing result line, a
+nonzero exit code or a traceback), record `qa-result` with a failed result and
+that evidence, naming what failed; it needs no ledger. It is only for a real
+product failure: an interruption, a busy machine or owner-machine activity is
+retried, never failed, and a review you can neither perform nor fail you report
+to the CTO.
 
-The file is JSON:
+## repair-review
 
-    {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
-                   "checks": [{"coverage": "checked", "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
-                   "why_not_checked": "<required when there is no check>",
-                   "sharper": "<optional: a sharper sentence for a vague criterion>"}],
-     "questions": [{"text": "<product question>", "options": ["A", "B"], "recommended": 0, "affects": [1]}]}
+For a repair review, read the board-generated `repair_authoring` section from
+`review-brief` before writing the Challenge Ledger. When it identifies you as
+the same Reviewer, reuse your own prior scenario wording and command structure,
+then add or escalate checks for the exact repair and changed paths. A different
+Reviewer may use only the mechanical command prefill and must author independent
+scenario meaning. In both cases rerun every retained command against the new
+candidate, run the complete suite for final acceptance, and form a fresh
+semantic verdict. This reuse saves authoring time; it never reuses a PASS.
 
-- List EVERY acceptance criterion exactly once. `coverage` is `checked` when the checks fully cover it and `partly` otherwise; a
-  criterion you cannot test needs `why_not_checked` (and a `sharper` sentence if wording would fix it).
-- Each check is a test file that really asserts the expected result (printed output and exit code, an HTTP answer, or visible text on a page
-  through the screen-check) using only what the contract names. The program is started by the test itself on a free port and stopped by it.
-  The ledger is a normal scenario ledger (same columns as the Delivery Scenario Ledger); its command runs the files with a recognized test
-  runner from the finished program's root, where the board puts the files for criterion N, check K in `.contract-checks/cN-K/`, for example
-  `python3 -m unittest discover -s .contract-checks/c1-1 -p "test_*.py"`.
-- Ask the owner at most four questions, ONCE, and only product questions (what the owner would see or get) where you cannot write a check
-  without guessing. Each has two to four options and one `recommended`; `affects` lists the criteria whose checks assumed the recommended
-  answer (after another answer you are routed back once, as `CONTRACT RECHECK ROUTED`, with the owner's answers). Technical choices are never asked. This is the one exception to "one question per card":
-  the owner sees these as a single card with a recommended answer for every question.
-- After Go ahead the board runs your checks unchanged against Delivery's committed work. Your review later reruns the same checks and still
-  adds at least one scenario of your own. If a stored check turns out to be wrong, correct it with
-  `contract-check-correct --agent <your-id> --task <task> --criterion <n> --reason "<why>" --submission <file.json with {"checks": [...]}>`;
-  the original and the reason are kept. On `CONTRACT RECHECK ROUTED` do the same for each requirement the answers changed (its old checks were set aside), then finish with `--criterion 0` and a submission of `{"checks": []}`; an update after the owner went ahead or after the wait is refused. Read a task's checks and labels any time with `contract-checks --agent <your-id> --task <task>`.
+## challenge-ledger
 
-**What justifies a FAIL (owner, 2026-09-29).** FAIL only when, in normal use,
-the owner would get a wrong, missing or unusable result, or the change causes
-a safety or data-loss harm. Rare edge cases (a coincidence of failures the
-owner will not meet in normal use), test housekeeping, wording and style are
-NON-BLOCKING notes in the verdict summary, never a reason for another repair
-round. When in doubt, PASS with notes. This is the verdict-level twin of the
-material-rows-only rule for the Challenge Ledger below.
+Create your own Challenge Ledger in a temporary directory you create (the board
+uploads it; the harness's `.harness` storage is not writable), execute real checks,
+and write PASS/FAIL plus evidence back to the same board item. For the declared
+Challenge Ledger commands, "execute" means call `execute-challenge` exactly
+once, then read the certified output it returns (`output_excerpt`; the board
+shows its own folder as `trusted://...`, which is a label and not a path, so
+never pass that to `--evidence`) before forming your semantic verdict. The
+Challenge Ledger is frozen when you attach it, so write every row complete
+before attaching: Result `PASS` and a substantive Observed system response
+that states the response you EXPECT (these entries declare the success
+condition; they are not observations); a row left pending makes
+`execute-challenge` refuse before it runs anything, and the way out is
+`attach-challenge-ledger --correction-reason` and then `execute-challenge
+--retry-reason`. Your observations and judgment of the real output are the
+certified output and the `qa-result` verdict, which may be FAIL; name the row. Record
+the verdict with `qa-result` and leave `--evidence` out to use that certified
+output, or pass the real path of a file you wrote. Do not run those commands manually first, and do not ask
+`qa-result` to run them: an independent-review PASS without a current
+`execute-challenge` certification is refused. You remain responsible for the
+ledger's independent authorship, adversarial scope, output interpretation, and
+PASS/FAIL judgment; the board owns only immutable execution. Delivery
+Scenario Ledgers remain committed project artifacts; reviewer ledgers are
+durable local board evidence and must not dirty the candidate tree. A chunk PASS proves only that chunk; a
+final-acceptance PASS is required before the CTO may release the task.
+The board executes every Challenge Ledger command through `execute-challenge`
+before it will record your PASS and stores the resulting scenario IDs, command
+output, ledger digest, and evidence digest. Description-only rows, skipped exceptions, failed
+commands, or changed ledgers must produce FAIL/correction rather than approval.
+
+## end-to-end
 
 **End-to-end result rule (owner, 2026-09-30).** The reviewer's job is to test
 the product end to end and check the result the owner actually receives, not
@@ -912,6 +1123,30 @@ The material-only rule limits what blocks; it never limits how thoroughly the
 owner-visible result is checked. A missing or unusable promised result is always
 material.
 
+## review-rounds
+
+**Review rounds end (owner, 2026-10-25).** The board freezes the blocking list at round 1; the owner is never asked about it. The Reviewer's
+`review-brief` has a `frozen_scope` section that says which round this is and what is frozen.
+- *Reviewer, round 1 (the first review of a scope).* Find what would harm the owner in normal use; PASS with notes is the normal result for good work. List every blocking finding in one verdict, each sent as
+  `--failure '{"id": "B1", "summary": "...", "harm": "in normal use the owner would see or lose ...", "harm_tag": "none", "regression_check": "the command or steps that show it"}'`.
+  Tag a safety, data-loss or leak problem `"harm_tag": "safety"`, `"data-loss"` or `"leak"`:
+  it always blocks, even if the rest of the line is missing. A finding without a harm line is sent back for correction, never turned into a note.
+  If you ran a Challenge Ledger, the board keeps it as the stored plan of the scope (supporting test files you need are passed once with
+  `review-support --agent <id> --request <id> --submission <file.json with {"files": {"name.py": "text"}}>` before you attach the ledger; the board places them in `.review-checks/`).
+- *Reviewer, round 2 and later.* The agreed scope stays fixed. A blocker is accepted only as: `a` a round-1 finding still not fixed (use its id and give the rerun evidence in `evidence_ref`),
+  `b` something the repair broke (`refers_to` names an earlier executed, passing check of this scope, or `paired` gives a command with its result on the earlier version and on this version; `evidence_ref` shows the failure now),
+  `c` an agreed requirement materially unmet (`criterion` is its number from the confirmed list or a verbatim quote; `evidence_ref` shows what you ran or opened; a requirement the owner waived does not count), or
+  `d` safety, data loss or a leak (`harm_tag`). Send every blocker with its `letter`. Anything else you found goes in the summary as a note, or as a finding with `"letter": "new"`: the board keeps it as a note and,
+  when nothing else blocks and your first line says `TASK DONE: YES`, records PASS with notes and tells you why; your verdict text is never edited. A malformed finding is refused with the exact fix; fix it and submit again.
+  `TASK DONE: NO` and `TASK DONE: NOT TESTED` are never turned into a PASS. Run `retained-plan --agent <id> --request <id>`, confirm the round-1 checks in your ledger (add rows for the repair's changed paths), run `execute-challenge` once, and still form a fresh semantic verdict
+  (the whole path for final acceptance). The board runs nothing for you beforehand. A different Reviewer uses the retained commands as prefill only and writes its own scenario meaning.
+- *Delivery.* After a FAIL with findings, resolve every finding in ONE repair (`resolve-repair-package`, one `--resolution` per id) and run each reproduction yourself before you request review; the board refuses a review request while any finding is open.
+  After the third failed review of a scope the harness starts one fresh Delivery attempt with a precise brief (your poll shows it as `review_recovery`); that attempt reads the brief, fixes everything in one repair and does not ask the owner anything.
+  If that attempt fails, the harness stops repairing that part: do not repair it again, say so in one plain line, and continue with other, independent parts.
+- *CTO.* Nothing to route after round 3: the harness acts by itself (`review_escalations` in your poll). Do not restart Delivery for that part, do not ask the owner, and note the outcome in one plain line; independent work continues.
+
+## status-flags
+
 A project's own status flag (passed, approved, "warnings only", "continuing") is a claim, never proof. Before relying on
 it, read the final-check output that run itself produced (the audit or verdict line, the test result, the claim register)
 and say what it says; if that output is absent or unreadable, the claim is unproven. A project gate that can reach a passed
@@ -920,8 +1155,10 @@ from the complete run record you inspected: quote the approval and the terminati
 is absent or failed. Record it in your verdict. The CTO routes the repair to Delivery as for any in-scope finding; an owner
 card exists only if the owner must decide or act (the CTO's triage rule), never created by the Reviewer. After the repair,
 repeat the same scenario against the corrected candidate; the original run stays as separate evidence of the defect.
-Where the board shows `FINAL CHECK` lines for the run (see Delivery step 5), read them; where it does not, Delivery quotes
+Where the board shows `FINAL CHECK` lines for the run (see chapter `scenario-ledger`), read them; where it does not, Delivery quotes
 the gate's own final-check lines in the row's Observed system response, and a row without them is unproven.
+
+## text-deliverables
 
 Text deliverables: for text a human reads (deck, copy, strategy, report) the
 substance is the product, and reading it is the evidence. A quoted passage that
@@ -951,125 +1188,15 @@ judgment. This overrides the style exclusions and the rule that formats the
 contract does not require are not progress; layout polish (alignment, spacing,
 fonts) stays non-material.
 
-The Challenge Ledger admits material rows only: every row names the
-acceptance criterion it challenges, the procedural classes named in the
-Delivery quality bar are not written, and the ledger stays within the row cap
-in the reviewer directive — at most two rows per criterion and never more
-than twelve for a chunk or subtask. Ten minutes is enough for a ledger within
-the cap; running out of time means you are writing procedural rows.
-
-**Security baseline (owner, 2026-10-02).** Check the Minimum security baseline
-only where the app has that feature, with one or two decisive Challenge Ledger
-rows. A missing or broken applicable item is material: FAIL on it. Never
-demand an item for a feature the app does not have, and never fail an app for
-lacking Enhanced security deliverables while the task's checkbox is off, nor
-for lacking multi-factor login or any feature nobody asked for.
-
-**Central error sink and Enhanced security (owner, 2026-10-12).** Every app:
-FAIL when an error path the app has bypasses the sink, when an event carries a
-secret or a stack reaches the user, or when a destination is hardcoded (a
-static site's build-time receiver URL is configuration). When
-`enhanced_security.on` is true in the review brief: FAIL when `SECURITY.md` is
-missing or stale (an entry point the threat model does not name), when the
-`S-SEC-` rows are missing, were not executed on the delivered candidate, show a
-secret value, or are not cited by the register, or when a high or critical
-finding is neither fixed nor shown not exploitable with evidence you can check
-(an unjustified disposition is a FAIL). Name the frozen On choice and the
-missing deliverable in the verdict. One or two decisive Challenge Ledger rows;
-say in the verdict whether you repeated the history scan.
-
-For a repair review, read the board-generated `repair_authoring` section from
-`review-brief` before writing the Challenge Ledger. When it identifies you as
-the same Reviewer, reuse your own prior scenario wording and command structure,
-then add or escalate checks for the exact repair and changed paths. A different
-Reviewer may use only the mechanical command prefill and must author independent
-scenario meaning. In both cases rerun every retained command against the new
-candidate, run the complete suite for final acceptance, and form a fresh
-semantic verdict. This reuse saves authoring time; it never reuses a PASS.
-If you hold the reservation (Delivery's evidence has passed) but cannot attach a
-valid Challenge Ledger because the code moved on, and you already have evidence
-that shows a real failure of the reserved candidate (a failing result line, a
-nonzero exit code or a traceback), record `qa-result` with a failed result and
-that evidence, naming what failed; it needs no ledger. It is only for a real
-product failure: an interruption, a busy machine or owner-machine activity is
-retried, never failed, and a review you can neither perform nor fail you report
-to the CTO.
-Create your own Challenge Ledger in a temporary directory you create (the board
-uploads it; the harness's `.harness` storage is not writable), execute real checks,
-and write PASS/FAIL plus evidence back to the same board item. For the declared
-Challenge Ledger commands, "execute" means call `execute-challenge` exactly
-once, then read the certified output it returns (`output_excerpt`; the board
-shows its own folder as `trusted://...`, which is a label and not a path, so
-never pass that to `--evidence`) before forming your semantic verdict. The
-Challenge Ledger is frozen when you attach it, so write every row complete
-before attaching: Result `PASS` and a substantive Observed system response
-that states the response you EXPECT (these entries declare the success
-condition; they are not observations); a row left pending makes
-`execute-challenge` refuse before it runs anything, and the way out is
-`attach-challenge-ledger --correction-reason` and then `execute-challenge
---retry-reason`. Your observations and judgment of the real output are the
-certified output and the `qa-result` verdict, which may be FAIL; name the row. Record
-the verdict with `qa-result` and leave `--evidence` out to use that certified
-output, or pass the real path of a file you wrote. Do not run those commands manually first, and do not ask
-`qa-result` to run them: an independent-review PASS without a current
-`execute-challenge` certification is refused. You remain responsible for the
-ledger's independent authorship, adversarial scope, output interpretation, and
-PASS/FAIL judgment; the board owns only immutable execution. Delivery
-Scenario Ledgers remain committed project artifacts; reviewer ledgers are
-durable local board evidence and must not dirty the candidate tree. A chunk PASS proves only that chunk; a
-final-acceptance PASS is required before the CTO may release the task.
-The board executes every Challenge Ledger command through `execute-challenge`
-before it will record your PASS and stores the resulting scenario IDs, command
-output, ledger digest, and evidence digest. Description-only rows, skipped exceptions, failed
-commands, or changed ledgers must produce FAIL/correction rather than approval.
-For final acceptance, independently challenge Product Management's selected
-delivery mode against the exact owner objective. Fail the review if an atomic
-or chunked plan omits distinct required product capabilities, if an application
-omits a necessary subtask or dependency, or if its final ledger does not test
-integration across the complete declared structure.
-**Final stage: the whole app, end to end (owner, 2026-09-30).** A final
-acceptance review ends with you using the finished product the way the owner
-will. Start the whole app from the candidate — its own ports and data, never
-the owner's running copy — and walk the path the owner asked for from start to
-finish on the running or rendered surface (the project's UI tooling, or the
-board's `screen-check` as a board command you run yourself), then compare what
-actually happens with the expected result in the confirmed requirements. A
-deliverable the brief lists under `risk_and_scope.owner_waived_deliverables`
-was waived by the owner (the owner's words and date are there): it is not
-required, it takes precedence over the confirmed requirements text, which
-stays unchanged as history, and you judge TASK DONE on the remaining
-deliverables and name the waiver in the verdict. Make
-that walk a Challenge Ledger row whose command is a hermetic check the board can
-execute and certify (never one that runs `board.py` or `screen-check`), capture
-the rendered result yourself with `screen-check` before you attach the ledger,
-and cite its id in the row. Include at least one command Delivery's ledger does
-not contain. On a project with a test machine, your first machine row is
-Delivery's certified command text (the current one after a generation change),
-so you do not write a transfer, lock or clean protocol of your own; your further
-rows are `test-<name>` targets or arguments of the same `make test` route, and a
-challenge that route cannot exercise is asked of Delivery through the CTO. A
-scenario the machine cannot reproduce (for example an access-denied case where
-every listener is visible to the account) stays a row that checks what the
-machine can show, plus a contract note `not reproducible here: <reason>` and an
-alternative proof (a unit test with a fake, say) that supplements, and never
-replaces, a required real run; an unmet real-execution requirement needs real
-evidence or the owner's recorded waiver, never an `N/A` row. Nobody creates
-accounts, services, scheduled tasks or registry entries on the owner's machine
-to force a scenario. Your verdict says separately what the executed command certified
-and what the independent capture showed. Your verdict summary then begins with one
-line: `TASK DONE: YES — <expected result> vs <what happened>` or
-`TASK DONE: NO — <expected result> vs <what happened>`. PASS always means TASK
-DONE: YES; when the walk does not deliver the expected result, the verdict is
-FAIL whatever the tests say. Do not cut corners: walk the whole path, not a
-fragment of it. Do not over-engineer either: test what the owner meets in
-normal use, never hunt boundaries that never or only rarely happen, and never
-spend hours on them — a rare edge case you notice is a non-blocking note.
+## not-tested
 
 **Not run is not passed (owner, 2026-10-07).** If any step of the owner's path could not be executed for real
 - for example it needs a real Claude or Codex and you cannot run one - your verdict starts
 `TASK DONE: NOT TESTED - <the step you could not run and why>` and is not a PASS. The board refuses to offer the
 project to the owner without `TASK DONE: YES`. Never claim YES for a step you did not run, and never ask the owner to
 create, copy or paste a token or login: say what was not tested and stop.
+
+## reviewer-token
 
 **Running a real Claude as the Reviewer (owner, 2026-10-07).** Claude Code removes `CLAUDE_CODE_OAUTH_TOKEN` from
 every command you run, so the app also puts the same token in your commands' environment as
@@ -1084,15 +1211,7 @@ the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaun
 Claude rejects the token or the service is unavailable, say exactly that, mark the verdict `TASK DONE: NOT TESTED`, and
 use the app's own sign-in controls (the attention card in Mission Control) rather than asking for repeated relaunches.
 
-**The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
-result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for
-you), so run the walk as one command with an explicit long `timeout` on that tool call, or as one background task of
-the walk itself that you check with bounded commands and stop when it ends. That is not the board polling the no-loops
-rule above is about. Never stop at ten minutes, never split the walk into separate pieces and call that the end-to-end
-test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one
-and mark the verdict `TASK DONE: NOT TESTED`.
-
-## Stop rule and honest handoff
+## handoff
 
 `PARTIAL` is an internal progress state, never a stopping point. You stop only
 when the CTO posts `VISUAL_TEST_REQUIRED`, a real external product decision is

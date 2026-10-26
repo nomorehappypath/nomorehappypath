@@ -271,7 +271,7 @@ class RunnerArgvTests(unittest.TestCase):
         minted = argv[argv.index("--session-id") + 1]
         uuid.UUID(minted)
         self.assertNotIn("--resume", argv)
-        self.assertIn("# CTO Directive", self.text())
+        self.assertIn("# CTO — hard rules", self.text())   # the launch carries the CTO card (directive diet)
         record = control.cli_session(self.root, session["id"])
         self.assertEqual((record["cli_session_id"], record["cli_launches"], record["cli_last_launch_resumed"]), (minted, 1, False))
         transcript = conversation.transcript_path(self.root, session["id"])
@@ -292,7 +292,7 @@ class RunnerArgvTests(unittest.TestCase):
         self.assertIn(minted, prompt)
         self.assertIn(f"conversation --session-id {session['id']}", prompt,
                       "a resumed agent is told the command that rereads its conversation")
-        self.assertNotIn("# CTO Directive", prompt, "a resumed agent already holds the directive")
+        self.assertIn("# CTO — hard rules", prompt, "with no system layer, a resumed agent is handed its card again before the recovery note (directive diet)")
         record = control.cli_session(self.root, session["id"])
         self.assertEqual((record["cli_launches"], record["cli_last_launch_resumed"]), (2, True))
         self.assertIn("launch: mode=resume provider=claude", transcript.read_text(encoding="utf-8"))
@@ -423,7 +423,7 @@ class RelaunchAfterPauseTests(unittest.TestCase):
         self.assertIn(conversation.PAUSE_RESUME_LABEL, prompt)
         self.assertIn("could not be resumed by the CLI", prompt)
         self.assertIn(f"conversation --session-id {session['id']}", prompt)
-        self.assertIn("# CTO Directive", prompt, "the fresh launch still carries the full directive")
+        self.assertIn("# CTO — hard rules", prompt, "the fresh launch still carries the role's card")
 
     def test_the_readable_view_folds_the_pause_message_like_a_launch_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -30,7 +30,9 @@ from tests.test_conversation_memory import stage_relaunch
 
 ROOT = Path(__file__).resolve().parents[1]
 # As the runner reads it: `$(<file)` drops the file's final newline (today's behaviour too).
-AGENT = (ROOT / "directives" / "AGENT.md").read_text(encoding="utf-8").rstrip("\n")
+# The rules a session loads at start are its role's one-page card (task 2026-10-25_directive-diet), never the whole reference file.
+DELIVERY = (ROOT / "directives" / "cards" / "DELIVERY.md").read_text(encoding="utf-8").rstrip("\n")
+REVIEWER = (ROOT / "directives" / "cards" / "REVIEWER.md").read_text(encoding="utf-8").rstrip("\n")
 
 
 class Stage4RunnerTests(unittest.TestCase):
@@ -117,7 +119,7 @@ class Stage4RunnerTests(unittest.TestCase):
         self.switch("claude", stage4=True)
         session = control.create(self.context, "claude_reviewer")
         argv = self.launch(session, "claude_reviewer")
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], AGENT)
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], REVIEWER)
         self.assertEqual(argv[argv.index("--system-prompt-snapshot") + 1], "off", "never replayed stale after an upgrade")
         self.assertTrue(argv[-1].startswith("MODE: Independent Reviewer."), "the visible first message is the kickoff")
         self.assertNotIn("# Agent Directive", argv[-1])
@@ -127,7 +129,7 @@ class Stage4RunnerTests(unittest.TestCase):
         stage_relaunch(self.context, session["id"])
         argv = self.launch(session, "claude_reviewer")
         self.assertIn("--resume", argv)
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], AGENT,
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], REVIEWER,
                          "P-4: a resumed agent gets its full rules back, not only the recovery note")
         self.assertIn(conversation.RECOVERY_LABEL, argv[-1])
 
@@ -137,7 +139,7 @@ class Stage4RunnerTests(unittest.TestCase):
         argv = self.launch(session, "codex_delivery")
         flags = [argv[index + 1] for index, item in enumerate(argv) if item == "-c"]
         instructions = next(flag for flag in flags if flag.startswith("developer_instructions="))
-        self.assertEqual(json.loads(instructions.split("=", 1)[1]), AGENT)
+        self.assertEqual(json.loads(instructions.split("=", 1)[1]), DELIVERY)
         self.assertTrue(argv[-1].startswith("MODE: Delivery Agent."), argv[-1][:80])
 
     def test_switched_off_the_prompt_is_byte_for_byte_todays(self):
@@ -145,11 +147,11 @@ class Stage4RunnerTests(unittest.TestCase):
         self.switch("claude", stage4=False)
         argv = self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
         self.assertNotIn("--append-system-prompt", argv)
-        self.assertTrue(argv[-1].startswith(AGENT + "\n\nMODE: Independent Reviewer.\n"), "directive, blank line, kickoff")
+        self.assertTrue(argv[-1].startswith(REVIEWER + "\n\nMODE: Independent Reviewer.\n"), "directive, blank line, kickoff")
         self.switch("codex", stage4=False)
         argv = self.launch(control.create(self.context, "codex_delivery"), "codex_delivery")
         self.assertFalse(any(item.startswith("developer_instructions=") for item in argv))
-        self.assertTrue(argv[-1].startswith(AGENT + "\n\nMODE: Delivery Agent.\n"))
+        self.assertTrue(argv[-1].startswith(DELIVERY + "\n\nMODE: Delivery Agent.\n"))
 
     def test_with_stage_3_the_authority_note_is_folded_into_the_same_system_text(self):
         from harness import claude_inbox
@@ -159,7 +161,7 @@ class Stage4RunnerTests(unittest.TestCase):
         self.switch("claude", stage4=True, stage3=True)
         argv = self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
         self.assertEqual(argv.count("--append-system-prompt"), 1)
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], AGENT + "\n\n" + claude_inbox.AUTHORITY_NOTE)
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], REVIEWER + "\n\n" + claude_inbox.AUTHORITY_NOTE)
 
 
 if __name__ == "__main__":

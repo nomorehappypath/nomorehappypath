@@ -3,14 +3,14 @@
 cards about its own browser tool, then an HTTP 500 of its own fresh run, then a sign-in it lacked, and
 each steered the task back to a step the owner had declared not required. Resumed at 00:45Z, the CTO
 posted two bland cycles over a wrong owner card and eight stale findings and cleared them only after
-the owner's messages. Delivery and the Reviewer are launched with directives/AGENT.md and the CTO with
-directives/CTO.md (scripts/run_managed_agent.sh); these pin the two rules that forbid each of those,
+the owner's messages. Delivery and the Reviewer are launched with their one-page cards and the CTO with
+its card; the full text is the reference they open by chapter (scripts/run_managed_agent.sh); these pin the two rules that forbid each of those,
 there and in the short-form mirrors under harness/directives.
 """
 import unittest
 from pathlib import Path
 
-from harness import claude_inbox, gemini_runtime
+from harness import reference_chapters
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,8 +26,12 @@ class AgentOwnToolLimits(unittest.TestCase):
         self.reviewer = flat("harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md")
 
     def test_launcher_loads_the_agent_directive_whole_for_delivery_and_reviewer(self):
+        # Directive diet: the card is loaded, never the whole reference file; the reference is opened by chapter.
         launcher = (ROOT / "scripts/run_managed_agent.sh").read_text()
-        self.assertEqual(launcher.count('directive="$(<"$harness_root/directives/AGENT.md")"'), 2)
+        self.assertEqual(launcher.count('directive="$(<"$harness_root/$instruction_file")"'), 3)
+        self.assertIn('instruction_file="directives/cards/DELIVERY.md"', launcher)
+        self.assertIn('instruction_file="directives/cards/REVIEWER.md"', launcher)
+        self.assertNotIn('directives/AGENT.md")"', launcher)
 
     def test_quality_bar_says_an_own_limit_is_never_a_finding_card_or_stop(self):
         self.assertIn("Your own tool, sandbox or session limit is never a finding, never an owner card, and never a reason to stop the rest", self.agent)
@@ -73,13 +77,11 @@ class CtoRetriageOnLaunchOrResume(unittest.TestCase):
         self.mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
 
     def test_the_paragraph_sits_inside_what_must_never_block_the_work(self):
-        text = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        start = text.index("## What must never block the work")
-        end = text.index("### Findings outside the current objective")
-        self.assertIn("First cycle after launch or resume: re-triage what you inherited", text[start:end])
+        chapter = reference_chapters.role_chapters("cto")["first-cycle"]
+        self.assertIn("First cycle after launch or resume: re-triage what you inherited", chapter)
 
     def test_first_cycle_retriages_every_card_and_finding(self):
-        self.assertIn("In the first cycle after launch or resume, after the mandatory poll, re-triage every open owner-action card and every in-scope finding of every active task under this section as if it had just been reported", self.cto)
+        self.assertIn("In the first cycle after launch or resume, after the mandatory poll, re-triage every open owner-action card and every in-scope finding of every active task under chapter `blocker-triage` as if it had just been reported", self.cto)
         self.assertIn("clear with `owner-action-done` what is not provably the owner's, naming the real cause", self.cto)
         self.assertIn("treat as non-blocking what would not change what the owner receives", self.cto)
         self.assertIn("by resolving yourself, with `finding-resolved`, a finding whose subject is an agent's own tool limit, the agent's route question as its evidence (Delivery cannot resolve a finding)", self.cto)
@@ -99,10 +101,8 @@ class CtoRetriageOnLaunchOrResume(unittest.TestCase):
 
     def test_the_cto_never_ends_on_a_question_about_its_own_job(self):
         """Owner 2026-10-15: "do the necessary and do not ask me such questions"."""
-        text = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        start = text.index("## What must never block the work")
-        end = text.index("### Findings outside the current objective")
-        self.assertIn("Never end on a question about your own job", text[start:end])
+        chapter = reference_chapters.role_chapters("cto")["never-block"]
+        self.assertIn("Never end on a question about your own job", chapter)
         self.assertIn("never ends with a question about a step this directive already assigns to you", self.cto)
         self.assertIn("routing Delivery to file or amend a requirement after an owner waiver, clearing a card, resolving or disposing a finding, pushing a stalled agent", self.cto)
         self.assertIn("Do it, then report `done: <what>` in one line", self.cto)
@@ -113,14 +113,9 @@ class CtoRetriageOnLaunchOrResume(unittest.TestCase):
         self.assertIn("do it and report `done: <what>`", self.mirror)
         self.assertIn('"Want me to do that now?" is a defect', self.mirror)
 
-    def test_cto_directive_fits_the_gemini_rules_budget(self):
-        directive = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        size = len(directive.encode("utf-8")) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES, f"CTO.md payload {size} bytes exceeds the Gemini rules budget")
-
-    def test_launcher_loads_the_cto_directive_whole(self):
+    def test_launcher_loads_the_cto_card(self):
         launcher = (ROOT / "scripts/run_managed_agent.sh").read_text()
-        self.assertIn('directive="$(<"$harness_root/directives/CTO.md")"', launcher)
+        self.assertIn('instruction_file="directives/cards/CTO.md"', launcher)
 
 
 if __name__ == "__main__":

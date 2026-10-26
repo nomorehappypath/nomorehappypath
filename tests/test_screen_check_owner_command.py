@@ -1,11 +1,10 @@
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
-"""When a screen check cannot run in the agent's sandbox, the owner gets the command.
+"""When a screen check cannot run in the agent's sandbox, the check still fails and the owner is NOT asked.
 
-Owner, 2026-09-28: "if running the app crashes, let the mission control give
-the full command like what you do and the user will run it in the shell."
-A certified check whose acceptance browser could not start, or crashed, inside
-the agent's sandbox still FAILS, and Mission Control shows the owner a card
-with the exact Terminal command that runs the same check outside the sandbox.
+Owner, 2026-09-28: Mission Control showed a card with the Terminal command. Owner, 2026-10-25 ("BIG NO" to waiting on Mission Control):
+that prompt ("Run a screen check yourself") is gone. A certified check whose acceptance browser could not start, or crashed, inside the
+agent's sandbox still FAILS; the agents are told to capture the page with the screen-check command, and the board records an
+information line, never an owner card.
 
 Run:  PYTHONPATH=. python3 -m unittest tests.test_screen_check_owner_command -v
 """
@@ -24,7 +23,6 @@ from unittest import mock
 
 from harness import board, browser_acceptance, platform_support
 from tests import environment_support
-from tests import test_owner_action_cards_rendered as _cards
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 COMMAND = "PYTHONPATH=. python3 -m unittest tests.test_studio_surface"
@@ -109,14 +107,13 @@ class CrashedBrowserNeverPassesTests(unittest.TestCase):
                 "lockfile_digests": {}, "role": "reviewer", "gate": "final", "retry_reason": "",
                 "task": "screen-task", "rerun_source": {"workspace": str(self.root), "commit": ""}}
 
-    def test_the_certified_run_fails_is_stored_as_failed_and_pins_the_card(self):
+    def test_the_certified_run_fails_is_stored_as_failed_and_asks_nobody(self):
         from harness import certified_execution, execution_identity
         command = "python3 -m unittest test_crash_pass"
         with self.assertRaisesRegex(ValueError, "screen check could not run") as caught:
             board._execute_internal_qa(command, self.root, certification=self.certification())
         self.assertIn(browser_acceptance.SANDBOX_BLOCKED, str(caught.exception))
-        cards = list((board.snapshot(self.root).get("owner_actions") or {}).values())
-        self.assertEqual([card["command"] for card in cards], [f"cd {self.root} && {command}"])
+        self.assertEqual(list((board.snapshot(self.root).get("owner_actions") or {}).values()), [], "no owner prompt")
         # Never stored as a success, so a later identical run cannot reuse it as a pass.
         stored = [json.loads(line) for line in (board.board_dir(self.root) / "execution-store.jsonl").read_text().splitlines()]
         self.assertTrue(stored and all(int(row.get("exit_code", 0)) != 0 for row in stored), stored)
@@ -145,14 +142,13 @@ class BrowserFailsBeforeAnyTestTests(CrashedBrowserNeverPassesTests):
         "        pass\n"
     )
 
-    def test_the_certified_run_fails_is_stored_as_failed_and_pins_the_card(self):
+    def test_the_certified_run_fails_is_stored_as_failed_and_asks_nobody(self):
         command = "python3 -m unittest test_crash_pass"
         with self.assertRaises(ValueError) as caught:
             board._execute_internal_qa(command, self.root, certification=self.certification())
         self.assertIn(browser_acceptance.SANDBOX_BLOCKED, str(caught.exception))
-        self.assertIn("Mission Control also shows the owner the command", str(caught.exception))
-        cards = list((board.snapshot(self.root).get("owner_actions") or {}).values())
-        self.assertEqual([(card["command"], card["task"]) for card in cards], [(f"cd {self.root} && {command}", "screen-task")])
+        self.assertIn("screen-check", str(caught.exception))
+        self.assertEqual(list((board.snapshot(self.root).get("owner_actions") or {}).values()), [], "no owner prompt")
         stored = [json.loads(line) for line in (board.board_dir(self.root) / "execution-store.jsonl").read_text().splitlines()]
         self.assertTrue(stored and all(int(row.get("exit_code", 0)) != 0 for row in stored), stored)
 
@@ -273,70 +269,23 @@ class OwnerCardTests(unittest.TestCase):
                 board._execute_internal_qa(COMMAND, self.root, certification=certification)
         return str(caught.exception), board.snapshot(self.root).get("owner_actions") or {}
 
-    def test_a_blocked_screen_check_fails_and_pins_the_exact_command(self):
+    def test_a_blocked_screen_check_fails_and_asks_the_owner_nothing(self):
         error, cards = self.run_failing(
             f"internal-QA test command failed with exit code 1: ... | {browser_acceptance.SANDBOX_BLOCKED}: the browser crashed (signal 5)",
             self.certification(),
         )
-        self.assertIn("Mission Control also shows the owner the command", error, "the check must still fail")
-        self.assertEqual(len(cards), 1)
-        card = next(iter(cards.values()))
-        self.assertEqual(card["title"], "Run a screen check yourself")
-        self.assertEqual(card["task"], "event-networking")
-        self.assertEqual(
-            card["command"],
-            f'd="$(mktemp -d)" && git -C {self.workspace} archive {COMMIT} | tar -x -C "$d" && cd "$d" && {COMMAND}',
-        )
-        self.assertNotIn("sandbox-exec", card["command"])
-
-    def test_the_command_really_rebuilds_the_reviewed_checkout_and_runs_there(self):
-        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True)
-        (self.workspace / "marker.txt").write_text("reviewed bytes\n")
-        subprocess.run(["git", "-C", str(self.workspace), "add", "marker.txt"], check=True)
-        subprocess.run(["git", "-C", str(self.workspace), "-c", "user.name=t", "-c", "user.email=t@t",
-                        "commit", "-qm", "reviewed"], check=True)
-        commit = subprocess.run(["git", "-C", str(self.workspace), "rev-parse", "HEAD"],
-                                capture_output=True, text=True, check=True).stdout.strip()
-        (self.workspace / "marker.txt").write_text("moved on\n")
-        with mock.patch.object(board, "_run_internal_qa", side_effect=ValueError(f"x | {browser_acceptance.SANDBOX_BLOCKED}: y")), \
-                self.assertRaises(ValueError):
-            board._execute_internal_qa("cat marker.txt", self.root, certification=self.certification(commit))
-        card = next(iter(board.snapshot(self.root)["owner_actions"].values()))
-        pasted = subprocess.run(["/bin/bash", "-c", card["command"]], capture_output=True, text=True, timeout=30)
-        self.assertEqual((pasted.returncode, pasted.stdout), (0, "reviewed bytes\n"), pasted.stderr)
-
-    def test_an_uncommitted_workspace_review_runs_in_that_workspace(self):
-        _error, cards = self.run_failing(f"x | {browser_acceptance.SANDBOX_BLOCKED}: y", self.certification(commit=""))
-        self.assertEqual(next(iter(cards.values()))["command"], f"cd {self.workspace} && {COMMAND}")
+        self.assertIn("screen-check", error, "the check must still fail, and the agents are told what to do")
+        self.assertNotIn("owner the command", error)
+        self.assertEqual(cards, {}, "no 'Run a screen check yourself' card and no other owner prompt")
+        events = [e for e in board.snapshot(self.root)["events"] if e.get("kind") == "screen_check_needed"]
+        self.assertEqual(len(events), 1)
+        self.assertIn("nothing is needed from you", events[0]["message"])
 
     def test_other_failures_and_uncertified_runs_pin_nothing(self):
         _error, cards = self.run_failing("internal-QA test command failed with exit code 1: AssertionError", self.certification())
         self.assertEqual(cards, {})
         _error, cards = self.run_failing(f"x | {browser_acceptance.SANDBOX_BLOCKED}: y", None)
         self.assertEqual(cards, {})
-
-
-class RenderedOwnerCommandTests(unittest.TestCase):
-    """Mission Control, in headless Chrome, shows the card with its command and Copy."""
-
-    setUp = _cards.RenderedOwnerActionCardTests.setUp
-    render = _cards.RenderedOwnerActionCardTests.render
-
-    def test_mission_control_shows_the_command_to_paste(self):
-        certification = {"board_root": self.root, "task": "event-networking",
-                         "rerun_source": {"workspace": "/Users/owner/Projects/studio", "commit": COMMIT}}
-        with mock.patch.object(board, "_run_internal_qa", side_effect=ValueError(f"x | {browser_acceptance.SANDBOX_BLOCKED}: y")), \
-                self.assertRaises(ValueError):
-            board._execute_internal_qa(COMMAND, self.root, certification=certification)
-        reading = self.render()
-        self.assertTrue(reading["sectionVisible"], reading)
-        self.assertEqual([card["title"] for card in reading["cards"]], ["Run a screen check yourself"])
-        self.assertTrue(all(card["visible"] for card in reading["cards"]))
-        self.assertIn(f"git -C /Users/owner/Projects/studio archive {COMMIT}", reading["pageText"])
-        self.assertIn(COMMAND, reading["pageText"])
-        self.assertIn("Copy", reading["pageText"])
-        self.assertIn("Paste it into Terminal and press Return.", reading["pageText"])
-        self.assertIn("browser could not run in the protected area where agents work", reading["pageText"])
 
 
 if __name__ == "__main__":

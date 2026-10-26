@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from harness import board, board_viewer, contract_check, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, runtime_identity, self_heal
+from harness import board, board_viewer, contract_check, control, control_plane, global_settings, project_chat, release_coordinator, release_preview, review_cost, runtime_identity, self_heal
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -639,6 +639,7 @@ def serve(
         # CTO question to the owner) reaches the board once per worker start
         board.configure_owner_questions(global_settings.load(settings_home).get("owner_questions"))
         contract_check.configure((global_settings.load(settings_home).get("plumbing") or {}).get("contract_check_wait_seconds"))
+        review_cost.configure(global_settings.load(settings_home).get("plumbing"))
     watchdog = ProjectWatchdog(root)
     preview_supervisor = release_preview.ReleasePreviewSupervisor(root)
     chat_action_token = secrets.token_urlsafe(32)
@@ -695,10 +696,22 @@ def serve(
         )
         bootstrap_thread = threading.Thread(target=bootstrap_server.serve_forever, daemon=True)
         bootstrap_thread.start()
-        def self_heal_create(kind: str, continues: str = "") -> dict:
+        def self_heal_create(kind: str, continues: str = "", recovery: bool = False) -> dict:
             # Unreadable Settings refuse (never launch defaults silently); a replacement continues the owner's
             # launch choice through `continues`; the Gemini availability gate applies as on every new session.
             settings_override = board_viewer.read_agent_settings_for_launch(settings_home)
+            if recovery:
+                # The one fresh attempt after repeated failed reviews (2026-10-25): the model is the owner's saved "retry once with"
+                # field for the Delivery vendor (blank = the vendor's default). Read silently; the owner is never asked at this moment.
+                document = global_settings.load(settings_home) if settings_home else {}
+                if kind == "claude_reviewer":
+                    # A review that could not be completed: one fresh Reviewer (the Settings Reviewer company, never Delivery's) on the owner's
+                    # saved "retry once with" model for that company, effort at least high. Through the Settings override so the same checks apply.
+                    return control.create(root, kind, fresh=True, settings_override=control.reviewer_retry_settings(
+                        settings_override or control.default_agent_settings(), document.get("reviewer_retry_models")))
+                choice = control.recovery_launch_choice(settings_override or control.default_agent_settings(), document.get("recovery_models"))
+                return control.create(root, kind, settings_override=settings_override, launch_choice=choice, fresh=True,
+                                      availability=board_viewer._delivery_availability(settings_home))
             return control.create(root, kind, settings_override=settings_override, continues=continues,
                                   availability=board_viewer._delivery_availability(settings_home))
 

@@ -9,6 +9,7 @@ Spec: board/tasks/2026-10-23_contract-first-checks_SPEC.md (v2).
 from __future__ import annotations
 
 import json
+import re
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -35,6 +36,76 @@ DECIDED_HEADING = "Decided before coding:"
 NOT_CHECKED = "not checked in advance"
 PARTLY_CHECKED = "partly checked"
 CHECKED = "checked"
+
+
+# --- Plain words for the owner (owner 2026-10-24: "it is gibberish") ------------------------------------------------------------------------
+PLAIN_LIMIT = 140                 # one sentence per requirement in "What will be tested"
+PLAIN_MIN_WORDS = 5
+SUMMARY_HEADING = "In plain words:"
+SUMMARY_MAX_LINES = 3
+SUMMARY_LINE_LIMIT = 200
+_PLAIN_RULES = (
+    (re.compile(r"`"), "a backtick (code)"),
+    (re.compile(r"\bsections?\s*\d|§", re.I), "a section number"),
+    (re.compile(r"\b[\w./-]+\.(?:py|js|ts|md|json|sh|html|css)\b", re.I), "a file name"),
+    (re.compile(r"\b(?:GIVEN|WHEN|THEN)\b"), "GIVEN / WHEN / THEN"),
+    (re.compile(r"\b(?:spec|delta)\b", re.I), "the word spec or delta"),
+    (re.compile(r"\b\w+\("), "a function call"),
+    (re.compile(r"\b[a-z]+(?:_[a-z0-9]+)+\b"), "a code name with underscores"),
+    (re.compile(r"\bD-\d{3}\b"), "a decision number"),
+)
+_COMMIT_ID = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+
+
+def plain_problem(value: Any, limit: int = PLAIN_LIMIT, *, min_words: int = PLAIN_MIN_WORDS) -> str:
+    """Why this is not plain words for the owner ("" when it is). Deterministic: the board and the tests use the same rules."""
+    if not isinstance(value, str) or not value.strip():
+        return "it is empty"
+    text = " ".join(value.split())
+    if len(text) > limit:
+        return f"it is {len(text)} characters; the limit is {limit}"
+    if len(text.split()) < min_words:
+        return f"it is too short to say anything ({min_words} words at least)"
+    for pattern, name in _PLAIN_RULES:
+        if pattern.search(text):
+            return f"it contains {name}, which the owner cannot read"
+    if _COMMIT_ID.search(text):
+        return "it contains a commit or code id, which the owner cannot read"
+    return ""
+
+
+PLAIN_SUMMARY_EXAMPLE = (
+    "Good: \"In plain words:\nA forecast page will show the next five days.\nYou will see a high and a low for each day.\n"
+    "Nothing for you to do.\n\n<the full requirements>\". "
+    "Bad: a block that names a spec section, a file, a function or a commit, or no block at all."
+)
+
+
+def split_plain_summary(text: Any) -> tuple[list[str], str]:
+    """(plain lines, the whole text) when the text starts with a valid "In plain words:" block, else raises ValueError with the fix.
+
+    The block is one to three short lines, then a blank line, then the full requirements. The whole stored text (block included) is what
+    the owner accepts and Delivery confirms verbatim, so the second value is the text unchanged.
+    """
+    raw = str(text or "").replace("\r\n", "\n").strip()
+    lines = raw.split("\n")
+    if not lines or lines[0].strip().lower() != SUMMARY_HEADING.lower():
+        raise ValueError(f"start the requirements with an \"{SUMMARY_HEADING}\" block for the owner: one to {SUMMARY_MAX_LINES} short lines (what will be built, what changes for them, whether they must do anything), then a blank line, then the full requirements. {PLAIN_SUMMARY_EXAMPLE}")
+    block: list[str] = []
+    index = 1
+    while index < len(lines) and lines[index].strip():
+        block.append(lines[index].strip())
+        index += 1
+    rest = "\n".join(lines[index:]).strip()
+    if not 1 <= len(block) <= SUMMARY_MAX_LINES:
+        raise ValueError(f"the \"{SUMMARY_HEADING}\" block must have one to {SUMMARY_MAX_LINES} lines, then a blank line. {PLAIN_SUMMARY_EXAMPLE}")
+    if not rest:
+        raise ValueError(f"after the \"{SUMMARY_HEADING}\" block, a blank line and the full requirements must follow. {PLAIN_SUMMARY_EXAMPLE}")
+    for number, line in enumerate(block, 1):
+        problem = plain_problem(line, SUMMARY_LINE_LIMIT, min_words=3)
+        if problem:
+            raise ValueError(f"line {number} of the \"{SUMMARY_HEADING}\" block is not plain words: {problem}. {PLAIN_SUMMARY_EXAMPLE}")
+    return block, raw
 
 
 def configure(seconds: Any) -> None:
@@ -128,10 +199,14 @@ def parse_submission(raw: str) -> dict[str, Any]:
         why = ""
         if not checks_raw:
             why = _text(item.get("why_not_checked"), f"criterion {number} needs a check or the reason it has none (why_not_checked)", CRITERION_CHARS, minimum=3)
+        plain = item.get("plain")
+        problem = plain_problem(plain)
+        if problem:
+            raise ValueError(f"criterion {number} needs a `plain` sentence the owner can read (what this protects for them, at most {PLAIN_LIMIT} characters): {problem}")
         checks, check_bytes = parse_checks(checks_raw, f"criterion {number}")
         total_bytes += check_bytes
         total_checks += len(checks)
-        criteria.append({"n": number, "text": text, "sharper": sharper, "why_not_checked": why, "checks": checks})
+        criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks})
     if total_checks > MAX_CHECKS:
         raise ValueError(f"at most {MAX_CHECKS} checks in one submission")
     if total_bytes > MAX_TOTAL_BYTES:
@@ -213,7 +288,7 @@ def criterion_label(criterion: dict[str, Any]) -> str:
 
 
 def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"n": item["n"], "criterion": item["text"], "label": criterion_label(item)} for item in criteria]
+    return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", "")} for item in criteria]
 
 
 def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int) -> str:
@@ -222,10 +297,10 @@ def reviewer_instruction(task: str, version: int, requirements: str, direction: 
         "do not reserve, claim or review anything for it, and no code exists yet. Read the owner's original direction and the "
         "requirements below and write your checks from them only (black box: commands and their printed output, HTTP calls, or visible text "
         "on a page, each as a test file that asserts the result). Then submit ONCE with "
-        f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your directive "
-        "(Independent Reviewer workflow, Contract check before coding). Ask the owner at most 4 product questions, only where you cannot write "
+        f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter "
+        "`contract-first` (the board command reference --agent <your id> --name contract-first). Ask the owner at most 4 product questions, only where you cannot write "
         "a check without guessing, each with 2 to 4 options and one recommended. The owner may go ahead without waiting and a submission after "
-        f"that, or after about {max(1, minutes)} minutes, is refused. Do not start any polling or background helper. USER ACTION: None.\n"
+        f"that, or after about {max(1, minutes)} minutes, is refused. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
         f"ORIGINAL OWNER DIRECTION:\n{direction}\nREQUIREMENTS (version {version}):\n{requirements}"
     )
 
@@ -240,5 +315,5 @@ def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], 
         "--reason \"updated for the owner's answers\" --submission <JSON file with {\"checks\": [...]}>. When nothing more needs changing, finish with "
         f"contract-check-correct --task {task} --criterion 0 --reason \"nothing more to change\" --submission <JSON file with {{\"checks\": []}}>. "
         f"The owner may go ahead without waiting and a submission after that, or after about {max(1, minutes)} minutes, is refused. "
-        "Do not start any polling or background helper. Never ask the owner anything in your terminal. USER ACTION: None."
+        "Do not start any polling or background helper. Never ask the owner anything in your terminal. USER ACTION: None. Open reference: contract-first"
     )

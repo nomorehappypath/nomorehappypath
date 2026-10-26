@@ -359,6 +359,22 @@ def _run_observed(
     return int(process.returncode or 0), (stdout + stderr).strip(), audit
 
 
+_FAILURE_SIGNS = re.compile(r"FAILED|\bERROR\b|Traceback|\berrors=|\bfailures=|\b\w*Error\b|Exception")
+
+
+def _clean_run(output: str) -> bool:
+    """True only when the output shows no sign of a failure: an empty suite that merely found nothing, never an error in setup or collection."""
+    return not _FAILURE_SIGNS.search(output or "")
+
+
+class CouldNotRun(ValueError):
+    """A stored contract check could not run (no tests found, no browser): not a pass, not a failure, nothing certified."""
+
+    def __init__(self, reason: str, output: str = ""):
+        super().__init__(reason)
+        self.reason, self.output = reason, output
+
+
 def run(
     board_root: Any,
     execution_root: Path,
@@ -374,6 +390,7 @@ def run(
     browser: dict[str, str] | None = None,
     timeout_seconds: int = 300,
     reuse: bool = True,
+    unable_not_failure: bool = False,
 ) -> dict[str, Any]:
     try:
         argv = shlex.split(command, posix=True)
@@ -431,6 +448,7 @@ def run(
         exit_code, output, process_audit = _run_observed(
             command, execution_root, child_process.with_live_board(environment, board_root), timeout_seconds,
         )
+        raw_exit = exit_code           # what the command itself returned, before any rule below changes it
         audit_manifest = _write_process_audit(board_root, process_audit)
         if machine and not test_machine.stamp_is_current(board_root, machine):
             raise ValueError(
@@ -484,6 +502,14 @@ def run(
             exit_code = 4
             problem = f"the screen check could not run: {blocked}"
         count = _test_count(output)
+        if unable_not_failure and not final_check and not process_audit["problems"] and _clean_run(output) and (
+            (blocked and raw_exit == 0) or (count == 0 and raw_exit in (0, 5)) or (raw_exit == 0 and count is None)
+        ):   # a CLEAN empty run only: Python 3.12 exits 5 when no test ran; any error, failure or traceback stays a failure
+            raise CouldNotRun(
+                f"the screen check could not start: {blocked}" if blocked else
+                "the check ran but found no tests to run" if count == 0 else "the check ran but printed no test count",
+                output,
+            )
         if exit_code == 0 and count == 0:
             exit_code = 2
             problem = "internal-QA test command reported zero executed tests"

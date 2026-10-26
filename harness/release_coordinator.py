@@ -171,7 +171,7 @@ def _route_prepared(
             f"with the board command `record-release --task {task}` (no --health-command: "
             "the board mechanically validates and reuses the exact certified full-suite "
             "success). Do not rerun certified product tests, and do not hold this release "
-            "unless a hold is recorded on the board. USER ACTION: None.",
+            "unless a hold is recorded on the board. USER ACTION: None. Open reference: release",
             source="release-coordinator",
         )
     except (ValueError, OSError):

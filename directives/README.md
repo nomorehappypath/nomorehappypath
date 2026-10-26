@@ -23,7 +23,11 @@ target project and board. It opens only local macOS Terminal sessions and is
 bound to localhost.
 
 Manual directive pasting is still supported when the control panel is not in
-use: `AGENT.md` for Delivery/Independent Reviewer and `CTO.md` for CTO.
+use: paste the role's one-page card from `cards/` (`DELIVERY.md`, `REVIEWER.md`
+or `CTO.md`). The long rules are named chapters of `AGENT.md` (Delivery and
+Independent Reviewer) and `CTO.md` (CTO); a session opens one with the board
+command `reference --agent <id> --name <chapter>`, and the card or a board
+message says which.
 
 All work is visible in the three CLIs and in auto-created
 `.harness/board/BOARD.md` and `.harness/board/events.jsonl`.

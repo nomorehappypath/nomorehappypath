@@ -22,8 +22,9 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
     def test_cto_blocks_only_material_release_issues(self):
         primary = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
         completion = " ".join((ROOT / "harness" / "directives" / "CTO_COMPLETION_DIRECTIVE.md").read_text().split())
+        self.assertIn("\n## materiality\n", (ROOT / "directives" / "CTO.md").read_text())   # directive diet: a named chapter
+        self.assertIn("Materiality", completion)
         for text in (primary, completion):
-            self.assertIn("Materiality", text)
             self.assertIn("executable evidence", text)
             self.assertIn("material impact", text)
             self.assertIn("non-blocking", text)
@@ -131,8 +132,9 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
             self.assertNotIn("routed as follow-up work", text)
             self.assertNotIn("must be repaired or recorded", text)
             self.assertIn("review summary only", text)
-        self.assertIn('$harness_root/directives/AGENT.md', launcher)
-        self.assertIn('$harness_root/directives/CTO.md', launcher)
+        # Directive diet: each role is launched with its one-page card; the full files are the chapters they open on demand.
+        for card in ("DELIVERY", "REVIEWER", "CTO"):
+            self.assertIn(f'instruction_file="directives/cards/{card}.md"', launcher)
         self.assertIn("repair_authoring", agent)
         self.assertIn("never reuses a PASS", agent)
 

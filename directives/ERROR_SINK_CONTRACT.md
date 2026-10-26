@@ -5,7 +5,7 @@ so that we can redirect the errors to an intelligent system ... in the future.
 just put the infrastructure". This file is that infrastructure: one shape and
 one set of settings, so a receiver built once can take every app's errors. The
 app implements it in its own language (a few dozen lines); nothing is shipped
-as a library. `directives/AGENT.md` ("Central error sink") says when it applies:
+as a library. `directives/AGENT.md` (chapter `error-sink`) says when it applies:
 every app, on every task.
 
 ## 1. One entry point

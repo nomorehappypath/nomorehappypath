@@ -283,7 +283,7 @@ class ControlTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertFalse(profile_sentinel.exists())
-            self.assertIn("Agent Directive", capture.read_text(encoding="utf-8"))
+            self.assertIn("Delivery Agent — hard rules", capture.read_text(encoding="utf-8"))   # the card (directive diet)
 
     def test_managed_provider_keeps_operator_git_identity_without_session_config_overrides(self):
         with TemporaryDirectory() as tmp:
@@ -650,12 +650,12 @@ class ControlTests(unittest.TestCase):
                 for _ in range(30):
                     if capture.is_file() and working_directory.is_file():
                         captured = capture.read_text(encoding="utf-8")
-                        if "Agent Directive" in captured and "No owner direction has been supplied yet" in captured and f"The target project is {root}" in captured:
+                        if "Delivery Agent — hard rules" in captured and "No owner direction has been supplied yet" in captured and f"The target project is {root}" in captured:
                             break
                     time.sleep(.1)
                 else:
                     self.fail("fake Codex command did not finish writing its prompt and working-directory sentinels")
-                self.assertIn("Agent Directive", captured)
+                self.assertIn("Delivery Agent — hard rules", captured)
                 self.assertIn("No owner direction has been supplied yet", captured)
                 self.assertEqual(working_directory.read_text(encoding="utf-8").strip(), str(execution_root))
                 self.assertIn(f"The target project is {root}", captured)

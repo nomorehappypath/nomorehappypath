@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness import board, browser_acceptance, certified_execution, claude_inbox, cto, execution_identity, gemini_runtime
+from harness import board, browser_acceptance, certified_execution, cto, execution_identity
 from tests import environment_support
 from tests import test_execute_once as base
 
@@ -246,12 +246,6 @@ class DirectivePinTests(unittest.TestCase):
         self.assertIn("prints one `FINAL CHECK: <PASS|FAIL|NOT RUN|WARNINGS ONLY|SKIPPED> <name>` line per such gate, the TEST's verdict on that check", agent)
         self.assertIn("a negative test that sees the gate correctly refuse prints PASS", agent)
         self.assertIn("refuses the run unless every such line is PASS, whatever the exit code", agent)
-
-    def test_the_cto_payload_still_fits_the_gemini_rules_budget(self):
-        size = len((ROOT / "directives/CTO.md").read_bytes()) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES)
-        self.assertLessEqual(size, 23994, "net zero or smaller than before this change (23994)")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness import board, board_surface, board_viewer, claude_inbox, contract, control, cto as cto_module, gemini_runtime, review_brief
+from harness import board, board_surface, board_viewer, contract, control, cto as cto_module, review_brief
 from tests.environment_support import require_loopback
 from tests.test_requirements_contract import context, delivery_with_direction
 
@@ -487,9 +487,9 @@ class ReleaseAndHistoryTests(_Project):
 
 
 class DirectiveTests(unittest.TestCase):
-    def test_the_cto_directive_says_open_the_path_yourself_before_pinning_and_stays_under_the_gemini_budget(self):
-        text = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        section = text[text.index("## What must never block the work"):text.index("### Findings outside the current objective")]
+    def test_the_cto_directive_says_open_the_path_yourself_before_pinning(self):
+        from harness import reference_chapters
+        section = reference_chapters.role_chapters("cto")["owner-cards"]
         self.assertIn("Open the path yourself before pinning or repeating an owner card", section)
         cto = flat("directives/CTO.md")
         self.assertIn("A card the owner cannot act on is a defect", cto)
@@ -498,8 +498,6 @@ class DirectiveTests(unittest.TestCase):
         self.assertIn('never "read the report" or "View app" for a task with no screen', cto)
         self.assertIn("for any other card verify the control or command it names exists", cto)
         self.assertIn('the first "awaiting owner" status names exactly where the thing is', cto)
-        size = len(text.encode("utf-8")) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES, f"CTO.md payload {size} bytes exceeds the Gemini rules budget")
 
     def test_the_mirror_and_delivery_directives_carry_the_rule(self):
         mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
@@ -511,6 +509,11 @@ class DirectiveTests(unittest.TestCase):
         self.assertIn('attaches each under its own `--document "<name>"`', agent)
         self.assertIn("one current document per name", agent)
         self.assertIn("Read what was delivered", board_viewer.rendered_page())
+
+
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
 
 
 if __name__ == "__main__":

@@ -352,7 +352,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             # accepted or released (recorded before holds closed themselves)
             # needs no repair; the card names the task that does.
             concluded = set(state.get("cancelled_tasks") or {}) | {
-                str(task) for task, decision in releases.items() if decision.get("decision") == "accepted"
+                str(task) for task, decision in releases.items() if board.owner_accept_is_real(state, str(task), decision)
             } | {
                 str(task) for task, record in (state.get("releases") or {}).items()
                 if isinstance(record, dict) and record.get("status") in {"VISUAL_TEST_REQUIRED", "ACCEPTED"}
@@ -368,7 +368,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             known_tasks = {str(task) for task in directions}
             accepted_tasks = {
                 str(task) for task, decision in releases.items()
-                if str(task) in known_tasks and decision.get("decision") == "accepted"
+                if str(task) in known_tasks and board.owner_accept_is_real(state, str(task), decision)
             }
             counts["passed"] = len(accepted_tasks)
             sentinels = {"AWAITING_OWNER_DIRECTION", "GLOBAL_MONITOR", "REVIEW_QUEUE"}
@@ -404,8 +404,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(gap, dict) and gap.get("state") in {"diagnosing", "owner_decision", "answered"}
                 and str(gap.get("task")) not in accepted_tasks and str(gap.get("task")) not in cancelled
             ]
-            owner_gaps = [gap for gap in open_gaps if gap.get("state") == "owner_decision"]
-            awaiting_owner = awaiting_owner | awaiting_requirements | {str(gap.get("task")) for gap in owner_gaps}
+            awaiting_owner = awaiting_owner | awaiting_requirements
             counts["awaiting_owner"] = len(awaiting_owner)
             counts["open"] = len({task for task in live if str(task) not in awaiting_owner})
             running = bool({task for task in live if str(task) not in awaiting_owner})
@@ -462,18 +461,16 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
                     "Your decision needed: the requirements are ready. Open Mission Control and "
                     "press Go ahead, or Modify to ask for changes."
                 )
-            if owner_gaps:
-                gap = owner_gaps[0]
-                latest_task = str(gap.get("task"))
-                latest_progress = (
-                    ("Your answer was received; the CTO is applying it. " if gap.get("owner_replied_at") else "Waiting for you: ")
-                    + f"{gap.get('task')} could not be fully tested ({str(gap.get('reason') or '')[:200]}). Open Mission Control and choose: "
-                    "waive this part, give me a machine where it can happen, or stop."
-                )
-            elif open_gaps:
+            if open_gaps:
                 gap = open_gaps[0]
                 latest_task = str(gap.get("task"))
-                latest_progress = f"Not fully tested: the CTO is deciding what to do ({str(gap.get('reason') or '')[:200]})."
+                latest_progress = f"Not fully tested: the harness is settling it by itself ({str(gap.get('reason') or '')[:200]})."
+            # 2026-10-25: a part the harness stopped repairing after repeated failed reviews. Information, never a request to the owner.
+            stopped = [e for e in (state.get("review_escalations") or {}).values()
+                       if e.get("status") == "could_not_finish" and str(e.get("task")) not in accepted_tasks and str(e.get("task")) not in cancelled]
+            if stopped:
+                latest_task = str(stopped[0].get("task"))
+                latest_progress = str(stopped[0].get("outcome") or "Could not finish one part of the work; nothing of it was released.")
             # Batch 2 item C: a review waiting on a signed-out reviewer stops all
             # progress; the card says so before anything else.
             needed = state.get("reviewer_needed") or {}
@@ -653,6 +650,7 @@ class ProjectManager:
             "providers": control.PROVIDERS,
             "provider_efforts": control.PROVIDER_EFFORTS,
             "provider_models": control.PROVIDER_MODELS,
+            "recovery_defaults": control.STRONGEST_MODELS,
             "provider_model_descriptions": control.PROVIDER_MODEL_DESCRIPTIONS,
             "provider_availability": {name: cli_capabilities.provider_availability(self.home, name) for name in control.PROVIDERS},
             "openai": global_settings.openai_status(self.home),
@@ -1724,7 +1722,7 @@ def make_handler(manager: ProjectManager):
                 if self.path == "/api/settings":
                     value = self._body()
                     updated = global_settings.update_agent_settings(
-                        manager.home, value.get("agent_settings", value),
+                        manager.home, value.get("agent_settings", value), value.get("recovery_models"), value.get("reviewer_retry_models"),
                     )
                     return self._send(200, {**manager.settings_payload(), **updated})
                 if self.path == "/api/update/check":

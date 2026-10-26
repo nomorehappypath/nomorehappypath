@@ -60,9 +60,21 @@ def submission(questions=None, checks=True, **extra) -> dict:
 QUESTION = {"text": "Which greeting should it print?", "options": ["hello", "hi there", "good day"], "recommended": 0, "affects": [1]}
 
 
+PLAIN_LINE = "This requirement protects what you asked for."
+
+
+def plain_ready(value):
+    """The early-look submission needs a plain sentence per requirement; fixtures that do not care about it get a harmless one."""
+    if isinstance(value, dict):
+        for criterion in value.get("criteria") or []:
+            if isinstance(criterion, dict):
+                criterion.setdefault("plain", PLAIN_LINE)
+    return value
+
+
 def write_json(directory: Path, name: str, value) -> str:
     path = directory / name
-    path.write_text(json.dumps(value), encoding="utf-8")
+    path.write_text(json.dumps(plain_ready(value)), encoding="utf-8")
     return str(path)
 
 
@@ -607,8 +619,9 @@ class StoredChecksRunTests(_Fixture):
         outside = self.base / "outside"
         outside.mkdir()
         _repo, commit = self.committed_repo("hello", {".contract-checks": (str(outside),)})
-        with self.assertRaisesRegex(ValueError, r"\.contract-checks"):
-            self.run_checks(commit)
+        run = self.run_checks(commit)       # the checks could not be placed: they did not run (no failure of the work, no block)
+        self.assertEqual(run["run"]["status"], "partly")
+        self.assertIn(".contract-checks", run["run"]["did_not_run"]["1"])
         self.assertEqual(list(outside.iterdir()), [], "nothing was written through the link")
 
     def test_no_saved_version_is_recorded_honestly_not_as_a_pass(self):
@@ -658,6 +671,8 @@ class FinalReviewFlowTests(unittest.TestCase):
         root = self.root
         (root / "test_smoke.py").write_text("import unittest\n\nclass Smoke(unittest.TestCase):\n    def test_passes(self): self.assertTrue(True)\n")
         (root / "hello.py").write_text("print('hello')\n")
+        for extra in ("test_views.py", "test_models.py"):    # other modules at the repository root, as real projects have: an unquoted pattern would expand to them
+            (root / extra).write_text("import unittest\n\nclass Extra(unittest.TestCase):\n    def test_it(self):\n        self.assertTrue(True)\n")
         (root / ".gitignore").write_text(".harness/\n")
         (root / "ledger.md").write_text(HEADER + "| S-001 | Delivery behavior remains correct under the focused smoke check. | `python3 -m unittest test_smoke` | Holds | PASS: executed | PASS |\n")
         (root / "challenge.md").write_text(HEADER + "| S-101 | The independent check confirms the behavior through a distinct test scope. | `python3 -m unittest test_smoke -k passes` | Holds | PASS: executed | PASS |\n")
@@ -756,7 +771,7 @@ class SurfaceTests(unittest.TestCase):
     def request(operation, arguments, nonce, artifact=None):
         body = {"protocol": "1", "nonce": nonce, "operation": operation, "arguments": [operation, *arguments]}
         if artifact is not None:
-            payload = json.dumps(artifact).encode("utf-8")
+            payload = json.dumps(plain_ready(artifact)).encode("utf-8")
             body["artifacts"] = {"submission": {"content": base64.b64encode(payload).decode("ascii"), "length": len(payload),
                                                 "sha256": hashlib.sha256(payload).hexdigest(), "media_type": "text/plain"}}
         return body

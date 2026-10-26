@@ -29,7 +29,7 @@ from harness import cli_capabilities, codex_app_server, global_settings
 from harness.interactive_supervisor import _remote_tui_command
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTIVE = (ROOT / "directives" / "AGENT.md").read_text(encoding="utf-8").rstrip("\n")
+DIRECTIVE = (ROOT / "directives" / "cards" / "DELIVERY.md").read_text(encoding="utf-8").rstrip("\n")   # the system layer is the role's card since the directive diet
 MARKER = "HARNESS-DIRECTIVE-" + hashlib.sha256(DIRECTIVE.encode("utf-8")).hexdigest()[:16]
 # A terminal answers these queries; a bare PTY must too, or the TUI waits.
 TERMINAL_REPLIES = ((b"\x1b[6n", b"\x1b[1;1R"), (b"\x1b[c", b"\x1b[?62;22c"), (b"\x1b[?u", b"\x1b[?0u"),

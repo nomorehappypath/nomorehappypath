@@ -51,13 +51,13 @@ ALL_BOARD_OPERATIONS = {
     "declare-build", "collect-build",
     "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
-    "owner-direction", "clear-hold", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
-    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
+    "owner-direction", "clear-hold", "reconcile-unmerged-accept", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
+    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result",
+    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "review-support", "retained-plan",
     "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair",
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
@@ -67,12 +67,13 @@ ALL_BOARD_OPERATIONS = {
     "screen-check", "screen-script", "amend-exclusions",
     "supersede-subtask",
     "close-released",
-    "need-test-machine", "machine-status", "machine-baseline",
+    "need-test-machine", "machine-status", "machine-baseline", "reference",
 }
 # hook-event: every agent's own CLI reports its lifecycle and asks for tool
 # decisions (plumbing Stage 1); identity is the session's, never the caller's.
+# reference: every role opens one named chapter of its reference directive (2026-10-25 directive diet); read-only.
 # machine-status: every role reads the test machine's current connection, authorization and rule (2026-10-20).
-COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline", "hook-event", "machine-status"}
+COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline", "hook-event", "machine-status", "reference"}
 # Delivery and the Reviewer ask for the owner's test machine and mark tool changes themselves; no CTO is needed.
 MACHINE_OPERATIONS = {"need-test-machine", "machine-baseline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
@@ -83,7 +84,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "declare-build", "collect-build",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
-    "contract-checks", "ask-owner",
+    "contract-checks", "ask-owner", "contract-check-skip",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "resolve-repair-package", "complete", "claim-release-repair",
@@ -104,11 +105,11 @@ REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # 2026-10-23: the Reviewer's one early look at the requirements, and the correction of a stored check.
     "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
     "execute-challenge", "findings", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package",
+    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package", "review-support", "retained-plan",
     "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
-    "contract-checks", "ask-owner",   # contract-checks is read-only: the CTO can see what a failing early check says
+    "contract-checks", "ask-owner", "contract-check-skip",   # contract-checks is read-only: the CTO can see what a failing early check says
     "record-finding", "finding-triage", "finding-resolved", "findings",
     # Owner 2026-10-14: the CTO sets an in-scope finding aside as not material,
     # and records the owner's waiver of a contract deliverable.
@@ -159,6 +160,7 @@ UPLOAD_ARGUMENTS = {
     "screen-script": ("--steps", "steps", True),
     "contract-check-submit": ("--submission", "submission", True),
     "contract-check-correct": ("--submission", "submission", True),
+    "review-support": ("--submission", "submission", True),
 }
 RAW_PATH_OPERATIONS = {"attach-workspace", "bind-repository"}
 IDENTITY_AGENT_ARGUMENT = "--agent"
@@ -168,15 +170,15 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
-    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger",
+    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "review-support", "retained-plan",
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
     "supersede-subtask", "close-released", "deliverable-waived", "deliverable-file", "screen-script", "amend-exclusions",
-    "need-test-machine", "machine-status", "machine-baseline",
+    "need-test-machine", "machine-status", "machine-baseline", "reference",
 }
 PROTECTED_ARGUMENTS = {
     "--agent", "--session-id", "--task", "--role", "--vendor", "--name",
@@ -205,9 +207,9 @@ CONCURRENT_BOARD_OPERATIONS = {
 # command (finding: agent commands failed under load while the worker
 # reported ready). They skip only the gateway's coarse serialization; the
 # board's own file lock still orders every state access.
-SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status"}
+SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status", "reference"}
 # A refused read changes nothing, so it never opens a hold (backlog #15).
-READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks"}
+READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks", "retained-plan", "reference"}
 
 
 # Reserved legacy frame sentinel (pre-1.0 wire format); kept for compatibility.

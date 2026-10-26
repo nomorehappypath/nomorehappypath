@@ -17,7 +17,7 @@ from pathlib import Path
 from harness import board, board_viewer, browser_acceptance, control
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
-from tests.test_contract_first_checks import ledger, TEST_FILE
+from tests.test_contract_first_checks import ledger, TEST_FILE, plain_ready
 from tests.test_requirements_contract import context, delivery_with_direction
 
 PROBE = r"""
@@ -89,7 +89,7 @@ class RenderedContractCheckTests(unittest.TestCase):
             agent_b = delivery_with_direction(root, "TASK-QUESTIONS")
             board.record_requirement_proposal(root, agent_b["id"], "Final agreed requirements: a program prints a greeting.")
             path = base / "submission.json"
-            path.write_text(json.dumps({"criteria": criteria, "questions": questions}), encoding="utf-8")
+            path.write_text(json.dumps(plain_ready({"criteria": criteria, "questions": questions})), encoding="utf-8")
             board.record_contract_check_submission(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
             agent_a = delivery_with_direction(root, "TASK-READING")
             board.record_requirement_proposal(root, agent_a["id"], "Final agreed requirements: a page shows a clock.")
@@ -127,11 +127,11 @@ class RenderedContractCheckTests(unittest.TestCase):
 
             reading = before["TASK-READING"]
             self.assertIn("The reviewer is reviewing the contract", reading["text"])
-            self.assertEqual([b["text"] for b in reading["buttons"]], ["Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual([b["text"] for b in reading["buttons"]], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
             self.assertTrue(all(b["visible"] for b in reading["buttons"]), "the Go ahead button is not hidden or held")
 
             card = before["TASK-QUESTIONS"]
-            self.assertEqual([b["text"] for b in card["buttons"]], ["Answer the questions", "Go ahead using the recommended answers", "Modify…"])
+            self.assertEqual([b["text"] for b in card["buttons"]], ["Copy", "Answer the questions", "Go ahead using the recommended answers", "Modify…"])
             self.assertTrue(all(b["visible"] for b in card["buttons"]))
             self.assertLessEqual(len(card["questions"]), 4)
             first = card["questions"][0]
@@ -143,7 +143,7 @@ class RenderedContractCheckTests(unittest.TestCase):
 
             fallback = before["TASK-FALLBACK"]
             self.assertIn("Not checked in advance", fallback["text"])
-            self.assertEqual(fallback["buttons"][0]["text"], "Go ahead — this is the contract")
+            self.assertEqual([b["text"] for b in fallback["buttons"]][:2], ["Copy", "Go ahead — this is the contract"])
 
             self.assertNotIn("Could not", result["note"])
             self.assertIn("Your answers are recorded under", result["after"])

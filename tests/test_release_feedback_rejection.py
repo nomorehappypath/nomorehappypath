@@ -213,5 +213,10 @@ process.stdout.write(JSON.stringify({gate:taskGate(state,'TASK',{},null,[],0,0),
         self.assertIn("Reason unavailable for this older response.", unavailable["panel"])
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

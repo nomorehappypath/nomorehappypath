@@ -348,8 +348,12 @@ process.stdout.write(JSON.stringify(points));
         )[0]["html"]
         self.assertIn("One piece of work · an independent reviewer must check it before you try it", atomic)
         self.assertIn("· atomic", atomic)
-        self.assertIn("Product Management structure", atomic)
-        self.assertIn("One cohesive correction", atomic)
+        # owner 2026-10-24: the structure wording is technical; it is kept, behind "Technical details", not on the main view
+        self.assertNotIn("Product Management structure", atomic)
+        technical = atomic.split('<details class="technical-details"', 1)[1].split("</details>", 1)[0]
+        self.assertIn("· atomic", technical)
+        self.assertIn("One cohesive correction", technical)
+        self.assertNotIn("· atomic", atomic.replace(technical, ""))
         application = self.rendered_task_cards(
             {
                 "delivery_plans": {"APP": {"mode": "application", "rationale": "Several capabilities", "subtasks": {

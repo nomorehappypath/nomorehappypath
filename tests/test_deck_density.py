@@ -4,7 +4,6 @@ more than 3 items or about 50 words of body text on a slide is a material findin
 import unittest
 from pathlib import Path
 
-from harness import claude_inbox, gemini_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL = ("directives/AGENT.md", "harness/directives/CTO_COMPLETION_DIRECTIVE.md",
@@ -46,9 +45,16 @@ class DeckDensity(unittest.TestCase):
         for path in FULL:
             self.assertIn("Text deliverables: for text a human reads (deck, copy, strategy, report) the substance is the product", flat(path))
 
-    def test_cto_payload_stays_in_the_gemini_budget(self):
-        size = len((ROOT / "directives/CTO.md").read_bytes()) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES)
+    def test_the_cards_send_delivery_and_the_reviewer_to_the_deck_chapter(self):
+        # Directive diet: the card is what is always loaded; the counting rules sit in the `text-deliverables` chapter it names.
+        from harness import reference_chapters
+        for role in ("engineering", "qa"):
+            rules = [sentence for _n, sentence, targets in reference_chapters.card_rules(role) if "text-deliverables" in targets and "50 words" in sentence]
+            self.assertTrue(rules, role)
+            self.assertIn("3 items", rules[0])
+        chapter = reference_chapters.role_chapters("engineering")["text-deliverables"]
+        self.assertIn("Slide decks (client-facing): density is content, not polish", chapter)
+        self.assertIn("text inside an image counts", " ".join(chapter.split()))
 
 
 if __name__ == "__main__":

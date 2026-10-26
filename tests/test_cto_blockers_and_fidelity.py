@@ -19,9 +19,10 @@ class CtoBlockersAndFidelity(unittest.TestCase):
         self.cto = flat("directives/CTO.md")
         self.mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
 
-    def test_launcher_loads_the_directive_whole(self):
+    def test_launcher_loads_the_cto_card(self):
+        # Directive diet: the CTO starts with its one-page card; CTO.md is the reference opened by chapter.
         launcher = (ROOT / "scripts/run_managed_agent.sh").read_text()
-        self.assertIn('directive="$(<"$harness_root/directives/CTO.md")"', launcher)
+        self.assertIn('instruction_file="directives/cards/CTO.md"', launcher)
 
     def test_reported_blocker_is_material_only_while_no_authorized_route_exists(self):
         for text in (self.cto, self.mirror):
@@ -37,7 +38,7 @@ class CtoBlockersAndFidelity(unittest.TestCase):
         self.assertIn("never for an agent's own tool", self.cto)
         # the standing owner-only steps are kept, and a wrong card is cleared, not left pinned
         self.assertIn("sign-in and token creation", self.cto)
-        self.assertIn('"Run a screen check yourself" card', self.cto)
+        self.assertNotIn('"Run a screen check yourself" card', self.cto, "that prompt no longer exists (2026-10-25)")
         self.assertIn("clear it with `owner-action-done`", self.cto)
         self.assertIn("never for an agent's own tool", self.mirror)
 

@@ -16,10 +16,13 @@ import re
 import unittest
 from pathlib import Path
 
+from harness import reference_chapters
+
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = ROOT / "directives" / "AGENT.md"
 CTO = ROOT / "directives" / "CTO.md"
-HEADING = "### Minimum security baseline"
+HEADING = "## security-baseline"      # directive diet (2026-10-25): the baseline is the chapter of that name
+REVIEWER_BLOCK = "**Security baseline (owner, 2026-10-02).**"
 WORD_CAP = 360
 
 
@@ -28,20 +31,19 @@ def flat(text: str) -> str:
 
 
 def baseline_section(text: str) -> str:
-    start = text.index(HEADING)
-    end = text.index("\n### ", start + len(HEADING))
-    return text[start:end]
+    """The Delivery half of the chapter: everything before the Reviewer's checking rule that sits in the same chapter."""
+    chapter = reference_chapters.chapters(text)["security-baseline"]
+    return chapter[:chapter.index(REVIEWER_BLOCK)]
 
 
 class SecurityBaselineTests(unittest.TestCase):
     def setUp(self):
         self.text = AGENT.read_text(encoding="utf-8")
 
-    def test_the_baseline_sits_once_in_the_delivery_workflow(self):
-        self.assertEqual(self.text.count(HEADING), 1)
-        position = self.text.index(HEADING)
-        self.assertLess(self.text.index("## Delivery Agent workflow"), position)
-        self.assertLess(position, self.text.index("## Independent Reviewer workflow"))
+    def test_the_baseline_is_one_chapter_that_both_cards_point_at(self):
+        self.assertEqual(self.text.count(HEADING + "\n"), 1)
+        for role in ("engineering", "qa"):
+            self.assertTrue(any("security-baseline" in targets for _n, _s, targets in reference_chapters.card_rules(role)), role)
 
     def test_every_professional_default_is_covered(self):
         section = flat(baseline_section(self.text))
@@ -58,7 +60,7 @@ class SecurityBaselineTests(unittest.TestCase):
             "may act on the record they ask for",  # access to records
             "Rate-limit any public endpoint that spends money",  # costly endpoints
             "never in a response",  # leaked errors
-            "Every error goes through the Central error sink below",  # 2026-10-12
+            "Every error goes through the Central error sink (chapter `error-sink`)",  # 2026-10-12
             "standard audit once before delivery",  # dependencies
             "Limit uploads by type and size",  # uploads
             "Debug mode",  # delivered settings
@@ -74,12 +76,12 @@ class SecurityBaselineTests(unittest.TestCase):
         self.assertLessEqual(words, WORD_CAP, "the baseline must stay short, not grow into a section")
 
     def test_the_quality_bar_cannot_dismiss_an_applicable_item(self):
-        quality_bar = flat(self.text[self.text.index("### Delivery quality bar"):self.text.index(HEADING)])
+        quality_bar = flat(reference_chapters.chapters(self.text)["materiality"])
         material = quality_bar[quality_bar.index("Material, and always in scope"):quality_bar.index("Procedural, and never admitted")]
-        self.assertIn("an applicable item of the Minimum security baseline below missing or broken", material)
+        self.assertIn("an applicable item of the Minimum security baseline (chapter `security-baseline`) missing or broken", material)
 
     def test_the_reviewer_checks_it_only_where_it_applies(self):
-        reviewer = flat(self.text[self.text.index("## Independent Reviewer workflow"):])
+        reviewer = flat(reference_chapters.chapters(self.text)["security-baseline"])
         self.assertIn("**Security baseline (owner, 2026-10-02).**", reviewer)
         self.assertIn("only where the app has that feature", reviewer)
         self.assertIn("A missing or broken applicable item is material: FAIL on it.", reviewer)

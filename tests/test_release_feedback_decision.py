@@ -94,5 +94,10 @@ process.stdout.write(JSON.stringify(nodes.tasks.children[0].innerHTML));
                 board.record_release_decision(root, "TASK-REASON", "not_accepted")
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

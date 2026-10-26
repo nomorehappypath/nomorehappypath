@@ -10,6 +10,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from harness import reference_chapters
+
 AGENT = Path(__file__).resolve().parents[1] / "directives" / "AGENT.md"
 
 RULE = """\
@@ -42,21 +44,15 @@ material."""
 
 
 class EndToEndResultRuleTests(unittest.TestCase):
-    def test_the_owner_rule_is_verbatim_right_after_what_justifies_a_fail(self):
+    def test_the_owner_rule_is_verbatim_and_alone_in_its_chapter_next_to_what_justifies_a_fail(self):
+        # Directive diet (2026-10-25): the rule is the whole of chapter `end-to-end`; "What justifies a FAIL" is in `materiality`.
         text = AGENT.read_text(encoding="utf-8")
         self.assertEqual(text.count(RULE), 1, "the owner's rule must appear verbatim, once")
-        workflow = text.index("## Independent Reviewer workflow")
-        fail_rule = text.index("**What justifies a FAIL (owner, 2026-09-29).**")
-        rule = text.index(RULE)
-        ledger = text.index("The Challenge Ledger admits material rows only")
-        self.assertLess(workflow, fail_rule)
-        self.assertLess(fail_rule, rule)
-        self.assertLess(rule, ledger, "inserted before the Challenge Ledger paragraph")
-        between = text[fail_rule:rule]
-        self.assertTrue(between.rstrip().endswith("material-rows-only rule for the Challenge Ledger below."),
-                        "immediately after the What-justifies-a-FAIL paragraph")
-
-
+        chapters = reference_chapters.chapters(text)
+        self.assertEqual(chapters["end-to-end"], "## end-to-end\n\n" + RULE + "\n")
+        self.assertIn("**What justifies a FAIL (owner, 2026-09-29).**", chapters["materiality"])
+        self.assertTrue(any("end-to-end" in targets for _n, _s, targets in reference_chapters.card_rules("qa")),
+                        "the Reviewer card sends the reviewer to the chapter")
 
 
 class NotRunIsNotPassedRuleTests(unittest.TestCase):
@@ -95,7 +91,7 @@ class LongWalkRuleTests(unittest.TestCase):
         text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
         for words in ("The end-to-end walk takes the time it takes",
                       "explicit long `timeout`",
-                      "That is not the board polling the no-loops rule above is about",
+                      "That is not the board polling the no-loops rule in chapter `board-protocol` is about",
                       "Never stop at ten minutes",
                       "never split the walk into separate pieces and call that the end-to-end test",
                       "mark the verdict `TASK DONE: NOT TESTED`"):

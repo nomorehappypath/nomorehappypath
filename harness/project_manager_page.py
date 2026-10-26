@@ -333,6 +333,7 @@ PAGE = r'''<!doctype html>
           <div class="connection-result" id="openai-result" role="status" aria-live="polite"></div>
         </section>
         <div class="settings-cards" id="settings-fields"><div class="skeleton"><div class="spinner" aria-label="Loading settings"></div></div></div>
+        <div class="settings-cards" id="recovery-fields"></div>
         <p class="settings-notice" id="settings-notices" role="status" aria-live="polite" hidden></p>
         <div class="settings-footer"><p class="settings-error" id="settings-error" role="alert" aria-live="polite"></p><button class="button" type="submit" id="settings-save">Save agent settings</button></div>
       </form>
@@ -448,13 +449,13 @@ Start-Service sshd</pre>
             <li><strong>The agents set up the machine themselves.</strong> After the one-time setup above, they connect to it over ssh and install the build and test tools they need there; you do not install those or type commands into the machine to get the work done.</li>
             <li><strong>The program is tested on the real Windows machine</strong>, and the independent reviewer (from the other AI company) runs the tests again on the same machine in its own folder.</li>
             <li><strong>You are asked for the password again after any stop.</strong> Pausing, closing or restarting the project, or a key that stops working, makes the <strong>Test machine</strong> card ask for the password again. Enter it and press Connect; the agents carry on. The same <strong>Test machine</strong> button is in the project&rsquo;s own header.</li>
-            <li><strong>If part of the work could not be tested, you are told.</strong> The project says <strong>Not fully tested</strong> as soon as a review ends that way. When the cause is something only you control (for example the machine&rsquo;s account is an administrator, so a &ldquo;permission denied&rdquo; case can never happen there), or when the agents could not settle it between themselves in three rounds, the project says <strong>Waiting for you</strong> and a card asks you to choose: <em>waive this part</em> (say which part), <em>give me a machine where it can happen</em>, or <em>stop this task</em>. Send your choice with <strong>Message the CTO</strong>. The card then says your answer was received, and it stays open until the CTO has applied it (recorded the waiver, arranged the retest, or stopped the task); a paused project must be resumed for the agents to act. Security, the independent review itself and the integrity of the code cannot be waived, and defects the reviewer found are not part of a waiver. The same untouched work is not sent for review again while you decide; a changed version of the code, a reconnected or changed machine, or a replacement reviewer can still trigger a new attempt, and that is expected.</li>
+            <li><strong>If part of the work could not be tested, you are told.</strong> The project says <strong>Not fully tested</strong> as soon as a review ends that way, and the agents settle it themselves; you are not asked to wait or to choose. If it still cannot be completed after the safety nets chosen in Settings, the task says <strong>could not finish</strong> and nothing ships. Security, the independent review itself and the integrity of the code cannot be waived.</li>
             <li><strong>When it passes, you get the program: Get the build.</strong> For a new task whose Delivery declared a program build, the acceptance card shows <strong>Get the build</strong> instead of <strong>View app</strong> (a Windows program has nothing to open in a browser; a task that also delivers a web app keeps View app). Projects accepted before this existed keep their old card; a new task is needed to get a program this way. It lists each file with its size and its SHA-256 fingerprint, which machine it was built and tested on, and from which version of the code; it says which Windows it is for, what you need (for example Administrator rights), the steps to try it and what you should see; a line under each file says whether it was started on the test machine before it was collected.</li>
           </ol>
           <p><strong>How to try the program.</strong> Press <strong>Download</strong>, then check that the file is the one that was tested: on Windows run <code>Get-FileHash file.exe</code> in PowerShell (on a Mac <code>shasum -a 256 file</code>, on Linux <code>sha256sum file</code>) and compare it with the SHA-256 on the card; they must match. If they do not, stop and report it: do not run the file. Then follow the steps on the card on a compatible Windows machine (the program is for Windows even when Mission Control runs on a Mac or Linux computer). Windows may warn you that the program is from an unknown publisher: the programs are not code-signed, so run one only because you asked for it. The download keeps working after you accept the work and after you destroy the test machine.</p>
           <ul class="help-list">
             <li><strong>What the app does not do.</strong> It never creates, resets or deletes your Windows machine; one machine serves one project; keep it a throwaway; it does not run on Windows itself (only the machine under test is Windows); it does not sign or publish your program; it does not run the program for you.</li>
-            <li><strong>What a test can and cannot show.</strong> The tests only prove what that one machine can show. When a case cannot happen there, the reviewer says <strong>NOT TESTED</strong> and you decide, as above.</li>
+            <li><strong>What a test can and cannot show.</strong> The tests only prove what that one machine can show. When a case cannot happen there, the reviewer says <strong>NOT TESTED</strong> and the project is marked <strong>Not fully tested</strong>, as above.</li>
           </ul>
         </section>
 
@@ -976,6 +977,13 @@ Start-Service sshd</pre>
           <div class="connection-result ${resultClass}" data-settings-result="${role.id}" role="status" aria-live="polite">${esc(resultText)}</div>
         </section>`;
       }).join('');
+      // "If repairs keep failing, retry once with": one choice per vendor, saved with the rest; the harness reads it silently when it is needed.
+      q('#recovery-fields').innerHTML = `<section class="settings-card" data-recovery-card>
+          <div><h2>If repairs keep failing</h2><p class="settings-card-copy">When the same part of your project fails its independent check three times, the harness tries once more with a fresh Delivery agent on the model chosen here. If that also fails, it stops working on that part and tells you plainly; it never asks you at that moment. Leave a vendor on its default to use the strongest model in its list.</p>
+          <p class="settings-card-copy">When a review cannot be completed (the Reviewer says a part could not be tested), the harness starts one fresh Reviewer on the model chosen below, from the other AI company than the one writing the work. If that also cannot complete it, that part is reported as not finished and nothing from it is released.</p></div>
+          ${[['recovery', 'If repairs keep failing, retry once with', 'recovery_models'], ['reviewer-retry', "If the review can't be completed, retry once with", 'reviewer_retry_models']].map(([kind, words, field]) => providers.map(([id, provider]) => { const models = value.provider_models?.[id] || []; const chosen = value[field]?.[id] || ''; const fallback = value.recovery_defaults?.[id] || ''; const known = !chosen || models.includes(chosen);
+            return `<div class="field"><label for="${kind}-${esc(id)}">${esc(words)} (${esc(provider.short || provider.label)})</label><select id="${kind}-${esc(id)}" data-${kind}-model="${esc(id)}"><option value=""${chosen ? '' : ' selected'}>Default: ${esc(fallback)}</option>${known ? '' : `<option value="${esc(chosen)}" selected>${esc(chosen)}</option>`}${models.map((model) => `<option value="${esc(model)}"${model === chosen ? ' selected' : ''}>${esc(model)}</option>`).join('')}</select></div>`; }).join('')).join('')}
+        </section>`;
       const markRetest = (role) => {
         const box = q(`[data-settings-result="${role}"]`);
         box.className = 'connection-result';
@@ -1035,7 +1043,7 @@ Start-Service sshd</pre>
       q('#settings-error').textContent = '';
       save.disabled = true;
       try {
-        renderSettings(await api('/api/settings', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({agent_settings: agentSettings})}));
+        renderSettings(await api('/api/settings', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({agent_settings: agentSettings, recovery_models: Object.fromEntries([...document.querySelectorAll('[data-recovery-model]')].map((select) => [select.dataset.recoveryModel, select.value])), reviewer_retry_models: Object.fromEntries([...document.querySelectorAll('[data-reviewer-retry-model]')].map((select) => [select.dataset.reviewerRetryModel, select.value]))})}));
         status('Global agent settings saved. They will apply to new sessions in every project.');
       } catch (error) {
         q('#settings-error').textContent = error.message;

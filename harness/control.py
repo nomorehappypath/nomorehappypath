@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -122,6 +123,12 @@ PROVIDER_MODELS = {
         "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
     ],
 }
+# "If repairs keep failing, retry once with": the default of that Settings field for each vendor is the strongest model of the vendor's own list
+# above (the lists are suggestions, newest first, so this says which one is strongest). Kept next to the catalog so the two are edited together;
+# a test pins every entry to the catalog. Gemini's field exists but is never live-tested.
+STRONGEST_MODELS = {"codex": "gpt-6-astra", "claude": "claude-fable-5-1[1m]", "gemini": "gemini-3.1-pro-high"}
+RECOVERY_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max", "ultra")
+RECOVERY_MIN_EFFORT = "high"
 PROVIDER_DEFAULT_MODELS = {"codex": "gpt-5.6-sol", "claude": "opus", "gemini": "gemini-3.1-pro-high"}
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-\[\]]{0,119}$")
 # Backward-compatible union for older callers; validation is provider-specific.
@@ -716,10 +723,48 @@ def validated_launch_choice(settings: dict[str, dict[str, str]], role: str, choi
     return {"provider": provider, "model": model, "effort": effort, "note": note}
 
 
+def validated_recovery_models(value: Any) -> dict[str, str]:
+    """The saved "retry once with" model of each vendor; blank or missing means the vendor's default."""
+    if value is None or value == "":
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("the repair-retry models must be an object with one entry per vendor")
+    result: dict[str, str] = {}
+    for provider in PROVIDERS:
+        model = str(value.get(provider) or "").strip()
+        result[provider] = normalize_provider_model(provider, model) if model else ""
+    return result
+
+
+def recovery_launch_choice(settings: dict[str, dict[str, str]], recovery_models: Any = None, role: str = "delivery") -> dict[str, str]:
+    """The one retry's provider, model and effort, chosen silently from Settings (the owner is never asked at that moment).
+
+    `role="delivery"` (the one fresh attempt after repeated failed reviews) or `"reviewer"` (the one fresh Reviewer when a review cannot be completed).
+    Vendor: that role's vendor in Settings (so the Reviewer stays another vendor than Delivery). Model: the owner's saved field for that vendor, else the
+    vendor's default (`STRONGEST_MODELS`). Effort: the role's own effort, raised to at least high."""
+    provider = str(settings[role]["provider"])
+    saved = validated_recovery_models(recovery_models).get(provider, "")
+    model = saved or STRONGEST_MODELS[provider]
+    effort = str(settings[role].get("effort") or RECOVERY_MIN_EFFORT)
+    order = RECOVERY_EFFORT_ORDER
+    if provider == "gemini" or effort not in order or order.index(effort) < order.index(RECOVERY_MIN_EFFORT):
+        effort = RECOVERY_MIN_EFFORT
+    if provider == "gemini":
+        model, effort, _ = gemini_pair(model, effort, repair=False)    # the saved model and the raised effort must agree before launch
+    return {"provider": provider, "model": model, "effort": effort}
+
+
+def reviewer_retry_settings(settings: dict[str, dict[str, str]], reviewer_retry_models: Any = None) -> dict[str, dict[str, str]]:
+    """Settings for the one fresh Reviewer of a review that could not be completed: the Reviewer's own vendor and the owner's saved model for it."""
+    return {**settings, "reviewer": {**settings["reviewer"], **recovery_launch_choice(settings, reviewer_retry_models, role="reviewer")}}
+
+
 def create(root: Path, kind: str, task: str = "", color: str = "black",
            settings_override: dict[str, dict[str, str]] | None = None, continues: str = "",
            launch_choice: dict[str, Any] | None = None,
-           availability: "Callable[[str], dict[str, Any]] | None" = None) -> dict[str, Any]:
+           availability: "Callable[[str], dict[str, Any]] | None" = None, fresh: bool = False) -> dict[str, Any]:
+    """`fresh=True` (the one review-recovery attempt, 2026-10-25): a blank conversation. The newest ended session's CLI conversation and its undelivered
+    messages are NOT inherited; the task is bound by the caller (`board.bind_replacement`) and the brief arrives through the board."""
     if kind not in KINDS:
         raise ValueError("unknown session kind")
     task = task.strip()
@@ -823,7 +868,8 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             # The runner's plan for the CLI conversation (continue / fresh and why), shown on the agent card.
             "cli_launch_reason": None,
         }
-        _inherit_cli_memory(state, session, continues)
+        if not fresh:
+            _inherit_cli_memory(state, session, continues)
         state["sessions"][session_id] = session
         return dict(session)
 
@@ -1118,6 +1164,28 @@ def note_cli_exec(root: Path, session_id: str) -> dict[str, Any]:
             raise ValueError(f"unknown managed session: {session_id}")
         session["launch_exec_at"] = now()
         return {"session_id": session_id, "launch_exec_at": session["launch_exec_at"]}
+
+
+MAX_INSTRUCTION_RECORDS = 50
+
+
+def instruction_record(file: str, text: bytes, carrier: str, launch_mode: str) -> dict[str, Any]:
+    """What the harness delivered to an agent at one launch: the file, its size as delivered, its hash, how it rode and which kind of launch."""
+    if carrier not in {"system_layer", "first_message"}:
+        raise ValueError("the carrier is system_layer or first_message")
+    return {"file": file, "bytes": len(text), "sha256": hashlib.sha256(text).hexdigest(), "carrier": carrier, "launch_mode": launch_mode}
+
+
+def note_instruction(root: Path, session_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    """One entry per actual launch (the newest also stays as `instruction_delivery`), so the sum over a session is those entries."""
+    with locked_state(root) as state:
+        session = state.get("sessions", {}).get(session_id)
+        if not session:
+            raise ValueError(f"unknown managed session: {session_id}")
+        entry = {"launch": int(session.get("cli_launches") or 0), "at": now(), **record}
+        session["instruction_delivery"] = entry
+        session["instruction_deliveries"] = (list(session.get("instruction_deliveries") or []) + [entry])[-MAX_INSTRUCTION_RECORDS:]
+        return entry
 
 
 def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
@@ -1930,6 +1998,11 @@ def main(argv: list[str] | None = None) -> int:
     launch_parser.add_argument("--reason", default="", help="the launch plan's reason, shown on the agent card")
     exec_marker_parser = subparsers.add_parser("note-cli-exec")
     exec_marker_parser.add_argument("--session-id", required=True)
+    instruction_parser = subparsers.add_parser("note-instruction", help="record what rules text was delivered at this launch (the text arrives on standard input)")
+    instruction_parser.add_argument("--session-id", required=True)
+    instruction_parser.add_argument("--file", required=True)
+    instruction_parser.add_argument("--carrier", required=True)
+    instruction_parser.add_argument("--launch-mode", default="fresh")
     failed_parser = subparsers.add_parser("launch-failed")
     failed_parser.add_argument("--session-id", required=True)
     failed_parser.add_argument("--pid", required=True, type=int)
@@ -1964,6 +2037,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "note-cli-exec":
         print(json.dumps(note_cli_exec(context_from_args(args), args.session_id), sort_keys=True))
+        return 0
+    if args.command == "note-instruction":
+        record = instruction_record(args.file, sys.stdin.buffer.read(), args.carrier, args.launch_mode)
+        print(json.dumps(note_instruction(context_from_args(args), args.session_id, record), sort_keys=True))
         return 0
     if args.command == "launch-failed":
         # The shell is waiting for this report while it closes: never let a stalled lock or disk hold it.

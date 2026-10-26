@@ -653,6 +653,7 @@ class BoardSurfaceCommandTests(unittest.TestCase):
             "screen-script": (agent, token, gateway, "--steps", "steps"),
             "contract-check-submit": (reviewer[1], reviewer[3], reviewer[4], "--submission", "submission"),
             "contract-check-correct": (reviewer[1], reviewer[3], reviewer[4], "--submission", "submission"),
+            "review-support": (reviewer[1], reviewer[3], reviewer[4], "--submission", "submission"),
         }
         required_operations = {
             operation for operation, (_option, _field, required) in UPLOAD_ARGUMENTS.items()
