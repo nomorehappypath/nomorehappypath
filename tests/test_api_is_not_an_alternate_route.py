@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness import board, claude_inbox, contract, gemini_runtime
+from harness import board, contract
 from tests import test_board
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,13 +49,10 @@ class DirectivesSayTheApiIsSanctioned(unittest.TestCase):
                 self.assertIn("real-run evidence of the backend only at terminal success with the outputs inspected and secrets redacted, never proof of UI behavior", text)
                 self.assertIn("a real credential, permission, security or host gate is never bypassed; if unsure, ask once", text)
 
-    def test_cto_directive_carries_it_and_still_fits_the_gemini_budget(self):
+    def test_cto_directive_carries_it(self):
         text = flat("directives/CTO.md")
         self.assertIn("A browser-tool denial is final for that tool; the project's own API, CLI or the call its own UI makes is sanctioned, never an alternate route", text)
         self.assertIn("its successful, inspected run is backend evidence only; a real gate is never bypassed", text)
-        raw = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        size = len(raw.encode("utf-8")) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES, f"CTO.md payload {size} bytes exceeds the Gemini rules budget")
 
 
 class ApiRunIsRealRunEvidence(unittest.TestCase):

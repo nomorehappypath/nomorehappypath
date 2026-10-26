@@ -285,6 +285,13 @@ launch_visible_cli() {
   if [[ "$provider" == "gemini" ]]; then require_runnable "${HARNESS_AGY_BIN:-agy}"; else require_runnable "$1"; fi
   # From the next line on, a death is the CLI's own; until the registry hears this, an ended runner is a failed launch.
   "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-cli-exec --session-id "$session_id" >/dev/null 2>&1 || true
+  # What the harness itself delivers to this agent, once per launch and after the carrier is chosen (task 2026-10-25_directive-diet).
+  # A recording problem is said out loud and never holds the launch.
+  if [[ -n "${instruction_file:-}" ]]; then
+    printf '%s' "${instruction_text:-}" | "$python_bin" -E "$harness_root/harness/control.py" "${context_args[@]}" note-instruction \
+      --session-id "$session_id" --file "$instruction_file" --carrier "${instruction_carrier:-first_message}" --launch-mode "$launch_mode" >/dev/null 2>>"${launch_err_file:-/dev/null}" \
+      || echo "NOTE: the size of the rules delivered to this agent could not be recorded; the agent starts normally." >&2
+  fi
   credential_prefix=()
   if [[ "$provider" == "claude" ]]; then
     if [[ -z "$claude_auth_bootstrap" ]]; then
@@ -396,12 +403,13 @@ PY
 }
 
 machine_note() {
-  "$python_bin" -E - "$harness_root" "$target_root" "$data_root" "$workspace_root" <<'PY'
+  # The CTO has no test-machine chapter; Delivery and the Reviewer are pointed at it (directive diet, 2026-10-25).
+  "$python_bin" -E - "$harness_root" "$target_root" "$data_root" "$workspace_root" "$kind" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from harness import test_machine
 from harness.project_context import context_from_roots
-print(test_machine.launch_note(context_from_roots(sys.argv[2], sys.argv[3], sys.argv[4])))
+print(test_machine.launch_note(context_from_roots(sys.argv[2], sys.argv[3], sys.argv[4]), open_reference=sys.argv[5] != "claude_cto"))
 PY
 }
 
@@ -440,15 +448,26 @@ print("1" if status["enabled"] else "")
       system_directive="$directive_text"
     fi
   fi
+  # DIRECTIVE DIET (2026-10-25): what is delivered is the role's one-page card (directives/cards/), and the carrier below is recorded
+  # once per launch. No launch path may leave the agent without its card: when the card is not in the system layer it rides the
+  # first message, on a resume too (a resume used to replace it with the recovery note alone).
+  instruction_text="$directive_text"
   if [[ -n "$system_directive" ]]; then
+    instruction_carrier="system_layer"
     prompt="$kickoff_text"
   else
+    instruction_carrier="first_message"
     prompt="${directive_text}
 
 ${kickoff_text}"
   fi
   if [[ "$launch_mode" == "resume" ]]; then
     prompt="$(recovery_prompt)"
+    if [[ -z "$system_directive" ]]; then
+      prompt="${directive_text}
+
+${prompt}"
+    fi
   else
     if [[ -n "$predecessor_session" ]]; then
       # A previous session of this role existed and could not be resumed:
@@ -774,13 +793,16 @@ sys.stdout.write("\0".join(["--codex-app-server-json", json.dumps(argv), "--code
       gemini_access+=(--add-dir "$gemini_add_dir")
       while IFS= read -r -d '' part; do stage3_supervisor_args+=("$part"); done < <("$python_bin" -E -c 'import json,sys; sys.stdout.write("\0".join(json.load(sys.stdin).get("supervisor_args",[]))+"\0")' <<<"$gemini_runtime_json")
       export HARNESS_HOOK_GATE_TIMEOUT="$("$python_bin" -E -c 'import json,sys; print(json.load(sys.stdin).get("gate_timeout",5))' <<<"$gemini_runtime_json")"
-      if [[ -n "$system_directive" && "$launch_mode" != "resume" && "$("$python_bin" -E -c 'import json,sys; print("1" if json.load(sys.stdin).get("stage4") else "")' <<<"$gemini_runtime_json")" == "" ]]; then
-        # The rules could not be placed in the system layer after all: the first message carries them, as today.
+      if [[ -n "$system_directive" && "$("$python_bin" -E -c 'import json,sys; print("1" if json.load(sys.stdin).get("stage4") else "")' <<<"$gemini_runtime_json")" == "" ]]; then
+        # The rules could not be placed in the system layer after all: the first message carries them, on a resume too.
+        instruction_carrier="first_message"
         prompt="${system_directive}
 
 ${prompt}"
       fi
-    elif [[ -n "$system_directive" && "$launch_mode" != "resume" ]]; then
+    elif [[ -n "$system_directive" ]]; then
+      # No runtime preparation at all (it failed): the first message carries the card, on a resume too.
+      instruction_carrier="first_message"
       prompt="${system_directive}
 
 ${prompt}"
@@ -1003,7 +1025,8 @@ runner_step="registering with the board"
 case "$kind" in
   codex_delivery)
     agent_id="$(register_agent engineering AWAITING_OWNER_DIRECTION 'Delivery Agent' "$vendor")"
-    directive="$(<"$harness_root/directives/AGENT.md")"
+    instruction_file="directives/cards/DELIVERY.md"
+    directive="$(<"$harness_root/$instruction_file")"
     kickoff="MODE: Delivery Agent.
 Start from ${execution_root}, which supplies the established CLI permissions.
     The target project is ${target_root}; perform all task work and board actions there.
@@ -1014,11 +1037,15 @@ board as standing by, then wait for the owner to describe what they want. Do
 not invent an objective, task, Completion Contract, scenario ledger, chunk,
 QA request, or bootstrap work before that direction arrives. When it does,
 your Product Manager hat converts it into the internal objective and plan.
-Before implementation, ask clarifying questions as needed. After the owner
-agrees and says go ahead, write a structured final requirements confirmation
-and record it with the board command: confirm-requirements --agent ${agent_id}.
-The original owner direction remains unchanged; this confirmation is an
-additional archived section immediately after it. Do not define a delivery
+Before implementation, ask clarifying questions as needed (with the board
+command ask-owner, never in the terminal). When the requirements are agreed,
+FILE them with propose-requirements --agent ${agent_id}: the text starts with
+an 'In plain words:' block of at most three short lines for the owner (what
+will be built, what changes for them, whether they must do anything), then a
+blank line, then the full requirements. Wait for the owner's Go ahead on the
+board; then record the accepted text verbatim with confirm-requirements
+--agent ${agent_id}. The original owner direction remains unchanged; this
+confirmation is an additional archived section immediately after it. Do not define a delivery
 plan or begin implementation until that confirmation is recorded.
 If this agent ID is already attached to a recovered task by the board, poll
 immediately and resume that preserved task and next action; do not return to
@@ -1027,7 +1054,8 @@ standby or ask the owner to repeat the direction."
     ;;
   claude_reviewer)
     agent_id="$(register_agent qa REVIEW_QUEUE 'Independent Reviewer' "$vendor")"
-    directive="$(<"$harness_root/directives/AGENT.md")"
+    instruction_file="directives/cards/REVIEWER.md"
+    directive="$(<"$harness_root/$instruction_file")"
     kickoff="MODE: Independent Reviewer.
 There is no implementation task for you. Start from ${execution_root}, which
 supplies the established CLI permissions. The target project and visible board
@@ -1038,7 +1066,8 @@ For every board command, start with: ${board_command_prefix}"
     ;;
   claude_cto)
     agent_id="$(register_agent cto GLOBAL_MONITOR CTO "$vendor")"
-    directive="$(<"$harness_root/directives/CTO.md")"
+    instruction_file="directives/cards/CTO.md"
+    directive="$(<"$harness_root/$instruction_file")"
     kickoff="Start from ${execution_root}, which supplies the established CLI permissions.
     You are the global CTO for the target project ${target_root}. You are already registered by the visible supervisor as agent ${agent_id}; use that ID for every board command and do not register a second agent. Start visible
 monitoring of that project's board now.

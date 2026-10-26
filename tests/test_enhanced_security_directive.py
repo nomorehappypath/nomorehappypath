@@ -15,13 +15,18 @@ import re
 import unittest
 from pathlib import Path
 
+from harness import reference_chapters
+
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = ROOT / "directives" / "AGENT.md"
 CTO = ROOT / "directives" / "CTO.md"
 CONTRACT = ROOT / "directives" / "ERROR_SINK_CONTRACT.md"
-SINK = "### Central error sink"
-ENHANCED = "### Enhanced security (owner checkbox)"
-BASELINE = "### Minimum security baseline"
+# Directive diet (2026-10-25): the three security texts are chapters of the reference file; the reviewer's checking rules sit in the
+# same chapters, after the Delivery half, under these bold openings.
+SINK = "error-sink"
+ENHANCED = "enhanced-security"
+BASELINE = "security-baseline"
+REVIEWER_SINK_AND_ENHANCED = "**Central error sink and Enhanced security (owner, 2026-10-12).**"
 SINK_WORD_CAP = 500
 ENHANCED_WORD_CAP = 620
 
@@ -30,30 +35,33 @@ def flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def section(text: str, heading: str) -> str:
-    start = text.index(heading)
-    end = text.index("\n### ", start + len(heading))
-    return text[start:end]
+def section(text: str, name: str) -> str:
+    """The Delivery half of one security chapter (the reviewer's rule that shares the chapter starts at its bold opening)."""
+    chapter = reference_chapters.chapters(text)[name]
+    return chapter.split(REVIEWER_SINK_AND_ENHANCED)[0]
 
 
 class EnhancedSecurityDirectiveTests(unittest.TestCase):
     def setUp(self):
         self.text = AGENT.read_text(encoding="utf-8")
 
-    def test_both_sections_sit_once_after_the_baseline_inside_the_delivery_workflow(self):
-        for heading in (SINK, ENHANCED):
-            self.assertEqual(self.text.count(heading), 1, heading)
-        baseline, sink, enhanced = (self.text.index(h) for h in (BASELINE, SINK, ENHANCED))
-        self.assertLess(self.text.index("## Delivery Agent workflow"), baseline)
-        self.assertLess(baseline, sink)
-        self.assertLess(sink, enhanced)
-        self.assertLess(enhanced, self.text.index("### Scope control for newly discovered findings"))
-        self.assertLess(enhanced, self.text.index("## Independent Reviewer workflow"))
+    def test_both_sections_are_one_chapter_each_that_the_cards_open(self):
+        for name in (SINK, ENHANCED):
+            self.assertEqual(self.text.count(f"\n## {name}\n"), 1, name)
+            for role in ("engineering", "qa"):
+                self.assertTrue(any(name in targets for _n, _s, targets in reference_chapters.card_rules(role)), (role, name))
+        # the cards open them at the moment that matters (the board cannot check these)
+        delivery = " ".join(sentence for _n, sentence, _t in reference_chapters.card_rules("engineering"))
+        self.assertIn("When `enhanced_security.on` is true in your poll, open `enhanced-security` before coding", delivery)
+        self.assertIn("Before you build any app, open `security-baseline` and `error-sink`", delivery)
+        reviewer = " ".join(sentence for _n, sentence, _t in reference_chapters.card_rules("qa"))
+        self.assertIn("When `enhanced_security.on` is true in the review brief, open `enhanced-security` before the ledger", reviewer)
+        self.assertIn("Before reviewing any app, open `security-baseline` and `error-sink`", reviewer)
 
     def test_the_sink_section_states_the_contract_every_app_implements(self):
         sink = flat(section(self.text, SINK))
         for needle in (
-            "Every app, on or off the checkbox below",
+            "Every app, on or off the Enhanced security checkbox (chapter `enhanced-security`)",
             "one error module with one entry point",
             "uncaught exceptions and unhandled rejections",
             "`/api/client-errors`",
@@ -116,19 +124,20 @@ class EnhancedSecurityDirectiveTests(unittest.TestCase):
     def test_the_baseline_points_at_both_instead_of_forbidding_them(self):
         baseline = flat(section(self.text, BASELINE))
         self.assertNotIn("no threat models, penetration-test rituals or compliance frameworks", baseline)
-        self.assertIn("threat models and security test passes belong to Enhanced security below, which the owner switches on per task", baseline)
-        self.assertIn("Every error goes through the Central error sink below", baseline)
+        self.assertIn("threat models and security test passes belong to Enhanced security (chapter `enhanced-security`), which the owner switches on per task", baseline)
+        self.assertIn("Every error goes through the Central error sink (chapter `error-sink`)", baseline)
 
     def test_the_product_commit_may_carry_the_security_file_and_the_error_module(self):
-        workflow = flat(self.text[self.text.index("## Delivery Agent workflow"):self.text.index(BASELINE)])
-        self.assertIn("`SECURITY.md` and the app's error module (Central error sink below) are product files, not governance artifacts", workflow)
+        workflow = flat(reference_chapters.chapters(self.text)["harness-storage"])
+        self.assertIn("`SECURITY.md` and the app's error module (chapter `error-sink`) are product files, not governance artifacts", workflow)
 
     def test_the_quality_bar_names_both_as_material(self):
-        quality_bar = flat(self.text[self.text.index("### Delivery quality bar"):self.text.index(BASELINE)])
-        self.assertIn("the Central error sink below missing or broken; an Enhanced security deliverable missing while the task's checkbox is on", quality_bar)
+        quality_bar = flat(reference_chapters.chapters(self.text)["materiality"])
+        self.assertIn("the Central error sink (chapter `error-sink`) missing or broken; an Enhanced security deliverable missing while the task's checkbox is on", quality_bar)
 
     def test_the_reviewer_checks_every_app_for_the_sink_and_the_deliverables_only_when_on(self):
-        reviewer = flat(self.text[self.text.index("## Independent Reviewer workflow"):])
+        chapters = reference_chapters.chapters(self.text)
+        reviewer = flat(chapters["enhanced-security"] + chapters["security-baseline"])
         self.assertIn("**Central error sink and Enhanced security (owner, 2026-10-12).**", reviewer)
         for words in (
             "FAIL when an error path the app has bypasses the sink",

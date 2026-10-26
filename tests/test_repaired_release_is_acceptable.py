@@ -75,5 +75,10 @@ class RepairedReleaseIsAcceptable(unittest.TestCase):
             board.record_release_decision(self.root, "REL3", "not_accepted", reason="changed my mind")
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

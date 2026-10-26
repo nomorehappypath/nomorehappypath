@@ -256,5 +256,10 @@ process.stdout.write(JSON.stringify({gate:taskGate(state,%s,{},null,[],0,0),pane
             self.assertTrue(any(event["kind"] == "owner_release_repair_claimed" for event in board.snapshot(root)["events"]))
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

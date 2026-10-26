@@ -514,18 +514,20 @@ RULE_TEXT = (
 )
 
 
-def launch_note(root: ProjectRoot) -> str:
+def launch_note(root: ProjectRoot, open_reference: bool = False) -> str:
     """One paragraph for every fresh launch, restart and resume of an agent (S8): the connection and the current rule.
-    Empty when the project has no test machine record, so projects that never use one see nothing."""
+    Empty when the project has no test machine record, so projects that never use one see nothing.
+    `open_reference` adds the line that points Delivery and the Reviewer at the `test-machine` chapter (the CTO has none)."""
+    hint = " Open reference: test-machine" if open_reference else ""
     try:
         value = read(root)
     except Damaged:
-        return "[test-machine] The project's test machine record is damaged: run machine-status, then need-test-machine if you need the machine. " + RULE_TEXT
+        return "[test-machine] The project's test machine record is damaged: run machine-status, then need-test-machine if you need the machine. " + RULE_TEXT + hint
     if value is None:
         return ""
     report = status_report(root)
     where = f"{report['user']}@{report['address']}:{report['port']}" if report["address"] else "(not connected yet)"
-    return f"[test-machine] Machine {where}, revision {report['revision']}, state {report['state']}. {RULE_TEXT}"
+    return f"[test-machine] Machine {where}, revision {report['revision']}, state {report['state']}. {RULE_TEXT}{hint}"
 
 
 # -- baseline markers (X2) -----------------------------------------------------------------

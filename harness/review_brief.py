@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from harness import reference_chapters, review_cost
+
 try:
     from harness.project_context import ProjectRoot, project_context
 except ImportError:  # Legacy harness compatibility.
@@ -122,6 +124,10 @@ def build(
             "what_was_tested": _text(row.get("what_was_tested") or row.get("expected_response")),
             "recorded": "executed" if row.get("id") in outcomes else "unavailable",
         } for row in (delivery_scenarios or [])]
+    reduction = review_cost.reduce_candidate(
+        context.code_root, request, list(request.get("reviewed_files") or []),
+        context.storage_path("reviews", f"{_text(request.get('id')) or 'request'}.reading-list.json"),
+    )
     brief = {
         "version": 1, "task": task, "request_id": _text(request.get("id")),
         "requirements": {
@@ -178,12 +184,18 @@ def build(
             "on": bool((request.get("enhanced_security") or {}).get("on", False)),
             "revision": int((request.get("enhanced_security") or {}).get("revision", 0) or 0),
         },
+        # Directive diet: when Enhanced security is on for this review, the brief says which chapter holds what to check.
+        **({"open_reference": reference_chapters.reference_hint("enhanced-security")} if (request.get("enhanced_security") or {}).get("on") else {}),
         "owner_clarifications": _bounded([{
             "text": _text(value.get("text")), "at": _text(value.get("created_at")),
         } for value in (state.get("owner_clarifications") or {}).get(task, [])]),
         "prior_failures_and_repairs": _bounded(failures),
         "repair_package": request.get("repair_package"),
         "repair_authoring": repair_authoring,
+        # 2026-10-25: which round this is, the round-1 findings the scope is frozen on, and the stored round-1 checks.
+        "frozen_scope": request.get("frozen_scope"),
+        # Delivery changed these tests of the last judged version during the repair and said why; the verdict must name each one.
+        "changed_tests": list(request.get("changed_tests") or []),
         "product_structure": {
             "mode": _text(plan.get("mode")), "rationale": _text(plan.get("rationale")),
             "revision": int(plan.get("structure_revision", 0)),
@@ -205,6 +217,8 @@ def build(
                 ((plan.get("subtasks") or {}).get(_text(request.get("subtask")) or "") or {}).get("base_carried_accepted_paths") or []
             )),
         },
+        # Review cost controls (2026-10-25): present only for a change above the owner's size limits in Settings.
+        **({"input_reduction": reduction} if reduction else {}),
         "integration_integrity": _bounded(integrations),
         "finalization_diff": request.get("finalization_diff"),
         "environment": request.get("environment_identity") or {},

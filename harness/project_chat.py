@@ -288,7 +288,7 @@ def _task_status(state: dict[str, Any], task: str) -> str:
     if isinstance(cancelled, dict) and task in cancelled:
         return "closed"
     decision = (state.get("release_decisions") or {}).get(task, {})
-    if isinstance(decision, dict) and decision.get("decision") == "accepted":
+    if isinstance(decision, dict) and board.owner_accept_is_real(state, task, decision):
         return "accepted"
     repair = (state.get("release_repairs") or {}).get(task, {})
     repair_status = str(repair.get("status", "")) if isinstance(repair, dict) else ""
@@ -364,7 +364,7 @@ def _remaining_work(root: ProjectRoot, state: dict[str, Any], tasks: list[str]) 
     }
     for task in tasks:
         decision = (state.get("release_decisions") or {}).get(task, {})
-        if isinstance(decision, dict) and decision.get("decision") == "accepted":
+        if isinstance(decision, dict) and board.owner_accept_is_real(state, task, decision):
             continue
         cancelled = state.get("cancelled_tasks")
         if isinstance(cancelled, dict) and task in cancelled:
@@ -500,7 +500,7 @@ def _task_review_summary(state: dict[str, Any], task: str) -> str:
 def _task_outcome_line(state: dict[str, Any], task: str) -> str:
     decision = (state.get("release_decisions") or {}).get(task) or {}
     release = (state.get("releases") or {}).get(task) or {}
-    if decision.get("decision") == "accepted":
+    if board.owner_accept_is_real(state, task, decision):
         return f"The owner accepted it on {human_date(decision.get('recorded_at'))}."
     if decision.get("decision") == "not_accepted":
         return "The owner rejected the release; repair is required."

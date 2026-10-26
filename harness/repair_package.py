@@ -15,6 +15,7 @@ FULL_DEPTH_CATEGORIES = {
     "security", "data_integrity", "concurrency", "architecture", "recovery", "unknown",
 }
 ALLOWED_CATEGORIES = FULL_DEPTH_CATEGORIES | {"behavior", "compatibility", "ux", "cosmetic"}
+STRUCTURED_FIELDS = ("harm", "harm_tag", "criterion", "evidence_ref", "letter", "refers_to", "paired")
 
 
 def _now() -> str:
@@ -64,7 +65,7 @@ def _member(
     regression = str(raw.get("regression_check") or "").strip()
     if raw and len(regression) < 8:
         raise ValueError(f"repair member {identifier} requires a concrete regression check")
-    return {
+    member = {
         "id": identifier,
         "summary": summary,
         "category": category,
@@ -73,6 +74,13 @@ def _member(
         "regression_check": regression[:2000],
         "status": "open",
     }
+    # Frozen-scope findings (2026-10-25): the reviewer's harm line, tag, criterion, evidence and qualification letter.
+    # `review_rounds.judge` validates them and fills the permitted omissions; here they are only carried and digested.
+    for key in STRUCTURED_FIELDS:
+        value = raw.get(key)
+        if value not in (None, "", {}):
+            member[key] = value
+    return member
 
 
 def build(
@@ -120,6 +128,9 @@ def build(
         "requires_explicit_resolution": explicit,
         "status": "open", "created_at": _now(),
     }
+    if "structure_revision" in request:
+        # a package belongs to one structure revision of the work (an older revision's open package never blocks a new round 1)
+        package["structure_revision"] = int(request.get("structure_revision") or 0)
     package["sha256"] = _digest(package)
     return package
 

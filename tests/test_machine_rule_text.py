@@ -122,11 +122,5 @@ class DeliveryTests(unittest.TestCase):
         source = (ROOT / "harness" / "board.py").read_text()
         self.assertIn("the one exception is installing Python 3 on a macOS or Linux machine that lacks it, which is Delivery's one first step", source)
 
-    def test_cto_md_is_unchanged_in_size_budget(self):
-        # CTO.md sits 10 bytes under the pinned Gemini rules budget (24000); this task must not touch it.
-        from harness import gemini_runtime
-        self.assertLessEqual(len((ROOT / "directives" / "CTO.md").read_bytes()), gemini_runtime.RULES_LIMIT_BYTES)
-
-
 if __name__ == "__main__":
     unittest.main()

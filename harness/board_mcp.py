@@ -48,6 +48,8 @@ STRUCTURED: dict[tuple[str, str], tuple[str, list[tuple[str, bool]]]] = {
     ("declare-chunks", "--chunk"): (":", [("name", False), ("description", False)]),
     ("declare-subtask-chunks", "--chunk"): (":", [("name", False), ("description", False)]),
 }
+# A frozen-scope finding (2026-10-25) carries more than the six pipe fields: sent as one JSON object, the form the board accepts for --failure.
+JSON_FINDING_FIELDS = ("harm", "harm_tag", "criterion", "evidence_ref", "letter", "refers_to", "paired")
 LIST_OF_IDS = {("split-repair-package", "--group")}   # each entry: comma-joined member ids
 
 
@@ -69,6 +71,11 @@ def _property(operation: str, action: argparse.Action) -> dict[str, Any]:
                 "properties": {name: ({"type": "array", "items": {"type": "string"}} if is_list else {"type": "string"})
                                for name, is_list in fields},
                 "required": [name for name, is_list in fields if not is_list]}
+        if (operation, option) == ("qa-result", "--failure"):
+            paired = {"type": "object", "additionalProperties": False, "required": [],
+                      "properties": {name: {"type": "string"} for name in ("command", "earlier_commit", "earlier_result", "repaired_commit", "repaired_result")}}
+            item["properties"].update({name: (paired if name == "paired" else {"type": "string"}) for name in JSON_FINDING_FIELDS})
+            item["required"] = ["id", "summary"]
         return {"type": "array", "items": item} if repeated else item
     if (operation, option) in LIST_OF_IDS:
         return {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
@@ -140,7 +147,10 @@ def argv_for(operation: str, arguments: dict[str, Any]) -> list[str]:
                 separator, fields = STRUCTURED[(operation, option)]
                 if not isinstance(item, dict):
                     raise ValueError(f"{name} entries must be objects")
-                item = _join(item, separator, fields)
+                if (operation, option) == ("qa-result", "--failure") and any(key in item for key in JSON_FINDING_FIELDS):
+                    item = json.dumps(item)
+                else:
+                    item = _join(item, separator, fields)
             elif (operation, option) in LIST_OF_IDS:
                 if any("," in str(member) for member in item):
                     raise ValueError(f"{name} member ids may not contain ','")

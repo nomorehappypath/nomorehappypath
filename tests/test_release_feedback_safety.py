@@ -103,5 +103,10 @@ class ReleaseFeedbackSafetyTests(unittest.TestCase):
         self.assertNotIn("OWNER_REJECTED_REPAIR_REQUIRED", dialog)
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

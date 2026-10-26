@@ -1791,5 +1791,10 @@ class BoardTests(unittest.TestCase):
             board.request_review(self.root, dev["id"], passed_ledger, "review core", chunk="core")
 
 
+from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
+
+setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)
+
+
 if __name__ == "__main__":
     unittest.main()

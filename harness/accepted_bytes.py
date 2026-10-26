@@ -38,6 +38,11 @@ def binary_patch_arguments(*revisions: str, paths: Iterable[str] = ()) -> list[s
     return ["diff", *RENAME_RULE, "--binary", *revisions, "--", *paths]
 
 
+def numstat_arguments(*revisions: str) -> list[str]:
+    """Arguments after ``git`` for per-path changed-line counts under the one rename rule (NUL-separated, no text conversion)."""
+    return ["diff", *RENAME_RULE, "--no-textconv", "--numstat", "-z", *revisions]
+
+
 def commit_manifest_arguments(commit: str, nul: bool = False) -> list[str]:
     """Arguments after ``git`` that list the paths one commit changed."""
     return ["diff-tree", "--no-commit-id", "--no-renames", "--name-only", *(["-z"] if nul else []), "-r", commit, "--"]

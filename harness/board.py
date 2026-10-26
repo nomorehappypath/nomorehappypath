@@ -40,7 +40,7 @@ if __package__ in {None, ""}:
 from harness import screen_script as screen_script_runner
 from harness import test_machine
 from harness import failure_words
-from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection
+from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, red_proof, reference_chapters
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -95,7 +95,7 @@ CTO_WAKE_ANSWERED_STATES = {"automatic_requested", "automatic_failed", "unrespon
 # Board events that only say "the monitor ran": for the CTO, the hot event
 # window keeps the latest of each so real task events are not pushed out.
 ROUTINE_MONITOR_EVENTS = {
-    "agent_automatic_recovery_routed", "instruction_route_queued", "agent_standby", "board_polled",
+    "agent_automatic_recovery_routed", "instruction_route_queued", "agent_standby", "board_polled", "reference_opened",
 }
 # A routed CLI turn has the same observed latency budget as other agent work.
 # Keep it visibly recovering (never healthy) during that bounded response
@@ -443,7 +443,7 @@ def _extract_cold_state(root: Path, state: dict[str, Any]) -> None:
             })
     accepted = {
         task for task, decision in state.get("release_decisions", {}).items()
-        if decision.get("decision") == "accepted"
+        if owner_accept_is_real(state, task, decision)
     }
     archived_requests = [
         entry.get("value", {}) for entry in state.get("archive", [])
@@ -730,13 +730,17 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
             if not (existing.get("kind") == kind and existing.get("agent_id") == agent["id"])
         ]
     state["events"].append(event)
-    if kind in OWNER_ACTION_TRIGGER_EVENTS and state.get("owner_actions"):
+    if kind in PROGRESS_EVENTS:
+        review_cost.count_turn(state, agent, payload)  # the task's "used so far" line; information only
+    if kind == "qa_result":
+        review_cost.settle_review(state, payload.get("request_id"))
+    if kind in OWNER_ACTION_TRIGGER_EVENTS and (state.get("owner_actions") or state.get("verification_gaps")):
         _settle_owner_actions(state, event, agent)
     if kind in _HOLD_ENDING_EVENTS and state.get("control_plane_holds"):
         _resolve_concluded_hold(state, event)
     if kind == "control_plane_hold_resolved" and state.get("owner_actions"):
         _close_hold_owner_card(state, event)
-    if kind in CTO_ROUTE_REQUIRED_EVENTS or kind in CTO_ROUTING_EVENTS or kind in TASK_PROGRESS_EVENTS or kind == "status_update":
+    if kind in CTO_ROUTE_REQUIRED_EVENTS or kind in CTO_ROUTING_EVENTS or kind in TASK_PROGRESS_EVENTS or kind in REVIEW_BLOCK_EVENTS or kind == "status_update":
         _track_route_obligation(state, event, agent)
     if agent is not None and kind in PROGRESS_EVENTS:
         agent["last_progress_at"] = event["at"]
@@ -875,6 +879,7 @@ def finish_project_pause(root: ProjectRoot) -> dict[str, Any]:
                 "challenge_ledger": request.get("challenge_ledger"),
                 "route_state": request.get("route_state"),
             }
+            review_cost.close_stretch(request)  # bank the active review time before the pause
             request["paused_from_status"] = request["status"]
             request["status"] = "suspended"
             request["suspended_at"] = now()
@@ -980,7 +985,7 @@ def stage_required_delivery_resumes(
         cancelled = set((state.get("cancelled_tasks") or {}).keys())
         accepted = {
             str(task) for task, decision in (state.get("release_decisions") or {}).items()
-            if decision.get("decision") == "accepted"
+            if owner_accept_is_real(state, task, decision)
         }
         unfinished = {
             str(task) for task in (state.get("task_owner_directions") or {})
@@ -1020,6 +1025,10 @@ def stage_required_delivery_resumes(
             if request.get("status") == "failed":
                 required_tasks.add(str(request.get("task") or ""))
 
+        required_tasks.update(
+            str(task) for task in (state.get("git_reintegration_required") or {})
+            if str(task) in unfinished and str(task) not in cancelled
+        )
         required_tasks.update(
             str(task) for task, repair in (state.get("release_repairs") or {}).items()
             if task in unfinished and repair.get("status") in {
@@ -1068,7 +1077,8 @@ def stage_required_delivery_resumes(
                 "status": str(source.get("status") or "working"),
                 "status_note": str(next_action),
                 "poll_counter": int(source.get("poll_counter", 0)),
-                "write_authority": source.get("write_authority", True) is not False,
+                # an owner Stop clears write authority; the owed re-integration needs a writable owner after resume
+                "write_authority": True if task in (state.get("git_reintegration_required") or {}) else source.get("write_authority", True) is not False,
                 "next_action": str(next_action),
             }
             event = _event(state, "project_resume_delivery_staged", source, {
@@ -1162,6 +1172,7 @@ def finish_project_resume(root: ProjectRoot, resume_id: str) -> dict[str, Any]:
                 "resumed_at": now(),
             })
             request.pop("suspended_at", None)
+            review_cost.open_stretch(request)  # the pause is not review time: the active stretch starts again now
             restored_reviews += 1
 
         completed = {
@@ -3052,7 +3063,7 @@ def set_task_security(root: Path, task: str, enhanced: Any) -> dict[str, Any]:
         text = (
             f"[OWNER DECISION] Enhanced security {'ON' if enhanced else 'OFF'} for task {task} (revision {revision}). "
             "Read the current value from the board (poll: enhanced_security) before your first review request. "
-            + (TASK_SECURITY_RULE if enhanced else "When off, the Enhanced security deliverables are not required; the central error sink still is.")
+            + (TASK_SECURITY_RULE + " " + reference_chapters.reference_hint("enhanced-security") if enhanced else "When off, the Enhanced security deliverables are not required; the central error sink still is.")
         )
         try:
             from harness import control
@@ -3153,7 +3164,8 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         "next_action": next_action,
         "routed_around_findings": routed_around_findings,
         "owner_waived_deliverables": owner_waived_deliverables,
-        "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE},
+        "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE,
+                              **({"open_reference": reference_chapters.reference_hint("enhanced-security")} if task_security_state(state, task)["on"] else {})},
     }
 
 
@@ -3250,9 +3262,19 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                 repeated = _repeated_failures(state)
                 if repeated:
                     result["repeated_failures"] = repeated   # the CTO that keeps polling and posts nothing still sees it
+                escalations = review_rounds.poll_view(state.get("review_escalations") or {})
+                if escalations:
+                    result["review_escalations"] = escalations   # past the round limit: the recovery or the honest outcome; never an owner question
                 gaps = _open_verification_gaps(state)
                 if gaps:
                     result["verification_gaps"] = [{k: g.get(k) for k in ("id", "task", "scope", "state", "rounds", "reason", "request_id", "owner_replied_at")} for g in gaps]
+            elif agent["role"] in DEVELOPER_ROLES:
+                recovery = [
+                    {"scope": e.get("scope"), "status": e["status"], "open_ids": e.get("open_ids"), "brief": e.get("brief", ""), "outcome": e.get("outcome", "")}
+                    for e in (state.get("review_escalations") or {}).values()
+                    if e.get("task") == agent.get("task") and e.get("status") in {"recovery", "could_not_finish"} and e.get("who") != "reviewer"]
+                if recovery:
+                    result["review_recovery"] = recovery   # the fresh attempt reads its brief here; a stopped scope says so
         else:
             result = None
     if rejection:
@@ -3309,10 +3331,39 @@ def request_recovery(root: Path, agent_id: str) -> dict[str, Any]:
     return event
 
 
+def stopped_scopes(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Scopes of this task the harness stopped repairing ("could not finish") in its CURRENT structure revision. A new revision is new work."""
+    revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0) or 0)
+    return [e for e in review_rounds.terminal_for(state.get("review_escalations") or {}, task)
+            if int((e.get("scope") or {}).get("structure_revision", 0) or 0) == revision]
+
+
+def work_left_outside_stopped_scopes(state: dict[str, Any], task: str) -> bool | None:
+    """None when no scope of the task is stopped. Otherwise whether Delivery still has work OUTSIDE the stopped scopes (another chunk or
+    subtask that is not finished). Restart, relaunch and watchdog routes use this: they respect a stopped scope and keep serving the rest."""
+    stopped = stopped_scopes(state, task)
+    if not stopped:
+        return None
+    gone_chunks = {(e["scope"].get("subtask", ""), e["scope"].get("chunk", "")) for e in stopped if e["scope"].get("chunk")}
+    gone_subtasks = {e["scope"].get("subtask", "") for e in stopped if e["scope"].get("subtask") and not e["scope"].get("chunk")}
+    for name, value in ((state.get("task_chunks") or {}).get(task) or {}).items():
+        if value.get("status") != "passed" and ("", name) not in gone_chunks:
+            return True
+    for name, item in (((state.get("delivery_plans") or {}).get(task) or {}).get("subtasks") or {}).items():
+        if item.get("status") in {"passed", "superseded"} or name in gone_subtasks:
+            continue
+        pending = [c for c, value in (item.get("chunks") or {}).items() if value.get("status") != "passed" and (name, c) not in gone_chunks]
+        if pending or not item.get("chunks"):
+            return True
+    return False
+
+
 def _agent_has_actionable_work(state: dict[str, Any], agent: dict[str, Any]) -> bool:
     """Return whether silence means this role is failing to advance work."""
     role = agent.get("role")
     if role == "qa":
+        if _open_review_blocks(state):
+            return True   # a blocked review waits on the Reviewer (e.g. a contract-check correction): silence is a stall
         return any(
             request.get("status") in {"authoring", "open", "reserved", "claimed"}
             and (
@@ -3386,11 +3437,13 @@ def _agent_has_actionable_work(state: dict[str, Any], agent: dict[str, Any]) -> 
         if agent.get("task") == AWAITING_OWNER_DIRECTION:
             return False
         plan = state.get("delivery_plans", {}).get(agent.get("task"), {})
+        stopped_subtasks = {e["scope"].get("subtask", "") for e in stopped_scopes(state, str(agent.get("task") or "")) if e["scope"].get("subtask")}
         if any(
             _effective_subtask_pipeline_status(
                 state, str(agent.get("task") or ""), name, item,
             ) == "in_progress"
             for name, item in plan.get("subtasks", {}).items()
+            if name not in stopped_subtasks
         ):
             return True
         active_reviews = [
@@ -3410,6 +3463,8 @@ def _agent_has_actionable_work(state: dict[str, Any], agent: dict[str, Any]) -> 
             return True
         # An open review belongs to the Independent Reviewer. Delivery is
         # truthfully waiting and will be routed automatically on FAIL/PASS.
+        if not active_reviews and work_left_outside_stopped_scopes(state, str(agent.get("task") or "")) is False:
+            return False   # everything left is a part the harness stopped repairing: not work Delivery is failing to advance
         return not active_reviews
     return False
 
@@ -3530,11 +3585,13 @@ def _repeated_failure_note(state: dict[str, Any] | None) -> str:
 
 
 def _open_verification_gaps(state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    return [g for g in ((state or {}).get("verification_gaps") or {}).values() if g.get("state") in {"diagnosing", "owner_decision", "answered"}]
+    ended = {k for k, e in ((state or {}).get("review_escalations") or {}).items() if e.get("status") == "could_not_finish"}
+    return [g for g in ((state or {}).get("verification_gaps") or {}).values()
+            if g.get("state") in {"diagnosing", "owner_decision", "answered"} and g.get("scope_key") not in ended]
 
 
 def _verification_gap_note(state: dict[str, Any] | None) -> str:
-    """What the CTO is told each cycle about work that could not be fully tested (an owner decision to apply, a repeat to name)."""
+    """What the CTO is told each cycle about work that could not be fully tested (a repeat to name; never an owner decision)."""
     gaps = _open_verification_gaps(state)
     if not gaps:
         return ""
@@ -3542,16 +3599,24 @@ def _verification_gap_note(state: dict[str, Any] | None) -> str:
     lines = []
     for gap in shown:
         again = f" REPEATED NOT TESTED: round {gap['rounds']} for the same part." if gap["rounds"] > 1 else ""
-        if gap["state"] == "owner_decision":
-            replied = (" The owner has answered in Mission Control: apply it now (record the waiver with deliverable-waived, route a "
-                       "machine request with need-test-machine, or cancel the task), then clear the card.") if gap.get("owner_replied_at") else (
-                       " The board has asked the owner (waive / give a machine / stop); do not ask again, do not tell Delivery to resubmit.")
-            lines.append(f"NOT TESTED, OWNER DECISION: {gap['task']} ({gap['reason'][:160]}).{again}{replied}")
-        else:
-            lines.append(f"NOT TESTED, YOU ARE DIAGNOSING: {gap['task']} ({gap['reason'][:160]}).{again} Decide whose limit it is (the Reviewer's "
-                         "tool or session: relaunch or sign in; the machine: the machine card; otherwise the owner) before the next round.")
+        lines.append(f"NOT TESTED: {gap['task']} ({gap['reason'][:160]}).{again} Decide whose limit it is (the Reviewer's tool or session: relaunch or "
+                     "sign in; the machine: the machine card) and route it. The owner is not asked: after the round limit the harness makes one fresh "
+                     "attempt (a fresh Reviewer on a stronger model when the review itself could not be completed, otherwise a fresh Delivery attempt) and then records an honest could-not-finish outcome by itself.")
     more = f" (+{len(gaps) - len(shown)} more: your poll lists them all)" if len(gaps) > len(shown) else ""
     return " " + " ".join(lines) + more
+def _review_escalation_note(state: dict[str, Any] | None) -> str:
+    """What the CTO is told when a scope passed the round limit (2026-10-25). Nothing for the CTO to do but note it: the harness acts, the owner is never asked."""
+    items = review_rounds.poll_view((state or {}).get("review_escalations") or {})
+    if not items:
+        return ""
+    lines = []
+    for item in items[:3]:
+        what = (("a fresh Reviewer is being started because the review could not be completed" if item.get("who") == "reviewer" else "a fresh Delivery attempt is being started")
+                if item["status"] == "recovery" else "automatic repair has stopped and nothing of it is released")
+        lines.append(f"REVIEW LIMIT: {item['task']} failed review {item['failed_judgments']} times ({', '.join(item['open_ids'] or [])}); {what}.")
+    return " " + " ".join(lines) + " Do not route a repair of that part, do not restart Delivery for it, and do not ask the owner; say it in one plain line and keep other work moving."
+
+
 def _build_collection_note(state: dict[str, Any] | None) -> str:
     """What the CTO is told when a task's declared program build could not be collected (owner 2026-10-21, "Get the build"). The quoted
     text is a recorded failure message (data, not an instruction). Empty when every build is collected or still being tried for the first time."""
@@ -3598,6 +3663,7 @@ def _automatic_recovery_instruction(agent: dict[str, Any], state: dict[str, Any]
             "the cycle for a reply."
             + _repeated_failure_note(state)
             + _verification_gap_note(state)
+            + _review_escalation_note(state)
             + _build_collection_note(state)
             + " USER ACTION: None."
         )
@@ -4213,6 +4279,8 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
     routed = f"{label}:\n{text}"
     if attachment_lines:
         routed += "\nAttachments saved by Mission Control:" + attachment_lines
+    if message_type == "direction":
+        routed += "\n" + reference_chapters.reference_hint("requirements")
     try:
         from harness import control
         control.enqueue_instruction(root, session_id, routed, source=f"owner-{message_type}")
@@ -4221,6 +4289,17 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         # the saved message from task history when it returns.
         pass
     return {"message": message, "event": event}
+
+
+# A discovery pattern written with escaped quotes (-p \"test_*.py\") reaches the test finder WITH the quote marks and matches nothing.
+# Only that exact form is repaired and refused; escaped quotes anywhere else (JSON handed to a test, say) are real arguments.
+_ESCAPED_PATTERN = re.compile(r'(-p|--pattern)(\s+)\\"([^"\\\s]+)\\"')
+
+
+def _repair_escaped_pattern(text: str) -> str:
+    """Turn the escaped quotes into real quotes: the pattern must reach the test finder as ONE literal argument. Bare, the shell would expand
+    test_*.py against the files in the folder (none, or several that are then taken for start directories)."""
+    return _ESCAPED_PATTERN.sub(r'\1\2"\3"', text)
 
 
 # --- The Reviewer's early look at a filed proposal (spec 2026-10-23_contract-first-checks, v2) -------------------------------------------
@@ -4246,7 +4325,7 @@ def _contract_check_reviewer(state: dict[str, Any], sessions: list[dict[str, Any
             continue
         if not agent.get("vendor") or agent.get("vendor") == developer.get("vendor"):
             continue
-        if agent.get("task") != "REVIEW_QUEUE" and not _task_finished(state, str(agent.get("task") or "")):
+        if agent.get("task") != "REVIEW_QUEUE" and not _task_closed_for_checks(state, str(agent.get("task") or "")):
             continue
         candidates.append(agent)
     if not candidates:
@@ -4330,7 +4409,7 @@ def _settle_contract_checks(state: dict[str, Any], current: datetime) -> list[tu
     return settled
 
 
-def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False) -> dict[str, Any]:
+def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False) -> dict[str, Any]:
     """File the final agreed requirements as a PROPOSAL awaiting the owner.
 
     The owner's go-ahead is a contract signature; it must be a recorded board
@@ -4345,6 +4424,10 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     text = contract.normalize_owner_direction(text)
     if not text or len(text) > 12000:
         raise ValueError("the requirements proposal is required and must be 12000 characters or fewer")
+    if plain_required:
+        # every agent's proposal (the agent command passes this) starts with a short block the owner can read; the board's own callers and
+        # proposals stored before this rule are not refused
+        contract_check.split_plain_summary(text)
     try:
         from harness import control
         sessions = control.snapshot(root).get("sessions", [])
@@ -4622,12 +4705,17 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
         }
         if proposal.get("contract_check"):
             confirmation["contract_check"] = _confirmation_contract_check(proposal)
+            if confirmation["contract_check"].get("checks"):
+                confirmation["contract_check"]["red_proof"] = {"status": "pending"}
         state["requirement_confirmations"][task] = confirmation
         agent.update({"status": "requirements_confirmed", "status_note": "final requirements confirmed; Product Management may plan delivery", "last_status_at": now()})
-        return _event(state, "requirements_confirmed", agent, {
+        event = _event(state, "requirements_confirmed", agent, {
             "task": task, "message": "final clarified requirements confirmed after owner direction; delivery may now begin",
             "owner_direction": direction, "requirements_confirmation": text,
         })
+    if confirmation.get("contract_check", {}).get("checks"):
+        run_red_proof(root, task)     # the stored checks are locked: see each one fail on the unbuilt project before Delivery codes (never raises)
+    return event
 
 
 def _contract_check_folder(root: Path, task: str, tag: str) -> Path:
@@ -4645,6 +4733,9 @@ def _validate_contract_check_files(criteria: list[dict[str, Any]]) -> None:
                 for body in (check["ledger"], *check["files"].values()):
                     if CLAUDE_TOKEN_SHAPE.search(body):
                         raise ValueError(f"{where} contains what looks like a Claude login token; remove it")
+                if _ESCAPED_PATTERN.search(check["ledger"]):
+                    raise ValueError(f"{where}: the test pattern has escaped quotes (a backslash before a quote), which hand the quote marks to the test finder and find nothing; "
+                                     "quote the pattern, for example: python3 -m unittest discover -s .contract-checks/c1-1 -p \"test_*.py\" (quoted, so the shell cannot expand it)")
                 probe.write_text(check["ledger"], encoding="utf-8")
                 valid, problems, _rows = contract.scenario_simulations(probe)
                 if not valid:
@@ -4702,7 +4793,7 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             ]
             criteria.append({
                 "n": criterion["n"], "text": criterion["text"], "sharper": criterion["sharper"],
-                "why_not_checked": criterion["why_not_checked"], "stale": False, "checks": stored,
+                "why_not_checked": criterion["why_not_checked"], "plain": criterion["plain"], "stale": False, "checks": stored,
             })
         check.update({
             "criteria": criteria, "questions": parsed["questions"], "submitted_at": now(), "token": secrets.token_hex(4),
@@ -4756,7 +4847,7 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
         if not old:
             raise ValueError("that requirement has no stored check to correct")
-        if _task_finished(state, str(task)):
+        if _task_closed_for_checks(state, str(task)):
             raise ValueError("the task is finished; its checks can no longer be corrected")
         folder = _contract_check_folder(root, str(task), f"correction-{secrets.token_hex(3)}")
         header = {"n": number, "text": old[0]["criterion"]}
@@ -4779,7 +4870,10 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
             "task": str(task), "criterion": number, "reason": reason,
             "message": "a stored check was corrected by the Reviewer; the original and the reason are kept, earlier results no longer count",
         })
-        return {"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}
+        corrected = {"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}
+        (block.get("compare") or {}).pop(str(number), None)      # the old label was about the old check
+    run_red_proof(root, str(task), [number], "correction")      # the corrected check is seen once more on the unbuilt project; it is never asked about again
+    return corrected
 
 
 def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], proposal: dict[str, Any], number: int, new_checks: list[dict[str, Any]], reason: str) -> dict[str, Any]:
@@ -4813,6 +4907,51 @@ def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], propo
     return {"criterion": number, "status": check["status"], "still_open": open_ones if not done else []}
 
 
+def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: Any, reason: str) -> dict[str, Any]:
+    """Delivery or the CTO sets aside ONE stored check the board could not run, with a recorded reason (shown as not checked in advance).
+
+    Only a check whose last board run said "did not run" can be skipped, so a failing check cannot be waved away; the independent final
+    review is not touched and nothing else is waived.
+    """
+    reason = " ".join(str(reason or "").split())
+    if len(reason) < 8:
+        raise ValueError("skipping a check requires a reason of at least 8 characters")
+    try:
+        number = int(criterion)
+    except (TypeError, ValueError):
+        raise ValueError("name the requirement number") from None
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") not in DEVELOPER_ROLES | {"cto"}:
+            raise ValueError("only Delivery or the CTO can skip a check that could not run")
+        if agent.get("role") in DEVELOPER_ROLES and agent.get("task") != str(task):
+            raise ValueError("Delivery can skip a check only on its own task")
+        block = ((state.get("requirement_confirmations") or {}).get(str(task)) or {}).get("contract_check") or {}
+        entries = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
+        if not entries:
+            raise ValueError("that requirement has no stored check to skip")
+        if (block.get("results") or {}).get(str(number)) != "did_not_run":
+            raise ValueError("only a check the board reported as 'did not run' can be skipped; a check that ran and failed must be fixed or corrected")
+        if _task_closed_for_checks(state, str(task)):
+            raise ValueError("the task is finished (accepted, cancelled, or released with no repair under way)")
+        block["checks"] = [item for item in block["checks"] if item["criterion_index"] != number]
+        block["checks_sha256"] = _checks_digest(block["checks"])
+        block.setdefault("skipped", []).append({"criterion_index": number, "reason": reason, "by": agent_id, "role": agent.get("role"), "at": now(), "entries": entries})
+        criteria = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria") or []
+        for item in criteria:
+            if item["n"] == number:
+                item["stale"] = True
+                item["skipped_reason"] = reason
+        block["labels"] = contract_check.labels(criteria)
+        (block.get("results") or {}).pop(str(number), None)
+        (block.get("did_not_run") or {}).pop(str(number), None)
+        _event(state, "contract_check_skipped", agent, {
+            "task": str(task), "criterion": number, "reason": reason,
+            "message": "a stored check that could not run was skipped with a recorded reason; it shows as not checked in advance and the independent review is unchanged",
+        })
+        return {"criterion": number, "checks_sha256": block["checks_sha256"]}
+
+
 def _verified_contract_checks(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
     """The stored checks of a confirmed task, each re-read and compared with the digest the contract recorded."""
     block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check") or {}
@@ -4844,13 +4983,16 @@ def show_contract_checks(root: Path, agent_id: str, task: str = "") -> dict[str,
     }
 
 
-def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, str]) -> None:
-    """What the board's run said per requirement ("passed" / "failed"), for the owner's "What will be tested" list. Display only: best effort."""
+def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, str], reasons: dict[int, str] | None = None) -> None:
+    """What the board's run said per requirement ("passed" / "failed" / "did_not_run"), for the owner's "What will be tested" list.
+
+    Display only: best effort. A check that could not run keeps the plain reason (what ran, what it saw)."""
     try:
         with locked_state(root) as state:
             block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check")
             if block is not None:
                 block["results"] = {str(number): outcome for number, outcome in sorted(outcomes.items())}
+                block["did_not_run"] = {str(number): text for number, text in sorted((reasons or {}).items())}
     except (OSError, ValueError):
         pass
 
@@ -4872,6 +5014,7 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                 "checks_sha256": block["checks_sha256"]}
     simulations: list[dict[str, Any]] = []
     outcomes: dict[int, str] = {}
+    reasons: dict[int, str] = {}
     with tempfile.TemporaryDirectory(prefix="harness-contract-probe-") as probe_directory:
         probe = Path(probe_directory) / "contract-check-probe.md"
         probe.write_text("probe\n", encoding="utf-8")
@@ -4880,7 +5023,13 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
             try:
                 folder.mkdir()
             except FileExistsError:
-                raise ValueError("the finished work already has an entry named .contract-checks, which the board needs for the Reviewer's checks; rename or remove it") from None
+                # the board cannot place the Reviewer's checks: they did not run; that is not a failure of the work and blocks nothing
+                for item in checks:
+                    outcomes[item["criterion_index"]] = "did_not_run"
+                    reasons[item["criterion_index"]] = (
+                        "the finished work already has an entry named .contract-checks, where the board puts the Reviewer's checks, so they could not be placed. "
+                        "Delivery or the CTO can skip the check with a recorded reason (contract-check-skip).")
+                checks = []
             for item in checks:
                 own = folder / ("c" + item["n"].replace(".", "-"))
                 own.mkdir()
@@ -4889,19 +5038,38 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(body, encoding="utf-8")
                 ledger = own / "ledger.md"
-                ledger.write_text(item["ledger"], encoding="utf-8")
+                # a command stored with escaped quotes (-p \"test_*.py\") would hand the quote marks to the test finder and find nothing
+                ledger.write_text(_repair_escaped_pattern(item["ledger"]), encoding="utf-8")
                 candidate = execution_identity.candidate_evidence_identity(
                     commit, str(request.get("reviewed_tree_hash") or request.get("reviewed_worktree_digest") or ""),
                     str((request.get("contract_revision") or {}).get("sha256") or ""), {"contract_check": item["sha256"]},
                 )
                 try:
-                    simulations.extend(_execute_scenario_simulations(
-                        checkout, ledger, live_board_root=root,
-                        certification={**certification, "candidate": candidate, "gate": f"contract-check:{item['n']}"},
-                    ))
-                    outcomes[item["criterion_index"]] = "failed" if outcomes.get(item["criterion_index"]) == "failed" else "passed"
+                    try:
+                        found = _execute_scenario_simulations(
+                            checkout, ledger, live_board_root=root,
+                            certification={**certification, "candidate": candidate, "gate": f"contract-check:{item['n']}", "unable_not_failure": True,
+                                           "retry_reason": certification.get("retry_reason") or "the board's own run of a stored contract check"},
+                        )
+                    except certified_execution.CouldNotRun:
+                        # one automatic second try on the same committed work; nothing was certified, so nothing is held against it
+                        found = _execute_scenario_simulations(
+                            checkout, ledger, live_board_root=root,
+                            certification={**certification, "candidate": candidate, "gate": f"contract-check:{item['n']}", "unable_not_failure": True,
+                                           "retry_reason": "automatic second try: the first run could not run the check"},
+                        )
+                    simulations.extend(found)
+                    if outcomes.get(item["criterion_index"]) not in {"failed", "did_not_run"}:
+                        outcomes[item["criterion_index"]] = "passed"
                 except certified_execution.RetryableInterruption:
                     raise
+                except certified_execution.CouldNotRun as unable:
+                    seen = " ".join(str(unable.output or "").split())[-200:]
+                    reasons[item["criterion_index"]] = (
+                        f"{unable.reason}{(' (it printed: ' + seen + ')') if seen else ''}. This says nothing about the work. "
+                        "Delivery or the CTO can skip this check with a recorded reason (contract-check-skip), or the Reviewer can correct it."
+                    )
+                    outcomes[item["criterion_index"]] = "did_not_run"
                 except ValueError as error:
                     outcomes[item["criterion_index"]] = "failed"
                     _record_contract_check_results(root, task, outcomes)
@@ -4909,8 +5077,12 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                         f"the Reviewer's check {item['n']} for \"{item['criterion']}\" failed: {error}. If you believe the check contradicts the "
                         "requirements rather than your work, post a blocked status naming that requirement; the CTO asks the Reviewer to correct it. Never edit the check."
                     ) from None
-    _record_contract_check_results(root, task, outcomes)
-    return {"run": {"role": role, "at": now(), "status": "passed", "checks_sha256": block["checks_sha256"], "scenario_ids": [item["id"] for item in simulations]},
+    _record_contract_check_results(root, task, outcomes, reasons)
+    if role == "delivery":
+        _compare_passed_checks_with_base(root, task, [number for number, outcome in outcomes.items() if outcome == "passed"])
+    partly = bool(reasons)
+    return {"run": {"role": role, "at": now(), "status": "partly" if partly else "passed", "checks_sha256": block["checks_sha256"],
+                    "scenario_ids": [item["id"] for item in simulations], **({"did_not_run": {str(n): r for n, r in reasons.items()}} if partly else {})},
             "bundle": _simulation_bundle(root, "contract checks", simulations), "checks_sha256": block["checks_sha256"]}
 
 
@@ -4930,6 +5102,197 @@ def _contract_check_stale_reason(state: dict[str, Any], request: dict[str, Any])
     if ran != current:
         return "the stored checks changed after they were run; run execute-challenge again"
     return ""
+
+
+# --- Red proof: a check must be seen failing before the work counts (task 2026-10-25_repair-test-integrity) -----------------------------------
+# The stored checks are run once against the project as it was when the task began. Never raises and never holds delivery: what cannot be
+# compared says so. `contract_check["compare"]` holds one plain label per requirement (red_proof.LABELS); `["red_proof"]` the details.
+
+_RED_PROOF_RETRY = "the board's own run of a stored check on the project before the work"
+
+
+def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | None = None) -> tuple[dict[str, dict[str, str]], str] | None:
+    """The stored checks run on the project as it was before the work: {check number: {outcome, sha256, reason}} and the base commit.
+
+    outcome is "failed" (the check really ran and the test runner reported a failure: the good result here), "passed" (it passes on
+    nothing) or "did_not_run" (it could not be compared: the reason says why). None when the task has no readable stored checks.
+    """
+    try:
+        state = _read_state(root)
+        checks = [item for item in _verified_contract_checks(state, task) if numbers is None or item["criterion_index"] in numbers]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not checks:
+        return None
+    base = str(((state.get("task_baselines") or {}).get(task) or {}).get("head") or "")
+    found: dict[str, dict[str, str]] = {}
+
+    def settle(item: dict[str, Any], outcome: str, reason: str = "") -> None:
+        found[item["n"]] = {"outcome": outcome, "sha256": item["sha256"], "reason": reason}
+
+    if not base:
+        for item in checks:
+            settle(item, "did_not_run", "the project had no saved version before the work began")
+        return found, base
+    request = {"task": task, "subtask": "", "stage": INDEPENDENT_REVIEW, "reviewed_commit": base}
+    deadline = time.monotonic() + red_proof.budget_seconds()
+    try:
+        with tempfile.TemporaryDirectory(prefix="harness-red-proof-") as probe_directory:
+            probe = Path(probe_directory) / "red-proof-probe.md"
+            probe.write_text("probe\n", encoding="utf-8")
+            with _review_candidate_checkout(root, state, request, probe) as (checkout, _unused):
+                folder = checkout / ".contract-checks"
+                try:
+                    folder.mkdir()
+                except FileExistsError:
+                    for item in checks:
+                        settle(item, "did_not_run", "the project before the work already has an entry named .contract-checks")
+                    return found, base
+                if (checkout / ".harness-linked-dependencies").exists():
+                    for item in checks:
+                        settle(item, "did_not_run", "the project before the work would have run with today's installed packages, so the comparison would not be fair")
+                    return found, base
+                lockfiles = _execution_lockfile_digests(checkout)
+                environment = _environment_identity()["sha256"]
+                for item in checks:
+                    if time.monotonic() > deadline:
+                        settle(item, "did_not_run", "the time set aside for this comparison ran out")
+                        continue
+                    own = folder / ("c" + item["n"].replace(".", "-"))
+                    own.mkdir()
+                    for relative, body in item["files"].items():
+                        target = own / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(body, encoding="utf-8")
+                    ledger = own / "ledger.md"
+                    ledger.write_text(_repair_escaped_pattern(item["ledger"]), encoding="utf-8")
+                    candidate = execution_identity.candidate_evidence_identity(base, base, "", {"contract_check": item["sha256"], "gate": "red-proof"})
+                    try:
+                        _execute_scenario_simulations(checkout, ledger, live_board_root=root, certification={
+                            "board_root": root, "candidate": candidate, "environment_sha256": environment, "lockfile_digests": lockfiles,
+                            "role": "reviewer", "gate": f"red-proof:{item['n']}", "retry_reason": _RED_PROOF_RETRY, "task": task,
+                            "unable_not_failure": True})
+                        settle(item, "passed")
+                    except certified_execution.CouldNotRun as unable:
+                        settle(item, "did_not_run", unable.reason)
+                    except certified_execution.RetryableInterruption:
+                        settle(item, "did_not_run", "the run was interrupted before it finished")
+                    except ValueError as error:
+                        # only a check that really ran and was failed by the test runner is the good outcome; a command that could not start,
+                        # a timeout, a machine or confinement problem or an unusable ledger says nothing about the check
+                        if red_proof.is_real_failure(str(error)):
+                            settle(item, "failed")
+                        else:
+                            settle(item, "did_not_run", " ".join(str(error).split())[:200])
+    except (ValueError, OSError, tarfile.TarError, subprocess.SubprocessError) as error:
+        for item in checks:
+            if item["n"] not in found:
+                settle(item, "did_not_run", " ".join(str(error).split())[:200] or "the project before the work could not be set up")
+    return found, base
+
+
+def _store_compare(root: Path, task: str, found: dict[str, dict[str, str]], base: str, source: str) -> dict[int, str]:
+    """Keep each check's label on the confirmed contract and recompute the label of every requirement that was probed.
+
+    A result is kept only for a check whose stored bytes are still the ones that ran (a replaced check's late result is discarded), and only
+    the requirements actually probed are merged. Returns the stored requirement labels; best effort ({} when the write is refused).
+    """
+    try:
+        with locked_state(root) as state:
+            block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check")
+            if block is None:
+                return {}
+            current = {item["n"]: item["sha256"] for item in block.get("checks") or []}
+            detail = block.setdefault("red_proof", {})
+            records = detail.setdefault("checks", {})
+            for number, result in found.items():
+                if current.get(number) != result["sha256"]:
+                    continue
+                label = {"failed": red_proof.FAILS_BEFORE, "passed": red_proof.PASSES_ON_NOTHING}.get(result["outcome"], red_proof.COULD_NOT_COMPARE)
+                earlier = records.get(number) or {}
+                if label == red_proof.COULD_NOT_COMPARE and earlier.get("sha256") == result["sha256"] and earlier.get("label") in {red_proof.FAILS_BEFORE, red_proof.PASSES_ON_NOTHING}:
+                    continue    # a later run that could not compare never erases what an earlier run of the same check did show
+                records[number] = {"label": label, "sha256": result["sha256"], "base_commit": base, "reason": result["reason"]}
+            detail.update({"status": "settled", "base_commit": base, "at": now(), "source": source})
+            probed = {int(str(number).split(".")[0]) for number in found}
+            compare = block.setdefault("compare", {})
+            stored: dict[int, str] = {}
+            for criterion in sorted(probed):
+                labels = [records[n]["label"] for n in sorted(records) if n.startswith(f"{criterion}.") and current.get(n) == records[n]["sha256"]]
+                if not labels:
+                    continue
+                outcomes = ["passed" if item == red_proof.PASSES_ON_NOTHING else "failed" if item == red_proof.FAILS_BEFORE else "did_not_run" for item in labels]
+                compare[str(criterion)] = stored[criterion] = red_proof.criterion_label(outcomes)
+            return stored
+    except (OSError, ValueError):
+        return {}
+
+
+def _settle_red_labels(root: Path, task: str, labels: dict[int, str]) -> None:
+    """Ask the Reviewer ONCE per requirement, through the correction path, to replace or sharpen a check that passes on nothing."""
+    from harness import control
+    with locked_state(root) as state:
+        block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check")
+        if block is None:
+            return
+        detail = block.setdefault("red_proof", {})
+        todo = [number for number, label in labels.items() if label == red_proof.PASSES_ON_NOTHING and number not in (detail.get("asked") or [])]
+        if not todo:
+            return
+        detail["asked"] = sorted(set(detail.get("asked") or []) | set(todo))        # recorded before sending: at most one request, whatever happens
+        proposal = (state.get("requirement_proposals") or {}).get(task) or {}
+        texts = {item["n"]: item["text"] for item in (proposal.get("contract_check") or {}).get("criteria") or []}
+        weak = [n for n, record in sorted((detail.get("checks") or {}).items()) if record["label"] == red_proof.PASSES_ON_NOTHING and int(n.split(".")[0]) in todo]
+        reviewer = (state.get("agents") or {}).get(str((proposal.get("contract_check") or {}).get("reviewer_id") or "")) or {}
+        session_id = str(reviewer.get("session_id") or "") if reviewer.get("active") else ""
+        text = red_proof.correction_request(task, todo, [texts.get(number, "") for number in todo], weak)
+        _event(state, "red_proof_flagged", None, {
+            "task": task, "criteria": todo,
+            "message": "a check passed on the project before any work, so it proves nothing; the Reviewer was asked once to sharpen it" if session_id
+            else "a check passed on the project before any work, so it proves nothing; no Reviewer could be asked, so it stays marked as not distinguishing"})
+    if session_id:
+        try:
+            control.enqueue_instruction(root, session_id, text, source="contract-check")
+        except (ValueError, OSError):
+            pass
+
+
+def run_red_proof(root: Path, task: str, numbers: list[int] | None = None, source: str = "start") -> dict[str, str]:
+    """Run the stored checks once on the unbuilt project and label each check and requirement; never raises.
+
+    Returns the requirement labels by number ({} when nothing could be run at all). Whatever happens, delivery is not held beyond the
+    Settings-routed time budget, and a comparison that cannot happen leaves the check as "not checked in advance" or "could not compare".
+    """
+    try:
+        probed = _probe_stored_checks_on_base(root, task, numbers)
+        if probed is None:
+            return {}
+        found, base = probed
+        labels = _store_compare(root, task, found, base, source)
+        _settle_red_labels(root, task, labels)
+        return {str(number): label for number, label in labels.items()}
+    except Exception as error:   # noqa: BLE001 - the red proof is information; nothing it does may hold the Go ahead or the delivery
+        try:
+            with locked_state(root) as state:
+                block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check")
+                if block is not None:
+                    block.setdefault("red_proof", {}).update({"status": "unavailable", "reason": " ".join(str(error).split())[:200]})
+                _event(state, "red_proof_unavailable", None, {"task": task, "message": "the stored checks could not be compared with the project before the work: " + " ".join(str(error).split())[:200]})
+        except (OSError, ValueError):
+            pass
+        return {}
+
+
+def _compare_passed_checks_with_base(root: Path, task: str, passed: list[int]) -> None:
+    """At request-review: the checks that passed on the finished work also run on the base; a pass on both did not distinguish."""
+    if not passed:
+        return
+    try:
+        probed = _probe_stored_checks_on_base(root, task, passed)
+        if probed is not None:
+            _store_compare(root, task, probed[0], probed[1], "review")
+    except Exception:   # noqa: BLE001 - never a failure of the work
+        pass
 
 
 # --- A managed agent's product question to the owner (owner, live test 2026-10-23) ------------------------------------------------------
@@ -5068,6 +5431,21 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
         if agent.get("role") == "cto":
             owner_text = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) else note
             verdict = _owner_question_verdict(owner_text)
+            # the agent's own "working" label does not count: a note about a blocked review that states no action is waiting
+            blocked = [] if verdict["refusal"] else _blocked_reviews_without_action(state)
+            if blocked and _note_is_inaction_about(note, state_name, blocked):
+                verdict = {**verdict, "refusal": _waiting_refusal(blocked)}
+                _event(state, "cto_waiting_refused", agent, {
+                    "task": str(blocked[0].get("task") or ""), "failure_kind": "review_blocked", "failure_at": blocked[0].get("at"),
+                    "message": f"a status was refused: the review of {blocked[0].get('task')} is blocked and the note states no action",
+                })
+                block = (state.get("review_blocks") or {}).get(str(blocked[0].get("task") or ""))
+                if block is not None and not block.get("flagged"):
+                    block["flagged"] = True   # ONE flag per block; the stall ladder raises the owner card if the Reviewer stays silent
+                    _event(state, "review_blocked_too_long", agent, {
+                        "task": str(blocked[0].get("task") or ""),
+                        "message": f"The review of {blocked[0].get('task')} has been blocked since {blocked[0].get('at')} with no action: the Reviewer is being recovered; the owner is not asked to test the unreviewed build.",
+                    })
             if not verdict["refusal"] and state_name.strip().lower() in CTO_WAITING_STATES:
                 failures = _unrouted_failures(state)
                 if failures:
@@ -5106,6 +5484,7 @@ def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state
         agent.update({"status": state_name, "status_note": note, "last_status_at": now()})
         wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
+        _flag_ready_claim(state, agent, note)
         if wake_pending:
             # A board write from the CTO refutes "not responding": it is alive
             # and logged in. It has still not polled, so the poll stays the
@@ -5390,10 +5769,12 @@ def _owner_question_verdict(text: str, default_action: str = "", default_minutes
 # timestamp cut-off), cleared by the CTO's board actions on the task, by the
 # task's own progress, or by the task ending (Codex plan check 2026-10-14).
 CTO_WAITING_STATES = ("waiting", "watching", "monitoring", "standby", "blocked", "idle")
+CTO_WAITING_TEXT = re.compile(r"\b(?:still (?:waiting|awaiting|pending)|standing by|stand by|watching|hasn.t [a-z ]*yet|has not [a-z ]*yet|waiting (?:for|on)|awaiting|pending)\b", re.I)
 # failures that need a routed next action (the CTO's own stall or failed recovery is the harness's)
 CTO_ROUTE_REQUIRED_EVENTS = (
     "staged_review_cancelled", "challenge_execution_failed", "agent_stalled", "agent_recovery_failed",
     "git_acceptance_failed", "git_acceptance_reintegration_required", "remote_push_failed", "qa_pass_invalidated",
+    "ready_claim_without_review",
 )
 # what the CTO can do about one (its board actions on the task)
 CTO_ROUTING_EVENTS = (
@@ -5410,10 +5791,149 @@ TASK_PROGRESS_EVENTS = (
 )
 
 
+# 2026-10-24 (owner, priority 1): the owner was asked to test and accept a build whose final review never passed. The board now
+# checks it instead of trusting sentences: no release without a passed final review of that head, a Delivery claim of "ready"
+# without one is a flag the CTO must route, and a blocked review has a clock (below).
+READY_CLAIM = re.compile(
+    r"feature[- ]complete|(?:is|are|now|fully|all)\s+(?:complete|completed|done|finished)\b|complete and tested|"
+    r"ready (?:for|to) (?:you|your|the owner|owner|test|testing|try|use|accept|acceptance)\b|"
+    r"(?:owner|you) can (?:now )?(?:test|try|use|accept)\b|please (?:test|accept|try)\b",
+    re.I,
+)
+# a negation right before the claim, or a pending review right after it, makes it a status, not an invitation
+READY_NEGATION_BEFORE = re.compile(r"\b(?:not|isn't|aren't|never|no longer)\W+(?:\w+\W+){0,2}$", re.I)
+READY_PENDING = re.compile(r"\b(?:until|once|after|before|pending|awaiting|blocked)\b", re.I)
+
+
+def _is_ready_claim(clause: str) -> bool:
+    for found in READY_CLAIM.finditer(clause):
+        before = clause[max(0, found.start() - 30):found.start()]
+        if READY_NEGATION_BEFORE.search(before) or READY_PENDING.search(clause[found.end():]) or READY_PENDING.search(clause[:found.start()]):
+            continue
+        return True
+    return False
+
+
+REVIEW_BLOCK_GRACE_SECONDS = 300
+REVIEW_BLOCK_EVENTS = ("agent_restart_requested", "agent_replacement_requested", "contract_check_corrected")
+REVIEW_BLOCK_CLOSERS = (
+    "development_complete", "task_cancelled", "task_closed_administratively", "git_acceptance_completed",
+    "visual_test_required", "release_recorded", "contract_check_corrected",
+)
+
+
+def _all_task_reviews(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Hot review requests of the task plus the archived ones that survive in the request index."""
+    hot = [request for request in (state.get("qa_requests") or {}).values() if request.get("task") == task]
+    seen = {request.get("id") for request in hot}
+    cold = [request for key, request in (state.get("qa_request_index") or {}).items() if request.get("task") == task and key not in seen]
+    return hot + cold
+
+
+RELEASE_FIXTURE_EXEMPT = False   # tests that build bare release fixtures switch this on (tests/release_fixture_support.py); never in production
+
+
+def _in_review_pipeline(state: dict[str, Any], task: str) -> bool:
+    """Every production release needs a valid final review. Only a test fixture that opted out explicitly may release a task
+    that has neither a plan nor any review."""
+    if not RELEASE_FIXTURE_EXEMPT:
+        return True
+    return bool((state.get("delivery_plans") or {}).get(task) or _all_task_reviews(state, task))
+
+
+def _final_pass_for(state: dict[str, Any], task: str, head: str = "") -> bool:
+    """The NEWEST final independent review of the task (current plan revision) passed, is still valid, and is of exactly `head`
+    (any head when it is unknown). An older PASS never stands in for a newer FAIL."""
+    revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0))
+    finals = [
+        request for request in _all_task_reviews(state, task)
+        if request.get("phase") == "final_acceptance"
+        and (not state.get("delivery_plans", {}).get(task) or int(request.get("structure_revision", 0)) == revision)
+    ]
+    newest = max(finals, key=lambda request: int(request.get("cycle", 0)), default=None)
+    if not newest or newest.get("status") != "passed" or newest.get("integrity_invalidated"):
+        return False
+    reviewed = str(newest.get("reviewed_commit") or "")
+    if (state.get("task_repositories") or {}).get(task):
+        return not head or reviewed == head   # a Git task: the reviewed commit must be named and equal to the release head
+    return not head or not reviewed or reviewed == head   # a project without Git has no commit identity to compare
+
+
+def _flag_ready_claim(state: dict[str, Any], agent: dict[str, Any], text: str) -> None:
+    """Delivery says the work is ready while no final review has passed on its current version: tell the CTO, loudly."""
+    task = str(agent.get("task") or "")
+    if agent.get("role") not in DEVELOPER_ROLES or not task or task == AWAITING_OWNER_DIRECTION:
+        return
+    claims = [clause for clause in re.split(r"[.;\n]", str(text or "")) if _is_ready_claim(clause)]
+    if not claims:
+        return
+    if task in (state.get("cancelled_tasks") or {}) or not _in_review_pipeline(state, task):
+        return
+    head = str(((state.get("task_branches") or {}).get(task) or {}).get("head") or "")
+    if _final_pass_for(state, task, head):
+        return
+    _event(state, "ready_claim_without_review", agent, {
+        "task": task,
+        "message": "Delivery says the work is ready or complete, but no final independent review has passed on its current version: "
+                   + " ".join(str(text).split())[:160]
+                   + " - the owner must not be asked to test or accept it; route the review (relaunch the Reviewer or correct the blocking check).",
+    })
+
+
+def _track_review_block(state: dict[str, Any], event: dict[str, Any], agent: dict[str, Any] | None) -> None:
+    """Keep the durable list of cancelled staged reviews that still wait. A retryable interruption (the owner's machine was busy)
+    is not a block; a closed block needs a verdict for the same review scope, the task's completion, end or a corrected check."""
+    kind = str(event.get("kind") or "")
+    task = str(event.get("task") or "")
+    blocks = state.setdefault("review_blocks", {})
+    if kind in ("agent_restart_requested", "agent_replacement_requested") and (agent or {}).get("role") == "qa":
+        for block in blocks.values():
+            block["actioned_at"] = event.get("at")
+            block["actions"] = int(block.get("actions") or 0) + 1
+        return
+    if not task:
+        return
+    if kind == "staged_review_cancelled":
+        if "did not run" in str(event.get("message") or ""):
+            return   # interrupted execution: the ordinary retry, nothing waits on the Reviewer
+        request = (state.get("qa_requests") or {}).get(str(event.get("request_id") or "")) or {}
+        block = blocks.setdefault(task, {"task": task, "since": event.get("at"), "actioned_at": "", "count": 0, "actions": 0,
+                                         "phase": request.get("phase", ""), "chunk": request.get("chunk", "")})
+        block["count"] += 1
+    elif kind == "qa_result" and task in blocks:
+        request = (state.get("qa_requests") or {}).get(str(event.get("request_id") or "")) or (state.get("qa_request_index") or {}).get(str(event.get("request_id") or "")) or {}
+        block = blocks[task]
+        if not request or not block.get("phase") or (request.get("phase") == block.get("phase") and request.get("chunk", "") == block.get("chunk", "")):
+            blocks.pop(task, None)
+    elif kind in REVIEW_BLOCK_CLOSERS or (kind == "owner_release_decision_recorded" and event.get("decision") == "accepted"):
+        blocks.pop(task, None)
+    elif kind in CTO_ROUTING_EVENTS and task in blocks:
+        blocks[task]["actioned_at"] = event.get("at")
+
+
+def _open_review_blocks(state: dict[str, Any]) -> list[dict[str, Any]]:
+    cancelled = state.get("cancelled_tasks") or {}
+    return [dict(block) for task, block in (state.get("review_blocks") or {}).items() if task not in cancelled]
+
+
+def _blocked_reviews_without_action(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Blocked reviews whose last action (or start) is older than the grace: waiting is not an action. A paused project holds it."""
+    if str((state.get("project_pause") or {}).get("status") or "") in {"paused", "resuming"}:
+        return []
+    out = []
+    for block in _open_review_blocks(state):
+        since = _parsed_timestamp(block.get("actioned_at")) or _parsed_timestamp(block.get("since"))
+        if since and (datetime.now(timezone.utc) - since).total_seconds() > REVIEW_BLOCK_GRACE_SECONDS:
+            out.append({"task": block["task"], "kind": "review_blocked", "at": block.get("since"), "count": block.get("count", 1),
+                        "actions": int(block.get("actions") or 0)})
+    return out
+
+
 def _track_route_obligation(state: dict[str, Any], event: dict[str, Any], agent: dict[str, Any] | None) -> None:
     """Keep the durable list of failures the CTO must route; settle them on routing, progress or the task's end."""
     kind = str(event.get("kind") or "")
     task = str(event.get("task") or "")
+    _track_review_block(state, event, agent)
     obligations = state.setdefault("route_obligations", [])
     if kind in CTO_ROUTE_REQUIRED_EVENTS:
         if (agent or {}).get("role") == "cto" or not task or task == "GLOBAL_MONITOR":
@@ -5437,7 +5957,7 @@ def _track_route_obligation(state: dict[str, Any], event: dict[str, Any], agent:
 
 
 def _unrouted_failures(state: dict[str, Any]) -> list[dict[str, Any]]:
-    return [dict(open_one) for open_one in state.get("route_obligations") or []]
+    return [dict(open_one) for open_one in state.get("route_obligations") or []] + _blocked_reviews_without_action(state)
 
 
 def _seed_route_obligations(state: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
@@ -5475,11 +5995,42 @@ def _seed_route_obligations(state: dict[str, Any], root: Path | None = None) -> 
     return state
 
 
+CTO_ACTION_WORDS = re.compile(
+    r"\b(?:restart(?:ed)?|relaunch(?:ed)?|replac(?:e|ed|ing)) (?:the )?(?:reviewer|qa-\d+)|\b(?:reviewer|qa-\d+)\b[^.;]{0,40}\b(?:restarted|relaunched|replaced)\b|owner[- ]action|owner card|\bescalat(?:e|ed)\b",
+    re.I,
+)
+CTO_REVIEWER_WORDS = re.compile(r"\b(?:reviewer|qa-\d+)\b", re.I)
+
+
+def _note_is_inaction_about(note: str, state_name: str, blocked: list[dict[str, Any]]) -> bool:
+    """A CTO note that is waiting-shaped (state or words) or that talks about the blocked review without stating a board action."""
+    if CTO_ACTION_WORDS.search(note):
+        return False
+    if state_name.strip().lower() in CTO_WAITING_STATES or CTO_WAITING_TEXT.search(note):
+        return True
+    lowered = note.lower()
+    if CTO_REVIEWER_WORDS.search(note):
+        return True
+    for block in blocked:
+        task = str(block.get("task") or "")
+        tail = "-".join(task.split("-")[-2:]).lower()
+        if task.lower() in lowered or (tail and tail in lowered):
+            return True
+    return False
+
+
 def _waiting_refusal(failures: list[dict[str, Any]]) -> str:
     first = failures[0]
     at = _parsed_timestamp(first.get("at"))
     when = at.strftime("%H:%M UTC") if at else "just now"
     more = f" (+{len(failures) - 1} more)" if len(failures) > 1 else ""
+    if first.get("kind") == "review_blocked":
+        return (
+            f"the review of {first.get('task')} has been blocked since {when}{more} and no action has been taken: restart or replace the Reviewer "
+            "(Mission Control, or let the stall ladder do it), or route the correction of the blocking check to the Reviewer (only it may correct a stored check), then report. "
+            + ("Two restarts did not clear it: raise one owner card (owner-action) naming the blocked review. " if int(first.get("actions") or 0) >= 2 else "")
+            + "Waiting is not an action, and the owner is never the workaround."
+        )
     return (
         f"route the next action, then report: {first.get('kind')} on {first.get('task')} at {when}{more} has no routed action since "
         "(record-finding --affects-current-task or finding-triage for the task's agent, owner-action, finding-route-around, "
@@ -6895,6 +7446,7 @@ def task_brief(root: Path, agent_id: str, plan: str, update: str) -> dict[str, A
         value = {"plan": plan, "update": update, "updated_at": now(), "agent_id": agent_id}
         state.setdefault("task_briefs", {})[developer["task"]] = value
         _event(state, "task_brief_updated", developer, {"task": developer["task"], "message": update})
+        _flag_ready_claim(state, developer, update)
         _end_stale_brief_hold(state, developer["task"])
         return json.loads(json.dumps(value))
 
@@ -7467,7 +8019,8 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         inherited_count = len(baseline.get("dirty_files", []))
         binding = "owner-named Git repository on an isolated broker branch" if owner_repository else "isolated broker task worktree"
         message = f"Product Management defined the internal task in its {binding}; captured {inherited_count} inherited dirty files for internal attribution; owner action is not required"
-        return _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count, "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding})
+        return _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count,
+                                                   "open_reference": reference_chapters.reference_hint("delivery-workflow", *(["inherited-changes"] if inherited_count else [])), "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding})
 
 
 def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> dict[str, Any]:
@@ -7597,8 +8150,7 @@ def _task_reserves_repository(state: dict[str, Any], task: str) -> bool:
     this, every finished task blocked the next task on the same repository
     forever and the CTO had to release bindings by hand.
     """
-    decision = (state.get("release_decisions", {}).get(task) or {}).get("decision", "")
-    if decision == "accepted":
+    if owner_accept_is_real(state, task):
         return False
     if task in (state.get("cancelled_tasks") or {}):
         return False
@@ -7750,6 +8302,7 @@ def _abandon_review_intents(
     request: dict[str, Any], reviewer_id: str, reason: str,
 ) -> None:
     """Keep abandoned authorship auditable without assigning it to a replacement."""
+    review_cost.close_stretch(request)  # the attempt ended without a verdict: keep the time it used
     intents = list(request.get("reviewer_initial_intents") or [])
     amendments = list(request.get("reviewer_intent_amendments") or [])
     if intents or amendments:
@@ -8135,6 +8688,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "reviewed_commit": request.get("reviewed_commit", ""),
                 "delivery_state": request.get("delivery_state", "passed"),
                 "route_attempt": request["route_attempts"],
+                "open_reference": reference_chapters.reference_hint(*_review_chapters(request)),
             })
 
     for superseded in superseded_routes:
@@ -8149,7 +8703,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "author the distinct Challenge Ledger now, but do not attach it, execute review commands, or "
                 "post a verdict until the board records Delivery success; the board will message you when it does. "
                 "Do not start or continue any polling, "
-                "watch, sleep, caffeinate, or background helper. USER ACTION: None."
+                "watch, sleep, caffeinate, or background helper. USER ACTION: None. " + delivery["open_reference"]
             )
         else:
             instruction = (
@@ -8158,7 +8712,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "Do not start or continue any polling, watch, sleep, caffeinate, or background helper. "
                 "Run one bounded board poll now, author the distinct Challenge Ledger, claim this exact request, "
                 "execute the simulations, and post the formal PASS or FAIL result. If ledger preparation exceeds "
-                "one minute, post a short board status update before continuing. USER ACTION: None."
+                "one minute, post a short board status update before continuing. USER ACTION: None. " + delivery["open_reference"]
             )
         try:
             queued = control.enqueue_instruction(
@@ -8196,6 +8750,16 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                     ),
                 })
     return deliveries
+
+
+def _review_chapters(request: dict[str, Any]) -> list[str]:
+    """The reference chapters a routed review points the Reviewer at (task 2026-10-25_directive-diet)."""
+    names = ["challenge-ledger", "review-rounds"]
+    if request.get("phase") == "final_acceptance":
+        names.append("final-acceptance")
+    if request.get("repair_context"):
+        names.append("repair-review")
+    return names
 
 
 def _delivery_succeeded_instruction(request_id: str, task: str) -> str:
@@ -8286,35 +8850,23 @@ def _execute_internal_qa(
     """
     try:
         return _run_internal_qa(command, root, measurement=measurement, certification=certification, live_board_root=live_board_root, reuse=reuse)
+    except certified_execution.CouldNotRun:
+        raise   # a stored contract check that could not run: no owner card, the board says so itself
     except ValueError as error:
         if certification is None or browser_acceptance.SANDBOX_BLOCKED not in str(error):
             raise
-        source = certification.get("rerun_source") or {}
-        if source.get("commit"):
-            # The reviewer's checkout was disposable; the command rebuilds it.
-            rerun = (
-                f'd="$(mktemp -d)" && git -C {shlex.quote(source["workspace"])} archive '
-                f'{shlex.quote(source["commit"])} | tar -x -C "$d" && cd "$d" && {command}'
-            )
-        else:
-            where = source.get("workspace") or str(project_context(root).code_root)
-            rerun = f"cd {shlex.quote(where)} && {command}"
+        # Owner 2026-10-25: no owner prompt for this (it used to be the card "Run a screen check yourself"). The agents are told how to
+        # continue below; a review that still cannot be completed is settled by the bounded recovery and the honest outcome.
         with locked_state(certification["board_root"]) as state:
-            _record_owner_action(
-                state, {"id": "system", "role": "system"},
-                "Run a screen check yourself",
-                rerun,
-                "An agent's check needed a web browser, and the browser could not run in the protected area where "
-                "agents work. You can run the command shown here in Terminal to see the result yourself, but that alone "
-                "does not complete the agents' required checks. The agents will arrange the remaining checks; "
-                "nothing else is needed from you.",
-                str(certification.get("task") or ""),
-            )
+            _event(state, "screen_check_needed", None, {
+                "task": str(certification.get("task") or ""),
+                "message": "A check needed a web browser that could not run in the protected area where agents work. The agents were told to capture "
+                           "the page with the screen-check command instead; nothing is needed from you.",
+            })
         raise ValueError(
             f"{error} | the browser could not run inside the agent's sandbox. A rendered test whose own headless browser can "
             "run in the sandbox is fine; one that cannot must stay out of the governed command. Capture the rendered page with "
-            "the screen-check board command (with --expect) and cite its screen-... id in the ledger. Mission Control also "
-            "shows the owner the command"
+            "the screen-check board command (with --expect) and cite its screen-... id in the ledger"
         ) from error
 
 
@@ -8346,6 +8898,7 @@ def _run_internal_qa(
             retry_reason=str(certification.get("retry_reason") or ""),
             browser=certification.get("browser"),
             reuse=reuse,
+            unable_not_failure=bool(certification.get("unable_not_failure")),
         )
         if measurement is not None:
             measurement.update(result["measurement"])
@@ -8428,6 +8981,7 @@ def _execute_scenario_simulations(
     )
     results = []
     failures = []
+    unable_error: certified_execution.CouldNotRun | None = None
     command_results: dict[str, dict[str, Any]] = {}
     # Owner 2026-10-12 (Enhanced security): a command any S-SEC- row names is
     # executed fresh in every request (scanner databases and history move);
@@ -8475,6 +9029,9 @@ def _execute_scenario_simulations(
             )
         except certified_execution.RetryableInterruption:
             raise   # nothing was certified and nothing failed: waiting behind a run, or owner-machine activity
+        except certified_execution.CouldNotRun as unable:
+            unable_error = unable_error or unable   # remembered; the other commands still run, and a real failure elsewhere wins
+            continue
         except ValueError as error:
             output = str(error)
             failures.append(f"{scenario['id']}: {error}")
@@ -8490,6 +9047,8 @@ def _execute_scenario_simulations(
         results.append(row)
     if failures:
         raise ValueError("Scenario Ledger simulations failed: " + " | ".join(failures))
+    if unable_error is not None:
+        raise unable_error
     return results
 
 
@@ -8618,6 +9177,8 @@ def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[
                 raise ValueError("dirty task workspace review is missing its reviewed_worktree_digest")
             if current.get("working_tree_digest") != expected_digest:
                 raise ValueError("dirty task workspace changed after review request; request a fresh review cycle")
+        if request.get("challenge_support_files"):
+            raise ValueError("the Reviewer's supporting files can only be placed in a saved (committed) version of the work; nothing was executed")
         yield workspace, source_path
         return
     probe = git_process.run(["git", "rev-parse", "--show-toplevel"], cwd=workspace, capture_output=True, text=True)
@@ -8644,6 +9205,17 @@ def _review_candidate_checkout(root: Path, state: dict[str, Any], request: dict[
         candidate_ledger = checkout / relative
         candidate_ledger.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, candidate_ledger)
+        support = request.get("challenge_support_files") or {}
+        if support:
+            # The Reviewer's supporting files (frozen at attach, flat validated names) go in their own folder, never over a candidate file.
+            folder = checkout / ".review-checks"
+            try:
+                folder.mkdir()
+            except FileExistsError:
+                raise ValueError("the reviewed work already has an entry named .review-checks, where the board puts the Reviewer's supporting files; "
+                                 "they could not be placed, so nothing was executed") from None
+            for name, body in review_rounds.support_manifest(support).items():
+                (folder / name).write_text(body, encoding="utf-8")
         yield checkout, candidate_ledger
 
 
@@ -9911,8 +10483,7 @@ _GAP_CLOSING_EVENTS = {
     "owner_release_decision_recorded": "Resolved: task accepted", "task_closed_administratively": "Resolved: task closed as released",
 }
 _GAP_AGENT_WORDS = ("sandbox", "timed out", "timeout", "sign-in", "signed out", "quota", "my tool", "my session", "my browser", "the reviewer's tool", "reviewer tool", "terminal")
-GAP_OWNER_AFTER_ROUNDS = 3
-GAP_CHOICES = ("waive this part (say which part)", "give me a machine where it can happen", "stop this task")
+GAP_OWNER_AFTER_ROUNDS = 3   # kept for the history of the rule: since 2026-10-25 a testing gap is settled by the bounded recovery, never by an owner card
 
 
 def _not_tested_declaration(summary: Any) -> str:
@@ -9938,18 +10509,6 @@ def _gap_scope_key(request: dict[str, Any]) -> str:
 
 def _gap_candidate(request: dict[str, Any]) -> dict[str, str]:
     return {"commit": str(request.get("reviewed_commit") or ""), "tree": str(request.get("reviewed_tree_hash") or request.get("reviewed_worktree_digest") or "")}
-
-
-def _gap_owner_card_text(gap: dict[str, Any]) -> tuple[str, str]:
-    title = f"Your decision needed: {gap['task']} could not be fully tested"
-    again = (f" This is round {gap['rounds']} and the agents have not been able to settle it between themselves." if gap["rounds"] > 1 else "")
-    why = (
-        f"The independent Reviewer could not test part of {gap['task']}: {gap['reason']}{again} Nobody can fix this by changing code, so the "
-        f"work is waiting for you. Choose one and tell the CTO in Mission Control (Message the CTO): (1) {GAP_CHOICES[0]}; (2) {GAP_CHOICES[1]}; "
-        f"(3) {GAP_CHOICES[2]}. Parts about security, the independent review itself, and making sure the reviewed version is the one that is delivered cannot be waived. "
-        f"Full verdict: review {gap['request_id']}."
-    )
-    return title, why
 
 
 def _note_verification_gap(root: Path, state: dict[str, Any], request: dict[str, Any], qa: dict[str, Any], summary: str, at: str = "") -> None:
@@ -9982,29 +10541,16 @@ def _note_verification_gap(root: Path, state: dict[str, Any], request: dict[str,
     gap["reviewers"] = reviewers   # every Reviewer that ended NOT TESTED for this scope: a different one is a changed test setting
     gap["last_at"] = at or now()
     gap["history"].append({"request_id": gap["request_id"], "at": gap["last_at"]})
-    lowered = declaration.lower()
-    owner_cause = any(word in lowered for word in _GAP_OWNER_WORDS) and not any(word in lowered for word in _GAP_AGENT_WORDS)
     if gap["state"] == "closed":
         gap["state"] = "diagnosing"
         gap["rounds"] = 1   # a new unresolved run (closure by pass, cancellation or the CTO's disposition); total_rounds keeps the history
-    if owner_cause or gap["rounds"] >= GAP_OWNER_AFTER_ROUNDS:
-        gap["state"] = "owner_decision"   # a cause the owner controls at once; a run nobody has settled in three rounds is his to know about too
+    # Owner 2026-10-25 ("BIG NO" to waiting on Mission Control): no owner card and no owner decision. The failed judgment counts toward the
+    # round limit (review_rounds.record_judgment); after it the bounded recovery and the honest "could not finish" outcome settle the gap.
+    gap["state"] = "diagnosing"
     _event(state, "verification_gap_recorded", qa, {
         "task": gap["task"], "gap_id": gap["id"], "rounds": gap["rounds"], "state": gap["state"],
         "message": f"{gap['task']} could not be fully tested (round {gap['rounds']}): {reason[:200]}",
     })
-    if gap["state"] == "owner_decision":
-        title, why = _gap_owner_card_text(gap)
-        card = (state.get("owner_actions") or {}).get(gap.get("card_id", ""))
-        if card and card.get("status") == "open":
-            card.update({"title": title, "why": why, "refreshed_at": now()})
-        else:
-            # one card per gap, never merged with another scope's card by the generic same-task deduplication
-            card = {"id": f"action-{secrets.token_hex(6)}", "title": title, "command": "", "why": why, "task": gap["task"], "for_agent": "",
-                    "kind": "gap", "gap_id": gap["id"], "agent_id": qa["id"], "status": "open", "recorded_at": now(), "outcome": "", "done_at": ""}
-            state.setdefault("owner_actions", {})[card["id"]] = card
-            gap["card_id"] = card["id"]
-            _event(state, "owner_action_recorded", qa, {"task": gap["task"], "action_id": card["id"], "title": title, "message": f"owner action needed: {title}"})
 
 
 def reconcile_verification_gaps(root: Path) -> dict[str, Any]:
@@ -10023,12 +10569,21 @@ def reconcile_verification_gaps(root: Path) -> dict[str, Any]:
         except OSError:
             pass
     with locked_state(root) as state:
+        for old_gap in (state.get("verification_gaps") or {}).values():
+            # A gap from before 2026-10-25 may hold an owner decision and its card: the harness settles it itself now, nobody waits for the owner.
+            if old_gap.get("state") == "owner_decision":
+                old_gap["state"] = "diagnosing"
+                card = (state.get("owner_actions") or {}).get(old_gap.get("card_id", ""))
+                if card and card.get("status") == "open":
+                    _resolve_owner_action(state, card, "Resolved: the harness now settles this by itself and does not ask you", "verification_gap")
+                old_gap["state"] = "diagnosing"       # resolving the card closes its gap; the gap itself is still the harness's to settle
+                old_gap.pop("closed_at", None)
         seen = {int(e.get("sequence") or 0) for e in history if isinstance(e, dict)}
         history.extend(e for e in state.get("events", []) if isinstance(e, dict) and int(e.get("sequence") or 0) not in seen)
         history.sort(key=lambda e: int(e.get("sequence") or 0))
         replayed = {e.get("request_id") for g in (state.get("verification_gaps") or {}).values() for e in g.get("history", [])}
         replayed_passes: set[str] = set()
-        concluded = set(state.get("cancelled_tasks") or {}) | {str(task) for task, d in (state.get("release_decisions") or {}).items() if d.get("decision") == "accepted"}
+        concluded = set(state.get("cancelled_tasks") or {}) | {str(task) for task, d in (state.get("release_decisions") or {}).items() if owner_accept_is_real(state, task, d)}
         count = 0
         for event in history:
             if not isinstance(event, dict) or event.get("kind") != "qa_result" or str(event.get("task") or "") in concluded:
@@ -10073,25 +10628,6 @@ def _close_gaps_for(state: dict[str, Any], task: str, outcome: str, scope_key: s
         card = (state.get("owner_actions") or {}).get(gap.get("card_id", ""))
         if card and card.get("status") == "open":
             _resolve_owner_action(state, card, outcome, "verification_gap")
-
-
-def _gap_refusal(root: Path, state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str, review_artifact: dict[str, Any]) -> None:
-    """Delivery may not resubmit the candidate that ended NOT TESTED while the owner's decision is open and nothing about it changed."""
-    scope = "|".join((task, phase, subtask, chunk))
-    tree = str(review_artifact.get("tree_hash") or "")
-    for gap in (state.get("verification_gaps") or {}).values():
-        if not str(gap.get("scope_key") or "").startswith(scope + "|") or gap.get("state") != "owner_decision":
-            continue
-        known_reviewers = set(gap.get("reviewers") or [gap.get("reviewer")])
-        replacement = any(
-            agent.get("role") == "qa" and agent.get("active") and agent.get("id") not in known_reviewers
-            for agent in (state.get("agents") or {}).values()
-        )   # a different Reviewer is a changed test setting (an agent limit was the cause of the last rounds): it may retry, and a repeat is counted
-        if not replacement and tree and tree == (gap.get("candidate") or {}).get("tree") and str(gap.get("machine_revision") or "").split("|")[0] == _current_machine_revision(root):
-            raise ValueError(
-                f"this is the candidate that could not be fully tested ({gap['reason'][:160]}) and the owner has been asked to decide; "
-                f"resubmitting it unchanged would repeat the same verdict. Wait for the owner's choice ({'; '.join(GAP_CHOICES)}), or "
-                "submit a changed candidate or a changed test setting (a reconnected machine).")
 
 
 def owner_clear_hold(root: ProjectRoot, task: str, source: str) -> dict[str, Any]:
@@ -11709,6 +12245,7 @@ def _application_finalization_diff(
 def _repair_packages_for_scope(
     state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str,
 ) -> list[dict[str, Any]]:
+    revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0) or 0)
     return sorted([
         package for package in state.get("repair_packages", {}).values()
         if package.get("task") == task
@@ -11716,6 +12253,8 @@ def _repair_packages_for_scope(
         and package.get("subtask", "") == subtask
         and package.get("chunk", "") == chunk
         and package.get("status") in {"open", "ready_for_review", "under_review"}
+        # a changed structure starts a new round 1: an older revision's package (no field = recorded before this rule) never blocks it
+        and ("structure_revision" not in package or int(package["structure_revision"]) == revision)
     ], key=lambda package: (str(package.get("created_at") or ""), str(package.get("id") or "")))
 
 
@@ -12148,6 +12687,58 @@ def _completion_gate_problems(
     return problems
 
 
+def _escalation_refusal(state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str) -> None:
+    """A scope past the round limit: no review is requested while its one fresh attempt is starting, and never after the harness stopped repairing it."""
+    revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0) or 0)
+    refusal = review_rounds.refusal_for(state.get("review_escalations") or {}, {
+        "task": task, "phase": phase, "subtask": subtask, "chunk": chunk, "structure_revision": revision})
+    if refusal:
+        raise ValueError("review was not requested: " + refusal)
+
+
+def _repair_changed_tests(
+    execution_root: Path, state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str, commit: str,
+    package: dict[str, Any] | None, changes: str, test_command: str = "",
+) -> list[dict[str, str]]:
+    """Test files of the last judged version that this repair changes, each with the reason Delivery gave (refused when one is missing).
+
+    A repair must not make the work pass by loosening the test. A test file that existed in the version the last failed review judged and
+    is modified, deleted or renamed now needs a line `Test changed: <file> - <why>` in the repair note. Files added by the repair are fine.
+    """
+    previous = [
+        row for row in _task_requests(state, task)
+        if row.get("stage") == INDEPENDENT_REVIEW and row.get("phase", "legacy") == phase and row.get("subtask", "") == subtask
+        and row.get("chunk", "") == chunk and row.get("result") == "failed" and row.get("reviewed_commit")
+    ]
+    if not previous or not commit:
+        return []
+    last = max(previous, key=lambda row: int(row.get("cycle", 0)))
+    earlier = str(last["reviewed_commit"])
+    if earlier == commit:
+        return []
+    diff = git_process.run(["git", "diff", "--name-status", "-M", "-z", earlier, commit], cwd=execution_root, capture_output=True, text=True)
+    if diff.returncode != 0:
+        return []
+    parts = diff.stdout.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(parts) and parts[index]:
+        status = parts[index]
+        width = 2 if status[0] in "RC" else 1
+        names = parts[index + 1:index + 1 + width]
+        index += 1 + width
+        if status[0] in "MDRT" and names and red_proof.is_test_file(names[0]) and names[0] not in paths:
+            paths.append(names[0])
+    if last.get("test_command") and test_command.strip() != str(last["test_command"]).strip():
+        paths.append(red_proof.TEST_COMMAND)       # a different test command can switch the failing test off without touching it
+    if not paths:
+        return []
+    reasons, missing = red_proof.reasons_for(changes, paths)
+    if missing:
+        raise ValueError(red_proof.refusal(missing))
+    return [{"path": path, "reason": reasons[path]} for path in paths]
+
+
 def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: str = "chunk", chunk: str = "", changes: str = "", evidence: str = "", test_command: str = "", subtask: str = "", test_scope: str = "full", scope_reason: str = "", repair_package_id: str = "") -> dict[str, Any]:
     """Queue a direct independent review for the multi-hat delivery-agent flow.
 
@@ -12228,6 +12819,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("final acceptance cannot start while another review is active")
 
         mode, subtask, chunk = _validate_review_scope(state, developer["task"], phase, subtask, chunk)
+        _escalation_refusal(state, developer["task"], phase, subtask, chunk)
         packages = _repair_packages_for_scope(
             state, developer["task"], phase, subtask, chunk,
         )
@@ -12243,7 +12835,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                 raise ValueError("repair package is already under independent review")
             if package.get("status") == "open":
                 if package.get("requires_explicit_resolution"):
-                    raise ValueError("every explicit repair-package member must be resolved before review")
+                    open_ids = ", ".join(str(member.get("id")) for member in package.get("members") or [] if member.get("status") != "resolved")
+                    raise ValueError(f"every explicit repair-package member (each finding of the failed review) must be resolved in one repair before review is requested; still open: {open_ids}. "
+                                     f"Run resolve-repair-package --package {package.get('id')} with one --resolution MEMBER_ID|WHAT_YOU_CHANGED|HOW_YOU_CHECKED_IT for each")
                 if len(changes.strip()) < 8:
                     raise ValueError("repair review requires a concrete changes summary")
                 umbrella = (package.get("members") or [{}])[0]
@@ -12298,6 +12892,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         request_state = json.loads(json.dumps(state))
     if review_artifact.get("available") and not review_artifact.get("immutable_clean"):
         raise ValueError("every governed review requires an immutable clean commit/tree; use broker stage+commit before review")
+    changed_tests = _repair_changed_tests(
+        execution_root, request_state, task_name, phase, subtask, chunk, str(review_artifact.get("commit") or ""),
+        selected_repair_package, changes, test_command) if selected_repair_package else []
     if subtask and review_artifact.get("available"):
         accepted_byte_manifest = accepted_bytes.build_manifest(
             execution_root, scope_baseline_commit,
@@ -12387,7 +12984,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         if (latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit")
                 and not proof_changed_since_pass):
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
-        _gap_refusal(root, state, developer["task"], phase, subtask, chunk, review_artifact)
+        _escalation_refusal(state, developer["task"], phase, subtask, chunk)
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
         if cycle > 1 and not changes.strip():
             raise ValueError("a re-review cycle requires a concise --changes summary")
@@ -12415,7 +13012,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "repair_package": selected_repair_package,
             "repair_package_id": (selected_repair_package or {}).get("id", ""),
             "contract_revision": contract_revision, "environment_identity": environment_identity,
-            "changes_summary": changes, "status": "authoring", "delivery_state": "executing",
+            "changes_summary": changes, "changed_tests": changed_tests, "test_command": test_command, "status": "authoring", "delivery_state": "executing",
             "staged_authoring": True, "requested_at": requested_at,
             "review_wait_started_at": requested_at, "review_wait_stopped_at": None,
             "claimed_by": None, "claimed_at": None, "result": None,
@@ -12426,6 +13023,12 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         # enhanced-security choice for good and freezes it into the request,
         # so what the reviewer reads is exactly what was chosen.
         staged_request["enhanced_security"] = _lock_and_freeze_task_security(state, developer["task"], requested_at)
+        staged_request["frozen_scope"] = _frozen_scope_brief(state, staged_request)
+        retained = (state.get("retained_plans") or {}).get(review_rounds.lineage_key(staged_request)) if staged_request["frozen_scope"]["frozen"] else None
+        if retained and retained.get("support_files"):
+            # the round-1 supporting files are placed again for the round-2 run; a Reviewer's own review-support replaces them
+            staged_request["challenge_support_files"] = dict(retained["support_files"])
+            staged_request["challenge_support_sha256"] = retained["support_sha256"]
         staged_request["review_brief"] = review_brief_projection.build(
             root, state, staged_request, delivery_scenarios=planned_scenarios,
             include_delivery_evidence=False,
@@ -12496,7 +13099,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     "message": (
                         "Delivery evidence did not run (" + str(error)[:200] + "); no test failed, ask for the review again"
                         if interrupted
-                        else "Delivery evidence failed; staged Reviewer execution and verdict remain blocked"),
+                        else "Delivery evidence failed: " + str(error)[:500] + ". What to do: Delivery fixes what is named above and asks for the review again; "
+                             "a stored check that could not run (not a failed test) can be skipped with a recorded reason using contract-check-skip. "
+                             "Staged Reviewer execution and verdict remain blocked until then"),
                 })
                 failures = state.setdefault("delivery_attempt_failures", [])
                 if not interrupted:
@@ -12553,7 +13158,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         if (latest and latest["status"] == "passed" and latest.get("reviewed_commit") == review_artifact.get("commit")
                 and not proof_changed_since_pass):
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
-        _gap_refusal(root, state, developer["task"], phase, subtask, chunk, review_artifact)
+        _escalation_refusal(state, developer["task"], phase, subtask, chunk)
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
         if cycle > 1 and not changes.strip():
             raise ValueError("a re-review cycle requires a concise --changes summary")
@@ -12622,7 +13227,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             ),
             "contract_revision": contract_revision,
             "environment_identity": environment_identity,
-            "changes_summary": changes,
+            "changes_summary": changes, "changed_tests": changed_tests, "test_command": test_command,
             "status": "reserved" if staged_existing.get("status") == "reserved" else "open",
             "delivery_state": "passed", "staged_authoring": True,
             "cited_screen_checks": cited_screen_checks,
@@ -12640,6 +13245,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "reviewer_initial_intents", "reviewer_intents_recorded_at",
             "reviewer_intent_amendments", "reviewer_authoring_overlap_started",
             "delivery_wait_told", "enhanced_security",
+            "frozen_scope", "challenge_support_files", "challenge_support_sha256",
         ):
             if key in staged_existing:
                 request[key] = json.loads(json.dumps(staged_existing[key]))
@@ -12920,6 +13526,103 @@ def _reviewed_candidate_files(root: Path, request_id: str) -> tuple[str, dict[st
     return commit, _commit_files(_task_execution_roots(root, state, task)[0], commit)
 
 
+def record_review_support(root: Path, agent_id: str, request_id: str, submission: str) -> dict[str, Any]:
+    """The Reviewer's supporting test files for its Challenge Ledger, frozen before the ledger is attached (one JSON file: {"files": {...}}).
+
+    The worker never reads a path the agent names: the file arrives as an upload. Names are flat and validated, text only, bounded."""
+    try:
+        parsed = json.loads(Path(submission).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("the supporting-files submission could not be read as JSON") from error
+    clean = review_rounds.support_manifest(parsed.get("files") if isinstance(parsed, dict) else None)
+    with locked_state(root) as state:
+        qa = _require_agent(state, agent_id)
+        request = state.get("qa_requests", {}).get(request_id)
+        if not request or qa.get("role") != "qa" or request.get("stage") != INDEPENDENT_REVIEW:
+            raise ValueError("only the Reviewer of an independent review can add supporting files")
+        attempts = list(request.get("challenge_execution_attempts") or [])
+        mine = request.get("reserved_by") == qa["id"] if request.get("status") == "reserved" else (
+            request.get("status") == "claimed" and request.get("claimed_by") == qa["id"] and not request.get("challenge_execution")
+            and bool(attempts) and attempts[-1].get("status") in {"failed", "interrupted"})
+        if not mine:
+            raise ValueError("supporting files are frozen when the Challenge Ledger is attached: add them before you attach it (after a failed run, correct the ledger and add them again)")
+        digest = hashlib.sha256(json.dumps(clean, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        request["challenge_support_files"] = clean
+        request["challenge_support_sha256"] = digest
+        return {"request": request_id, "files": sorted(clean), "sha256": digest,
+                "message": f"{len(clean)} supporting file(s) stored. The board places them in .review-checks/ of the checkout when your ledger runs; attach the ledger now."}
+
+
+def show_retained_plan(root: Path, agent_id: str, request_id: str) -> dict[str, Any]:
+    """Read-only: the round-1 checks of this scope (ledger text, commands, supporting files) and what round it is."""
+    state = _read_state(root)
+    qa = _require_agent(state, agent_id)
+    request = (state.get("qa_requests") or {}).get(request_id)
+    if not request or qa.get("role") != "qa":
+        raise ValueError("only a Reviewer can read the retained plan of a review request")
+    plan = (state.get("retained_plans") or {}).get(review_rounds.lineage_key(request))
+    if not plan:
+        return {"request": request_id, "retained": False, "message": "No round-1 checks were kept for this scope (round 1 had no executed Challenge Ledger, or this is round 1)."}
+    return {"request": request_id, "retained": True, **{key: plan[key] for key in ("source_request", "ledger", "ledger_sha256", "commands", "support_files", "support_sha256")},
+            "message": "Confirm these checks: put them in your Challenge Ledger (add rows for the repair's changed paths), pass the supporting files with review-support, and run execute-challenge once. "
+                       "A different Reviewer uses the commands as prefill only and writes its own scenario meaning."}
+
+
+def open_reference(root: Path, agent_id: str, name: str) -> dict[str, Any]:
+    """Every role: one named chapter of the role's reference directive (directives/AGENT.md or CTO.md), as JSON.
+
+    The always-loaded text of a session is its one-page card; this is how the rest is opened when a card rule or a board message
+    names a chapter (task 2026-10-25_directive-diet). It changes no workflow state and no gate: the `reference_opened` event, which
+    counts the bytes retrieved, is the only write. An unknown chapter is refused with the list of names, and then writes nothing.
+    """
+    with locked_state(root, allow_paused=True, operation="reference") as state:
+        agent = _require_agent(state, agent_id)
+        result = reference_chapters.chapter_result(str(agent.get("role") or ""), name)
+        _event(state, "reference_opened", agent, {
+            "task": agent.get("task") or "", "chapter": result["chapter"], "bytes": result["bytes"],
+            "message": f"opened the rules chapter {result['chapter']} ({result['bytes']} bytes)"})
+    return result
+
+
+def _retain_plan(root: Path, state: dict[str, Any], request: dict[str, Any], at: str) -> None:
+    """Round 1 (the baseline) keeps the Reviewer's executed checks, with their supporting files, as the stored plan of the scope lineage."""
+    value = str(request.get("challenge_ledger") or "")
+    if not value:
+        return                                  # an early FAIL ran no ledger: only the findings are kept
+    try:
+        path = _task_path_from_state(root, state, request["task"], value)
+        text = path.read_text(encoding="utf-8")[:200_000]
+        valid, _problems, rows = contract.scenario_simulations(path)
+    except (OSError, ValueError):
+        return
+    state.setdefault("retained_plans", {})[review_rounds.lineage_key(request)] = {
+        "source_request": str(request.get("id") or ""), "ledger": text, "ledger_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "commands": [row["command"] for row in rows] if valid else [],
+        "support_files": dict(request.get("challenge_support_files") or {}), "support_sha256": str(request.get("challenge_support_sha256") or ""),
+        "retained_at": at,
+    }
+
+
+def _frozen_scope_brief(state: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+    """What the Reviewer is told about the round at the moment the review is requested (also shown in the review brief)."""
+    requests = _task_requests(state, str(scope["task"]))
+    prior = review_rounds.prior_judgments(requests, scope)
+    base = review_rounds.baseline(prior)
+    last = next((row for row in reversed(prior) if row.get("status") == "failed"), None)
+    plan = (state.get("retained_plans") or {}).get(review_rounds.lineage_key(scope))
+    number = review_rounds.round_number(prior, base)
+    return {
+        "round": number, "round_limit": review_rounds.round_limit(), "frozen": bool(base),
+        "round_1_findings": [{key: found.get(key, "") for key in ("id", "summary", "harm", "regression_check")} for found in (base or {}).get("findings", {}).values()],
+        "still_open_ids": [str(f.get("id")) for f in (last or {}).get("structured_findings") or []],
+        "retained_plan": {"commands": plan["commands"], "support_files": sorted(plan["support_files"]), "read_with": "retained-plan"} if plan else None,
+        "rule": ("Round 1 is open: list every blocking finding with an id, a harm line (in normal use the owner would see or lose ...) and a reproduction; tag safety, data-loss or leak."
+                 if not base else
+                 "The agreed scope is frozen. Block only on (a) a round-1 finding still not fixed, (b) something the repair broke, (c) an agreed requirement materially unmet, or (d) safety, data loss or a leak; "
+                 "put anything else in the summary as a note (letter new). You still form a fresh semantic verdict and run the whole path for final acceptance."),
+    }
+
+
 def attach_challenge_ledger(
     root: Path, agent_id: str, request_id: str, challenge_ledger: str,
     correction_reason: str = "",
@@ -13012,6 +13715,9 @@ def attach_challenge_ledger(
             "reviewed_commit": request.get("reviewed_commit", ""),
             "challenge_ledger_sha256": challenge_digest,
         }
+        if request.get("challenge_support_sha256"):
+            # the frozen supporting files are part of what was authorized: changed bytes never ride an earlier authorization or result
+            authorization_fields["support_sha256"] = request["challenge_support_sha256"]
         authorization = {
             **authorization_fields,
             "sha256": hashlib.sha256(json.dumps(
@@ -13045,7 +13751,18 @@ def attach_challenge_ledger(
         })
         if not correction:
             _event(state, "qa_claimed", qa, {"task": request["task"], "request_id": request["id"], "stage": request.get("stage", DEVELOPMENT_QA), "cycle": request["cycle"], "ledger": request["ledger"], "challenge_ledger": challenge_ledger})
-        return dict(request)
+        attached = dict(request)
+        plan = (state.get("retained_plans") or {}).get(review_rounds.lineage_key(request)) if (request.get("frozen_scope") or {}).get("frozen") else None
+        if plan:
+            # Round 2 or later: the round-1 checks are to be confirmed in this ledger. Reported, never a refusal: a check the repair made
+            # obsolete may be dropped, and the verdict says why.
+            valid, _problems, rows = contract.scenario_simulations(challenge)
+            have = {" ".join(str(row["command"]).split()) for row in rows} if valid else set()
+            missing = [command for command in plan.get("commands") or [] if " ".join(str(command).split()) not in have]
+            attached["retained_commands_missing"] = missing
+            if missing:
+                attached["retained_plan_note"] = "Your ledger does not repeat these round-1 checks: " + "; ".join(missing[:5]) + ". Keep them, or say in your verdict why each no longer applies."
+        return attached
 
 
 def claim_qa(root: Path, agent_id: str, request_id: str = "", challenge_ledger: str = "") -> dict[str, Any]:
@@ -13191,6 +13908,8 @@ def _execute_challenge_locked(
             "reviewed_commit": request.get("reviewed_commit", ""),
             "challenge_ledger_sha256": simulation_digest,
         }
+        if request.get("challenge_support_sha256"):
+            authorization_fields["support_sha256"] = request["challenge_support_sha256"]
         expected_authorization = hashlib.sha256(json.dumps(
             authorization_fields, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")).hexdigest()
@@ -13204,6 +13923,8 @@ def _execute_challenge_locked(
         current_checks_digest = str((((state.get("requirement_confirmations") or {}).get(request["task"]) or {}).get("contract_check") or {}).get("checks_sha256") or "") if request.get("phase") == "final_acceptance" else ""
         if existing_execution.get("ledger_sha256") == simulation_digest and str(existing_execution.get("contract_check_sha256") or "") != current_checks_digest:
             existing_execution = {}   # the stored checks changed (or were never run for this execution): run everything again
+        if existing_execution.get("contract_check_partial"):
+            existing_execution = {}   # a check could not run last time: it is tried again, never reused as certified
         if existing_execution.get("ledger_sha256") == simulation_digest and any(
             not test_machine.stamp_is_current(root, stamp) for stamp in existing_execution.get("machine_stamps", [])
         ):
@@ -13241,6 +13962,8 @@ def _execute_challenge_locked(
         "challenge_ledger": simulation_digest,
         "review_scope": _review_scope_identity(review_request)["sha256"],
     }
+    if review_request.get("challenge_support_sha256"):
+        candidate_artifacts["challenge_support"] = review_request["challenge_support_sha256"]
     if not (
         review_request.get("reviewed_commit")
         or review_request.get("reviewed_tree_hash")
@@ -13364,6 +14087,7 @@ def _execute_challenge_locked(
             "executed_at": now(),
             "retry_reason": retry_reason.strip(),
             "contract_check_sha256": str((contract_check_run or {}).get("checks_sha256") or ""),
+            "contract_check_partial": bool(((contract_check_run or {}).get("run") or {}).get("did_not_run")),
         }
         _apply_contract_check_run(request, contract_check_run)
         request.setdefault("challenge_execution_attempts", []).append({
@@ -13487,6 +14211,88 @@ def _require_failure_evidence(path: Path) -> None:
                          "if you cannot show one, release the review through the CTO instead of failing it")
 
 
+def review_recovery_update(root: Path, key: str, **fields: Any) -> dict[str, Any] | None:
+    """Record one step of the single fresh Delivery attempt (durable, so a restart resumes it; only while the recovery is still ours)."""
+    with locked_state(root) as state:
+        entry = (state.get("review_escalations") or {}).get(key)
+        if not entry or entry.get("status") != "recovery":
+            return None
+        entry.update(fields)
+        if fields.get("phase") == "started":
+            _event(state, "review_recovery_started", None, {
+                "task": entry["task"], "message": (f"{entry['task']}: one fresh Reviewer is working on the review that could not be completed; nobody needs to act." if entry.get("who") == "reviewer"
+                                                  else f"{entry['task']}: one fresh Delivery attempt is working on the open findings ({', '.join(entry.get('open_ids') or [])}); nobody needs to act."),
+            })
+        return json.loads(json.dumps(entry))
+
+
+def review_recovery_settle(root: Path, key: str, reason: str, closed: bool = False) -> dict[str, Any] | None:
+    """The attempt could not run or did not finish: automatic repair of this part stops and the honest outcome is recorded (or, when the
+    task itself was cancelled, the record is closed). Nothing is released and no owner card is made."""
+    with locked_state(root) as state:
+        entry = (state.get("review_escalations") or {}).get(key)
+        if not entry or entry.get("status") != "recovery":
+            return None
+        at = now()
+        if closed:
+            entry.update(status="closed", closed_at=at, outcome=reason)
+            return json.loads(json.dumps(entry))
+        entry.update(status="could_not_finish", settled_at=at, outcome=review_rounds.outcome_text(entry, reason))
+        _event(state, "review_could_not_finish", None, {"task": entry["task"], "message": entry["outcome"]})
+        return json.loads(json.dumps(entry))
+
+
+def review_recovery_mark_retired(root: Path, key: str, at: str) -> None:
+    with locked_state(root) as state:
+        entry = (state.get("review_escalations") or {}).get(key)
+        if entry and entry.get("status") == "could_not_finish":
+            entry["retired_at"] = at
+            for agent in (state.get("agents") or {}).values():
+                if agent.get("session_id") == entry.get("session_id"):
+                    # a restart requested before the scope was stopped never overrides the retirement
+                    agent.pop("restart_requested_at", None)
+                    agent.pop("restart_reason", None)
+
+
+def request_recovery_wake_text(entry: dict[str, Any]) -> str:
+    return (f"REVIEW RECOVERY: you are the one fresh Delivery attempt for {entry['task']}. Poll the board once now: your poll shows review_recovery with the precise brief. "
+            "Fix every open finding in one repair, then request review. Do not ask the owner anything. USER ACTION: None.")
+
+
+def _frozen_scope_context(state: dict[str, Any], request: dict[str, Any], requests: list[dict[str, Any]], prior: list[dict[str, Any]]) -> dict[str, Any]:
+    """The durable records a round-2+ finding is checked against (task 2026-10-25_frozen-review-scope)."""
+    task = str(request.get("task") or "")
+    confirmation = (state.get("requirement_confirmations") or {}).get(task) or {}
+    contract_check_block = confirmation.get("contract_check") or {}
+    passing: set[str] = set()
+    commits: set[str] = set()
+    for row in requests:
+        if row.get("stage") != INDEPENDENT_REVIEW or review_rounds.lineage_key(row) != review_rounds.lineage_key(request) or row.get("id") == request.get("id"):
+            continue
+        if row.get("reviewed_commit"):
+            commits.add(str(row["reviewed_commit"]))
+        for execution in row.get("command_executions") or []:
+            if execution.get("exit_code") == 0 and execution.get("id"):
+                passing.add(str(execution["id"]))
+    passing |= {f"C{number}" for number, outcome in (contract_check_block.get("results") or {}).items()
+                if outcome == "passed" and (contract_check_block.get("compare") or {}).get(number) != red_proof.PASSES_ON_NOTHING}
+    return {
+        "requirements": str(confirmation.get("text") or ""),
+        "criteria": {str(item.get("n")) for item in contract_check_block.get("labels") or []},
+        "passing": passing, "commits": commits,
+        "waivers": list((state.get("deliverable_waivers") or {}).get(task, [])),
+    }
+
+
+def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, summary: str,
+                  failure_members: list[dict[str, Any]] | None, early_fail: bool) -> dict[str, Any]:
+    requests = _task_requests(state, str(request.get("task") or ""))
+    prior = review_rounds.prior_judgments(requests, request)
+    return review_rounds.judge(
+        request, prior, result, summary, failure_members, _frozen_scope_context(state, request, requests, prior),
+        early_fail=early_fail, certified=bool(request.get("challenge_execution")))
+
+
 def qa_result(
     root: Path, agent_id: str, request_id: str, result: str, summary: str,
     evidence: str, finalization_classification: str = "",
@@ -13508,6 +14314,7 @@ def qa_result(
     simulations: list[dict[str, Any]] = []
     review_state: dict[str, Any] | None = None
     review_request: dict[str, Any] | None = None
+    submitted_result = result
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state["qa_requests"].get(request_id)
@@ -13527,6 +14334,14 @@ def qa_result(
                 raise ValueError("a rejected finalization classification cannot receive a PASS verdict")
         elif classification:
             raise ValueError("finalization classification is valid only for a computed application finalization diff")
+        unnamed = red_proof.unnamed_in_verdict(request.get("changed_tests") or [], summary)
+        if unnamed:
+            raise ValueError(red_proof.verdict_refusal(request["changed_tests"], unnamed))
+        # Frozen review scope (2026-10-25): decided before the first PASS-specific branch, and decided again in the final transaction.
+        judgment = _judge_review(state, request, result, summary, failure_members, early_fail)
+        result = judgment["effective_result"]
+        if finalization and result == "passed" and classification != "accepted":
+            raise ValueError("a rejected finalization classification cannot receive a PASS verdict")
         if result == "passed":
             _require_completed_ledger(
                 root, str(_task_path_from_state(root, state, request["task"], request["ledger"])),
@@ -13616,9 +14431,13 @@ def qa_result(
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state["qa_requests"].get(request_id)
-        early_fail = _early_fail_allowed(request, qa, result)
+        early_fail = _early_fail_allowed(request, qa, submitted_result)
         if not early_fail and (qa["role"] != "qa" or not request or request["claimed_by"] != qa["id"] or request["status"] != "claimed"):
             raise ValueError("only the QA agent that claimed this request may submit its result")
+        again = _judge_review(state, request, submitted_result, summary, failure_members, early_fail)
+        if again["effective_result"] != result or [m.get("id") for m in again["blockers"]] != [m.get("id") for m in judgment["blockers"]]:
+            raise ValueError("the review state changed while the verdict was being checked; submit the verdict again")
+        judgment = again
         if early_fail:
             # In the same transaction as the FAIL itself: a verdict that is refused leaves the reservation exactly as it was.
             request.update({"status": "claimed", "claimed_by": qa["id"], "claimed_at": now(), "early_fail_from_reservation": True})
@@ -13669,7 +14488,7 @@ def qa_result(
             repair_package_model.refresh_digest(prior_package)
         if result == "failed":
             package = repair_package_model.build(
-                request["task"], request, summary.strip(), failure_members,
+                request["task"], request, summary.strip(), judgment["blockers"] if judgment["structured"] else failure_members,
             )
             package["source_reviewer_id"] = qa["id"]
             repair_package_model.refresh_digest(package)
@@ -13708,6 +14527,14 @@ def qa_result(
                 if key in simulation
             } | {"kind": "reviewer_scenario" if simulation_field == "reviewer_simulations" else "qa_scenario"})
         request.update({"status": result, "result": result, "result_summary": summary, "evidence": str(evidence_path), "completed_at": completed, "review_wait_stopped_at": completed})
+        if request.get("stage") == INDEPENDENT_REVIEW:
+            request.update(review_rounds.request_fields(judgment, summary, failure_members))
+            resolutions = {str(m.get("id")): str(m.get("resolution") or "") for m in (prior_package or {}).get("members", []) if m.get("resolution")}
+            if judgment["structured"] and judgment["effective_result"] == "failed" and not judgment["baseline_request"]:
+                _retain_plan(root, state, request, completed)
+            for escalation_event in review_rounds.record_judgment(state.setdefault("review_escalations", {}), request, judgment, summary, resolutions, completed,
+                                                                  reviewer_id=qa["id"], reviewer_session=str(qa.get("session_id") or "")):
+                _event(state, escalation_event["kind"], qa, {"task": request["task"], "request_id": request_id, "message": escalation_event["message"]})
         qa.update({"status": "qa_complete", "status_note": f"{request_id}: {result}", "last_status_at": completed})
         developer = _require_agent(state, request["developer_id"])
         if request.get("stage") == INDEPENDENT_REVIEW:
@@ -13738,7 +14565,7 @@ def qa_result(
             ),
             "last_status_at": completed,
         })
-        _event(state, "qa_result", qa, {"task": request["task"], "request_id": request_id, "stage": request.get("stage", DEVELOPMENT_QA), "cycle": request["cycle"], "result": result, "ledger": request["ledger"], "challenge_ledger": request.get("challenge_ledger"), "evidence": evidence, "scenario_count": len(simulation_bundle["scenario_ids"]) if simulation_bundle else 0, "repair_package_id": request.get("created_repair_package_id", ""), "lifecycle": request_lifecycle, "command_execution_count": len([item for item in request.get("command_executions", []) if item.get("cache_decision") != "same_request_deduplicated"]), "message": summary})
+        _event(state, "qa_result", qa, {"task": request["task"], "request_id": request_id, "stage": request.get("stage", DEVELOPMENT_QA), "cycle": request["cycle"], "result": result, "ledger": request["ledger"], "challenge_ledger": request.get("challenge_ledger"), "evidence": evidence, "scenario_count": len(simulation_bundle["scenario_ids"]) if simulation_bundle else 0, "repair_package_id": request.get("created_repair_package_id", ""), "lifecycle": request_lifecycle, "command_execution_count": len([item for item in request.get("command_executions", []) if item.get("cache_decision") != "same_request_deduplicated"]), "board_decision": judgment["message"], "message": summary})
         if result == "failed":
             request["verdict_summary"] = summary[:2000]
             _note_verification_gap(root, state, request, qa, summary)
@@ -13750,12 +14577,17 @@ def qa_result(
             )
         if result == "failed" and developer.get("session_id"):
             route_session = developer["session_id"]
-            routed_text = f"Independent review {request_id} FAILED. Read its board result, fix the root cause, run internal QA, and submit the next review cycle. Do not wait for the owner."
-            gap_now = next((g for g in (state.get("verification_gaps") or {}).values() if g.get("request_id") == request_id and g.get("state") == "owner_decision"), None)
-            if gap_now:
-                routed_text = (f"Independent review {request_id} ended NOT TESTED and the owner has been asked to decide ({gap_now['reason'][:200]}). "
-                               "Resubmitting the same candidate is refused until he answers or the test setting changes; work on anything else that is "
-                               "unaffected, and tell the CTO if you can change the candidate so the part becomes testable.")
+            routed_text = f"Independent review {request_id} FAILED. Read its board result, fix the root cause of EVERY open finding in one repair, run internal QA, and submit the next review cycle. Do not wait for the owner. " + reference_chapters.reference_hint("repair", "review-rounds")
+            escalation = (state.get("review_escalations") or {}).get(review_rounds.lineage_key(request)) or {}
+            if escalation.get("status") == "recovery" and escalation.get("who") == "reviewer":
+                routed_text = (f"Independent review {request_id} could not be completed. The harness is starting one fresh Reviewer on a stronger model; no code change is needed. "
+                               "Request review again for the same scope with a changes summary that says so, and wait. Nobody asks the owner anything.")
+            elif escalation.get("status") == "recovery":
+                routed_text = (f"Independent review {request_id} FAILED for the {escalation.get('failed_judgments')}th time. The harness is starting one fresh Delivery attempt "
+                               "for this part with a precise brief; do not start another repair of it. Nobody asks the owner anything.")
+            elif escalation.get("status") == "could_not_finish":
+                routed_text = (f"Independent review {request_id} FAILED again. Automatic repair of this part has stopped and nothing of it will be released; "
+                               "do not repair it again. Continue only with other, independent parts of the task if there are any.")
         # RC1 residual (row 10): a PASSED review is also delivery's cue to move
         # NOW — next subtask, integration, or the Completion Contract — instead
         # of waiting for a poll cycle to notice.
@@ -13765,7 +14597,7 @@ def qa_result(
                 routed_text = (
                     f"FINAL REVIEW {request_id} PASSED for {request['task']}. Validate the Completion "
                     "Contract and call complete now. Do not rerun the already-passed final review unless "
-                    "its execution identity changes. USER ACTION: None."
+                    "its execution identity changes. USER ACTION: None. " + reference_chapters.reference_hint("release")
                 )
             else:
                 routed_text = (
@@ -13793,7 +14625,7 @@ def qa_result(
                     f"{str(request.get('reviewed_commit') or '')[:12]}. The Python "
                     "coordinator now owns release preparation. Poll once for the "
                     "prepared release action; do not ask Delivery or Reviewer to "
-                    "repeat certified work. USER ACTION: None."
+                    "repeat certified work. USER ACTION: None. " + reference_chapters.reference_hint("release")
                 )
             _event(state, "release_routing_requested", cto_agent, {
                 "task": request["task"], "request_id": request_id,
@@ -14188,11 +15020,36 @@ def unreleased_final_passes(state: dict[str, Any]) -> list[tuple[str, dict[str, 
     ]
 
 
+ACTIVE_REPAIR_STATUSES = frozenset({"OWNER_REJECTED_REPAIR_REQUIRED", "DELIVERY_REPAIR_IN_PROGRESS", "repairing"})
+
+
+def _task_closed_for_checks(state: dict[str, Any], task: str) -> bool:
+    """Is the task truly over for the operations on stored checks (correct, skip, early look)?
+
+    `_task_finished` still sees the earlier release after the owner pressed Not Accepted, although Delivery is working on that task again.
+    The effective lifecycle: cancelled or really accepted is over; released is over ONLY while no owner-requested repair and no reopened
+    scope is under way.
+    """
+    if task in (state.get("cancelled_tasks") or {}):
+        return True
+    if owner_accept_is_real(state, task) or task in (state.get("git_acceptances") or {}):
+        return True
+    release = (state.get("releases") or {}).get(task) or {}
+    if release.get("status") not in RELEASED_STATUSES:
+        return False
+    if ((state.get("release_repairs") or {}).get(task) or {}).get("status") in ACTIVE_REPAIR_STATUSES:
+        return False
+    reopen = (state.get("candidate_scope_reopens") or {}).get(task) or {}
+    if reopen and str(reopen.get("recorded_at") or "") > str(release.get("recorded_at") or ""):
+        return False
+    return True
+
+
 def _task_finished(state: dict[str, Any], task: str) -> bool:
     """Released to the owner or accepted: no more review work of its own."""
     return bool(
         (state.get("releases") or {}).get(task, {}).get("status") in RELEASED_STATUSES
-        or ((state.get("release_decisions") or {}).get(task) or {}).get("decision") == "accepted"
+        or owner_accept_is_real(state, task)
         or task in (state.get("git_acceptances") or {})
     )
 
@@ -14301,6 +15158,12 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
         agent = _require_agent(state, agent_id)
         if agent["role"] != "cto":
             raise ValueError("only the CTO may record VISUAL_TEST_REQUIRED")
+        if _in_review_pipeline(state, task) and not _final_pass_for(state, task, str(checks.get("head_commit") or "")):
+            raise ValueError(
+                "cannot record VISUAL_TEST_REQUIRED: no final independent review has passed on this exact version of the task. "
+                "The owner is not asked to test or accept an unreviewed build: get the review to pass (relaunch the Reviewer or "
+                "correct the blocking check), then record the release."
+            )
         required_checks = BROKER_RELEASE_REQUIRED_CHECKS if checks.get("git_broker_governed") else RELEASE_REQUIRED_CHECKS
         if checks.get("runtime_gate_required"):
             required_checks = set(required_checks) | {
@@ -14400,6 +15263,8 @@ def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> di
         head_commit = str(preview.get("head_commit") or "")
         if head_commit and str(release.get("head_commit") or "") != head_commit:
             raise ValueError("the preview does not match the current release candidate")
+        if status == "ready" and _in_review_pipeline(state, task) and not _final_pass_for(state, task, str(release.get("head_commit") or "")):
+            raise ValueError("the candidate preview cannot be offered: no valid final independent review stands on this version")
         previous = release.get("preview") or {}
         previous_status = str(previous.get("status") or "")
         if (
@@ -14441,6 +15306,24 @@ def clear_release_preview(root: Path, task: str) -> dict[str, Any]:
             raise ValueError("a candidate preview exists only for a release awaiting the owner test")
         removed = release.pop("preview", None) or {}
         return dict(removed)
+
+
+def _resolve_accepted_follow_ups(state: dict[str, Any], task: str, head_commit: str, recorded_at: str) -> None:
+    """Close the deferred finding this released follow-up task was fixing. A governed task calls this only after its merge."""
+    for finding in state.get("deferred_findings", {}).values():
+        if finding.get("status") == "fix_in_progress" and finding.get("follow_up_task") == task:
+            finding.update({
+                "status": "resolved",
+                "resolved_at": recorded_at,
+                "resolution_evidence": f"Owner accepted released follow-up {task} at commit {head_commit}.",
+                "next_action": "Resolved through the independently reviewed and owner-accepted follow-up task.",
+            })
+            _event(state, "finding_resolved", None, {
+                "task": task,
+                "finding_id": finding.get("id", ""),
+                "message": finding["next_action"],
+            })
+            break
 
 
 def record_release_decision(root: Path, task: str, decision: str, reason: str = "") -> dict[str, Any]:
@@ -14537,21 +15420,8 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
                 "decision": decision,
                 "message": "Owner release response recorded against the released task",
             })
-            if decision == "accepted":
-                for finding in state.get("deferred_findings", {}).values():
-                    if finding.get("status") == "fix_in_progress" and finding.get("follow_up_task") == task:
-                        finding.update({
-                            "status": "resolved",
-                            "resolved_at": response["recorded_at"],
-                            "resolution_evidence": f"Owner accepted released follow-up {task} at commit {release.get('head_commit', '')}.",
-                            "next_action": "Resolved through the independently reviewed and owner-accepted follow-up task.",
-                        })
-                        _event(state, "finding_resolved", None, {
-                            "task": task,
-                            "finding_id": finding.get("id", ""),
-                            "message": finding["next_action"],
-                        })
-                        break
+            if decision == "accepted" and not governed_acceptance:
+                _resolve_accepted_follow_ups(state, task, release.get("head_commit", ""), response["recorded_at"])
             if decision == "not_accepted":
                 _event(state, "owner_release_repair_required", None, {
                     "task": task,
@@ -14590,6 +15460,77 @@ def _plain_acceptance_failure(detail: str) -> str:
     return f"Your approval is saved, but the app could not be updated with the approved work: {text}. Ask the CTO to fix the reason, then press Accept again."
 
 
+REINTEGRATION_REQUIRED_RELEASE = "REINTEGRATION_REQUIRED"
+
+
+def _void_unmerged_accept(root: ProjectRoot, task: str, reason: str) -> dict[str, Any]:
+    """An Accept that cannot merge: keep the decision in the history, free the slot, take the stale release off the owner's
+    test list, and make Delivery do the re-integration. Nothing is merged, stopped or closed. Safe to repeat."""
+    with locked_state(root) as state:
+        voided = state.get("release_decisions", {}).pop(task, None)
+        release = state.get("releases", {}).get(task)
+        if voided:
+            state.setdefault("voided_release_decisions", {}).setdefault(task, []).append({
+                **voided, "voided_at": now(), "voided_because": "Main moved after final certification; nothing was merged.",
+                "release_head_commit": (release or {}).get("head_commit", ""),
+            })
+        if isinstance(release, dict) and release.get("status") == "VISUAL_TEST_REQUIRED":
+            release.update({"status": REINTEGRATION_REQUIRED_RELEASE, "superseded_status": "VISUAL_TEST_REQUIRED", "superseded_at": now()})
+        _event(state, "git_acceptance_reintegration_required", None, {
+            "task": task,
+            "message": "Your Accept did not go in: main moved after final certification, so nothing was merged and nothing was closed. "
+                       "Delivery is asked to re-integrate main and request a fresh final review.",
+        })
+        marker = state.get("git_reintegration_required", {}).get(task)
+        if isinstance(marker, dict):
+            # an earlier receipt may belong to a Delivery session that has since stopped: route afresh
+            for key in ("delivery_notified_at", "instruction_id", "delivery"):
+                marker.pop(key, None)
+    routed = route_reintegration(root, task, reason, source="owner-accept")
+    with locked_state(root) as state:
+        live = state.get("git_reintegration_required", {}).get(task)
+        if live is not None:
+            tail = (
+                "Delivery has been asked to combine the changes, test again and request a fresh final review; press Accept again when the new test card appears."
+                if routed.get("delivery") != "relaunch_required" else
+                "Delivery is not running, so open a Delivery agent for this project and tell it to resume this task; it will combine the changes and test again, then press Accept again on the new test card."
+            )
+            live["owner_line"] = "Your Accept did not go in: other approved work changed the app after the final review, so nothing was merged and nothing was closed. " + tail
+            routed = dict(live)
+    return routed
+
+
+def reconcile_unmerged_accept(root: ProjectRoot, task: str) -> dict[str, Any]:
+    """Repair a board stranded by the pre-fix bug: an owner Accept saved, the merge refused, Delivery stopped. Idempotent."""
+    with locked_state(root) as state:
+        decision = (state.get("release_decisions") or {}).get(task)
+        owed = (state.get("git_reintegration_required") or {}).get(task)
+        if task in (state.get("git_acceptances") or {}):
+            raise ValueError("this task is already in main; nothing to reconcile")
+        if not (decision and decision.get("decision") == "accepted") and not owed:
+            raise ValueError("this task has no saved Accept waiting on a merge")
+        reason = str((owed or {}).get("reason") or "main moved after final certification")
+        release = (state.get("releases") or {}).get(task) or {}
+        if not decision and owed and release.get("status") == REINTEGRATION_REQUIRED_RELEASE:
+            return dict(owed)   # already reconciled: nothing to add
+        # an old-bug board may have ARCHIVED the stopped Delivery (the accepted-task housekeeping): bring its record back, stopped
+        if not any(a.get("role") in DEVELOPER_ROLES and a.get("task") == task for a in state.get("agents", {}).values()):
+            archived = [
+                a for a in _read_cold(root, "agents")
+                if a.get("role") in DEVELOPER_ROLES and a.get("task") == task and not a.get("superseded_by_agent_id")
+            ]
+            if archived:
+                last = max(archived, key=lambda a: (str(a.get("spawned_at") or ""), str(a.get("id") or "")))
+                state.setdefault("agents", {})[last["id"]] = {**last, "active": False, "write_authority": False, "status": "stopped", "liveness": "offline"}
+        # a Delivery stopped by the old bug carries no hand-over mark: give it one so a replacement resumes this task
+        if not any(a.get("active") and a.get("role") in DEVELOPER_ROLES and a.get("task") == task for a in state.get("agents", {}).values()):
+            for agent in state.get("agents", {}).values():
+                if agent.get("role") in DEVELOPER_ROLES and agent.get("task") == task and not agent.get("active") \
+                        and not agent.get("superseded_by_agent_id") and not (agent.get("stopped_by_owner_at") or agent.get("stopped_by_harness_at")):
+                    agent["stopped_by_harness_at"] = now()
+    return _void_unmerged_accept(root, task, reason)
+
+
 def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, Any]) -> dict[str, Any]:
     """Fast-forward main for a saved Accept; a refusal is recorded, never lost.
 
@@ -14601,16 +15542,8 @@ def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, An
     try:
         recorded_response["git_acceptance"] = accept_owner_release(root, task)
     except git_broker.MainMovedError as error:
-        with locked_state(root) as state:
-            state.setdefault("git_reintegration_required", {})[task] = {
-                "task": task, "reason": str(error), "recorded_at": now(),
-                "next_action": "Re-integrate on the task branch and repeat final QA plus independent review.",
-            }
-            state["release_decisions"][task].pop("git_acceptance", None)
-            _event(state, "git_acceptance_reintegration_required", None, {
-                "task": task,
-                "message": "Main moved after final certification; no merge occurred and fresh final review is required",
-            })
+        # 2026-10-24 report: the saved Accept is not an acceptance while the merge is owed.
+        _void_unmerged_accept(root, task, str(error))
         recorded_response["git_acceptance"] = {"status": "reintegration_required", "reason": str(error)}
         return recorded_response
     except ValueError as error:
@@ -14714,6 +15647,7 @@ def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:
         release = state.get("releases", {}).get(task)
         if isinstance(release, dict):
             release.update({"status": RELEASE_ACCEPTED, "accepted_at": now()})
+            _resolve_accepted_follow_ups(state, task, release.get("head_commit", ""), now())
         _event(state, "git_acceptance_completed", None, {
             "task": task, "commit": result["commit"], "tree": result["tree"],
             "mirror_ref": result["mirror_ref"],
@@ -15002,7 +15936,7 @@ def claim_release_repair(root: Path, agent_id: str, task: str) -> dict[str, Any]
             control.enqueue_instruction(
                 root,
                 session_id,
-                "OWNER REPAIR ROUTED: read the saved reason and attachment metadata from the board, repair this release, then start a new review and release cycle without asking the owner to repeat anything.",
+                "OWNER REPAIR ROUTED: read the saved reason and attachment metadata from the board, repair this release, then start a new review and release cycle without asking the owner to repeat anything. " + reference_chapters.reference_hint("owner-rejection-repair"),
                 source="owner-release-decision",
             )
         except ValueError:
@@ -15129,10 +16063,43 @@ ACCEPTED_STOP_MESSAGE = "Task accepted, Dev agent stopped."
 STOP_KEEPS_TASK_MESSAGE = "Agent stopped. The task is kept — start a new agent to carry on."
 
 
+def owner_accept_is_real(state: dict[str, Any], task: str, decision: Any = None) -> bool:
+    """Is the owner's saved Accept an acceptance? A governed task is accepted only once its merge exists.
+
+    2026-10-24 report: a saved Accept whose merge failed (main moved, a failed fast-forward, a crash before the merge) used to
+    count as accepted everywhere, so a Stop wrote "Task accepted, Dev agent stopped" for a task that was not in main and left it
+    with no agent. The saved decision is the authorization for the merge, not proof that it happened. A task without the
+    governed Git path (no repository, or no passed final review with a mirror) keeps today's meaning: the decision is the acceptance.
+    """
+    if decision is None:
+        decision = (state.get("release_decisions") or {}).get(task)
+    if not (isinstance(decision, dict) and decision.get("decision") == "accepted"):
+        return False
+    if task in (state.get("git_acceptances") or {}):
+        return True
+    if (decision.get("git_acceptance") or {}).get("status") == "failed" or task in (state.get("git_reintegration_required") or {}):
+        return False
+    governed = bool(
+        (state.get("task_repositories") or {}).get(task)
+        and any(
+            request.get("phase") == "final_acceptance" and request.get("status") == "passed" and request.get("mirror_ref")
+            for request in _task_requests(state, task)
+        )
+    )
+    return not governed
+
+
+def accept_is_owed(state: dict[str, Any], task: str) -> bool:
+    """The owner's Accept is saved (or was refused) but the merge has not happened: Delivery's task is not finished."""
+    decision = (state.get("release_decisions") or {}).get(task)
+    saved_not_real = bool(isinstance(decision, dict) and decision.get("decision") == "accepted" and not owner_accept_is_real(state, task, decision))
+    return task not in (state.get("git_acceptances") or {}) and (saved_not_real or task in (state.get("git_reintegration_required") or {}))
+
+
 def _accepted_task_ids(state: dict[str, Any]) -> set[str]:
     return {
         task for task, decision in (state.get("release_decisions") or {}).items()
-        if (decision or {}).get("decision") == "accepted"
+        if owner_accept_is_real(state, task, decision)
     } | set((state.get("git_acceptances") or {}).keys())
 
 
@@ -15181,7 +16148,7 @@ def stop_session(root: Path, session_id: str) -> dict[str, Any]:
                 agent.get("role") in DEVELOPER_ROLES
                 and task not in {"", AWAITING_OWNER_DIRECTION}
                 and task not in (state.get("cancelled_tasks") or {})
-                and state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES
+                and (state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES or accept_is_owed(state, task))
             )
             agent.update({
                 "active": False, "write_authority": False,
@@ -15360,7 +16327,7 @@ def _stopped_task_to_resume(state: dict[str, Any], agent_id: str) -> tuple[str, 
             and not source.get("superseded_by_agent_id")
             and task not in {"", AWAITING_OWNER_DIRECTION}
             and task not in accepted and task not in cancelled and task not in owned
-            and state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES
+            and (state.get("releases", {}).get(task, {}).get("status") not in RELEASED_STATUSES or accept_is_owed(state, task))
             and owner_direction_for_task(state, str(source["id"]), task)
         ):
             candidates.append((str(source.get("stopped_by_owner_at") or source.get("stopped_by_harness_at")), str(source["id"]), task))
@@ -15480,6 +16447,7 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
                     release = state.get("releases", {}).get(task)
                     if isinstance(release, dict) and release.get("status") == "VISUAL_TEST_REQUIRED":
                         release.update({"status": RELEASE_ACCEPTED, "accepted_at": now()})
+                        _resolve_accepted_follow_ups(state, task, release.get("head_commit", ""), now())
                 elif outcome.get("operation") == "subtask-fold":
                     request = state.get("qa_requests", {}).get(outcome.get("request_id"))
                     if not request:
@@ -15600,6 +16568,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("attach-workspace"); p.add_argument("--agent", required=True); p.add_argument("--workspace", required=True)
     p = sub.add_parser("bind-repository"); p.add_argument("--agent", required=True); p.add_argument("--repo", default=""); p.add_argument("--baseline", default="")
     p = sub.add_parser("reconcile-baseline"); p.add_argument("--agent", required=True)
+    p = sub.add_parser("reconcile-unmerged-accept"); p.add_argument("--task", required=True)
     p = sub.add_parser("clear-hold"); p.add_argument("--task", required=True); p.add_argument("--source", required=True)
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
@@ -15607,6 +16576,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
     p = sub.add_parser("contract-checks"); p.add_argument("--agent", required=True); p.add_argument("--task", default="")
+    p = sub.add_parser("contract-check-skip"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True, help="why this stored check could not run and is set aside (at least 8 characters)")
     p = sub.add_parser("ask-owner"); p.add_argument("--agent", required=True); p.add_argument("--question", required=True); p.add_argument("--option", action="append", default=[], help="an answer the owner can pick (2 to 4); omit for a free answer")
     p = sub.add_parser("confirm-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("record-finding"); p.add_argument("--task", required=True); p.add_argument("--title", required=True); p.add_argument("--description", required=True); p.add_argument("--evidence", default=""); p.add_argument("--affects-current-task", action="store_true")
@@ -15635,8 +16605,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("review-brief"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
     p = sub.add_parser("relinquish-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("review-intents"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--intent", action="append", required=True); p.add_argument("--amend", action="store_true")
+    p = sub.add_parser("review-support"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--submission", required=True, help="a JSON file {\"files\": {\"name.py\": \"text\"}}: supporting test files of your Challenge Ledger")
+    p = sub.add_parser("retained-plan"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
+    p = sub.add_parser("reference"); p.description = "Read one named chapter of your role's reference directive (the card names it, or a board message says: Open reference: <chapter>)."; p.add_argument("--agent", required=True); p.add_argument("--name", required=True, help="the chapter name, for example enhanced-security")
     p = sub.add_parser("attach-challenge-ledger"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--challenge-ledger", required=True); p.add_argument("--correction-reason", default="")
-    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--failure", action="append", default=[], metavar="ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
+    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--failure", action="append", default=[], metavar="JSON finding, or ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
     p = sub.add_parser("resolve-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--resolution", action="append", required=True, metavar="MEMBER_ID|RESOLUTION|REGRESSION_CHECK")
     p = sub.add_parser("split-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--group", action="append", required=True, metavar="MEMBER_ID,MEMBER_ID"); p.add_argument("--reason", required=True)
     p = sub.add_parser("complete"); p.add_argument("--agent", required=True); p.add_argument("--note", required=True)
@@ -15716,13 +16689,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "attach-workspace": out = attach_task_workspace(root, args.agent, args.workspace)
         elif args.command == "bind-repository": out = bind_task_repository(root, args.agent, args.repo, args.baseline)
         elif args.command == "reconcile-baseline": out = reconcile_inherited_baseline(root, args.agent)
+        elif args.command == "reconcile-unmerged-accept": out = reconcile_unmerged_accept(root, args.task)
         elif args.command == "clear-hold": out = owner_clear_hold(root, args.task, args.source)
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
-        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program)
+        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
         elif args.command == "contract-checks": out = show_contract_checks(root, args.agent, args.task)
+        elif args.command == "contract-check-skip": out = record_contract_check_skip(root, args.agent, args.task, args.criterion, args.reason)
         elif args.command == "ask-owner": out = record_agent_question(root, args.agent, args.question, args.option)
         elif args.command == "confirm-requirements": out = record_requirement_confirmation(root, args.agent, args.text)
         elif args.command == "record-finding": out = record_finding(root, args.task, args.title, args.description, args.affects_current_task, args.evidence)
@@ -15767,10 +16742,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "review-brief": out = review_brief(root, args.request, args.agent)
         elif args.command == "relinquish-qa": out = relinquish_review_reservation(root, args.agent, args.request, args.reason)
         elif args.command == "review-intents": out = record_review_intents(root, args.agent, args.request, args.intent, amendment=args.amend)
+        elif args.command == "review-support": out = record_review_support(root, args.agent, args.request, args.submission)
+        elif args.command == "retained-plan": out = show_retained_plan(root, args.agent, args.request)
+        elif args.command == "reference": out = open_reference(root, args.agent, args.name)
         elif args.command == "attach-challenge-ledger": out = attach_challenge_ledger(root, args.agent, args.request, args.challenge_ledger, args.correction_reason)
         elif args.command == "qa-result":
             failure_members = []
             for raw in args.failure:
+                if raw.lstrip().startswith("{"):
+                    try:
+                        finding = json.loads(raw)
+                    except ValueError as error:
+                        raise ValueError(f"--failure JSON is not valid: {error}") from error
+                    if not isinstance(finding, dict):
+                        raise ValueError("--failure JSON must be an object like " + review_rounds.FINDING_EXAMPLE)
+                    failure_members.append(finding)
+                    continue
                 parts = raw.split("|", 5)
                 if len(parts) != 6:
                     raise ValueError("failure format is ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")

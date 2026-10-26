@@ -181,7 +181,8 @@ class BuildCopyByteLimitTests(unittest.TestCase):
     def test_a_file_that_grew_past_the_certified_size_is_refused_with_nothing_kept_or_published(self):
         manifest, error, published, store = self._collect(b"x" * 5_000_000, b"x" * 1000)
         self.assertIsNone(manifest)
-        self.assertIn("larger on the machine", str(error))
+        # Two honest refusals depending on when the size is noticed (before the copy, or while it runs under load): both keep and publish nothing.
+        self.assertRegex(str(error), "larger on the machine|grew past the")
         self.assertEqual(published, [])
         self.assertEqual([c.name for c in store.iterdir() if c.name != ".lock"], [], "the temporary folder and any published folder are removed")
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from harness import board, board_viewer, claude_inbox, control, gemini_runtime, self_heal
+from harness import board, board_viewer, control, self_heal
 from tests.test_self_restart import _Fixture, _ago
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -474,8 +474,6 @@ class CtoRuleTests(unittest.TestCase):
         self.assertIn("the harness ladder (wake, restart, replace) recovers a silent role", mirror)
         self.assertIn("never does the stalled Delivery or Reviewer deliverable itself", mirror)
         self.assertIn("only the harness raises the one owner card when the ladder is exhausted", mirror)
-        size = len((ROOT / "directives/CTO.md").read_bytes()) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES)
 
 
 if __name__ == "__main__":

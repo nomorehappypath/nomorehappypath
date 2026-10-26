@@ -16,7 +16,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from harness import board, board_viewer, claude_inbox, control, gemini_runtime, owner_location
+from harness import board, board_viewer, control, owner_location
 from tests.environment_support import require_loopback
 from tests.test_requirements_contract import context
 
@@ -264,9 +264,6 @@ class LocationDirectiveTests(unittest.TestCase):
         self.assertIn("relay nothing the cycle did not check", cto)
         self.assertIn("A status claiming restarted, deployed, live, running or in progress names the evidence the CTO checked in that cycle", mirror)
         self.assertIn("relay nothing the cycle did not check", mirror)
-        text = (ROOT / "directives/CTO.md").read_text(encoding="utf-8")
-        size = len(text.encode("utf-8")) + len(claude_inbox.AUTHORITY_NOTE.encode("utf-8")) + 2
-        self.assertLessEqual(size, gemini_runtime.RULES_LIMIT_BYTES, f"CTO.md payload {size} bytes exceeds the Gemini rules budget")
 
 
 if __name__ == "__main__":

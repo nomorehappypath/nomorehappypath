@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from harness import attention, claude_auth, board, control
+from harness import attention, claude_auth, board, control, review_rounds
 
 FROZEN_AFTER_SECONDS = 15 * 60
 REVIEWER_WAIT_SECONDS = 5 * 60
@@ -52,6 +52,7 @@ STALL_ROLES = set(board.DEVELOPER_ROLES) | {"qa", "cto"}
 # (plan check 2026-10-15 finding 4): a lease heartbeat proves the wrapper lives,
 # not that the command advances.
 STALL_LEASE_MAX_SECONDS = 30 * 60
+RECOVERY_CREATE_GRACE_SECONDS = 120
 EVENT_KINDS = ("agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up")
 ROLE_BY_KIND = {"codex_delivery": "the Delivery Agent", "claude_reviewer": "the Reviewer", "claude_cto": "the CTO"}
 
@@ -98,6 +99,8 @@ def _unfinished(state: dict[str, Any], agent: dict[str, Any]) -> bool:
         if not task or task == board.AWAITING_OWNER_DIRECTION:
             return False
         decided = (state.get("release_decisions") or {}).get(task, {}).get("decision") == "accepted"
+        if board.work_left_outside_stopped_scopes(state, task) is False:
+            return False   # only parts the harness stopped repairing are left: never brought back; other parts of the task stay eligible
         return not decided and task not in (state.get("cancelled_tasks") or {}) and task not in (state.get("git_acceptances") or {})
     if role == "qa":
         return any(
@@ -106,6 +109,13 @@ def _unfinished(state: dict[str, Any], agent: dict[str, Any]) -> bool:
             for request in (state.get("qa_requests") or {}).values()
         )
     return False
+
+
+def _barred(state: dict[str, Any], agent: dict[str, Any]) -> bool:
+    """THE terminal-scope check of every restart and relaunch route (pending restart, frozen terminal, natural exit, stall ladder, watchdog):
+    a Delivery agent whose task has only scopes left that the harness stopped repairing is never brought back. A task with other unfinished
+    work, or a new structure revision, is not barred."""
+    return agent.get("role") in board.DEVELOPER_ROLES and board.work_left_outside_stopped_scopes(state, str(agent.get("task") or "")) is False
 
 
 def _replaced(state: dict[str, Any], control_state: dict[str, Any], agent: dict[str, Any], session: dict[str, Any]) -> bool:
@@ -205,7 +215,7 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         if session.get("read_only") or session.get("superseded_by_session_id"):
             continue
         agent = agents_by_session.get(str(session.get("id")))
-        if not agent or _needs_sign_in(session) or _limit_held(session, current) or _stall_exhausted(state, agent):
+        if not agent or _barred(state, agent) or _needs_sign_in(session) or _limit_held(session, current) or _stall_exhausted(state, agent):
             continue
         status = session.get("status")
         if agent.get("restart_requested_at") and status not in control.ACTIVE_STATUSES:
@@ -249,7 +259,10 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
                     "reason": "its terminal closed while it still had work to finish",
                 }))
     actions.extend(_stall_actions(state, control_state, agents_by_session, actions, current))
+    actions.extend(_recovery_actions(state, control_state, current))
     needed = state.get("reviewer_needed") or {}
+    retry_starting = any(e.get("status") == "recovery" and e.get("who") == "reviewer" and e.get("phase") != "started"
+                         for e in (state.get("review_escalations") or {}).values())
     waited = _age(needed.get("requested_at"), current)
     live = [session for session in control_state.get("sessions", []) if session.get("status") in control.ACTIVE_STATUSES]
     reviewer_starting = any(
@@ -272,12 +285,162 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         and _limit_held(session, current)
         for session in live)
     if needed and waited is not None and waited >= REVIEWER_WAIT_SECONDS and not reviewer_starting and not claude_signed_out \
-            and not reviewer_limit_held:
+            and not reviewer_limit_held and not retry_starting:
         actions.append(_limited(state, "role:reviewer", current, {
             "action": "start_reviewer", "kind": "claude_reviewer",
             "reason": f"a review has waited {int(waited // 60)} minutes with no reviewer available",
         }))
     return [action for action in actions if action]
+
+
+# ---------------------------------------------------------------------------
+# The one fresh Delivery attempt after the round limit (2026-10-25). Phases are recorded in the board's review_escalations entry
+# (requested, stopping, creating, started), every step is idempotent, and the owner is never asked anything.
+# ---------------------------------------------------------------------------
+def _recovery_actions(state: dict[str, Any], control_state: dict[str, Any], current: datetime) -> list[dict[str, Any]]:
+    sessions = {str(item.get("id")): item for item in control_state.get("sessions", [])}
+    resumed = _parsed((state.get("project_pause") or {}).get("resumed_at"))
+    actions: list[dict[str, Any]] = []
+    for key, entry in sorted((state.get("review_escalations") or {}).items()):
+        if entry.get("status") == "could_not_finish" and entry.get("session_id") and not entry.get("retired_at") and entry.get("who") != "reviewer":
+            made = sessions.get(str(entry["session_id"]))
+            if made is not None and made.get("status") in control.ACTIVE_STATUSES and board.work_left_outside_stopped_scopes(state, str(entry.get("task") or "")) is False:
+                actions.append({"review_key": key, "task": entry["task"], "self_heal_key": f"review-recovery:{key}", "at": current.isoformat(),
+                                "action": "review_recovery_retire", "session_id": made["id"]})
+            continue
+        if entry.get("status") != "recovery":
+            continue
+        task = str(entry.get("task") or "")
+        base = {"review_key": key, "task": task, "self_heal_key": f"review-recovery:{key}", "at": current.isoformat(),
+                **({"who": "reviewer"} if entry.get("who") == "reviewer" else {})}
+        if task in (state.get("cancelled_tasks") or {}):
+            actions.append({**base, "action": "review_recovery_settle", "reason": "the task was cancelled", "closed": True})
+            continue
+        phase = str(entry.get("phase") or "requested")
+        reviewer = entry.get("who") == "reviewer"
+        agent = ((state.get("agents") or {}).get(str(entry.get("reviewer_id") or "")) if reviewer else
+                 next((a for a in (state.get("agents") or {}).values()
+                       if a.get("role") in board.DEVELOPER_ROLES and a.get("task") == task and a.get("active")), None))
+        if reviewer and phase == "requested" and agent and any(
+                r.get("status") in {"reserved", "claimed"} and agent.get("id") in (r.get("reserved_by"), r.get("claimed_by"))
+                for r in (state.get("qa_requests") or {}).values()):
+            # The Reviewer that ended the review still holds another review: replacing it now would strand that work. Wait, up to the recovery wait.
+            if _anchored_age(entry.get("requested_at"), resumed, current) >= review_rounds.recovery_wait_seconds():
+                actions.append({**base, "action": "review_recovery_settle", "reason": "the previous Reviewer stayed busy with another review"})
+            continue
+        if phase == "requested":
+            session = sessions.get(str((agent or {}).get("session_id") or ""))
+            if agent and agent.get("active") and session and session.get("status") in control.ACTIVE_STATUSES:
+                actions.append({**base, "action": "review_recovery_stop", "agent_id": agent["id"], "session_id": session["id"], "kind": session.get("kind", "")})
+            else:
+                actions.append({**base, "action": "review_recovery_create"})
+        elif phase == "stopping":
+            old = sessions.get(str(entry.get("old_session_id") or ""))
+            if old is None or old.get("status") not in control.ACTIVE_STATUSES:
+                actions.append({**base, "action": "review_recovery_create"})
+            elif _anchored_age(entry.get("stopping_at"), resumed, current) >= review_rounds.recovery_wait_seconds():
+                actions.append({**base, "action": "review_recovery_settle", "reason": f"the previous {'Reviewer' if reviewer else 'Delivery'} terminal would not close"})
+        elif phase == "creating":
+            made = sessions.get(str(entry.get("session_id") or ""))
+            if made is not None:
+                if made.get("status") == "launching" and not made.get("pid") and not made.get("attached_at"):
+                    actions.append({**base, "action": "review_recovery_launch", "session_id": made["id"]})
+                else:
+                    actions.append({**base, "action": "review_recovery_mark_started", "session_id": made["id"]})
+            elif _anchored_age(entry.get("creating_at"), resumed, current) >= RECOVERY_CREATE_GRACE_SECONDS:
+                actions.append({**base, "action": "review_recovery_settle", "reason": "starting the fresh session was interrupted"})
+        elif phase == "started":
+            made = sessions.get(str(entry.get("session_id") or ""))
+            registered = any(a.get("session_id") == entry.get("session_id") for a in (state.get("agents") or {}).values())
+            if (made is None or made.get("status") not in control.ACTIVE_STATUSES) and not registered:
+                actions.append({**base, "action": "review_recovery_settle", "reason": f"the fresh {'Reviewer' if reviewer else 'Delivery'} session did not start"})
+            elif _anchored_age(entry.get("started_at"), resumed, current) >= review_rounds.recovery_wait_seconds():
+                actions.append({**base, "action": "review_recovery_settle", "reason": "it produced no new review in the time allowed"})
+    return actions
+
+
+def _anchored_age(since: Any, resumed: datetime | None, current: datetime) -> float:
+    """Seconds since `since`, counted from the project's last resume when later: time spent paused never runs the clock."""
+    start = _parsed(since)
+    if start is None:
+        return 0.0
+    if resumed is not None and resumed > start:
+        start = resumed
+    return max(0.0, (current - start).total_seconds())
+
+
+def _retire_recovery_session(root: Path, key: str, at: str) -> dict[str, Any]:
+    """A stopped recovery leaves no live terminal behind (managed stop, recorded once), unless that session still serves other parts of the task."""
+    state = board.snapshot(root)
+    entry = (state.get("review_escalations") or {}).get(key) or {}
+    session_id = str(entry.get("session_id") or "")
+    if entry.get("status") != "could_not_finish" or not session_id or entry.get("retired_at"):
+        return {"action": "review_recovery_retire", "skipped": "nothing to retire"}
+    if board.work_left_outside_stopped_scopes(state, str(entry.get("task") or "")) is not False:
+        return {"action": "review_recovery_retire", "skipped": "the session still serves other parts of the task"}
+    live = next((item for item in control.snapshot(root).get("sessions", []) if item.get("id") == session_id), None)
+    if live and live.get("status") in control.ACTIVE_STATUSES:
+        control.stop(root, session_id)
+    board.review_recovery_mark_retired(root, key, at)
+    return {"action": "review_recovery_retire", "review_key": key, "session_id": session_id}
+
+
+def _execute_recovery(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]], Any],
+                      create: Callable[..., dict[str, Any]] | None) -> dict[str, Any]:
+    key, name, at = action["review_key"], action["action"], action.get("at") or _now().isoformat()
+    state = board.snapshot(root)
+    entry = (state.get("review_escalations") or {}).get(key)
+    if name == "review_recovery_retire":
+        return _retire_recovery_session(root, key, at)
+    if not entry or entry.get("status") != "recovery":
+        return {"action": name, "skipped": "no longer in recovery"}
+    if board.pause_state(root).get("status") != "active":
+        return {"action": name, "skipped": "the project is not active"}
+    if name == "review_recovery_settle":
+        board.review_recovery_settle(root, key, action["reason"], closed=bool(action.get("closed")))
+        _retire_recovery_session(root, key, at)       # the attempt that ran out of time (or never started) is stopped too
+        return {"action": name, "review_key": key}
+    if name == "review_recovery_stop":
+        board.request_agent_replacement(root, action["agent_id"], "the review could not be completed; one fresh Reviewer follows" if entry.get("who") == "reviewer"
+                                        else "the same part failed independent review repeatedly; one fresh attempt follows")
+        stopped = control.stop(root, action["session_id"])
+        board.review_recovery_update(root, key, phase="stopping", old_agent_id=action["agent_id"], old_session_id=action["session_id"],
+                                     stopping_at=at, stop_mark=stopped.get("stop_requested_at") or "")
+        return {"action": name, "review_key": key, "phase": "stopping"}
+    if name == "review_recovery_launch":
+        session = next((item for item in control.snapshot(root).get("sessions", []) if item.get("id") == action["session_id"]), None)
+        if session and session.get("status") == "launching" and not session.get("pid") and not session.get("attached_at"):
+            launch(session)
+        board.review_recovery_update(root, key, phase="started", started_at=at)
+        return {"action": name, "review_key": key, "phase": "started"}
+    if name == "review_recovery_mark_started":
+        board.review_recovery_update(root, key, phase="started", started_at=at)
+        return {"action": name, "review_key": key, "phase": "started"}
+    # review_recovery_create: the one attempt. Counted (phase "creating") BEFORE it acts; any failure settles it as could-not-finish.
+    reviewer = entry.get("who") == "reviewer"
+    old_agent = str(entry.get("old_agent_id") or "") or next((a["id"] for a in (state.get("agents") or {}).values()
+                                                              if a.get("role") in board.DEVELOPER_ROLES and a.get("task") == entry["task"]), "")
+    if not old_agent and not reviewer:
+        board.review_recovery_settle(root, key, "there is no Delivery agent on this task to replace")
+        return {"action": name, "review_key": key, "settled": True}
+    board.review_recovery_update(root, key, phase="creating", creating_at=at)
+    try:
+        session = (create or (lambda value, continues="", recovery=False: control.create(root, value, fresh=recovery)))(
+            "claude_reviewer" if reviewer else "codex_delivery", recovery=True)
+        board.review_recovery_update(root, key, session_id=session["id"])
+        if not reviewer:
+            board.bind_replacement(root, session["id"], old_agent, entry["task"])
+            try:
+                control.enqueue_instruction(root, session["id"], board.request_recovery_wake_text(entry), source="review-recovery")
+            except (OSError, ValueError):
+                pass       # the brief is also on the board: the new agent's first poll carries it
+        launch(session)
+        board.review_recovery_update(root, key, phase="started", started_at=_now().isoformat(),
+                                     model=f"{session.get('provider', '')}:{session.get('model', '')}:{session.get('effort', '')}")
+    except Exception as error:
+        board.review_recovery_settle(root, key, f"the fresh session could not be started: {str(error)[:160]}")
+        raise
+    return {"action": name, "review_key": key, "session_id": session["id"]}
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +488,8 @@ def _work_remains(state: dict[str, Any], role: str, task: str, agent_id: str) ->
     """Whether the role still has work, for a ladder whose agent record has already left the hot board
     (a Reviewer or CTO that goes offline is archived at once)."""
     if role == "qa":
+        if board._open_review_blocks(state):
+            return True   # a blocked review waits on the Reviewer; the request is gone but the work is not
         return any(request.get("status") in {"authoring", "open", "reserved", "claimed"} for request in (state.get("qa_requests") or {}).values())
     return board._agent_has_actionable_work(state, {"role": role, "id": agent_id, "task": task})
 
@@ -349,7 +514,7 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
         entry = ledger.get(key)
         candidates = by_key.get(key, [])
         agent = next((item for item in candidates if item.get("active")), None) or (candidates[0] if candidates else None)
-        if agent is not None and agent.get("id") in busy:
+        if agent is not None and (agent.get("id") in busy or _barred(state, agent)):
             continue
         role, _, task = key.partition(":")
         session = sessions.get(str((agent or {}).get("session_id") or (entry or {}).get("session_id") or ""))
@@ -437,8 +602,16 @@ def _skip_if_held_now(root: Path, action: dict[str, Any]) -> str:
     Returns the plain reason to skip, or an empty string."""
     name = str(action.get("action", ""))
     acts_on_terminal = name in {"restart", "relaunch", "relaunch_ended"} or (name.startswith("stall_") and name != "stall_reset")
-    if not (acts_on_terminal or name == "start_reviewer"):
+    # The one fresh Reviewer of a review that could not be completed obeys the same sign-in, consent and usage-limit holds as any Reviewer start.
+    starts_reviewer = name == "start_reviewer" or (name == "review_recovery_create" and action.get("who") == "reviewer")
+    if not (acts_on_terminal or starts_reviewer):
         return ""
+    if acts_on_terminal and action.get("agent_id"):
+        # Re-checked immediately before acting: a plan made a tick ago must not bring back what has just been stopped for good.
+        current_state = board.snapshot(root)
+        target_agent = (current_state.get("agents") or {}).get(action["agent_id"])
+        if target_agent and _barred(current_state, target_agent):
+            return "skipped: the harness stopped repairing the part this agent was working on, so it is not brought back"
     try:
         if board.pause_state(root).get("status") != "active":
             return "skipped: the project is not active"
@@ -450,7 +623,7 @@ def _skip_if_held_now(root: Path, action: dict[str, Any]) -> str:
         target = next((item for item in sessions if item.get("id") == action.get("session_id")), None)
         if target is not None and _limit_held(target):
             return "skipped: the terminal shows a usage-limit message, so it is waiting, not stuck"
-    if name == "start_reviewer":
+    if starts_reviewer:
         target_provider = str(((snapshot.get("agent_settings") or {}).get("reviewer") or {}).get("provider") or "")
     elif acts_on_terminal and action.get("session_id"):
         target = next((item for item in sessions if item.get("id") == action.get("session_id")), None) or {}
@@ -462,7 +635,7 @@ def _skip_if_held_now(root: Path, action: dict[str, Any]) -> str:
         # Other providers are unaffected by a Claude consent card.
         if any((item.get("claude_auth_action") or {}).get("reason") == "consent" for item in sessions):
             return "skipped: Claude agents are waiting for YOU to accept the one-time bypass warning, so another launch would be refused again"
-    if name == "start_reviewer":
+    if starts_reviewer:
         settings = snapshot.get("agent_settings") or {}
         reviewer_provider = str((settings.get("reviewer") or {}).get("provider") or "")
         for item in sessions:
@@ -525,6 +698,8 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
         except board.ProjectPausedError:
             pass       # a paused project refuses every write, this note included; nothing was done, which is the point
         return {"action": action["action"], "skipped": skipped}
+    if str(action["action"]).startswith("review_recovery_"):
+        return _execute_recovery(root, action, launch, create)
     if str(action["action"]).startswith("stall_"):
         return _execute_stall(root, action, launch, create)
     if action["action"] in {"restart", "relaunch_ended", "start_reviewer"}:
@@ -786,7 +961,7 @@ def _relaunch(root: Path, session_id: str, launch: Callable[[dict[str, Any]], An
 
 
 def run_once(root: Path, launch: Callable[[dict[str, Any]], Any], current: datetime | None = None,
-             create: Callable[[str], dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+             create: Callable[..., dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """One self-heal pass: plan, then act on each decision; one failure never blocks the rest."""
     results = []
     try:

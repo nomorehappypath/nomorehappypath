@@ -35,6 +35,7 @@ UPLOAD_ARGUMENTS = {
     "screen-script": ("--steps", "steps", True),
     "contract-check-submit": ("--submission", "submission", True),
     "contract-check-correct": ("--submission", "submission", True),
+    "review-support": ("--submission", "submission", True),
 }
 
 

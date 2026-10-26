@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import child_process, contract_check, control
+from harness import child_process, contract_check, control, review_cost
 from harness import platform_support
 
 SETTINGS_VERSION = 1
@@ -91,6 +91,11 @@ PLUMBING_LIMITS = {
     # when the first turn runs, which can wait on a sign-in or trust answer).
     "gemini_conversation_wait_seconds": (1800, 60, 7200),
     # How long the Reviewer's early look at the requirements may take before the owner's Go ahead is plain (the owner can always go ahead sooner).
+    # The largest change the Reviewer reads in full (2026-10-25): above either limit the brief is reduced to the git summary plus the
+    # largest changes, and says so. Information only: nothing is ever cut off.
+    "review_input_max_files": (review_cost.MAX_FILES_DEFAULT, review_cost.MAX_FILES_LOW, review_cost.MAX_FILES_HIGH),
+    "review_input_max_bytes": (review_cost.MAX_BYTES_DEFAULT, review_cost.MAX_BYTES_LOW, review_cost.MAX_BYTES_HIGH),
+    "review_input_measure_seconds": (review_cost.MEASURE_SECONDS_DEFAULT, review_cost.MEASURE_SECONDS_LOW, review_cost.MEASURE_SECONDS_HIGH),
     "contract_check_wait_seconds": (contract_check.WAIT_DEFAULT_SECONDS, contract_check.WAIT_MIN_SECONDS, contract_check.WAIT_MAX_SECONDS),
 }
 
@@ -206,11 +211,20 @@ def _default() -> dict[str, Any]:
     return {
         "version": SETTINGS_VERSION,
         "agent_settings": control.default_agent_settings(),
+        "recovery_models": control.validated_recovery_models(None),
+        "reviewer_retry_models": control.validated_recovery_models(None),
         "connectivity": {},
         "plumbing": default_plumbing(),
         "owner_questions": default_owner_questions(),
         "notices": [],
     }
+
+
+def _tolerant_recovery_models(value: Any) -> dict[str, str]:
+    try:
+        return control.validated_recovery_models(value)
+    except ValueError:
+        return control.validated_recovery_models(None)
 
 
 def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str, Any]:
@@ -232,6 +246,11 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
     return {
         "version": SETTINGS_VERSION,
         "agent_settings": agent_settings,
+        # "If repairs keep failing, retry once with": blank = the vendor's default (control.STRONGEST_MODELS). Documents saved before
+        # 2026-10-25 have no field and load unchanged. An unusable value falls back to the default rather than refusing the document.
+        "recovery_models": _tolerant_recovery_models(value.get("recovery_models")),
+        # "If the review can't be completed, retry once with" (2026-10-25): same shape, same default, same tolerance.
+        "reviewer_retry_models": _tolerant_recovery_models(value.get("reviewer_retry_models")),
         "connectivity": connectivity,
         "plumbing": _validated_plumbing(value.get("plumbing")),
         "owner_questions": _validated_owner_questions(value.get("owner_questions")),
@@ -732,9 +751,11 @@ def provider_environment(
     return environment
 
 
-def update_agent_settings(home: Path, value: dict[str, Any]) -> dict[str, Any]:
+def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: Any = None, reviewer_retry_models: Any = None) -> dict[str, Any]:
     save_notices: list[str] = []
     validated = control._validated_agent_settings(value, notices=save_notices)
+    validated_recovery = control.validated_recovery_models(recovery_models) if recovery_models is not None else None
+    validated_reviewer_retry = control.validated_recovery_models(reviewer_retry_models) if reviewer_retry_models is not None else None
     from harness import cli_capabilities
     for role, entry in validated.items():
         availability = cli_capabilities.provider_availability(home, entry["provider"])
@@ -754,6 +775,10 @@ def update_agent_settings(home: Path, value: dict[str, Any]) -> dict[str, Any]:
                 _preserve_broken(path)
                 current = _default()
         current["agent_settings"] = validated
+        if validated_recovery is not None:
+            current["recovery_models"] = validated_recovery
+        if validated_reviewer_retry is not None:
+            current["reviewer_retry_models"] = validated_reviewer_retry
         current["notices"] = save_notices      # an explicit save clears older repair notices
         _write(home, current)
         return json.loads(json.dumps(current))

@@ -52,6 +52,17 @@ class ReviewerLaunchPromptTests(unittest.TestCase):
             self.assertTrue(captured.exists(), done.stderr)
             prompt = " ".join(captured.read_text(encoding="utf-8").split())
         self.assertIn("MODE: Independent Reviewer.", prompt)
+        # Directive diet: the launched Reviewer starts with its card, which carries the verdict duty and sends it to the chapter
+        # holding the full walk rules; the chapter itself is what the `reference` command returns.
+        for phrase in (
+            "Independent Reviewer — hard rules",
+            "At final acceptance open `final-acceptance`",
+            "`TASK DONE: YES|NO — <expected result> vs <what happened>`",
+            "PASS always means YES",
+        ):
+            self.assertIn(phrase, prompt)
+        from harness import reference_chapters
+        chapter = " ".join(reference_chapters.role_chapters("qa")["final-acceptance"].split())
         for phrase in (
             "Final stage: the whole app, end to end",
             "`TASK DONE: YES — <expected result> vs <what happened>`",
@@ -59,7 +70,7 @@ class ReviewerLaunchPromptTests(unittest.TestCase):
             "Do not cut corners",
             "never hunt boundaries that never or only rarely happen",
         ):
-            self.assertIn(phrase, prompt)
+            self.assertIn(phrase, chapter)
 
 
 if __name__ == "__main__":

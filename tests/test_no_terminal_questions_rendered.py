@@ -16,7 +16,7 @@ from pathlib import Path
 from harness import board, board_viewer, browser_acceptance, control
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
-from tests.test_contract_first_checks import ledger, TEST_FILE
+from tests.test_contract_first_checks import ledger, TEST_FILE, plain_ready
 from tests.test_requirements_contract import context, delivery_with_direction
 
 PROBE = r"""
@@ -69,7 +69,7 @@ RECHECK_PROBE = r"""
   const box = note ? note.closest('.requirements-proposal') : null;
   const buttons = box ? [...box.querySelectorAll('button')].map(button => button.textContent.trim()) : [];
   await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text: note ? note.textContent.replace(/\s+/g, ' ') : '', buttons, list: box ? box.querySelectorAll('[data-checked-in-advance] li').length : 0})});
+    body: JSON.stringify({text: note ? note.textContent.replace(/\s+/g, ' ') : '', buttons, list: box ? box.querySelectorAll('[data-checked-in-advance] .checked-in-advance-list li').length : 0})});
 })();
 </script>
 """
@@ -151,7 +151,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             agent_q = delivery_with_direction(root, "TASK-QUESTIONS")
             board.record_requirement_proposal(root, agent_q["id"], "Final agreed requirements: a program prints a greeting.")
             path = base / "s.json"
-            path.write_text(json.dumps({"criteria": criteria, "questions": questions}), encoding="utf-8")
+            path.write_text(json.dumps(plain_ready({"criteria": criteria, "questions": questions})), encoding="utf-8")
             board.record_contract_check_submission(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
             agent_r = delivery_with_direction(root, "TASK-READING")
             board.record_requirement_proposal(root, agent_r["id"], "Final agreed requirements: a page shows a clock.")
@@ -167,7 +167,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
                           "Delivery asks", "Your Go ahead on the requirements"):
                 self.assertIn(piece, joined)
             self.assertTrue(result["targetsExist"], "every Show me button points at a card on the page")
-            self.assertEqual(result["buttons"], ["Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
             self.assertIn("The reviewer is reviewing the contract", result["text"])
             self.assertIn("Do you want to go ahead without waiting, or wait?", result["text"])
             self.assertIn("nothing was changed", result["waitNote"])
@@ -183,7 +183,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             control.take_instructions(root, session["id"])
             value = {"criteria": [{"text": "Prints a greeting", "checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}]},
                                   {"text": "The greeting looks friendly", "why_not_checked": "a matter of taste"}], "questions": []}
-            (base / "s.json").write_text(json.dumps(value), encoding="utf-8")
+            (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
             one = delivery_with_direction(root, "TASK-CONFIRMED")
             board.record_requirement_proposal(root, one["id"], "Final agreed requirements: a program prints a greeting.")
             board.record_contract_check_submission(root, reviewer["id"], "TASK-CONFIRMED", 1, str(base / "s.json"))
@@ -200,8 +200,8 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             joined = " | ".join(result["blocks"])
             self.assertIn("What will be tested", joined)
             self.assertIn("Written by the reviewer before coding; the board runs them", joined)
-            self.assertIn("Prints a greeting — checked · passed when the board ran it", joined)
-            self.assertIn("The greeting looks friendly — not checked in advance", joined)
+            self.assertIn("This requirement protects what you asked for. — checked · passed when the board ran it", joined)
+            self.assertIn("This requirement protects what you asked for. — not checked in advance", joined)
             self.assertNotIn(".json", joined)
             self.assertNotIn("/", joined.replace("a matter of taste", ""))
 
@@ -215,7 +215,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             check = {"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}
             value = {"criteria": [{"text": "Prints a greeting", "checks": [check]}, {"text": "Exits cleanly", "checks": [check]}],
                      "questions": [{"text": "Which greeting should it print?", "options": ["hello", "hi there"], "recommended": 0, "affects": [1]}]}
-            (base / "s.json").write_text(json.dumps(value), encoding="utf-8")
+            (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
             agent = delivery_with_direction(root, "TASK-RECHECK")
             board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
             board.record_contract_check_submission(root, reviewer["id"], "TASK-RECHECK", 1, str(base / "s.json"))
@@ -225,7 +225,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             self.assertTrue(result, "Chrome reported nothing")
             self.assertIn("The reviewer is reviewing the contract based on your answers", result["text"])
             self.assertIn("Do you want to go ahead without waiting, or wait?", result["text"])
-            self.assertEqual(result["buttons"], ["Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
             self.assertEqual(result["list"], 2, "What will be tested is listed")
 
     def test_delivery_alone_asks_the_owner_in_mission_control_and_the_answer_comes_back(self):
