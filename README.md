@@ -15,8 +15,11 @@ NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for AI-b
 ![Mission Control: a task ready for the owner's test](https://nomorehappypath.com/assets/shot-ready.png)
 *A small weather app built from one request: review passes recorded, then "ready for your test".*
 
-![How a request becomes accepted work](https://nomorehappypath.com/assets/readme-flow.png)
-*The six steps: you say what you want, approve the contract, Delivery plans and builds, the board reruns the proof, an independent reviewer checks, and you test and accept.*
+![How a task becomes accepted work: twenty steps in six phases](https://nomorehappypath.com/assets/process-infographic.png)
+*Twenty steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; the board locks them and checks they fail on the empty project; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
+
+![Why every test must fail first](https://nomorehappypath.com/assets/red-proof.png)
+*A test that passes on nothing proves nothing, so it is flagged "did not distinguish" and never counts. This shows a test can fail on an empty project, not that it covers every requirement.*
 
 ![Three roles, each filled by Codex, Claude or Gemini](https://nomorehappypath.com/assets/readme-roles.png)
 *Builder, independent reviewer and CTO can each be Codex, Claude or Gemini. Only the platform software writes the project board; agents change it through governed commands, and the reviewer is never from the builder's company.*
