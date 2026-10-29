@@ -8,6 +8,12 @@ Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years buil
 
 ## See it working
 
+![Mission Control during a real task: what is happening now, the step, the cost so far, and each agent](https://nomorehappypath.com/assets/mc-where-we-are.png)
+*A real task in Mission Control: what is happening now, which step it is on, what it has cost so far, and what the builder, the independent reviewer and the CTO are doing.*
+
+![The task timeline: done, now and next](https://nomorehappypath.com/assets/mc-timeline-now.png)
+*Every step in plain words: done, now, next, all the way to your review and "Accepted".*
+
 ![Mission Control: the project list](https://nomorehappypath.com/assets/readme-projects.png)
 *Mission Control lists every project. This one is a commercial marketing app built and maintained with NoMoreHappyPath.*
 
@@ -29,8 +35,8 @@ Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years buil
 ![A commercial marketing app built with it: expert chats](https://nomorehappypath.com/assets/readme-experts.png)
 *A commercial marketing app built with it: chatting with the expert agents.*
 
-![Choosing which AI company builds and which reviews](https://nomorehappypath.com/assets/readme-vendors.png)
-*Settings: choose which AI company builds and which one reviews.*
+![Settings: AI company, model and effort for each role](https://nomorehappypath.com/assets/mc-settings.png)
+*Settings: choose the AI company, model and effort for the builder, the independent reviewer and the CTO, once. The reviewer is always from a different AI company.*
 
 Demo videos and a longer walkthrough: https://nomorehappypath.com
 
