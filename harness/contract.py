@@ -20,7 +20,7 @@ ANSI_OSC = re.compile(r"(?:\x1b\]|\x9d).*?(?:\x07|\x1b\\|\x9c)", re.S)
 ANSI_CSI = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")
 ANSI_SS3 = re.compile(r"(?:\x1bO|\x8f).")
 TERMINAL_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f-\x9f]")
-SCENARIO_ID = re.compile(r"^S-[A-Za-z0-9._-]+$")
+SCENARIO_ID = re.compile(r"^S-[A-Za-z0-9._-]+$|^S\d+$")   # S-001 is the documented form; S1 is accepted too (2026-10-28: ten refusals over the dash)
 SECURITY_SCENARIO_PREFIX = "S-SEC-"
 
 
@@ -558,7 +558,8 @@ def _owner_description_problem(value: str) -> str:
     if OWNER_DESCRIPTION_CONTROL.search(value):
         return f"{OWNER_DESCRIPTION_HEADER} must not contain control characters"
     unquoted = text.strip("`").strip()
-    if EXECUTABLE_TEST_COMMAND.match(unquoted) or SHELL_CONTROL.search(unquoted):
+    if EXECUTABLE_TEST_COMMAND.match(unquoted):
+        # prose may contain "Q&A" or "a; b" (2026-10-28: "Q&A" was refused here as a shell command); only a text that STARTS with a test runner is a command
         return f"{OWNER_DESCRIPTION_HEADER} must describe behavior, not a command"
     if (
         OWNER_DESCRIPTION_HASH.fullmatch(unquoted)
@@ -601,8 +602,11 @@ def _scenario_rows(path: Path, *, require_owner_description: bool = False):
         else:
             indexes[field] = index
     rows = []
+    unrecognised: list[str] = []
     for line in lines:
         cells = _ledger_cells(line)
+        if cells and not SCENARIO_ID.fullmatch(cells[0]) and cells[0].lower() != "id" and cells[0].strip("-: ") and cells[0] not in unrecognised:
+            unrecognised.append(cells[0])
         if not cells or not SCENARIO_ID.fullmatch(cells[0]):
             continue
         scenario_id = cells[0]
@@ -646,7 +650,12 @@ def _scenario_rows(path: Path, *, require_owner_description: bool = False):
             "what_was_tested": owner_description,
         })
     if not rows:
-        problems.append("ledger has no concrete scenario rows")
+        hint = ""
+        if unrecognised:
+            hint = (f": these first-column values are not scenario ids ({', '.join(repr(item) for item in unrecognised[:4])}); an id starts with "
+                    "\"S-\", for example S-001. Each row's Simulation command must also start with a test runner (python3 -m pytest ..., "
+                    "python3 -m unittest ..., npm test ...)")
+        problems.append("ledger has no concrete scenario rows" + hint)
     return rows, problems
 
 

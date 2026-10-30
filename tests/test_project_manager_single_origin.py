@@ -169,7 +169,7 @@ class ProjectManagerSingleOriginTests(unittest.TestCase):
 (async()=>{
   const pause=delay=>new Promise(resolve=>setTimeout(resolve,delay));
   for(let attempt=0;attempt<500;attempt++){
-    const open=document.querySelector('[data-act=open]');
+    const open=document.querySelector('.actions [data-act=open]');   // the card's own Open button (an empty project's start link goes to the same board)
     if(open){open.click();return;}
     await pause(50);
   }

@@ -64,6 +64,29 @@ _PLAIN_RULES = (
 _COMMIT_ID = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
 
 
+NON_FUNCTIONAL = "non-functional"
+_NFR_KINDS = {"non-functional", "nonfunctional", "non functional", "quality", "nfr"}
+_NFR_PREFIX = re.compile(r"^\s*(non[- ]?functional|quality requirement)\s*:", re.I)
+
+
+def requirement_kind(item: dict[str, Any], text: str) -> str:
+    """`non-functional` (speed, phone layout, accessibility...) when the requirement says so by `kind` or by a leading
+    "Non-functional:" / "Quality requirement:"; anything else, or nothing, is an ordinary requirement. Never refused."""
+    kind = " ".join(str(item.get("kind") or "").lower().split())
+    return NON_FUNCTIONAL if kind in _NFR_KINDS or _NFR_PREFIX.match(text) else ""
+
+
+_FOR_EACH = re.compile(r"\b(for each[^.\n]{8,200})", re.I)
+
+
+def no_program_reason(text: Any) -> str:
+    """What the owner sees instead of "nothing to check" for a task that makes a document: the document's required content is the contract."""
+    found = _FOR_EACH.search(" ".join(str(text or "").split()))
+    content = f" Required content: {found.group(1).strip().rstrip(',;:')}." if found else ""
+    return ("this task makes a report, not a program, so nothing is tested in advance; the contract is what the report must contain." + content +
+            " The independent review reads the report against exactly this.")
+
+
 def plain_problem(value: Any, limit: int = PLAIN_LIMIT, *, min_words: int = PLAIN_MIN_WORDS) -> str:
     """Why this is not plain words for the owner ("" when it is). Deterministic: the board and the tests use the same rules."""
     if not isinstance(value, str) or not value.strip():
@@ -95,6 +118,10 @@ def split_plain_summary(text: Any) -> tuple[list[str], str]:
     the owner accepts and Delivery confirms verbatim, so the second value is the text unchanged.
     """
     raw = str(text or "").replace("\r\n", "\n").strip()
+    head = raw.split("\n", 1)[0]
+    if head.lower().startswith(SUMMARY_HEADING.lower()) and head[len(SUMMARY_HEADING):].strip():
+        # "In plain words: A page will ..." on one line is the same block (agents write it that way, 2026-10-28)
+        raw = SUMMARY_HEADING + "\n" + head[len(SUMMARY_HEADING):].strip() + raw[len(head):]
     lines = raw.split("\n")
     if not lines or lines[0].strip().lower() != SUMMARY_HEADING.lower():
         raise ValueError(f"start the requirements with an \"{SUMMARY_HEADING}\" block for the owner: one to {SUMMARY_MAX_LINES} short lines (what will be built, what changes for them, whether they must do anything), then a blank line, then the full requirements. {PLAIN_SUMMARY_EXAMPLE}")
@@ -277,7 +304,8 @@ def parse_submission(raw: str) -> dict[str, Any]:
         total_bytes += check_bytes
         total_checks += len(checks)
         criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks,
-                         "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said})
+                         "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said,
+                         "kind": requirement_kind(item, text)})
     if total_checks > MAX_CHECKS:
         raise ValueError(f"at most {MAX_CHECKS} checks in one submission")
     if total_bytes > MAX_TOTAL_BYTES:
@@ -369,7 +397,7 @@ def criterion_label(criterion: dict[str, Any]) -> str:
 
 def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts = covered_by_others(criteria)
-    return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", ""),
+    return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", ""), "reason": item.get("why_not_checked", ""), "kind": item.get("kind", ""),
              "coverage": coverage_line(item, counts.get(item["n"], 0))} for item in criteria]
 
 
@@ -398,4 +426,39 @@ def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], 
         f"contract-check-correct --task {task} --criterion 0 --reason \"nothing more to change\" --submission <JSON file with {{\"checks\": []}}>. "
         f"The owner may go ahead without waiting and a submission after that, or after about {max(1, minutes)} minutes, is refused. "
         "Do not start any polling or background helper. Never ask the owner anything in your terminal. USER ACTION: None. Open reference: contract-first"
+    )
+
+
+# --- The builder says a locked check does not match reality (task 2026-10-26_check-deviation) --------------------------------------------
+DEVIATION_WHY_MIN = 20
+DEVIATION_WHY_MAX = 1200
+
+
+def deviation_request(task: str, check: str, number: int, criterion: str, why: str) -> str:
+    """The one message that wakes the Reviewer to answer a builder's deviation, once, through the correction path."""
+    return (
+        f"CHECK DEVIATION: task {task}, check {check} (requirement {number}: {criterion}). Delivery says this stored check does not match reality: {why} "
+        f"Answer ONCE with contract-check-correct --task {task} --criterion {number}: either replace the check "
+        "(--reason \"<what was wrong>\" --submission <JSON file with {\"checks\": [...]}>; it is locked again, seen failing first and its coverage recomputed as for any correction), "
+        "or keep it (--reason \"the check is right because <why>\" --submission <JSON file with {\"keep\": true, \"checks\": []}>). "
+        "A second answer is refused. Nothing is held and Delivery keeps building; if you never answer, the final reviewer sees the deviation and the check stays as it is. "
+        "Do not start any polling or background helper. Never ask the owner anything. USER ACTION: None. Open reference: contract-first"
+    )
+
+
+# --- The Small change lane (task 2026-10-26_fast-lane) ---------------------------------------------------------------------------------
+SMALL_CHANGE_REASON = "Small change: tests are not written in advance"
+ANALYSIS_REASON = "Code analysis: nothing is tested in advance; after Go ahead the builder and the reviewer each read all the code"
+
+
+def full_lane_request(task: str, version: int, why: str, requirements: str, minutes: int) -> str:
+    """The one message that restarts the contract-check step for a Reviewer who sent a Small change task back to the full lane."""
+    return (
+        f"FULL LANE: you sent task {task} back from the Small change lane ({why}). Advisory preparation again, not a review round: write your checks from the "
+        "confirmed requirements below only (black box), then submit ONCE with "
+        f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter `contract-first`. "
+        "Submit no questions (the owner is not asked; a submission with questions is refused). The board runs the checks on Delivery's work as in the full lane; "
+        "nothing is held and the task is not sent back a second time. "
+        f"A submission after about {max(1, minutes)} minutes is refused. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
+        f"REQUIREMENTS:\n{requirements}"
     )

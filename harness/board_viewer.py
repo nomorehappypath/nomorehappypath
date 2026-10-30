@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
-from harness import platform_support, web_guard, agent_view, test_machine, failure_words, review_rounds, review_cost, difficulty_note
+from harness import platform_support, web_guard, agent_view, test_machine, failure_words, review_rounds, review_cost, difficulty_note, revert_proof, code_quality, cost_center, story
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
 
@@ -31,7 +31,7 @@ OWNER_MESSAGE_MAX_BYTES = 20_000
 OWNER_DIRECTIVE_EXTENSIONS = {".md", ".txt"}
 # Backlog #7: the Mission Control lines for what the harness did by itself.
 HARNESS_ACTION_EVENTS = {
-    "agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up",
+    "agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_retired_reviewer", "self_heal_failed", "self_heal_gave_up",
     "agent_stall_step", "agent_replacement_requested", "replacement_handoff_failed",
     # 2026-10-15: the CTO acted instead of asking the owner, or its stated default was applied after the deadline
     "cto_acted", "owner_default_applied",
@@ -88,15 +88,95 @@ PAGE = r"""<!doctype html>
 <style>.paused-banner{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:18px;border:1px solid #c9b7eb;background:#f5f0ff}.paused-banner[hidden]{display:none}.paused-banner h2{color:#533183}.paused-banner p{margin:5px 0 0;color:#5d5270}.resume-link{display:inline-block;white-space:nowrap;border-radius:8px;background:var(--blue);color:#fff;padding:10px 13px;font-weight:700;text-decoration:none}.project-paused .live{background:#f0eaff;color:#5a398e}@media(max-width:700px){.paused-banner{display:block}.resume-link{margin-top:14px}}</style>
 <style>html,body{max-width:100%;overflow-x:hidden}.project-controls{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}.project-controls button,.project-controls a.machine-link{padding:7px 10px;font-size:13px}.project-controls a.machine-link{display:inline-block;max-width:100%;overflow-wrap:anywhere;border:1px solid #b8c4cf;border-radius:8px;background:#fff;color:#174ea6;font-weight:600;text-decoration:none;line-height:1.3}.project-controls a.machine-link:hover{background:#eef3fb}.project-controls a.machine-link:focus-visible{outline:3px solid #1d4fd8;outline-offset:2px}.project-chat-panel,.project-chat-panel form,.project-chat-head,.project-chat-history,.project-chat-actions{min-width:0;max-width:100%}.project-chat-panel{margin-bottom:18px}.project-chat-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.project-chat-head p{margin:4px 0 0;color:var(--muted);font-size:13px}.project-chat-history{min-height:72px;max-height:min(460px,60vh);overflow-y:auto;overscroll-behavior:contain;margin:14px 0 10px;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fbfcfe}.chat-empty{color:var(--muted);font-size:13px;padding:12px;text-align:center}.chat-turn{margin:7px 0;padding:9px 11px;border-radius:9px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.chat-question{margin-left:12%;background:var(--blue-soft);color:#174ea6}.chat-answer{margin-right:12%;background:#edf1f4}.project-chat-panel label{display:block;font-size:13px;font-weight:700}.project-chat-panel textarea{display:block;width:100%;min-width:0;max-width:100%;min-height:72px;max-height:150px;margin-top:6px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit;resize:vertical}.project-chat-actions{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}.project-chat-status{color:var(--muted);font-size:13px;min-height:20px;flex:1 1 220px;overflow-wrap:anywhere}.project-chat-error{color:var(--red)}.project-chat-locked{margin:0 0 10px;padding:9px 11px;border:1px solid #f0d9a8;border-radius:9px;background:#fff8e8;color:#7a5410;font-size:13px}.project-chat-panel textarea:disabled,.project-chat-panel button:disabled{opacity:.55;cursor:not-allowed;background:#f1f3f6}@media(max-width:900px){.project-controls{justify-content:flex-start}.project-chat-history{max-height:200px}}@media(max-height:700px){.project-chat-history{max-height:150px}.project-chat-panel textarea{min-height:58px;max-height:90px}}</style>
 <style>.project-topbar{position:fixed;inset:0 0 auto;z-index:60;height:68px;display:flex;align-items:center;padding:0 34px;background:rgba(13,23,40,.97);color:#fff;box-shadow:0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(14px)}.project-topbar+.wrap{margin-top:68px}.project-brand{display:flex;align-items:center;gap:11px;min-width:230px;color:#fff;font-size:16px;font-weight:780;text-decoration:none}.project-brand-mark{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;color:#fff;background:linear-gradient(145deg,#5576ff,#7a52f5);box-shadow:0 8px 20px rgba(83,91,245,.35)}.project-nav{display:flex;align-items:center;gap:5px;height:100%}.project-nav a{height:40px;display:flex;align-items:center;border-radius:8px;padding:0 15px;color:#9eabc0;font-weight:680;text-decoration:none}.project-nav a:hover{color:#fff;background:rgba(255,255,255,.07)}.project-nav a[aria-current=page]{color:#fff;background:rgba(255,255,255,.1)}.project-nav-status{margin-left:auto;display:inline-flex;align-items:center;gap:8px;color:#cbd5e5;font-size:13px;font-weight:650}.project-nav-status .dot{width:8px;height:8px;background:#42d69a;box-shadow:0 0 0 4px rgba(66,214,154,.12)}@media(max-width:760px){.project-topbar{height:102px;padding:12px 18px;flex-wrap:wrap;gap:8px}.project-topbar+.wrap{margin-top:102px}.project-brand{min-width:0;margin-right:auto}.project-nav{order:3;width:100%;height:40px;overflow-x:auto}.project-nav a{flex:1;justify-content:center;white-space:nowrap;padding:0 10px}.project-nav-status{font-size:0}}@media(max-width:420px){.project-nav a{font-size:12px;padding:0 7px}}</style>
+<style>
+/* Mission Control story (2026-10-27): the Now section, the agent strip, the tabs. Colours keep 4.5:1; status is words, never colour alone. */
+:root{--mc-muted:#4b5a70;--mc-teal:#14b8a6;--mc-coral:#f97361;--mc-purple:#8b7cf6;--mc-amber-bg:#fff7e6;--mc-amber-line:#f5c26b;--mc-amber-ink:#78350f}
+.mc-tabs{display:flex;gap:6px;margin:18px 0 0;border-bottom:1px solid var(--line);overflow-x:auto}
+.mc-tabs button{flex:none;min-height:44px;padding:10px 18px;border:0;border-bottom:3px solid transparent;border-radius:8px 8px 0 0;background:transparent;color:var(--mc-muted);font-weight:700}
+.mc-tabs button[aria-selected=true]{color:#0f1b33;border-bottom-color:var(--blue);background:var(--blue-soft)}
+.mc-tabs button:focus-visible,.mc-agent button:focus-visible,.mc-now button:focus-visible{outline:3px solid #1d4fd8;outline-offset:2px}
+.mc-panel[hidden]{display:none}
+.mc-now{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin-top:18px}
+.mc-now.mc-needs{border-color:var(--mc-amber-line);background:var(--mc-amber-bg)}
+.mc-now-main{flex:1 1 480px;min-width:0}
+.mc-eyebrow{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mc-muted)}
+.mc-now-text{margin-top:4px;font-size:19px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.mc-next{margin-top:5px;color:var(--mc-muted);font-size:14px;overflow-wrap:anywhere}
+.mc-needs-line{margin-top:10px;padding:9px 12px;border:1px solid var(--mc-amber-line);border-radius:10px;background:var(--mc-amber-bg);color:var(--mc-amber-ink);font-weight:700;font-size:14px}
+.mc-step{display:flex;justify-content:space-between;gap:10px;margin:12px 0 5px;color:var(--mc-muted);font-size:13px}
+.mc-bar{height:8px;border-radius:999px;background:#e2e8f0;overflow:hidden}.mc-bar>i{display:block;height:100%;background:var(--mc-teal)}
+.mc-tiles{display:flex;gap:12px;flex-wrap:wrap}
+.mc-tile{min-width:130px;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:#f8fafc}
+.mc-tile span{display:block;font-size:12px;color:var(--mc-muted)}.mc-tile strong{display:block;font-size:18px;overflow-wrap:anywhere}.mc-tile small{display:block;margin-top:2px;color:var(--mc-muted)}
+.mc-others{flex:1 1 100%;margin:0;padding:10px 0 0;border-top:1px solid var(--line);color:var(--mc-muted);font-size:13px;list-style:none}.mc-others li{margin:4px 0}
+.mc-tell{margin-top:12px;min-height:46px;font-size:15px}
+.task-kind-choice{border:1px solid var(--line,#cfd8e3);border-radius:8px;padding:10px 12px;margin:10px 0}.task-kind-choice label{display:block;margin:6px 0;line-height:1.4}
+.mc-cancel{margin-top:12px;min-height:40px}
+.mc-agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:18px}
+.mc-agent{background:#fff;border:1px solid var(--line);border-top:4px solid var(--mc-teal);border-radius:14px;padding:16px 18px;min-width:0}
+.mc-agent.mc-reviewer{border-top-color:var(--mc-coral)}.mc-agent.mc-cto{border-top-color:var(--mc-purple)}
+.mc-agent-head{display:flex;justify-content:space-between;gap:8px;align-items:center}.mc-agent-head span{font-size:12px;color:var(--mc-muted)}
+.mc-doing{margin-top:8px;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+.mc-agent small{display:block;margin-top:8px;color:var(--mc-muted);font-size:12.5px;overflow-wrap:anywhere}
+.mc-agent .actions{margin-top:12px}.mc-agent .actions button{min-height:44px;font-size:13px}
+.mc-agent .mc-note{margin:8px 0 0;font-size:12.5px;color:#7c2d12}
+.mc-advanced-intro p{margin:4px 0 0;color:var(--mc-muted)}.mc-panel>.active-panel{margin-top:18px}
+.mc-panel>.launch:first-child,.mc-panel>.settings-panel:first-child{margin-top:18px}
+.mc-timeline{margin-top:18px}.mc-timeline h2,.mc-proof h2{margin:0 0 6px}
+.mc-hint{margin:0 0 14px;color:var(--mc-muted);font-size:13px}
+.mc-attention{margin:0 0 16px;padding:12px 14px;border:1px solid var(--mc-amber-line);border-radius:12px;background:var(--mc-amber-bg);color:var(--mc-amber-ink);font-size:14px;line-height:1.45}
+.mc-attention strong{display:block;margin-bottom:2px}
+.mc-steps{list-style:none;margin:0;padding:0}
+.mc-steps>li{position:relative;margin:0;padding:0 0 0 38px}
+.mc-steps>li::before{content:"";position:absolute;left:10px;top:24px;bottom:-2px;width:2px;background:#d6dde6}
+.mc-steps>li:last-child::before{display:none}
+.mc-steps>li::after{content:"";position:absolute;left:3px;top:6px;width:16px;height:16px;border-radius:50%;box-sizing:border-box;background:#fff;border:2px solid #94a3b8}
+.mc-steps>li.mc-done::after,.mc-steps>li.mc-earlier::after{background:#16a34a;border-color:#16a34a;content:"\2713";color:#fff;font-size:11px;font-weight:700;line-height:12px;text-align:center}.mc-steps>li.mc-earlier::after{background:#4ade80;border-color:#4ade80;color:#14532d}.mc-steps>li.mc-done::before,.mc-steps>li.mc-earlier::before{background:#16a34a}.mc-steps>li.mc-done .mc-st-tag,.mc-steps>li.mc-earlier .mc-st-tag{background:#dcfce7;color:#166534;border-radius:999px;padding:1px 9px;font-weight:600}.mc-steps>li.mc-done>details>summary,.mc-steps>li.mc-earlier>details>summary{background:#f0fdf4;border-radius:8px}
+.mc-steps>li.mc-now::after{border-color:#d97706;box-shadow:0 0 0 4px #fde9c4}
+.mc-steps>li.mc-gap::after{border-color:#c2410c;background:#fed7aa}
+.mc-steps>li.mc-earlier::after{background:#cbd5e1;border-color:#94a3b8}
+.mc-steps>li.mc-skipped::after,.mc-steps>li.mc-not_recorded::after{border-style:dashed}
+.mc-steps>li.mc-band{padding:14px 0 6px 38px;font-weight:700;color:#0f1b33;font-size:14px}.mc-steps>li.mc-band::after{display:none}
+.mc-steps details{border-radius:10px}
+.mc-steps summary{display:block;list-style:none;cursor:pointer;padding:6px 8px;margin:0 0 0 -8px;border-radius:10px;min-height:44px;box-sizing:border-box}
+.mc-steps summary::-webkit-details-marker{display:none}
+.mc-steps summary:hover{background:#f1f5f9}
+.mc-steps summary:focus-visible{outline:3px solid #1d4fd8;outline-offset:2px}
+.mc-st-head{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.mc-st-title{font-size:15px;font-weight:700;color:#0f172a}.mc-st-who{font-size:12.5px;color:var(--mc-muted)}
+.mc-st-tag{font-size:12.5px;font-weight:700;color:#334155}
+.mc-done .mc-st-tag{color:#047857}.mc-now .mc-st-tag{color:#92400e}.mc-gap .mc-st-tag{color:#9a3412}.mc-next .mc-st-tag,.mc-earlier .mc-st-tag{color:#475569}
+.mc-st-owner{font-size:12.5px;font-weight:700;color:#78350f;background:var(--mc-amber-bg);border:1px solid var(--mc-amber-line);border-radius:999px;padding:0 8px}
+.mc-st-text{display:block;margin-top:2px;font-size:14px;line-height:1.45;color:#334155;overflow-wrap:anywhere}
+.mc-st-more{margin:2px 0 10px;padding:8px 12px;border-left:3px solid #cbd5e1;background:#f8fafc;border-radius:0 8px 8px 0;font-size:13.5px;color:#1f2d3d}
+.mc-st-more ul{margin:4px 0 0;padding-left:18px}.mc-st-more li{margin:3px 0}
+.mc-fold{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
+.mc-fold>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:#1e3a8a;font-size:14px}
+.mc-fold>summary:focus-visible{outline:3px solid #1d4fd8;outline-offset:2px}
+.mc-proof-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:18px}
+.mc-proof-tiles .mc-tile{background:#fff;min-width:0}
+.mc-earlier-note{margin:12px 0 0;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#f1f5f9;color:#1f2d3d;font-size:14px}
+.mc-table-wrap{overflow-x:auto;margin-top:18px;border:1px solid var(--line);border-radius:14px;background:#fff}
+.mc-table{width:100%;border-collapse:collapse;font-size:14px}
+.mc-table th{padding:12px 14px;text-align:left;background:#f8fafc;color:var(--mc-muted);font-weight:700}
+.mc-table td{padding:13px 14px;vertical-align:top;border-top:1px solid var(--line)}
+.mc-table td strong{display:block}.mc-table td small{display:block;margin-top:3px;color:var(--mc-muted);font-size:12.5px}
+.mc-pill{display:inline-block;padding:3px 9px;border-radius:12px;font-size:12.5px;font-weight:700;background:#e2e8f0;color:#1f2d3d}
+.mc-pill.good{background:#d1fae5;color:#065f46}.mc-pill.bad{background:#fee2e2;color:#991b1b}
+.mc-notes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:18px}
+.mc-notes-grid .panel{margin:0}.mc-notes-grid ul{margin:6px 0 0;padding-left:18px;color:#334155;line-height:1.55}
+.mc-linkbtn{margin-top:4px;padding:6px 0;min-height:44px;background:transparent;border:0;color:#1e3a8a;font-weight:700;text-decoration:underline;cursor:pointer;text-align:left}
+@media(max-width:760px){.mc-table thead{position:absolute;left:-9999px}.mc-table,.mc-table tbody,.mc-table tr,.mc-table td{display:block;width:100%;box-sizing:border-box}.mc-table td{border-top:0;padding:6px 14px}.mc-table tr{border-top:1px solid var(--line);padding:8px 0}.mc-table tr:first-child{border-top:0}.mc-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:700;color:var(--mc-muted)}}
+@media(max-width:760px){.mc-now-text{font-size:17px}.mc-tabs button{padding:10px 14px}.mc-agent .actions button{flex:1 1 100%}}
+@media(prefers-reduced-motion:reduce){.mc-bar>i{transition:none}}
+</style>
 </head>
 <body>__PROJECT_NAV__<main class="wrap">
-<header class="top"><div style="display:flex;gap:14px;align-items:flex-start"><img src="favicon.png" alt="" aria-hidden="true" style="width:44px;height:44px;border-radius:10px;object-fit:contain;margin-top:3px"><div><div class="eyebrow">Local delivery system</div><h1>NoMoreHappyPath Mission Control</h1>__PROJECT_DESC__<div class="sub" id="project">Loading project…</div></div></div><div><div class="live"><i class="dot"></i>Board connected</div><div id="updated"></div>__PROJECT_CONTROLS__</div></header>__PROJECT_CLOSE_DIALOG__<div id="board-offline"><div class="panel"><h2>This project is closed</h2><p class="sub">Its board is not running. Return to Projects to open it again.</p><p><a id="board-offline-link" class="back-link" href="#">Projects</a></p></div></div>
+<header class="top"><div style="display:flex;gap:14px;align-items:flex-start"><img src="favicon.png" alt="" aria-hidden="true" style="width:44px;height:44px;border-radius:10px;object-fit:contain;margin-top:3px"><div><div class="eyebrow">Local delivery system</div><h1>NoMoreHappyPath Mission Control</h1>__PROJECT_DESC__<div class="sub" id="project">Loading project…</div><div class="sub" id="project-cost" data-project-cost></div></div></div><div><div class="live"><i class="dot"></i>Board connected</div><div id="updated"></div>__PROJECT_CONTROLS__</div></header>__PROJECT_CLOSE_DIALOG__<div id="board-offline"><div class="panel"><h2>This project is closed</h2><p class="sub">Its board is not running. Return to Projects to open it again.</p><p><a id="board-offline-link" class="back-link" href="#">Projects</a></p></div></div>
 <section class="waiting-banner" id="waiting-banner" hidden role="alert" aria-live="assertive"></section>
 <section class="limit-notice" id="limit-notice" hidden role="status" aria-live="polite"></section>
 <section class="panel paused-banner" id="paused-banner" hidden role="status"><div><h2>Project paused</h2><p>This board is read-only. Saved work, review ownership, and evidence are preserved exactly where they stopped.</p></div><a class="resume-link" id="resume-project" href="__RESUME_LINK__">Resume project</a></section>
 
-<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
-<section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <div id="notice" class="notice" aria-live="polite"></div>
 <section id="agent-questions" class="panel section owner-actions agent-questions" role="alert" hidden></section>
 <section id="sign-in-banner" class="panel section owner-actions" role="alert" hidden></section>
@@ -105,14 +185,27 @@ PAGE = r"""<!doctype html>
 <section id="machine-card" class="panel section owner-actions" role="alert" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
+<div class="mc-tabs" role="tablist" aria-label="Views of this project" id="mc-tablist"><button type="button" role="tab" id="tab-story-btn" aria-controls="tab-story" aria-selected="true" data-mc-keep="1" data-mc-tab="story">Story</button><button type="button" role="tab" id="tab-proof-btn" aria-controls="tab-proof" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="proof">Proof</button><button type="button" role="tab" id="tab-advanced-btn" aria-controls="tab-advanced" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="advanced">Advanced</button></div>
+<div class="mc-panel" id="tab-story" role="tabpanel" aria-labelledby="tab-story-btn">
+<section class="panel mc-now" id="story-now" aria-label="Now"></section>
+<section class="mc-agents" id="agent-strip" aria-label="Agents"></section>
+<section class="panel mc-timeline" id="story-timeline" aria-labelledby="story-timeline-title"></section>
+<div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only the work in progress appears here. The numbers show completed steps. When the work is ready for your test, try it and choose Accepted or Not accepted.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div>
+</div>
+<div class="mc-panel" id="tab-proof" role="tabpanel" aria-labelledby="tab-proof-btn" hidden><div class="mc-proof" id="proof-body"></div></div>
+<div class="mc-panel" id="tab-advanced" role="tabpanel" aria-labelledby="tab-advanced-btn" hidden>
+<section class="panel mc-advanced-intro" style="margin-top:18px"><h2>Advanced</h2><p>Everything for running the agents by hand: start and stop them, give direction, see every terminal and the review queue, and where this project’s AI access lives. Nothing here is needed for a normal task.</p></section>
+<section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button first asks what kind of work this is (Write code, Analyze code or Write specs), then lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
+<section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
 <section id="attention" class="panel section" aria-live="polite"></section>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
-<section class="layout"><div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only the work in progress appears here. The numbers show completed steps. When the work is ready for your test, try it and choose Accepted or Not accepted.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div><aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside></section>
+<aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside>
+</div>
 <dialog id="status-dialog" aria-labelledby="status-dialog-title"><div class="modal"><h2 id="status-dialog-title" tabindex="-1">Agent status</h2><div id="status-dialog-body"></div><div class="modal-actions"><button class="secondary" id="status-dialog-close">Close</button></div></div></dialog>
-<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
+<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Up to 5 files, 10 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
-<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
+<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
 <dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
@@ -142,8 +235,10 @@ let historyLoadedAtVersion='';
 let currentHistoryVersion='';
 let historyLoading=false;
 let pendingLaunchKind='';
+let directionAfterLaunch=false;   // Give direction with no Delivery agent running opens the Start dialog first, then the direction box
 let lastManaged=null;   // the latest /api/control snapshot, for the launch dialog's provider list
 let ownerMessageAgentId='';
+const waitingForReview=new Set();   // 'task:version' the owner chose to wait for the reviewer on (2026-10-28: the click showed nothing)
 let directionLauncher=false;   // the dialog was opened by Give direction in the launch panel (no Delivery agent exists yet)
 let ownerMessageType='direction';
 const ownerMessageMaxBytes=20000;
@@ -620,12 +715,14 @@ function taskNames(state,contracts,directions,liveTasks){
 // The Reviewer's early look at a filed proposal (spec 2026-10-23_contract-first-checks): the Go ahead is never held; the card says what the
 // reviewer is doing, shows its questions ONCE, and every decision names the version and card state the owner was shown.
 function proposalLabels(cc){
-  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,plain:item.plain||'',coverage:item.stale?'gap: no test covers this yet':(item.coverage_line||'not mapped'),label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
+  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,plain:item.plain||'',kind:item.kind||'',reason:item.why_not_checked||'',coverage:item.stale?'gap: no test covers this yet':(item.coverage_line||'not mapped'),label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
 }
+// A non-functional requirement (speed, phone layout, accessibility...) is labelled plainly wherever the list is drawn.
+function qualityTag(item){return item&&item.kind==='non-functional'?'<strong data-quality-requirement>Quality requirement:</strong> ':'';}
 function contractCheckLabels(cc){
   const list=Array.isArray(cc?.labels)?cc.labels:(Array.isArray(cc?.criteria)?cc.criteria.map(item=>{const checks=item.checks||[];return{criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};}):[]);
   if(!list.length)return'';
-  return `<ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.criterion)} — <strong>${esc(item.label)}</strong></li>`).join('')}</ul>`;
+  return `<ul class="checked-in-advance-list">${list.map(item=>`<li>${qualityTag(item)}${esc(item.criterion)} — <strong>${esc(item.label)}</strong></li>`).join('')}</ul>`;
 }
 // Plain words first (owner 2026-10-24): a stored requirements text that starts with "In plain words:" shows that block, the owner's recorded
 // choices and the full text behind a toggle. Text stored before this rule gets a plain notice and the same toggle - never an error.
@@ -650,16 +747,38 @@ function testedListHtml(labels,results,title,compare){
   if(!list.length)return'';
   const proof={fails_before:'fails before the work (good)',passes_on_nothing:'passes on nothing: did not distinguish, so it proves nothing yet',could_not_compare:'could not compare with the project before the work (no failure of the work)'};
   const said=(value,mark)=>{const before=proof[mark]?` · ${proof[mark]}`:'';if(mark==='passes_on_nothing')return before;return(value==='passed'?' · passed when the board ran it':value==='failed'?' · failed when the board ran it':value==='did_not_run'?' · the board could not run this check (no failure of the work)':'')+before;};
-  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${esc(item.plain||'A check the developer wrote; open Details to read it.')} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)],(compare||{})[String(item.n)]))}${item.note?` <small>(skipped: ${esc(item.note)})</small>`:''} · <span data-coverage>${esc(item.coverage||'not mapped')}</span></li>`).join('')}</ul><details class="tested-details" data-keep="tested-details"><summary>Details</summary><ul>${list.map(item=>`<li>${esc(item.criterion)}</li>`).join('')}</ul></details><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started, or a test the board could not run was set aside with a recorded reason.</small></div>`;
+  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${qualityTag(item)}${esc(item.plain||'A check the developer wrote; open Details to read it.')} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)],(compare||{})[String(item.n)]))}${item.note?` <small>(skipped: ${esc(item.note)})</small>`:''}${item.reason&&item.label==='not checked in advance'?` <small data-no-test-reason>(no test: ${esc(item.reason)})</small>`:''} · <span data-coverage>${esc(item.coverage||'not mapped')}</span></li>`).join('')}</ul><details class="tested-details" data-keep="tested-details"><summary>Details</summary><ul>${list.map(item=>`<li>${qualityTag(item)}${esc(item.criterion)}</li>`).join('')}</ul></details><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started, or a test the board could not run was set aside with a recorded reason.</small></div>`;
+}
+function deviationLinesHtml(cc){
+  const items=Array.isArray(cc?.deviations)?cc.deviations:[];
+  if(!items.length)return'';
+  const answer=item=>item.status==='replaced'?'changed the check':item.status==='kept'?`kept it: ${item.answer_reason||''}`:'has not answered yet';
+  return `<ul class="check-deviations" data-check-deviations>${items.map(item=>`<li>${esc(`The builder said check ${item.check} did not match reality: ${item.why}. The reviewer ${answer(item)}.`)}</li>`).join('')}</ul>`;
 }
 function checkedInAdvanceHtml(confirmation){
   const cc=confirmation?.contract_check;
   if(!cc)return'';
   const list=testedListHtml(cc.labels,cc.results,'',cc.compare);
   const reason=cc.reason?` (${esc(cc.reason)})`:'';
-  return list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`;
+  const lane=cc.lane==='small'?`<p class="lane-line" data-lane="small">Small change: tests are not written in advance. The independent reviewer still reviews the finished work.</p>`:cc.lane_sent_back?`<p class="lane-line" data-lane="full">The reviewer sent this back to the full process: ${esc(cc.lane_sent_back.reason||'')}</p>`:'';
+  return lane+(list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`)+deviationLinesHtml(cc);
 }
-function proposalQuestionsHtml(name,proposal){
+// Gaps above the Go ahead (owner 2026-10-26): when a requirement has a coverage gap or a test that proved nothing, say so plainly right above the
+// buttons. The Go ahead is never held and nothing is asked; nothing is shown when everything is covered.
+function gapSummaryHtml(labels,compare){
+  const rows=[];
+  (Array.isArray(labels)?labels:[]).forEach(item=>{
+    const coverage=String(item.coverage||'');
+    const idle=(compare||{})[String(item.n)]==='passes_on_nothing';
+    const tail=coverage.replace(/^(gap|not mapped):?\s*/,'');
+    const reason=coverage.startsWith('gap')?(tail||'no test covers this yet'):coverage.startsWith('not mapped')?(tail||'no test is linked to this yet'):idle?'its test passes on nothing, so it proves nothing yet':'';
+    if(!reason)return;
+    rows.push(`<li>${esc(item.n)}. ${esc(item.plain||item.criterion||'This requirement')}: ${esc(reason)}</li>`);
+  });
+  if(!rows.length)return'';
+  return `<div class="next gap-summary" data-gap-summary><strong>Before you go ahead: ${rows.length===1?'1 requirement is':rows.length+' requirements are'} not fully tested yet</strong><ul>${rows.join('')}</ul><p>The reviewer has been asked to add them; you can go ahead now or wait.</p></div>`;
+}
+function proposalQuestionsHtml(name,proposal,gaps){
   const cc=proposal.contract_check||{};
   const questions=Array.isArray(cc.questions)?cc.questions:[];
   const recommended=questions.map(q=>`${esc(q.text)} → ${esc(q.options[q.recommended])}`).join('; ');
@@ -668,22 +787,38 @@ function proposalQuestionsHtml(name,proposal){
     const radios=order.map((index,position)=>`<label class="cq-option"><input type="radio" data-keep="cq-${esc(name)}-${q.n}-${index}" name="cq-${esc(name)}-${q.n}" value="${index}"${position===0?' checked':''}> ${esc(q.options[index])}${index===q.recommended?' <small>(recommended)</small>':''}</label>`).join('');
     return `<fieldset class="cq" data-cq="${q.n}"><legend>${q.n}. ${esc(q.text)}</legend>${radios}<label class="cq-option"><input type="radio" data-keep="cq-${esc(name)}-${q.n}-other" name="cq-${esc(name)}-${q.n}" value="other"> Other: <input type="text" maxlength="300" data-keep="cq-${esc(name)}-${q.n}-text" data-cq-other aria-label="Your own answer to question ${q.n}"></label></fieldset>`;
   }).join('');
-  return `<div class="contract-questions" data-contract-questions="${esc(name)}"><div class="requirements-title">The reviewer needs a few choices from you</div><p>It cannot write a test for these without guessing. The recommended answer is already chosen; change it only if you want something different. You will not be asked again.</p>${cards}<p><small>The recommended answers: ${recommended}</small></p><div class="actions"><button type="button" data-cq-answer="${esc(name)}">Answer the questions</button><button type="button" class="secondary" data-req-go="${esc(name)}">Go ahead using the recommended answers</button></div></div>`;
+  return `<div class="contract-questions" data-contract-questions="${esc(name)}"><div class="requirements-title">The reviewer needs a few choices from you</div><p>It cannot write a test for these without guessing. The recommended answer is already chosen; change it only if you want something different. You will not be asked again.</p>${cards}<p><small>The recommended answers: ${recommended}</small></p>${gaps||''}<div class="actions"><button type="button" data-cq-answer="${esc(name)}">Answer the questions</button><button type="button" class="secondary" data-req-go="${esc(name)}">Go ahead using the recommended answers</button></div></div>`;
+}
+// D-014: the owner's checkbox decides the process; the card says which one this task runs as, and (full process) how many criteria have no test yet.
+function runningAsHtml(proposal){
+  const kind=proposal.task_kind||(proposal.document_only?'spec':'development');const words={development:'full process (tests first, independent review, end-to-end)',analysis:'code analysis (reads the code, reports issues and refactoring ideas, changes no code; the reviewer checks every finding)',spec:'document only (plain-words contract, text review)'};
+  return `<p class="running-as" data-running-as="${kind==='spec'?'document':kind==='analysis'?'analysis':'full'}"><strong>Running as:</strong> ${words[kind]||words.development}</p>`;
+}
+function noTestCountHtml(proposal){
+  const list=proposalLabels(proposal.contract_check||{});
+  const missing=list.filter(item=>item.label==='not checked in advance').length;
+  if(proposal.document_only||(proposal.task_kind&&proposal.task_kind!=='development')||!list.length||!missing)return'';
+  return `<p class="no-test-count" data-no-test-count>${missing} of ${list.length} criteria have no test yet.</p>`;
 }
 function proposalCardHtml(name,proposal){
   const cc=proposal.contract_check||{};
   const status=cc.status||'';
   const reading=status==='reading',rechecking=status==='rechecking',questions=status==='questions';
+  const gaps=gapSummaryHtml(proposalLabels(cc),cc.compare);
   const note=rechecking?`<div class="next contract-check-note" data-contract-check="rechecking"><strong>The reviewer is reviewing the contract based on your answers.</strong> It is updating the tests for the requirements your answers changed. Do you want to go ahead without waiting, or wait?</div>${testedListHtml(proposalLabels(cc))}`
     :reading?`<div class="next contract-check-note" data-contract-check="reading"><strong>The reviewer is reviewing the contract.</strong> It is checking how each requirement can be tested before any work starts. Do you want to go ahead without waiting, or wait?</div>`
-    :questions?proposalQuestionsHtml(name,proposal)+testedListHtml(proposalLabels(cc))
+    :questions?proposalQuestionsHtml(name,proposal,gaps)+testedListHtml(proposalLabels(cc))
     :status==='ready'?`<div class="next contract-check-note" data-contract-check="ready"><strong>${(cc.answers||[]).length?'Your answers are recorded under “Decided before coding”, and the reviewer has updated the tests.':'The reviewer read this first and wrote tests for it.'}</strong>${cc.reason?` ${esc(cc.reason)}.`:''}</div>${testedListHtml(proposalLabels(cc))}`
+    :proposal.small_change&&status==='not_checked'?`<div class="next contract-check-note" data-contract-check="small_change"><strong>Small change: tests are not written in advance.</strong> ${proposal.small_change_by==='owner'?'You chose this.':'Delivery proposed this; your Go ahead confirms it, or press Modify… to ask for the full process.'} The finished work is still reviewed by the independent reviewer and the board still runs the project's own checks.</div>`
+    :proposal.task_kind==='analysis'&&status==='not_checked'?`<div class="next contract-check-note" data-contract-check="analysis"><strong>Nothing is tested in advance.</strong> After you press Go ahead, the builder and the reviewer each read all the code and make their own list of issues; nobody has to wait for anything.</div>`
     :status==='not_checked'?`<div class="next contract-check-note" data-contract-check="not_checked"><strong>Not checked in advance.</strong> ${esc(cc.reason||'The reviewer did not look at this first.')} The work will be judged after it is built, as before.</div>`
     :'';
+  const canSmall=!proposal.small_change&&proposal.task_kind!=='analysis'&&(reading||status==='not_checked');
+  const smallBox=canSmall?`<label class="small-change-choice" data-small-change-choice><input type="checkbox" data-small-change> Small change: skip the question round and the advance test checks</label>`:'';
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
-    :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review</button>`:''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`;
-  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${note}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+    :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. This card updates by itself when it is done, so there is nothing else to do. You can still go ahead without waiting.</p>`:''}`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
 // A task card is split into two independently-refreshed regions so the window
@@ -722,7 +857,7 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive ${copyButtonHtml('directive',name,directive)}</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
-  const dynamicRegion=`<div class="live-label">Live delivery status</div><p class="task-usage" data-task-usage="${esc(name)}">${esc(((state.task_usage||{})[name]||{}).line||'')}</p>${(((state.task_difficulty||{})[name]||{}).line)?`<p class="task-usage" data-task-difficulty="${esc(name)}">${esc(state.task_difficulty[name].line)}</p>`:''}<div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div>${attemptsHtml(deliveryFailures(state,name),'p:'+name,'Attempts:')}<div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(currentUpdateText(state,name,brief,progress.current.label)||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
+  const dynamicRegion=`<div class="live-label">Live delivery status</div><p class="task-usage" data-task-usage="${esc(name)}">${esc(((state.task_usage||{})[name]||{}).line||'')}</p>${(((state.task_cost||{})[name]||{}).line)?`<p class="task-usage" data-task-cost="${esc(name)}">${esc(state.task_cost[name].line)}</p>`:''}${(((state.task_difficulty||{})[name]||{}).line)?`<p class="task-usage" data-task-difficulty="${esc(name)}">${esc(state.task_difficulty[name].line)}</p>`:''}${(((state.task_revert_proof||{})[name]||{}).line)?`<p class="task-usage" data-task-revert-proof="${esc(name)}">${esc(state.task_revert_proof[name].line)}</p>`:''}<div class="progress-heading"><strong>Whole task</strong><span>${progress.overall.completed} of ${progress.overall.total} required steps done</span></div><div class="progress" role="progressbar" aria-label="Whole task progress" aria-valuemin="0" aria-valuemax="${progress.overall.total}" aria-valuenow="${progress.overall.completed}"><i class="${accepted?'ready':''}" style="width:${overallWidth}%"></i></div><div class="progress-heading"><strong>Current stage: ${esc(progress.current.label)}</strong><span>${progress.current.completed} of ${progress.current.total} checks complete</span></div><div class="progress" role="progressbar" aria-label="Current stage progress" aria-valuemin="0" aria-valuemax="${progress.current.total}" aria-valuenow="${progress.current.completed}"><i class="${esc(gate.progressTone)}" style="width:${currentWidth}%"></i></div><div class="meta"><span class="task-counts">${esc(facts.progressText)}</span><span>${facts.reviews.filter(item=>item.status==='passed').length} independent review passes recorded</span><span class="cto-chip">${esc(gate.ctoAction)}</span></div>${attemptsHtml(deliveryFailures(state,name),'p:'+name,'Attempts:')}<div class="delivery-brief"><strong>What Delivery will do</strong><p>${esc(brief.plan||'Delivery has not yet published its plain-language plan.')}</p><strong>Current update</strong><p>${esc(currentUpdateText(state,name,brief,progress.current.label)||'Waiting for the next plain-language Delivery update.')}</p></div>${structurePlan}${scopeNotice}${routedNotice}${waivedNotice}<div class="next"><strong>What happens next:</strong> ${esc(gate.next)}</div>${releaseResponseHtml(state,name)}${securityHtml(state,name)}${cancelTaskHtml(state,name)}`;
   return {static:staticRegion,dynamic:dynamicRegion};
 }
 
@@ -749,11 +884,11 @@ function cancelTaskHtml(state,name){
 }
 
 async function confirmCancelTask(task){
-  const approved=window.confirm(`Cancel the task “${objectiveSummary(task)}” (${task})?\n\nThis abandons the task for good. Its board records and its workspace will be removed, and any agent working on it will be stopped.\n\nTo only close an agent and keep the task, use Stop instead.`);
+  const approved=window.confirm(`Cancel the task “${objectiveSummary(task)}” (${task})?\n\nThis abandons the task for good. Its board records will be removed (its work copy is kept for recovery), and any agent working on it will be stopped.\n\nTo only close an agent and keep the task, use Stop instead.`);
   if(!approved)return false;
   try{
     await call('/api/tasks/'+encodeURIComponent(task)+'/cancel',{});
-    el('#notice').textContent=`Task cancelled — ${objectiveSummary(task)}. Its records and workspace were removed.`;
+    el('#notice').textContent=`Task cancelled — ${objectiveSummary(task)}. Its records were removed; its work copy is kept for recovery.`;
     await refresh();
     return true;
   }catch(error){el('#notice').textContent='Could not cancel the task: '+error.message;return false;}
@@ -1042,14 +1177,14 @@ function requirementsHistoryHtml(item){
   return`<div class="history-requirements"><div class="history-requirements-title">Final agreed requirements</div><div class="history-requirements-body">${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'history',copyButtonHtml('history-requirements',item.task||item.title||'',confirmation.text))}</div>${confirmation.contract_check?testedListHtml(confirmation.contract_check.labels,confirmation.contract_check.results,'',confirmation.contract_check.compare):''}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Historical status wording describes that confirmation moment.</small></div>`;
 }
 
-function usageLineHtml(item){return (item.usage_line?`<p class="task-usage" data-task-usage-history>${esc(item.usage_line)}</p>`:'')+(item.difficulty_line?`<p class="task-usage" data-task-difficulty-history>${esc(item.difficulty_line)}</p>`:'');}
+function usageLineHtml(item){return (item.usage_line?`<p class="task-usage" data-task-usage-history>${esc(item.usage_line)}</p>`:'')+(item.cost_line?`<p class="task-usage" data-task-cost-history>${esc(item.cost_line)}</p>`:'')+(item.difficulty_line?`<p class="task-usage" data-task-difficulty-history>${esc(item.difficulty_line)}</p>`:'')+(item.revert_proof_line?`<p class="task-usage" data-task-revert-proof-history>${esc(item.revert_proof_line)}</p>`:'');}
 
 function reviewNotesHtml(item){
   // Information only (2026-10-25): what the checks judged minor and left as notes, and, if the harness stopped repairing a part, the plain outcome. Nothing here asks the owner to act.
   const notes=Array.isArray(item.review_notes)?item.review_notes:[];
   const outcome=String(item.review_outcome||'');
-  if(!notes.length&&!outcome)return'';
-  return`<div class="history-review-notes" data-review-notes>${outcome?`<p class="review-outcome"><strong>${esc(outcome)}</strong></p>`:''}${notes.length?`<div><strong>Left as notes (judged minor; nothing for you to do):</strong><ul>${notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></div>`:''}</div>`;
+  const quality=Array.isArray(item.code_quality)?item.code_quality:[];
+  return`<div class="history-review-notes" data-review-notes>${outcome?`<p class="review-outcome"><strong>${esc(outcome)}</strong></p>`:''}${notes.length?`<div><strong>Left as notes (judged minor; nothing for you to do):</strong><ul>${notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></div>`:''}${quality.length?`<div data-code-quality><strong>Code quality</strong> (the reviewer's observations on how the code is built; for your information, nothing for you to do):<ul>${quality.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></div>`:`<div data-code-quality><strong>Code quality</strong>: no code-quality check was recorded for this task.</div>`}</div>`;
 }
 
 function historyResultLabel(value){
@@ -1233,7 +1368,6 @@ function agentStatusSummaryCore(agent,state,contracts){
   if(agent.liveness==='needs_sign_in'&&String(agent.liveness_note||'').includes('sign-in prompt'))return{summary:agent.liveness_note,next:'Follow the sign-in prompt in its window. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and follow the sign-in prompt.'};
   if(agent.liveness==='needs_sign_in')return{summary:agent.liveness_note||'This agent needs you to sign in again: open its terminal and run /login.',next:'Run /login in its terminal. The harness holds its messages until then and carries on by itself.',ownerAction:'Open its terminal and run /login.'};
   if(agent.role==='cto'&&agent.recovery_state==='unresponsive')return{summary:'CTO is not responding - it may need /login. Three wake-ups in a row went unanswered, so the harness has stopped pinging it.',next:'Open the CTO terminal; if it shows a login prompt, run /login. The CTO resumes once it checks the board again.',ownerAction:'Open the CTO terminal and run /login if it asks you to sign in.'};
-  if(agent.role==='cto'&&agent.recovery_state==='answered_without_poll')return{summary:'The CTO answered its last wake-up with a status update but has not checked the latest project records yet. It is running; the app keeps reminding it. ',next:'It will check the project records on its next round. Nothing for you to do.',ownerAction:'None.'};
   if(agent.liveness==='stalled')return{summary:`The ${agent.role==='qa'?'Independent Reviewer':agent.role==='cto'?'CTO':'Delivery Agent'} for ${humanTask(agent,state)} stopped reporting. The app restarts it from its saved work; you do not need to do anything.`,next:'It continues from its saved work and posts an update. Nothing for you to do.'};
   if(agent.task==='AWAITING_OWNER_DIRECTION')return{summary:'This Delivery Agent is open and waiting for your development direction.',next:'Use Give direction in Mission Control when you are ready.'};
   if(agent.role==='cto'){
@@ -1525,7 +1659,7 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
 
 function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
-  directionLauncher=false; setAttachmentFields(true);
+  directionLauncher=false; setAttachmentFields(true); setTaskKindField(type==='direction');
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -1541,11 +1675,11 @@ async function submitOwnerMessage(event){
   let validated;try{validated=validateOwnerMessageText(el('#owner-message-text').value);}catch(failure){error.textContent=failure.message;return false;}
   if(directionLauncher){
     // No Delivery agent exists yet: keep the words, start the three agents with the owner's saved launch settings, then send.
-    writePendingDirection({text:validated.text,savedAt:Date.now()});
+    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),savedAt:Date.now()});
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
   }
-  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
+  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('task_kind',selectedTaskKind()); if(selectedTaskKind()==='spec')form.append('document_only','1'); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
   for(const file of Array.from(el('#owner-message-attachments').files||[]))form.append('attachments',file,file.name);
   const submit=el('#owner-message-submit'); submit.disabled=true; error.textContent='';
   try{
@@ -1762,6 +1896,7 @@ function render(data,managed){
   state.in_scope_findings=Array.isArray(data.in_scope_findings)?[...data.in_scope_findings]:[];
   lastBoard=data;
   writeText(el('#project'),data.path||'Local project');
+  writeText(el('#project-cost'),(state.project_cost||{}).line||'');
   writeText(el('#updated'),'Updated '+new Date(data.updated).toLocaleTimeString());
   writeText(el('#active'),agents.filter(agent=>agent.active).length);
   writeText(el('#open'),reviews.filter(review=>['authoring','open'].includes(review.status)).length);
@@ -1769,6 +1904,10 @@ function render(data,managed){
   const liveTasks=new Set(data.live_tasks||[]);
   writeText(el('#passed'),reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length);
   renderOwnerActions(state);
+  renderStory(data.story);
+  renderStrip(data.story);
+  renderTimeline(data.story);
+  renderProof(data.story);
   renderMachineCard(data.test_machine);
   renderHarnessActions(state);
   const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
@@ -1819,13 +1958,162 @@ function render(data,managed){
   el('#paused-banner').hidden=!projectPaused;
   if(projectPaused){
     document.querySelectorAll('button').forEach(button=>{
-      if((button.dataset&&button.dataset.copyKey)||button.id==='give-direction'||button.id==='direction-discard'||(directionLauncher&&el('#owner-message-dialog').contains(button)))return;   // saving a direction while paused only keeps the words; nothing starts until Resume
+      if((button.dataset&&(button.dataset.copyKey||button.dataset.mcKeep))||button.id==='give-direction'||button.id==='direction-discard'||(directionLauncher&&el('#owner-message-dialog').contains(button)))return;   // saving a direction while paused only keeps the words; nothing starts until Resume
       button.disabled=true;
       button.title='Unavailable while this project is paused. Resume the project to make changes.';
     });
   }
   applyChatAvailability(managed.project_chat,projectPaused);
   advanceDirectionStart();
+}
+
+
+// ---- Mission Control story (2026-10-27): the Now section, the agent strip and the tabs. Every sentence comes from harness/story.py
+// through the dashboard's `story`; the page only draws it (escaped) and wires the buttons to the routes that already exist. ----
+let mcTab='story',mcStartLinkDone=false;
+const mcTabs=['story','proof','advanced'];
+function showTab(name,focus){
+  mcTab=mcTabs.includes(name)?name:'story';
+  for(const id of mcTabs){
+    const panel=el('#tab-'+id),button=el('#tab-'+id+'-btn');
+    if(panel)panel.hidden=id!==mcTab;
+    if(button){button.setAttribute('aria-selected',id===mcTab?'true':'false');button.tabIndex=id===mcTab?0:-1;}
+  }
+  try{sessionStorage.setItem('nmhp-mc-tab',mcTab);}catch(error){}
+  if(focus){const button=el('#tab-'+mcTab+'-btn');if(button)button.focus();}
+  layoutDirty=true;
+}
+function wireTabs(){
+  const list=el('#mc-tablist');if(!list)return;
+  list.addEventListener('click',event=>{const button=event.target.closest('[data-mc-tab]');if(button)showTab(button.dataset.mcTab,false);});
+  list.addEventListener('keydown',event=>{
+    const order=mcTabs,at=order.indexOf(mcTab);
+    const target=event.key==='ArrowRight'?order[(at+1)%order.length]:event.key==='ArrowLeft'?order[(at+order.length-1)%order.length]:event.key==='Home'?order[0]:event.key==='End'?order[order.length-1]:'';
+    if(target){event.preventDefault();showTab(target,true);}
+  });
+  const proofLink=el('#story-now');
+  if(proofLink)proofLink.addEventListener('click',event=>{if(event.target.closest('[data-mc-goto]')){showTab(event.target.closest('[data-mc-goto]').dataset.mcGoto,true);}});
+  let remembered='story';try{remembered=sessionStorage.getItem('nmhp-mc-tab')||'story';}catch(error){}
+  showTab(location.hash==='#proof'?'proof':['#history','#project-chat','#tasks','#start-direction'].includes(location.hash)?'story':remembered,false);
+  if(location.hash==='#history'&&el('#history'))el('#history').open=true;
+}
+function storyTile(label,value,note){return `<div class="mc-tile"><span>${esc(label)}</span><strong>${esc(value)}</strong>${note?`<small>${esc(note)}</small>`:''}</div>`;}
+// The owner must always be able to abandon a task from the first screen (2026-10-28: the button lived only in the Advanced task cards).
+function storyCancelButton(task,label){
+  return task?`<button type="button" class="stop cancel-task mc-cancel" data-mc-cancel="${esc(task)}" data-mc-keep="1" title="Abandon this task for good. Its records are removed; its work copy is kept for recovery.">${esc(label)}</button>`:'';
+}
+function renderStory(story){
+  const node=el('#story-now');if(!node)return;
+  const s=story||{};
+  let html;
+  if(s.error){
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text">The summary could not be shown just now. Everything below still works.</div></div>`;
+  }else if(!s.current&&s.direction_sent&&!s.exception){
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text" data-story-now>The builder has your direction and is turning it into a plan.</div><div class="mc-next" data-story-next>Next: it shows you the plan and asks for your Go ahead.</div></div>`;
+  }else if(!s.current){
+    const problem=s.exception;
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text" data-story-now>${esc(problem?problem.reason:'Nothing is in progress.')}</div><div class="mc-next" data-story-next>${esc(problem?'Next: '+problem.action:'Next: tell the builder what to build.')}</div><button type="button" class="mc-tell" id="story-tell-builder" data-mc-keep="1">Tell the builder what to build</button></div>`;
+  }else{
+    const c=s.current,others=(s.order||[]).slice(1).map(name=>(s.tasks||{})[name]).filter(Boolean);
+    const percent=Math.max(0,Math.min(100,Math.round(100*Number(c.step||0)/Number(c.of||26))));
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now${others.length?` · ${esc(c.title)}`:''}</div><div class="mc-now-text" data-story-now>${esc(c.now)}</div><div class="mc-next" data-story-next>${esc(c.next)}</div>`
+      +(c.needs_owner?`<div class="mc-needs-line" role="status" data-story-needs>Needs you: ${esc(c.owner_action)}</div>`:'')
+      +`<div class="mc-step"><span data-story-step>Step ${Number(c.step)} of ${Number(c.of)} · ${esc(c.step_title)}${c.who?` (${esc(c.who)})`:''}</span><span>${esc(c.elapsed||'')}</span></div><div class="mc-bar" role="progressbar" aria-label="Step ${Number(c.step)} of ${Number(c.of)}" aria-valuemin="0" aria-valuemax="${Number(c.of)}" aria-valuenow="${Number(c.step)}"><i style="width:${percent}%"></i></div>${storyCancelButton(c.task,'Cancel this task')}</div>`
+      +`<div class="mc-tiles">${storyTile('Cost',String(c.cost||'').replace(/^Cost: /,''),c.codex_window)}${c.requirements&&c.requirements.text?`<div class="mc-tile" data-story-requirements><span>Requirements</span><strong>${esc(c.requirements.text)}</strong><button type="button" class="mc-linkbtn" data-mc-goto="proof" data-mc-keep="1">See the proof</button></div>`:''}</div>`
+      +(others.length?`<ul class="mc-others" aria-label="Other tasks in progress">${others.map(o=>`<li><strong>${esc(o.title)}</strong>: step ${Number(o.step)} of ${Number(o.of)}, ${esc(o.step_title)}. ${esc(o.now)} ${storyCancelButton(o.task,'Cancel')}</li>`).join('')}</ul>`:'');
+  }
+  writeHtml(node,html);
+  node.classList.toggle('mc-needs',Boolean(s.current&&s.current.needs_owner));
+}
+function renderStrip(story){
+  const node=el('#agent-strip');if(!node)return;
+  const rows=(story&&story.agents)||[];
+  const html=rows.map(a=>{
+    const message=a.message||{},view=a.view||{};
+    const messageAttrs=message.mode==='composer'?`data-strip-message="${esc(a.agent_id)}" data-strip-type="${esc(message.type)}"`:message.mode==='screen'?`data-strip-view="${esc(a.session_id)}"`:'disabled';
+    const viewAttrs=view.enabled?`data-strip-view="${esc(view.session_id)}"`:'disabled';
+    const note=(message.mode==='none'&&message.note)||(!view.enabled&&view.note)||'';
+    return `<div class="mc-agent mc-${esc(a.role)}" data-agent-role="${esc(a.role)}"><div class="mc-agent-head"><strong>${esc(a.label)}</strong><span>${esc(a.company)}</span></div>`
+      +`<div class="mc-doing">${esc(a.doing)}</div>`
+      +(a.detail?`<small>${esc(a.detail)}</small>`:'')+(a.slowed?`<small>${esc(a.slowed)}</small>`:'')+`<small>${esc(a.cost)}</small>`
+      +`<div class="actions"><button type="button" class="secondary" data-strip-action="message" ${messageAttrs}>${esc(message.label||'Message')}</button><button type="button" class="secondary" data-strip-action="view" ${viewAttrs}>View its screen</button></div>`
+      +(note?`<p class="mc-note" role="status">${esc(note)}</p>`:'')+`</div>`;
+  }).join('');
+  writeHtml(node,html);
+}
+const stepMoreTitle={now:'What is happening',next:'What will happen here',skipped:'Why it was skipped',gap:'What is missing',earlier:'What happened (before your feedback)',not_recorded:'What the board knows',done:'What happened'};
+function timelineRowHtml(row,task){
+  const more=(row.detail||[]).filter(Boolean);
+  const body=more.length?`<ul>${more.map(line=>`<li>${esc(line)}</li>`).join('')}</ul>`:'<p>Nothing more is recorded for this step.</p>';
+  return `<li class="mc-${esc(row.status)}" data-step="${Number(row.n)}" data-status="${esc(row.status)}"${row.status==='now'?' aria-current="step"':''}><details data-keep="tl-${esc(task)}-${esc(row.key)}"${row.status==='now'?' open':''}><summary><span class="mc-st-head"><span class="mc-st-title">${esc(row.title)}</span><span class="mc-st-who">${esc(row.who)}</span><span class="mc-st-tag">${esc(row.tag)}</span>${row.owner?'<span class="mc-st-owner">Needs you</span>':''}</span><span class="mc-st-text">${esc(row.text)}</span></summary><div class="mc-st-more"><strong>${esc(stepMoreTitle[row.status]||'What happened')}</strong>${body}</div></details></li>`;
+}
+function timelineListHtml(rows,task){
+  let last='',out='';
+  for(const row of rows){
+    if(row.area&&row.area!==last){out+=`<li class="mc-band">${esc(row.area)}</li>`;}
+    last=row.area||'';
+    out+=timelineRowHtml(row,task);
+  }
+  return out;
+}
+function renderTimeline(story){
+  const node=el('#story-timeline');if(!node)return;
+  const c=story&&story.current,tl=c&&c.timeline;
+  let html;
+  if(!c){
+    html='<h2 id="story-timeline-title">The story of this task</h2><p class="mc-hint">The step-by-step story appears here once a task starts.</p>';
+  }else if(!tl||tl.error||!(tl.steps||[]).length){
+    html='<h2 id="story-timeline-title">The story of this task</h2><p class="mc-hint">The step list could not be shown just now. Everything else on this page still works.</p>';
+  }else{
+    const rows=tl.steps,shown=rows.filter(row=>!row.fold),skipped=rows.filter(row=>row.fold==='skipped'),later=rows.filter(row=>row.fold==='later');
+    const problem=c.exception;
+    html=`<h2 id="story-timeline-title">The story of this task</h2>`
+      +(problem?`<div class="mc-attention" role="alert" data-story-attention><strong>Needs attention first</strong>${esc(problem.reason)} ${esc(problem.action)}</div>`:'')
+      +`<p class="mc-hint">Select a step to see what happened.</p><ol class="mc-steps" aria-labelledby="story-timeline-title" data-story-steps>${timelineListHtml(shown,c.task)}</ol>`
+      +(skipped.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-skipped" data-fold="skipped"><summary>${skipped.length===1?'1 step not needed':skipped.length+' steps not needed'}</summary><ol class="mc-steps">${timelineListHtml(skipped,c.task)}</ol></details>`:'')
+      +(later.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-later" data-fold="later"><summary>${later.length===1?'1 more step to come':later.length+' more steps to come'}</summary><ol class="mc-steps">${timelineListHtml(later,c.task)}</ol></details>`:'');
+  }
+  writeHtml(node,html);
+}
+function proofPill(cell,good){return `<span class="mc-pill ${esc(cell.tone||(good===true?'good':good===false?'bad':''))}">${esc(cell.text)}</span>`;}
+function renderProof(story){
+  const node=el('#proof-body');if(!node)return;
+  const c=story&&story.current,p=c&&c.proof;
+  let html;
+  if(!c){
+    html='<section class="panel"><h2>How we know it works</h2><p>The proof appears here once a task starts.</p></section>';
+  }else if(!p||p.error){
+    html='<section class="panel"><h2>How we know it works</h2><p>The proof could not be shown just now. Everything else on this page still works.</p></section>';
+  }else{
+    const rows=(p.rows||[]).map(row=>`<tr data-req="${Number(row.n)}"><td data-label="Requirement"><strong>${esc(row.n)}. ${esc(row.requirement)}</strong><small>${row.quality?'Quality requirement · ':''}${row.tests?'Tests: '+Number(row.tests):'No test yet'}</small></td><td data-label="Covered">${proofPill({text:row.covered.text},row.covered.ok)}</td><td data-label="Before the work">${proofPill(row.before)}</td><td data-label="Now">${proofPill(row.now)}</td></tr>`).join('');
+    const questioned=(p.questioned||[]),quality=(p.quality||[]);
+    html=`<section class="panel"><h2 id="proof-title">How we know it works</h2><p data-proof-header>${esc(p.header)}</p>${p.earlier_note?`<p class="mc-earlier-note" role="status" data-proof-earlier>${esc(p.earlier_note)}</p>`:''}</section>`
+      +`<div class="mc-proof-tiles" data-proof-tiles>${(p.tiles||[]).map(t=>storyTile(t.label,t.value,t.note)).join('')}</div>`
+      +(rows?`<div class="mc-table-wrap" role="region" aria-label="Requirements and their tests" tabindex="0"><table class="mc-table" data-proof-table><thead><tr><th scope="col">Requirement</th><th scope="col">Covered</th><th scope="col">Before the work</th><th scope="col">Now</th></tr></thead><tbody>${rows}</tbody></table></div>`:'')
+      +(p.untied?`<section class="panel" style="margin-top:18px" data-proof-untied><h2>${esc(p.untied.title)}</h2><p>${esc(p.untied.text)}</p></section>`:'')
+      +`<div class="mc-notes-grid"><section class="panel" data-proof-questioned><h2>${questioned.length>1?'The builder questioned '+questioned.length+' tests':'The builder questioned '+(questioned.length?'one test':'no test')}</h2>${questioned.length?`<ul>${questioned.map(line=>`<li>${esc(line)}</li>`).join('')}</ul>`:'<p>Nothing was questioned.</p>'}</section>`
+      +`<section class="panel" data-proof-quality><h2>Code quality notes · nothing for you to do</h2>${quality.length?`<ul>${quality.map(line=>`<li>${esc(line)}</li>`).join('')}</ul>`:'<p>The reviewer has not left any code quality notes.</p>'}</section></div>`;
+  }
+  writeHtml(node,html);
+}
+function openStartDirection(){
+  // "Tell the builder what to build": the builder that is waiting for its task gets the composer; with no builder yet, the same
+  // Give direction button the Advanced tab holds starts the three agents with the words (saved while the project is paused).
+  const agents=((lastBoard&&lastBoard.story&&lastBoard.story.agents)||[]);
+  const builder=agents.find(item=>item.role==='builder'&&item.present&&item.message&&item.message.mode==='composer');
+  if(builder){openOwnerMessageDialog(builder.agent_id,'direction');return;}
+  const give=el('#give-direction');if(give)give.click();
+}
+function wireStory(){
+  const strip=el('#agent-strip');
+  if(strip)strip.addEventListener('click',event=>{
+    const button=event.target.closest('button[data-strip-action]');if(!button||button.disabled)return;
+    if(button.dataset.stripMessage){openOwnerMessageDialog(button.dataset.stripMessage,button.dataset.stripType||'clarification');return;}
+    const id=button.dataset.stripView;
+    if(id){const session=((lastManaged&&lastManaged.sessions)||[]).find(item=>item.id===id)||{id,label:'Live agent'};viewAgent(session);}
+  });
+  const now=el('#story-now');
+  if(now)now.addEventListener('click',event=>{if(event.target.closest('#story-tell-builder'))openStartDirection();const cancel=event.target.closest('[data-mc-cancel]');if(cancel)confirmCancelTask(cancel.dataset.mcCancel);});
 }
 
 function applyChatAvailability(state,projectPaused){
@@ -1914,9 +2202,10 @@ function fillLaunchChoice(settings){
   for(const node of [providerSelect,modelSelect,modelInput,effortSelect])node.disabled=false;
 }
 async function showColorDialog(kind){
-  pendingLaunchKind=kind;
+  pendingLaunchKind=kind; directionAfterLaunch=false;
   el('#color-options').innerHTML=terminalColors.map((color,index)=>`<label class="color-choice"><input type="radio" name="terminal-color" value="${color.id}"${index===0?' checked':''}><span class="color-swatch" style="background:${color.hex}"></span><span>${color.label}</span></label>`).join('');
   const choice=el('#launch-choice'), isDelivery=kind==='codex_delivery';
+  {const radio=el('#launch-task-kind input[value="'+storedTaskKind()+'"]');if(radio)radio.checked=true;}
   choice.hidden=!isDelivery; launchChoiceReady=false; launchChoiceDamaged=false; launchChoiceSettings=null;
   el('#color-dialog-title').textContent=isDelivery?'Start a Delivery Agent':'Choose terminal color';
   el('#color-cancel').textContent=isDelivery?'Cancel — use Settings and black':'Cancel — use black';
@@ -1995,15 +2284,60 @@ function writePendingDirection(value){
   try{if(value)window.localStorage.setItem(directionKey,JSON.stringify(value));else window.localStorage.removeItem(directionKey);}
   catch(error){directionStorageBroken=true;}
 }
+const taskKindWords={development:'Write code',analysis:'Analyze code',spec:'Write specs'};
+const taskKindKey='task-kind:'+apiPrefix;
+let taskKindMemory='';
+function storedTaskKind(){
+  let kind=taskKindMemory;
+  try{kind=window.localStorage.getItem(taskKindKey)||kind;}catch(error){}
+  return taskKindWords[kind]?kind:'development';
+}
+function storeTaskKind(kind){
+  if(!taskKindWords[kind])return;
+  taskKindMemory=kind;
+  try{window.localStorage.setItem(taskKindKey,kind);}catch(error){}
+}
+function taskKindPicked(){
+  let kind=taskKindMemory;
+  try{kind=window.localStorage.getItem(taskKindKey)||kind;}catch(error){}
+  return !!taskKindWords[kind];
+}
+function setTaskKindField(visible){
+  const note=el('#owner-message-task-kind'),choice=el('#owner-message-kind-choice');
+  if(!note||!choice)return;
+  const ask=visible&&!taskKindPicked();
+  // no kind was picked at launch: offer the same three choices here (a copy of the launch ones)
+  if(ask&&!choice.firstChild){const copy=el('#launch-task-kind').cloneNode(true);copy.id='owner-message-kind-fieldset';copy.querySelectorAll('input').forEach(input=>{input.name='owner-message-kind';});choice.appendChild(copy);}
+  choice.hidden=!ask;
+  note.hidden=!visible||ask;
+  note.textContent='Kind of work: '+taskKindWords[storedTaskKind()]+'. You choose it when you start the Delivery agent.';
+}
+function selectedTaskKind(){
+  const choice=el('#owner-message-kind-choice');
+  if(choice&&!choice.hidden){const picked=choice.querySelector('input:checked');return picked?picked.value:'development';}
+  const note=el('#owner-message-task-kind');
+  if(!note||note.hidden)return 'development';
+  return storedTaskKind();
+}
+function launchTaskKind(){
+  const picked=el('#launch-task-kind input[name="launch-task-kind"]:checked');
+  return picked?picked.value:'development';
+}
 function setAttachmentFields(visible){
   for(const id of ['owner-message-attachments-label','owner-message-attachments','owner-message-attachments-help']){const node=el('#'+id);if(node)node.hidden=!visible;}
 }
-function openDirectionStart(){
-  requirementsModifyTask=''; directionLauncher=true; ownerMessageAgentId=''; ownerMessageType='direction'; setAttachmentFields(false);
+function openDirectionStart(launched){
+  // Delivery is not running yet: the owner picks the kind of work, provider, model and effort first (the same dialog as the Delivery button)
+  const board=lastBoard&&lastBoard.state;
+  // the page has not heard from the project yet: do not guess whether Delivery is running (the choices could be skipped)
+  if(launched!==true&&!board){el('#notice').textContent='The project is still loading. Press Give direction again in a moment.';return;}
+  if(launched!==true&&!['paused','resuming'].includes(board.project_pause?.status)&&!readPendingDirection()&&!developerAgents(board).length){showColorDialog('codex_delivery');directionAfterLaunch=true;return;}
+  requirementsModifyTask=''; directionLauncher=true; ownerMessageAgentId=''; ownerMessageType='direction'; setAttachmentFields(false); setTaskKindField(true);
   el('#owner-message-title').textContent='Give direction to Delivery';
   el('#owner-message-help').textContent='Write what you want built. When you press Send, Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives this. '+DIRECTION_TRUST_NOTE+' The words are kept in this browser until Delivery has them. Documents are not part of this first message: add them with Send clarification once Delivery is running.';
   el('#owner-message-submit').textContent='Send direction and start the agents';
   const saved=readPendingDirection();
+  {const kind=saved&&(saved.taskKind||(saved.documentOnly?'spec':''));if(kind)storeTaskKind(kind);setTaskKindField(true);}
   el('#owner-message-text').value=saved?saved.text:''; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
   el('#owner-message-dialog').showModal();
 }
@@ -2042,7 +2376,7 @@ async function advanceDirectionStart(){
     const sessionHasDirection=agent=>Boolean((state.owner_directions||{})[agent.session_id]?.text);
     const waiting=developerAgents(state).find(agent=>agent.task==='AWAITING_OWNER_DIRECTION'&&!sessionHasDirection(agent));
     if(waiting){
-      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text});
+      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec'});
       writePendingDirection(null); renderDirectionNote(null);
       el('#notice').textContent='Your complete direction was sent to Delivery.';
       await startMissingAgents(); return;
@@ -2130,9 +2464,9 @@ async function loadHistory(force=false){
 }
 
 el('#status-dialog-close').onclick=()=>el('#status-dialog').close();
-el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';};
-el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind)start(kind,'black');};
-el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind)start(kind,selected,choice);};
+el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';directionAfterLaunch=false;};
+el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;const done=start(kind,'black');if(after)done.then(ok=>{if(ok)openDirectionStart(true);});}};
+el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;const done=start(kind,selected,choice);if(after)done.then(ok=>{if(ok)openDirectionStart(true);});}};
 el('#decision-cancel').onclick=()=>el('#decision-dialog').close();
 el('#decision-form').onsubmit=submitRejection;
 el('#push-cancel').onclick=()=>el('#push-dialog').close();
@@ -2175,7 +2509,9 @@ function rememberPanel(id){
 }
 rememberPanel('settings-details');
 rememberPanel('history');
-refresh();
+wireTabs();
+wireStory();
+refresh().then(()=>{if(location.hash==='#start-direction'&&!mcStartLinkDone){mcStartLinkDone=true;openStartDirection();}});
 setInterval(refresh,2000);
 </script>
 <script>
@@ -2237,7 +2573,7 @@ document.addEventListener('click',async event=>{
     const note=el(`#req-decision-note-${CSS.escape(task)}`);
     const box=go.closest('.requirements-proposal');
     try{
-      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||''});
+      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||'',small_change:Boolean(box?.querySelector('[data-small-change]')?.checked)});
       if(note)note.textContent='Recorded. Delivery has been told to record the contract and begin.';
       await refresh();
     }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;}
@@ -2248,8 +2584,9 @@ document.addEventListener('click',async event=>{
 document.addEventListener('click',event=>{
   const wait=event.target.closest('[data-req-wait]');
   if(!wait)return;
-  const note=el(`#req-decision-note-${CSS.escape(wait.dataset.reqWait)}`);
-  if(note)note.textContent='Okay, nothing was changed. This card updates by itself when the review is in, or when its time runs out; then you can go ahead as usual.';
+  const box=wait.closest('.requirements-proposal');
+  waitingForReview.add(wait.dataset.reqWait+':'+((box&&box.dataset.version)||1));   // kept across the card's redraws, so the choice stays visible
+  refresh();
 });
 document.addEventListener('click',async event=>{
   const answer=event.target.closest('[data-cq-answer]');
@@ -2314,7 +2651,7 @@ document.addEventListener('change',async event=>{
 });
 let requirementsModifyTask='';
 function openRequirementsModify(task){
-  requirementsModifyTask=task; directionLauncher=false; setAttachmentFields(true);
+  requirementsModifyTask=task; directionLauncher=false; setAttachmentFields(true); setTaskKindField(false);
   el('#owner-message-title').textContent='Modify the requirements';
   el('#owner-message-help').textContent='Describe what should change in the proposed requirements. Delivery revises them and files a new proposal for your Go ahead. Sent as one complete message.';
   el('#owner-message-submit').textContent='Send requirements change';
@@ -2462,7 +2799,7 @@ def _compact_dashboard_state(
         if key not in {"archive", "events", "qa_requests", "qa_request_index", "delivery_attempt_failures"}
     }))
     # item 24: the plain words come from the complete state, before the live-only filtering below, and are redacted
-    compact["failure_words"] = failure_words.failures_for_state(state, live, board._redact_secrets)
+    compact["failure_words"] = state.get("failure_words") or failure_words.failures_for_state(state, live, board._redact_secrets)
     for hold in (compact.get("control_plane_holds") or {}).values():
         if isinstance(hold, dict) and "reason" in hold:
             hold["reason"] = board._redact_secrets(hold["reason"])
@@ -2516,8 +2853,15 @@ def _compact_dashboard_state(
     compact["task_security"] = {task: board.task_security_state(state, task) for task in live}
     # 2026-10-25: one plain line per task of what it has used so far, counted from the board's own records (information only)
     compact["task_usage"] = {task: review_cost.usage(state, task) for task in live}
+    # 2026-10-27: what each task and the project cost in agent work, API-equivalent (information only; a yardstick, never a bill)
+    if root is not None:
+        cost = cost_center.summarize(board.board_dir(root))
+        compact["task_cost"] = {task: {"line": cost_center.task_line(cost, task)} for task in live}
+        compact["project_cost"] = {"line": cost_center.project_line(cost)}
     # 2026-10-26: the latest difficulty note per role, one plain line per task (information only)
     compact["task_difficulty"] = {task: {"line": difficulty_note.line(state, task)} for task in live}
+    # 2026-10-26: which changed files no test notices, one plain line per task (information only)
+    compact["task_revert_proof"] = {task: {"line": revert_proof.line((state.get("revert_proofs") or {}).get(task))} for task in live}
     # 2026-09-27: an accepted task is no longer live, so its decision is not in
     # the projection above; the Stop prompt still has to know its Delivery is
     # finished. Only tasks whose Delivery agent is still on the page.
@@ -3272,8 +3616,10 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
             "subtasks_total": sum(value.get("status") != "superseded" for value in subtasks.values()),
             "review_passes": sum(request.get("status") == "passed" for request in requests),
             "review_notes": _review_notes(requests),
+            "code_quality": code_quality.notes(state, task),
             "usage_line": review_cost.usage(state, task)["line"],
             "difficulty_line": difficulty_note.line(state, task),
+            "revert_proof_line": revert_proof.line((state.get("revert_proofs") or {}).get(task)),
             "review_outcome": next((e.get("outcome", "") for e in review_rounds.terminal_for(state.get("review_escalations") or {}, task)), ""),
             "release_status": release.get("status", ""),
             "owner_decision": decision.get("decision", ""),
@@ -3491,6 +3837,7 @@ def dispatch_approved_findings(
 
 def dashboard_payload(
     root: Path, settings_home: Path | None = None, *, expose_path: bool = True,
+    runtime: dict | None = None, managed: bool = False,
 ) -> dict:
     """Build a read-only dashboard projection.
 
@@ -3575,6 +3922,23 @@ def dashboard_payload(
         session_id for session_id, session in sessions_by_id.items()
         if session.get("status") in control.ACTIVE_STATUSES
     }
+    # 2026-10-27 Mission Control story: computed on the FULL state (events, every request) before the compaction below drops them,
+    # with the same runtime facts the gate uses, so Ready/Accept is offered only when the ported gate allows it. Display only.
+    try:
+        full = data["state"]
+        story_agents = [
+            value for value in (full.get("agents") or {}).values()
+            if value.get("status") == "paused" or value.get("active") or (
+                value.get("role") in board.DEVELOPER_ROLES and value.get("task") != board.AWAITING_OWNER_DIRECTION
+                and value.get("session_id") in live_session_ids)
+        ]
+        full["failure_words"] = failure_words.failures_for_state(full, set(live_tasks), board._redact_secrets)
+        result["story"] = story.for_page(
+            full, live_contracts, live_tasks, {"commit": str((runtime or {}).get("commit", "")), "managed": bool(managed)},
+            agents=story_agents, sessions=list(sessions_by_id.values()), cost=cost_center.summarize(board.board_dir(root)),
+            settings=global_settings.load(settings_home) if settings_home is not None else None, redact=board._redact_secrets, ledgers=test_ledgers)
+    except Exception as error:   # noqa: BLE001 - the story is a display; the page still works from the old panels without it
+        result["story"] = {"error": f"The summary could not be computed ({type(error).__name__}).", "empty": False, "agents": [], "tasks": {}, "order": []}
     result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids, root=root)
     return result
 
@@ -3647,7 +4011,9 @@ def history_payload(root: Path) -> dict:
     test_ledgers = {task: _task_test_ledger(root, state, task) for task in historical_tasks}
     test_ledgers_all = {task: _task_test_ledgers(root, state, task) for task in historical_tasks}
     rows = _task_history(state, contracts, live_tasks, test_ledgers, test_ledgers_all=test_ledgers_all)
+    cost = cost_center.summarize(board.board_dir(root))
     for row in rows:
+        row["cost_line"] = cost_center.task_line(cost, str(row.get("task") or ""))
         # Owner 2026-10-15: an accepted report stays one click away in History.
         row["deliverable_links"] = board.document_deliverable_links(root, str(row.get("task") or ""), state)
         row["build"] = board.build_cards(root, state, [str(row.get("task") or "")]).get(str(row.get("task") or ""))
@@ -3842,7 +4208,7 @@ def notify_cto_of_cancel(root, task: str) -> list[str]:
         try:
             control.enqueue_instruction(
                 root, session["id"],
-                f"TASK CANCELLED BY THE OWNER: {task}. Its board records and workspace are removed and its "
+                f"TASK CANCELLED BY THE OWNER: {task}. Its board records are removed (its work copy is kept) and its "
                 "agents are stopped. Do not route, review, hold or release it. USER ACTION: None.",
                 source="owner-cancel",
             )
@@ -3923,7 +4289,7 @@ def parse_release_multipart(raw: bytes, content_type: str) -> tuple[dict[str, st
             })
         elif name in {
             "decision", "reason", "text", "message_type",
-            "directive_source", "directive_filename",
+            "directive_source", "directive_filename", "document_only", "task_kind",
         }:
             try:
                 fields[name] = data.decode("utf-8", errors="strict")
@@ -4047,7 +4413,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 # worker-derived project context. Its browser has no need for
                 # a trusted filesystem path, so do not put one on the wire.
                 self.send_json(
-                    200, dashboard_payload(root, settings_home, expose_path=not bool(project_id)),
+                    200, dashboard_payload(root, settings_home, expose_path=not bool(project_id), runtime=runtime_identity.public(runtime), managed=bool(project_id)),
                 ); return
             if path == "/api/history":
                 self.send_json(200, history_payload(root)); return
@@ -4176,7 +4542,10 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             section[key] = data[key]
                     preview = workspace_settings.update_preview(root, section)
                     self.send_json(200, {"preview": preview}); return
-                if board.pause_state(root).get("status") in {"paused", "resuming"}:
+                owner_cancel = path.startswith("/api/tasks/") and path.endswith("/cancel")
+                pause_status = board.pause_state(root).get("status")
+                # the owner's Cancel task still works on a paused project; everything else stays read-only
+                if pause_status in {"paused", "resuming"} and not (owner_cancel and pause_status == "paused"):
                     self.send_json(409, {
                         "error": "This project is paused and read-only. Resume it from Projects before making changes."
                     }); return
@@ -4274,7 +4643,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(self.rfile.read(length) or b"{}")
                     event = board.record_requirements_decision(
                         root, task, str(data.get("decision", "")), str(data.get("text", "")),
-                        version=data.get("version"), answers=data.get("answers"), token=str(data.get("token", "")),
+                        version=data.get("version"), answers=data.get("answers"), token=str(data.get("token", "")), small_change=data.get("small_change"),
                     )
                     self.send_json(201, {"decision": event}); return
                 ask_prefix, ask_suffix = "/api/agent-questions/", "/answer"
@@ -4302,6 +4671,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                         response = board.record_owner_message(
                             root, agent_id, text,
                             fields.get("message_type", "direction"), attachments,
+                            document_only=str(fields.get("document_only", "")).strip().lower() in {"1", "true", "on", "yes"},
+                            task_kind=str(fields.get("task_kind", "")),
                         )
                     else:
                         if length > 128 * 1024:
@@ -4314,6 +4685,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                         response = board.record_owner_message(
                             root, agent_id, text,
                             str(data.get("message_type", "direction")), [],
+                            document_only=data.get("document_only") is True,
+                            task_kind=str(data.get("task_kind", "")),
                         )
                     response["input"] = input_metadata
                     self.send_json(201, response); return

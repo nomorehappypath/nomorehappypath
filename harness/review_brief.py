@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from harness import reference_chapters, review_cost
+from harness import analysis_pass, reference_chapters, review_cost, revert_proof
 
 try:
     from harness.project_context import ProjectRoot, project_context
@@ -26,6 +26,20 @@ except ImportError:  # Legacy harness compatibility.
 
 MAX_ITEMS = 40
 MAX_TEXT = 4000
+
+
+def _process_rule(kind: str) -> str:
+    if kind == "spec":
+        return "Spec or document (the owner chose it): judge the text deliverable by reading it against the confirmed requirements."
+    if kind == "analysis":
+        return ("Code analysis (the owner chose it): the deliverable is FINDINGS.md, a report of issues and refactoring ideas, and the code is never changed. The builder and you each "
+                "read ALL the code on your own, checked each other's list once, and the CTO grouped duplicates: the board's CLEAN LIST (in this brief) is what the report must hold. "
+                "PASS only if EVERY clean-list item is in FINDINGS.md (by its ids, none dropped or silently changed; a disputed item is marked Disputed with both sides' evidence; "
+                "a builder may withdraw only its own disputed item in the report and you only yours here). Then verify EVERY finding "
+                "of the report against the code yourself (the builder's suite is no proof) and say how many you confirmed, contradict a finding that is wrong, add any issue "
+                "nobody listed, and never ask Delivery to fix code. Delivery may dispute a finding of yours with code evidence: re-check each "
+                "dispute once and withdraw the finding if it was wrong, or keep it with your own evidence.")
+    return "Development, the full process: no report-only shortcut applies, even for a report. Check it against the code yourself and put your own executed checks in the Challenge Ledger."
 
 
 def _text(value: Any) -> str:
@@ -63,6 +77,17 @@ def build(
                 "request": _text(prior.get("id")), "scope": scope,
                 "risk_reason": _text(prior.get("scope_reason")),
             })
+    deviations = _bounded([{
+        "check": _text(item.get("check")), "requirement": item.get("criterion_index"), "builder_said": _text(item.get("why")),
+        "reviewer": {"open": "has not answered yet; judge the check as stored", "kept": "kept the check: " + _text(item.get("answer_reason")),
+                     "replaced": "replaced the check: " + _text(item.get("answer_reason"))}.get(_text(item.get("status")), ""),
+    } for item in ((((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check") or {}).get("deviations") or [])])
+    measured = (state.get("revert_proofs") or {}).get(task) or {}
+    shown_revert = revert_proof.brief(measured) if measured and (measured.get("tree") == revert_proof.tree_of(request) or measured.get("commit") == _text(request.get("reviewed_commit"))) else {}
+    confirmed = (state.get("requirement_confirmations") or {}).get(task) or {}
+    sent_back = (confirmed.get("contract_check") or {}).get("lane_sent_back")
+    lane = ({"name": "small change", "tests_written_in_advance": False, "may_send_back_to_full_lane_once": True} if confirmed.get("small_change")
+            else {"name": "full (sent back from small change: " + _text(sent_back.get("reason")) + ")"} if sent_back else {})
     failures = [{
         "request": _text(value.get("id")), "scope": {
             "phase": _text(value.get("phase")), "subtask": _text(value.get("subtask")),
@@ -116,6 +141,12 @@ def build(
                 "Form a fresh semantic verdict from the new execution evidence.",
             ],
         }
+    # Code analysis: the clean list the board built from both passes (the Reviewer's own list is its own until both are closed; by review time it is merged).
+    kind = (state.get("task_kinds") or {}).get(task)
+    if kind is None:
+        from harness import board as _board       # one effective kind: a task begun before the choice is read the way the gates read it
+        kind = _board.task_kind(state, task, root)
+    clean = ((state.get("analysis_passes") or {}).get(task) or {}).get("clean") if kind == "analysis" else None
     scenarios = []
     if include_delivery_evidence:
         outcomes = set((request.get("delivery_simulations") or {}).get("scenario_ids") or [])
@@ -178,6 +209,13 @@ def build(
             } for value in (state.get("deferred_findings") or {}).values()
                 if value.get("task") == task and value.get("status") == "routed_around"]),
         },
+        # D-014: the owner's document-only checkbox. Off (the default) means the full process: no report-only shortcut applies, even when the
+        # deliverable is a report; the reviewer runs its own checks against the code.
+        "process": {
+            "document_only": bool((state.get("task_document_only") or {}).get(task)),
+            "task_kind": kind or ("spec" if (state.get("task_document_only") or {}).get(task) else "development"),
+            "rule": _process_rule(kind or ("spec" if (state.get("task_document_only") or {}).get(task) else "development")),
+        },
         # Owner 2026-10-12: the enhanced-security choice frozen into this
         # request at its creation; the reviewer judges against exactly this.
         "enhanced_security": {
@@ -196,6 +234,12 @@ def build(
         "frozen_scope": request.get("frozen_scope"),
         # Delivery changed these tests of the last judged version during the repair and said why; the verdict must name each one.
         "changed_tests": list(request.get("changed_tests") or []),
+        # 2026-10-26: Delivery said these locked checks did not match reality; an unanswered one is still the check as stored (no auto-accept).
+        **({"check_deviations": deviations} if deviations else {}),
+        # 2026-10-26: the Small change lane. The Reviewer may send the task back to the full lane ONCE (send-to-full-lane) if it is not small.
+        **({"lane": lane} if lane else {}),
+        # 2026-10-26: which changed files no stored check notices (information only; the verdict is the reviewer's own judgment).
+        **({"revert_proof": shown_revert} if shown_revert else {}),
         "product_structure": {
             "mode": _text(plan.get("mode")), "rationale": _text(plan.get("rationale")),
             "revision": int(plan.get("structure_revision", 0)),
@@ -227,6 +271,10 @@ def build(
             "workspace_root": str(context.workspace_root),
         },
         "reviewer_initial_intents": _bounded(list(request.get("reviewer_initial_intents") or [])),
+        "analysis_clean_list": {
+            "items": len(clean), "disputed": sum(1 for e in clean if e["disputed"]), "text": analysis_pass.clean_text(clean),
+            "instruction": ("PASS only if every item of this clean list is in FINDINGS.md. Your verdict needs the line `Clean list items in the report: N of %d`." % len(clean)),
+        } if clean is not None else None,
         "delivery_evidence_withheld": not include_delivery_evidence,
         "delivery_scenarios": _bounded(scenarios),
         "reviewer_responsibility": (
@@ -250,6 +298,11 @@ def build(
                 "hunt boundaries that never or only rarely happen - note them as non-blocking."
             ),
         }
+        if brief["process"]["task_kind"] == "analysis":
+            brief["final_stage"]["end_to_end"] = (
+                "Code analysis: do NOT start the app. The deliverable is the report, so the walk is opening FINDINGS.md exactly as the owner "
+                "receives it, checking every finding against the code, and comparing the report with the confirmed requirements."
+            )
         if brief["risk_and_scope"]["owner_waived_deliverables"]:
             brief["final_stage"]["owner_waivers"] = (
                 "The owner waived the deliverables listed under risk_and_scope.owner_waived_deliverables "

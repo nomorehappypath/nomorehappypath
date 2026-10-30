@@ -777,7 +777,7 @@ end run'''
             ], env={**{k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_OAUTH_TOKEN'}, **carried, 'SCREENDIR': str(directory)}, check=True, capture_output=True, text=True, timeout=60)
             if os.environ.get(HEADLESS_ENVIRONMENT) == '1':
                 # Private test walks: the agent runs in its screen session and no window is raised on the
-                # owner's Mac. View agent still opens one on demand, and that window closes itself too.
+                # owner's Mac. View agent then shows the read-only screen in Mission Control (uses_browser_view) and opens no window.
                 return SessionSurface(session_id=session_id)
             try:
                 self._open_screen_view(directory, session_id, color_rgb)
@@ -873,6 +873,79 @@ end run'''
         if result.stdout.strip() != "focused":
             raise ValueError("This agent's existing Terminal window is no longer open.")
         return {"mode": "native", "session_id": session["id"]}
+
+    # Typing and the read-only screen from Mission Control (agent_view). The agent lives in a GNU screen
+    # session whose socket folder belongs to the PROJECT, so these two calls need the project root; the
+    # tmux host on Linux finds its sessions by name alone. agent_view passes `root` only to a host that
+    # sets this flag.
+    session_scoped_to_project = True
+
+    def uses_browser_view(self) -> bool:
+        """View agent shows the read-only screen in Mission Control instead of raising a Terminal window
+        when the app runs headless (private test walks); otherwise the Terminal window stays as it was."""
+        return os.environ.get(HEADLESS_ENVIRONMENT) == '1'
+
+    _SCREEN_GONE = "This agent's live terminal is unavailable. Input was not sent."
+
+    def _screen_command(self, session_id, root, *command, timeout=10):
+        """Run one screen command against a live managed session; ValueError (plain words) when it cannot be."""
+        if root is None:
+            raise ValueError(self._SCREEN_GONE)
+        from harness.project_context import project_context
+        directory = project_context(root).storage_path('control', 'terminal-sockets')
+        name = self._screen_name(session_id)
+        if not directory.is_dir() or not list(directory.glob('*.' + name)):
+            raise ValueError(self._SCREEN_GONE)
+        try:
+            # -p 0: a detached session has no current window, so -X needs the window named.
+            result = subprocess.run(['/usr/bin/screen', '-S', name, '-p', '0', '-X', *command],
+                                    env={**os.environ, 'SCREENDIR': str(directory)},
+                                    capture_output=True, timeout=timeout, check=False)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            raise ValueError(self._SCREEN_GONE) from error
+        if result.returncode:
+            raise ValueError(self._SCREEN_GONE)
+        return directory
+
+    def input_session(self, session_id: str, data: bytes, *, root=None) -> None:
+        # `stuff` takes its argument as raw bytes (no escape processing), so arrow keys, paste, Enter and
+        # Ctrl+C arrive exactly as typed. A NUL byte cannot travel in a command line and is refused.
+        if b'\x00' in data:
+            raise ValueError("This key cannot be sent to the agent from here. Input was not sent.")
+        self._screen_command(session_id, root, 'stuff', data)
+
+    def capture_session(self, session_id: str, *, root=None) -> dict:
+        import tempfile
+        if root is None:
+            raise ValueError("This agent's live terminal is unavailable.")
+        from harness.project_context import project_context
+        directory = project_context(root).storage_path('control', 'terminal-sockets')
+        if not directory.is_dir():
+            raise ValueError("This agent's live terminal is unavailable.")
+        descriptor, temporary = tempfile.mkstemp(prefix='view-', suffix='.txt', dir=str(directory))
+        os.close(descriptor)
+        path = Path(temporary)
+        try:
+            path.unlink()
+            self._screen_command(session_id, root, 'hardcopy', temporary)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not (path.exists() and path.stat().st_size):
+                time.sleep(0.05)
+            if not path.exists():
+                raise ValueError("This agent's live terminal is unavailable.")
+            time.sleep(0.05)
+            screen = path.read_text(encoding='utf-8', errors='replace')
+        finally:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        lines = screen.split('\n')
+        if lines and lines[-1] == '':
+            lines.pop()
+        last = max((index for index, line in enumerate(lines) if line.strip()), default=0)
+        return {'screen': screen, 'cols': max([80] + [len(line) for line in lines]),
+                'rows': max(24, len(lines)), 'cursor_x': len(lines[last]) if lines else 0, 'cursor_y': last}
 
     DISMISS_SCRIPT = r'''on run argv
  set targetTTY to item 1 of argv

@@ -34,6 +34,12 @@ if find "$out" -iname "*provenance*" | grep -q .; then
 fi
 
 echo "== Gate 2: secret and personal-data scrub"
+# The cost center's private ledger (token counts per task) must never ship (task 2026-10-27_cost-center).
+if find "$out" \( -name "cost_ledger*" \) | grep -q .; then
+  echo "REFUSED: private cost ledger in outgoing tree:" >&2
+  find "$out" -name "cost_ledger*" >&2
+  exit 1
+fi
 # The trace pattern is assembled from pieces so this script's own shipped
 # copy never contains the literal it hunts.
 trace="aba""lgir"

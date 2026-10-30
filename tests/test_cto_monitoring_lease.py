@@ -1,5 +1,5 @@
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
-"""Adversarial checks for the global CTO's five-minute monitoring lease."""
+"""The global CTO has no monitoring lease any more (2026-10-26_lighter-cto): it is woken for a reason, and a quiet CTO is never stalled."""
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -48,46 +48,38 @@ class CtoMonitoringLeaseTests(unittest.TestCase):
     def _monitoring_instructions(self):
         return [
             item for item in control.take_instructions(self.root, self.cto_session["id"])
-            if item["source"] == "cto-monitoring-lease"
+            if item["source"] == "cto-wake"
         ]
 
     def test_active_task_wakes_cto_only_when_poll_deadline_is_due(self):
+        """2026-10-26: the "deadline" is a reason, not a poll age. A quiet CTO that last polled long ago is not woken and not stalled."""
         self._activate_task()
-        self._backdate_cto_poll(board.CTO_MONITOR_ROUTE_SECONDS - 2)
-        board.mark_stalled(self.root)
-        self.assertEqual(self._monitoring_instructions(), [])
-
-        self._backdate_cto_poll(board.CTO_MONITOR_INTERVAL_SECONDS + 1)
+        self._backdate_cto_poll(board.CTO_MONITOR_INTERVAL_SECONDS * 3)
         with patch("harness.board_viewer.launch_terminal") as launch:
             board.mark_stalled(self.root)
             board.mark_stalled(self.root)
         queued = self._monitoring_instructions()
-        self.assertEqual(len(queued), 1, "repeated watchdog ticks must not duplicate the wake")
+        self.assertEqual(len(queued), 1, "one wake on launch, not repeated by watchdog ticks")
         launch.assert_not_called()
-
         state = board.snapshot(self.root)
         cto = state["agents"][self.cto["id"]]
         self.assertEqual(cto["recovery_state"], "automatic_requested")
         self.assertEqual(cto["automatic_recovery_instruction_id"], queued[0]["id"])
-        self.assertGreater(cto["last_progress_at"], cto["last_poll_at"])
         self.assertTrue(any(
             event["kind"] == "instruction_route_queued"
             and event.get("instruction_id") == queued[0]["id"]
             for event in state["events"]
         ))
 
-    def test_real_poll_resets_lease_and_a_second_missed_cycle_wakes_again(self):
+    def test_real_poll_answers_the_wake_and_nothing_more_is_due(self):
         self._activate_task()
-        self._backdate_cto_poll(board.CTO_MONITOR_INTERVAL_SECONDS + 1)
         board.mark_stalled(self.root)
         self.assertEqual(len(self._monitoring_instructions()), 1)
-
         board.poll(self.root, self.cto["id"])
-        board.mark_stalled(self.root)
-        self.assertEqual(self._monitoring_instructions(), [])
         self._backdate_cto_poll(board.CTO_MONITOR_INTERVAL_SECONDS + 1)
         board.mark_stalled(self.root)
-        self.assertEqual(len(self._monitoring_instructions()), 1)
+        self.assertEqual(self._monitoring_instructions(), [], "five minutes without a poll is no reason to wake it")
+        self.assertEqual(board.snapshot(self.root)["agents"][self.cto["id"]]["liveness"], "healthy")
 
     def test_idle_board_never_wakes_or_spawns_cto(self):
         self._backdate_cto_poll(board.CTO_MONITOR_INTERVAL_SECONDS * 3)

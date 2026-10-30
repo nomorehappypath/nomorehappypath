@@ -81,11 +81,23 @@ class ProjectRegistryTests(unittest.TestCase):
         # A data root nested inside another project's repository is rejected.
         other = self._project_dir("gamma")
         outside_ws = self._project_dir("gamma-ws")
-        with self.assertRaisesRegex(ValueError, "nest"):
+        with self.assertRaisesRegex(ValueError, "would end up inside the project 'beta'"):
             registry.register(
                 self.home, "gamma", other, kind="adopted",
                 data_root=code / "gamma-data", workspace_root=outside_ws,
             )
+
+    def test_choosing_a_folder_that_holds_other_projects_says_what_to_do(self):
+        parent = self._project_dir("parent")
+        child = parent / "weather"
+        child.mkdir()
+        registry.register(self.home, "Weather app", child)   # a new project keeps its data in its own .harness folder
+        with self.assertRaises(ValueError) as caught:
+            registry.register(self.home, "Whole folder", parent, kind="adopted", data_root=self._project_dir("whole-data"), workspace_root=self._project_dir("whole-ws"))
+        message = str(caught.exception)
+        self.assertIn("This folder holds other projects, including 'Weather app'", message)
+        self.assertIn("Choose the project's own folder", message)
+        self.assertNotIn("data roots", message)
 
     # ---- S-REG-003: adopted projects keep harness data OUTSIDE the repo ----
     def test_adopted_defaults_to_manager_owned_outside_roots(self):

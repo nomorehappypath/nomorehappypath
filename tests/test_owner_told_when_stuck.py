@@ -45,7 +45,8 @@ class GapTests(base.ExecuteOnceTests):
         self.assertEqual(self.cards(), [], "the owner is not asked")
         home = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, home, True)
-        registry.register(home, "alpha", self.root)
+        alpha = registry.register(home, "alpha", self.root)
+        registry.activate(home, alpha["id"])   # only the open project's board is read (owner 2026-10-28)
         row = project_manager.ProjectManager(home, board_port=0).projects_payload()["projects"][0]
         self.assertNotIn("Waiting for you", row["latest_progress"])
         self.assertIn("settling it by itself", row["latest_progress"])

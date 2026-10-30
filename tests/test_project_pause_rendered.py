@@ -33,7 +33,7 @@ PAUSED_CARD_SCRIPT = r"""
     body: JSON.stringify({
       cardClass: card.className,
       badges: Array.from(card.querySelectorAll('.badge')).map(node => node.textContent.trim()),
-      progress: card.querySelector('.progress').textContent.trim(),
+      progress: card.querySelector('[data-now-sentence]').textContent.trim(),
       actions: card.querySelector('.actions').textContent.trim(),
     }),
   });
@@ -53,9 +53,17 @@ PAUSED_BOARD_SCRIPT = r"""
   const banner = document.querySelector('#paused-banner');
   const disabled = Array.from(document.querySelectorAll('button:disabled'));
   const enabled = Array.from(document.querySelectorAll('button:not(:disabled)'));
+  // Cancel stays usable on a paused project: click it and decline the confirmation (so nothing is cancelled).
+  const cancelButton = enabled.find(button => button.textContent.trim() === 'Cancel this task');
+  let cancelPrompt = '';
+  window.confirm = message => { cancelPrompt = message; return false; };
+  if (cancelButton) cancelButton.click();
+  await new Promise(resolve => setTimeout(resolve, 300));
   await fetch('/__layout_result__', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
+      cancelPrompt,
+      stillPausedAfterCancelClick: document.body.classList.contains('project-paused') && !document.querySelector('#paused-banner').hidden,
       bannerHidden: banner.hidden,
       bannerText: banner.textContent.trim(),
       resumeText: document.querySelector('#resume-project').textContent.trim(),
@@ -160,6 +168,7 @@ class RenderedPauseTests(unittest.TestCase):
         context = registry.context_for_entry(entry)
         board.begin_project_pause(context, drain_seconds=0)
         board.finish_project_pause(context)
+        registry.activate(home, entry["id"])   # a paused project is only read, and so only shown paused, while it is the open one (owner 2026-10-28)
         manager = project_manager.ProjectManager(home, board_port=0)
         server = ThreadingHTTPServer(
             ("127.0.0.1", 0), project_manager.make_handler(manager),
@@ -176,7 +185,7 @@ class RenderedPauseTests(unittest.TestCase):
             server.server_close()
 
         self.assertIn("paused", rendered["cardClass"].split())
-        self.assertEqual(rendered["badges"].count("Paused"), 1)
+        self.assertEqual(rendered["badges"].count("Paused · open"), 1)
         self.assertIn("Paused safely", rendered["progress"])
         self.assertIn("Resume project", rendered["actions"], "a paused project's button says what it does")
         self.assertNotIn("Open project", rendered["actions"])
@@ -291,7 +300,10 @@ class RenderedPauseTests(unittest.TestCase):
         self.assertIn("project-paused", rendered["bodyClass"].split())
         self.assertGreater(rendered["disabledCount"], 0)
         self.assertEqual(rendered["disabledWithoutReason"], [])
-        self.assertEqual(rendered["enabledButtons"], ["Give direction (starts the agents)"], "the one exception: saving a direction while paused keeps the words and starts nothing until Resume")
+        self.assertEqual(rendered["enabledButtons"], ["Story", "Proof", "Advanced", "Cancel this task", "Give direction (starts the agents)"],
+                         "the tabs stay usable so the owner can look around; two deliberate exceptions: Cancel this task (the owner must always be able to abandon a task, even paused) and saving a direction while paused, which keeps the words and starts nothing until Resume")
+        self.assertIn("Cancel the task", rendered["cancelPrompt"], "Cancel on a paused project still reaches the cancel confirmation")
+        self.assertTrue(rendered["stillPausedAfterCancelClick"], "clicking Cancel does not resume the project")
         self.assertIn("PAUSED", rendered["agentsText"])
         self.assertIn("intentionally paused", rendered["agentsText"])
         self.assertIn("PAUSED — REVIEWER PRESERVED", rendered["queueText"])

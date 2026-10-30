@@ -22,6 +22,7 @@ from tests.test_branding_rendered import probe_proxy
 PROBE = r"""
 <script>
 (async () => {
+  document.getElementById('tab-advanced-btn')?.click();   // the agent terminals live in the Advanced tab since the Mission Control redesign
   const visible = node => Boolean(node) && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0;
   const card = () => document.querySelector('#owner-actions .owner-action');
   for (let attempt = 0; attempt < 120 && !card(); attempt++) {
@@ -141,8 +142,10 @@ class RenderedOwnerCtoTests(unittest.TestCase):
             })
         board.status(self.root, self.cto["id"], "logged back in; reviewing the board", "working")
         reading = self.render()
-        self.assertIn("has not checked the latest project records yet", reading["ctoRowText"], json.dumps(reading, indent=2))
-        self.assertIn("keeps reminding it", reading["ctoRowText"])
+        # lighter-cto (13576a7) removed the "answered without checking the board" state and its
+        # reminder text on purpose: a CTO that posts status is simply monitoring, in plain words.
+        self.assertIn("The CTO is monitoring", reading["ctoRowText"], json.dumps(reading, indent=2))
+        self.assertIn("You do not need to do anything", reading["ctoRowText"])
         self.assertNotIn("CTO NOT RESPONDING", reading["badges"])
         self.assertNotIn("not responding", reading["attention"])
 

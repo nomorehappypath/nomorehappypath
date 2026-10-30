@@ -134,9 +134,11 @@ class EarlyLookTests(_Fixture):
     def test_documents_only_task_skips_the_look(self):
         agent = self.delivery()
         self.reviewer()
+        with board.locked_state(self.root) as state:
+            state.setdefault("task_document_only", {})[TASK] = True      # the owner's checkbox (D-014)
         board.record_requirement_proposal(self.root, agent["id"], TEXT, no_program=True)
         self.assertEqual(self.proposal()["contract_check"]["status"], "not_checked")
-        self.assertIn("no program", self.proposal()["contract_check"]["reason"])
+        self.assertIn("not a program", self.proposal()["contract_check"]["reason"])
 
     def test_reviewer_that_cannot_answer_is_not_asked(self):
         agent = self.delivery()

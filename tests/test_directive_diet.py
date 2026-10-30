@@ -43,7 +43,7 @@ class CardShapeTests(unittest.TestCase):
         for role in ROLES:
             with self.subTest(role=role):
                 self.assertEqual(reference_chapters.card_problems(role), [])
-                self.assertGreaterEqual(len(reference_chapters.card_rules(role)), 30)
+                self.assertGreaterEqual(len(reference_chapters.card_rules(role)), 25 if role == "cto" else 30)   # the CTO card dropped its 9 board-run rules (2026-10-26)
 
     def test_chapters_are_contiguous_unique_and_each_is_named_by_a_card_of_a_role_that_reads_it(self):
         for role in ROLES:

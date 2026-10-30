@@ -28,6 +28,13 @@ def finding_record(finding_id: str, task: str, status: str) -> dict:
     }
 
 
+def defects_by_task(context):
+    """Owner's order 2026-10-28: a repeated identical refusal is a logged defect (keyed here by its task), never a hold on the task."""
+    state = board.snapshot(context)
+    assert not state.get("control_plane_holds"), "a repeated refusal must not hold the task"
+    return {item["task"]: item for item in (state.get("friction_defects") or {}).values()}
+
+
 class RefusalHoldTaskTests(unittest.TestCase):
     setUp = _fixture["setUp"]
     begin_task = _fixture["begin_task"]
@@ -52,7 +59,7 @@ class RefusalHoldTaskTests(unittest.TestCase):
         gateway = self.gateway()
         for _ in range(times or board_surface.CommandGateway.REFUSAL_HOLD_THRESHOLD + 2):
             gateway._track_refusal(identity, operation, REFUSAL, arguments)
-        return board.snapshot(self.context).get("control_plane_holds", {})
+        return defects_by_task(self.context)
 
     def test_cto_repeated_finding_refusal_holds_the_findings_task_not_the_first_task(self):
         cto = self.project()
@@ -84,7 +91,7 @@ class RefusalHoldTaskTests(unittest.TestCase):
         gateway = self.gateway()
         for _ in range(times or board_surface.CommandGateway.REFUSAL_HOLD_THRESHOLD + 2):
             gateway._track_refusal(identity, operation, error, arguments)
-        return board.snapshot(self.context).get("control_plane_holds", {})
+        return defects_by_task(self.context)
 
     def test_a_task_brief_length_refusal_never_opens_a_hold_but_a_lookalike_does(self):
         _, identity = self.developer("BRIEF-TASK")

@@ -54,7 +54,7 @@ Demo videos and a longer walkthrough: https://nomorehappypath.com
 3. **Open Mission Control** at http://127.0.0.1:8740/ (the installer prints the address), or run `python3 harness/project_manager.py`. On a Linux server, that address is on the server itself: forward it first, for example `ssh -L 8740:127.0.0.1:8740 you@your-server`, then open http://127.0.0.1:8740/ on your own computer.
 4. **In Settings:** choose a provider for each of the three roles (Delivery, Reviewer, CTO) from the CLIs you installed, keeping Delivery and Reviewer on different vendors, and use the connection test to check each one. Settings apply to agents you start afterwards. If you use Claude, set up its agent token as described in [Claude agent authentication](#claude-agent-authentication); if you use Gemini, follow [Gemini agent setup](#gemini-agent-setup-optional). For the optional project chat, add your OpenAI API key under *Project chat key*.
 5. **New project** (or **Adopt existing**): choose the folder (read *Help → Your Responsibility* first: agents can edit, delete and run code in that folder, so choose it deliberately and back it up), then start the three agent roles from Mission Control. If Claude or Codex asks *Do you trust this folder?*, answer it in the agent's window (**View agent**).
-6. **Give your first direction** in plain English in the Delivery agent's window. Review the requirements the agents propose and press **Go ahead** (or change them).
+6. **Start the Delivery agent and choose the kind of work** (Write code, Analyze code or Write specs), then **give your first direction** in plain English. Review the requirements the agents propose and press **Go ahead** (or change them).
 7. **When the task shows "ready for your test"**, follow its test checklist: press **View app** (or **Open report** for a document), try it, then choose **Accepted** or **Not accepted**.
 
 The first run needs a few sign-ins; the sections below explain each one.
@@ -103,6 +103,29 @@ What it does not do: it never creates, resets or deletes the machine, one machin
 **The first Windows tool built this way: `why.exe`.** `why --port <N>` tells you which program is listening on a local TCP port. It was built by the agents, tested on a real Windows virtual machine, and reviewed by an independent reviewer from the other AI company who ran it there. The proof trail is the board of that project, and it is not a clean sweep: six reviews ran. The first three also found real defects, including that the error report could send a bearer token over plain HTTP to another computer, which the agents fixed and the reviewer re-ran on Windows. Five of the six ended *NOT TESTED* because the case where Windows refuses access to a protected process could not happen on the test machine (its account was an administrator). The owner then waived only that part, in writing, and the sixth review passed on fresh Windows runs of everything else. Accepting an untested part does not bypass security or defect findings. Those rounds are why *Not fully tested* exists.
 
 Existing projects keep their old acceptance card: *Get the build* appears only for a new task whose Delivery declared the build, so `why.exe` itself would need a new task to be downloadable this way. A task that declares a build and also a web app keeps *View app*.
+
+## What's new in v0.15.0
+
+- **Mission Control has a new look.** The task page tells the story of a task as a step-by-step timeline, each task has a *Proof* tab, the cards on top say what is happening now and when you are needed, the agent terminals moved into an *Advanced* menu, Settings are grouped, and Help is rewritten around "How a task works".
+- **A cost center.** Every project and task shows what it cost: tokens and the dollar price they would have been on the public price list, one plain line on each task card, a project total in the header, and a *Costs* page that lists projects and tasks, newest first. When something could not be counted, it says "not measured" instead of showing a made-up number.
+- **Sharper checks before you press *Go ahead*.**
+  - *Check deviation:* if Delivery finds that a locked check does not match reality, it says so and the Reviewer answers once.
+  - *Gaps above Go ahead:* a plain summary of requirements no test covers sits right above the buttons.
+  - *Revert proof:* at final review, each changed file is put back to its old version one at a time and the stored checks are re-run. Files that no check notices are reported.
+  - *Fast lane:* a copy change, version bump or config tweak skips the question round and the advance checks.
+  - *Code-quality notes* appear in the review, and the contract now lists non-functional requirements (speed, safety, behaviour on failure).
+- **A lighter CTO.** The CTO is woken for a reason, not on a clock, and every wake is counted by reason.
+- **Choose the kind of work: Write code, Analyze code or Write specs.** The choice is on the Start screen and at the top of Give direction. A spec is always read and judged by the Reviewer before it is finished.
+- **Analyze code, builder and Reviewer in parallel.** The builder and the Reviewer each read all the code and make their own list, check each other's list for false alarms, and the CTO removes duplicates into one clean list. The app itself knows what to look for and writes a `FINDINGS.md` with a severity, location, proof, failure, impact, advice and confidence for each issue, so you only describe your project.
+- **Projects load one at a time.** The app no longer loads every project when it starts or when the list refreshes: only the open project is loaded, and the others show their basics until you open or resume them.
+- **Delete on every project card.** It takes the project off the list and never deletes your folder.
+- **Give direction waits for the project's first answer before it decides,** and *Cancel task* works while a project is paused.
+- **Standing security and code-quality checks on every task.** Analysis tasks get the same checks as building tasks.
+- **Fairer reviews.** The reviewer never demands a screen capture for a task that has no screen. When a reviewer gives a review back, it is closed and a replacement can start. A report-only step is never refused or held.
+- **No false "agent silent" warnings.** An agent that is working is never called silent or busy.
+- **Honest delivery wording.** *Accept* says plainly when nothing was delivered, and idle cards show the measured cost.
+- **Settings: switch to the other AI company.** Switching Delivery or the Reviewer to a different AI company swaps the other one automatically so they never end up from the same company, and a refused Save is explained in plain words.
+- **View agent and typing fixed.** Typing from Mission Control reaches the agent on macOS, and a headless *View agent* shows the screen without opening a window.
 
 ## What's new in v0.14.0
 

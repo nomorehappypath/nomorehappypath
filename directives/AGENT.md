@@ -170,12 +170,12 @@ delivery plan or implement until the confirmation is recorded.
 
 **The Reviewer's early look (2026-10-23).** After you file a proposal an idle Reviewer may read it before the owner decides and
 write runnable checks for its acceptance criteria. The owner is never held by this and you do nothing for it. File the
-proposal with `--no-program` when the task makes documents only and no program (nothing is checked in advance then). After the
+proposal as it is: what kind of task this is (Write code, Analyze code, or Write specs) is the owner's choice when he starts the Delivery agent, never your call. The board reads it, shows the owner "Running as: ...", and refuses `--no-program` unless the owner chose Spec. Development is the full process: tests first, checks for every criterion (or a plain reason for each one that cannot be tested), independent review and end-to-end. Code analysis reads the code and hands in a report of issues and refactoring ideas with a `Proof:` line (new proof tests only where a test proves an issue; otherwise code evidence with file:line), and changes no existing file (chapter `standing-checks`). Spec applies the document path for you. The small-change lane below is separate and unchanged. File it with `--small-change` when the task is only a copy change, a version bump or a config tweak: no checks are written in advance, the owner's Go ahead confirms the choice (the owner can also tick it), and the independent final review and the board's own checks stay. If the Reviewer sends it back to the full lane (`FULL LANE`), the board then holds checks for you as usual. After the
 GO AHEAD and your `confirm-requirements`, read the checks with `contract-checks --agent <agent-id>`: they are your target, so
 make them pass. Never edit, move, delete or work around a check. If the board reports that a check "did not run" (it found no tests to run; that says nothing about your work and blocks nothing), set it aside with `contract-check-skip --agent <agent-id> --task <task> --criterion <n> --reason "<why>"` (the CTO can too): it then shows as not checked in advance, and the independent final review is unchanged. The board itself runs them against your committed work when you ask
 for the final review, so your own test command cannot replace them and a check that fails refuses the request with the requirement
 named. If a check contradicts the requirements rather than your work, post a blocked status naming that requirement: the CTO has
-the Reviewer correct it. If the Reviewer suggested sharper wording for a criterion you may replace the waiting proposal once with
+the Reviewer correct it. If a check assumes something that is not real (an API field that does not exist), send ONCE per check `check-deviation --agent <agent-id> --task <task> --criterion <n> --check <n.k> --why "<what it assumes vs what is real, with evidence>"` and keep building: the Reviewer replaces it or keeps it with a reason, nothing is held, the owner is not asked, and an unanswered one is shown to the final reviewer with the check unchanged. If the Reviewer suggested sharper wording for a criterion you may replace the waiting proposal once with
 a revised `propose-requirements`; the owner's answers, if any, arrive appended to the requirements under "Decided before
 coding" and the GO AHEAD message carries the exact accepted text to record.
 
@@ -220,9 +220,9 @@ The file is JSON:
   answer (after another answer you are routed back once, as `CONTRACT RECHECK ROUTED`, with the owner's answers). Technical choices are never asked. This is the one exception to "one question per card":
   the owner sees these as a single card with a recommended answer for every question.
 - After Go ahead the board runs your checks unchanged against Delivery's committed work. Your review later reruns the same checks and still
-  adds at least one scenario of your own. If a stored check turns out to be wrong, correct it with
+  adds at least one scenario of your own. If a stored check turns out to be wrong, or on `CHECK DEVIATION` (Delivery says it does not match reality), answer ONCE: correct it with
   `contract-check-correct --agent <your-id> --task <task> --criterion <n> --reason "<why>" --submission <file.json with {"checks": [...]}>`;
-  the original and the reason are kept. On `CONTRACT RECHECK ROUTED` do the same for each requirement the answers changed (its old checks were set aside), then finish with `--criterion 0` and a submission of `{"checks": []}`; an update after the owner went ahead or after the wait is refused. Read a task's checks and labels any time with `contract-checks --agent <your-id> --task <task>`.
+  the original and the reason are kept; on a task marked Small change (`lane` in your review brief), if it is not small (it changes behaviour, not just text) send it back ONCE with `send-to-full-lane --agent <your-id> --task <task> --reason "<plain reason>"`: you then get `FULL LANE` and submit checks with `contract-check-submit` (no questions; a second send-back is refused; the owner is never asked); otherwise review it as usual; to keep a check that is right send `--reason "the check is right because ..."` with a submission of `{"keep": true, "checks": []}` (a second answer is refused). On `CONTRACT RECHECK ROUTED` do the same for each requirement the answers changed (its old checks were set aside), then finish with `--criterion 0` and a submission of `{"checks": []}`; an update after the owner went ahead or after the wait is refused. Read a task's checks and labels any time with `contract-checks --agent <your-id> --task <task>`.
 
 ## delivery-workflow
 
@@ -343,6 +343,11 @@ The file is JSON:
    tests, uses shell-control masking, or the ledger changes during execution.
    An approved exception may document planning scope, but it cannot replace an
    executed simulation in a chunk or final review.
+   Ledger format (a markdown file; pass its PATH to `request-review`): the header
+   `| ID | What was tested | Simulation command | Expected system response | Observed system response | QA result |`,
+   then one row per scenario, for example `| S-001 | The report lists every finding with its place in the code |
+   python3 -m pytest tests/test_findings.py -q | every finding is listed | 12 passed | PASS |`. Ids look like `S-001`,
+   each command starts with a test runner and has no `;`, `&` or `|`. For an analysis, each row runs a proof test if you wrote one, otherwise an existing test of the project that still passes (the analysis changed no code); The board's rule that a Challenge Ledger row executes at least one test is unchanged: a project with NO runnable tests at all still needs one small check of existing code.
 
 ## repair
 
@@ -414,6 +419,13 @@ FAIL whatever the tests say. Do not cut corners: walk the whole path, not a
 fragment of it. Do not over-engineer either: test what the owner meets in
 normal use, never hunt boundaries that never or only rarely happen, and never
 spend hours on them — a rare edge case you notice is a non-blocking note.
+
+**A task with no screen needs no screen capture (owner, 2026-10-27).** When the owner's deliverable has no user interface (a
+report, a document, a data file, a command-line result) or the contract says no UI or report only, the walk is opening that
+deliverable exactly as the owner receives it and comparing it with the confirmed requirements. No `screen-check`, no browser
+and no rendered page is required, and a Challenge Ledger row needs no `screen-...` id. A capture tool that cannot run here
+(for example a browser the board refuses) is never a reason to hand the final review back: if the task has a screen, mark
+that step `TASK DONE: NOT TESTED` in your verdict; if it has none, there is nothing missing. A Code analysis never starts the app: its final review opens FINDINGS.md as the owner receives it and checks the findings against the code.
 
 **The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
 result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for
@@ -866,6 +878,67 @@ demand an item for a feature the app does not have, and never fail an app for
 lacking Enhanced security deliverables while the task's checkbox is off, nor
 for lacking multi-factor login or any feature nobody asked for.
 
+## standing-checks
+
+Security and code quality are part of every task, build or report. The builder
+checks them, the Reviewer checks them again independently, and the board sends a
+hand-in or a PASS back as incomplete when the section is missing (owner,
+2026-10-27: "The agent NMHP has to check for security. This should be in its
+DNA." and "NMHP checks if the code is well written and maintainable."). How
+much to check and where is your own call; the rules only ask that the check is
+done and that you say what you checked. Observations never block on style; a
+real security leak or a material defect blocks, as always.
+
+**Requirements.** The proposal carries a plain-words `Security:` line beside the
+`Non-functional:` lines: how the task keeps the owner's data and users safe, or
+why none of it applies. The owner reads it on the Go ahead card.
+
+**Delivery.** Do a security check of what you touched or audited and say what
+you checked. Write code that is readable and maintainable: clear names, small
+functions, no duplication, no dead code, no hard-coded value that belongs in
+settings, consistent with the code around it. The summary of the final
+`request-review` carries two lines, each at least a sentence: `Security:` (what
+you checked and found) and `Code quality:` (what you did for it). The board
+refuses the request without them.
+
+**Reviewer.** Do your own independent security check of what the work touched
+or audited, and say what you checked. Check the code quality of the changed
+files and record it with `--code-quality` (one line per observation with a file
+reference; when there is nothing to note, one line saying `checked, nothing to
+note`). Your PASS summary carries a `Security check:` line. A missing security
+check by Delivery is material and FAILs the review. The board refuses a PASS at
+final acceptance without that line or without a code-quality line.
+Code-quality observations are notes and never block, unless they describe a
+material defect.
+
+**Analysis and audit tasks get the same checks as building.** When the task is
+to analyze or audit code, you look for bugs, security problems and
+maintainability problems exactly as you would when building it, and the same
+lines are required: `Security:` and `Code quality:` in the hand-in, `Security
+check:` and a code-quality note in the verdict. There is no lighter rulebook.
+
+This covers every read-only review of code: an analysis, an audit, a refactoring or optimization review (the owner's Code analysis choice). You change no
+product code; you hand in a file that lists each issue (what is wrong, where, why it matters) and what you suggest doing about it, including any refactoring or
+optimization. Read ALL of the code, not the parts that look likely (helper agents are welcome). The hand-in says what you did, and the board refuses the final review request without these lines: `Examined:` (every part of the code you read) and `Proof:` (for each issue, the proof test's name, or a code-evidence paragraph in the report with file:line, the failing path and the observable harm). A proof test passes while the issue exists and fails once it is fixed; a test that only checks the report's wording proves nothing, and a test file is required only when your Proof line names tests.
+
+**How a Code analysis runs (two equal passes).** After the owner presses Go ahead, the Delivery agent and the Reviewer each read ALL the code at the same time, with the Code analysis checklist (see "What a Code analysis report contains") and the accepted requirements; whether the owner waited for anything makes no difference, and nobody does an early look. (1) Each side files its OWN list as it finds things: `analysis-list --task <task> --add "<file:line>|<what is wrong>|<why it matters>"` (repeat as often as you like; Delivery's issues are numbered D1.., the Reviewer's R1..; an issue is never edited or removed). Then `analysis-list --task <task> --done --examined "<every part of the code you read>"` (at least 40 characters; with no issues also `--none "<what you followed and found sound>"`, 20+ characters); after `--done` your list is closed. Neither side can read the other's list until both are closed, so do not ask for it. `analysis-list --task <task>` alone shows what you may read. (2) When both lists are closed the board sends each side the other's list. Check EVERY item against the code, once: `analysis-crosscheck --task <task> --mark "R3=confirmed" --mark "R5=false alarm|<file:line evidence>" --mark "R7=wrong|<file:line evidence>"` (Delivery marks every R item, the Reviewer every D item). The board refuses a submission that skips an item and refuses a second submission: there is no ping-pong. If, while checking, you notice a real problem that neither list has, add it in that same call with `--add "<file:line>|<what is wrong>|<why it matters>"` (repeat; same form and checks as `analysis-list --add`): it is numbered in your own series (D.. or R..), flagged "found while checking", is NOT marked by the other side, and the other side cannot read it before the merge. It still goes through the CTO merge and into the clean list as a plain item from you (never Disputed), and counts in M. (3) The CTO is woken and only groups items that describe the same problem (`analysis-merge`); it judges none true or false. The board builds ONE clean list: items the other side confirmed stand plain; items it marked false alarm or wrong stay as Disputed with both sides' words and evidence; a group keeps every source id (D2, R4). (4) The board sends the clean list to Delivery. Delivery writes `FINDINGS.md` from it: EVERY clean-list item, in the report format below, with Disputed items marked Disputed and the source ids kept, plus proof tests; a Delivery agent may withdraw only its own disputed item, in the report, and nothing else is dropped or silently changed. The board refuses the review request until the clean list exists. (5) The Reviewer reviews the file as today: the brief carries the clean list, and a PASS needs every item in FINDINGS.md and the line `Clean list items in the report: N of M` (N = M). It also verifies every finding against the code itself (the builder's suite is no proof), puts `Findings verified independently: N of M` and `Not examined:` in the verdict, and may withdraw only its own disputed item. Repair reviews verify the repair and the disputes. An issue with neither proof nor reason, or a part nobody read, is material.
+
+**What a Code analysis report contains.** The owner's direction gives you the project facts (the code folder, what the product is and who uses it, where tests run and which database, what is out of scope); work out the languages, frameworks, data stores, deployment files and test setup yourself from the code, and decide which parts are in scope. Look for: functional defects, edge cases, state errors and data-integrity risks; API and integration contract failures, input validation and serialization; security weaknesses (authorization, injection, exposed secrets, sensitive data); concurrency, performance, resource exhaustion and network resilience where the architecture warrants them; error handling, recovery, logging and observability gaps; missing tests for important behavior and failure modes; maintainability problems that create a concrete delivery or reliability risk; deployment, dependency, licensing, privacy and accessibility issues where they apply. Skip style preferences and speculation. The report is one file named `FINDINGS.md` in the project folder. Each finding has: Severity (Critical, High, Medium or Low), Category, Location (file and line or range), Evidence (what the code does and how you verified it), Failure scenario, Impact, Recommended action, and Confidence (Confirmed, or Needs verification with the evidence that is missing). Order by severity, then impact; no duplicates. The report ends with: review scope and components found, checks or tests run with results, areas that could not be assessed, and a short release-risk assessment based only on the evidence. Never claim the product is commercially viable merely because little was found. **Your review request is refused until it has these three things, so write them the first time:** (1) an `Examined:` line listing every part of the code you read; (2) a `Proof:` line saying, for each issue, the name of its proof test or the code-evidence paragraph (file:line, the failing path, the observable harm), and the test file it names must be in the project; (3) every test command you store is ONE plain command that starts a recognized runner (for example `python3 -m pytest proof_tests` or `python3 -m unittest`), with no `&&`, `;`, `|`, `<`, `>` or `$(...)` in it. Each side's own list uses the same checklist but keeps the short `<file:line>|<what is wrong>|<why it matters>` form; the report holds the board's clean list.
+
+**Repairing an analysis.** When the independent review fails an analysis, its findings are about the REPORT. A reviewer finding either contradicts one of yours (correct or withdraw it in the report, citing the code), adds an issue you missed (add it to the report under "Added after independent review" with its location and why it matters), or points at a flaw in a proof test (fix that test). You never change or delete an existing file (product code, configuration, data, an existing test) to "fix" an issue the report names; the board refuses a review request that does. You may DISPUTE a reviewer finding you believe is wrong: say so on a `Disputes:` line of your repair summary, as `B2: <file:line evidence>; B4: <file:line evidence>` (finding id first), or `Disputes: none`. The reviewer re-checks each dispute ONCE, in a FAIL or a PASS verdict, and answers on a `Disputes re-checked:` line naming every id: `B2 withdrawn, <why>` or `B4 kept, <its own file:line evidence>`; a finding both sides keep with evidence stays in the report as Disputed with both sides' evidence quoted. There is no second adjudication round: a Code analysis has two review rounds in all; if the second fails, the report is kept with the unresolved findings, marked not independently verified, and nothing is released. Reviewer: put every extra issue you find in your verdict as a finding with its location and why it matters, so Delivery can add it to the report, and never ask Delivery to fix product code.
+
+**Spec tasks** (the owner chose "Write specs"; the brief says `process.task_kind`). Only these get the shortcuts below; a Code analysis
+task is not a spec: its deliverable is the report plus its proof (tests where a test proves an issue, otherwise code evidence), you check every finding against the code yourself and put your own
+executed checks in the Challenge Ledger. Two-way street in an analysis: the reviewer may contradict, support or add to the report's findings, and
+Delivery may dispute a reviewer finding by its id with evidence (the code location); the reviewer re-checks it once and withdraws it if it was wrong. The result is
+one accurate log of issues and refactoring opportunities; nobody fixes code. Delivery of a document-only task: the deliverable is the only file added
+to the project. Checking scripts, probes and evidence tests live in your
+temporary evidence folder that the board uploads and are never committed to the
+owner's project; the board refuses a review request when the project holds
+other files (on the full process it refuses files that are neither the report nor a test). Reviewer: check the report against the code yourself, not only by
+reading the report, and put a `Not examined:` line in your PASS summary saying
+what you did not examine (it may say nothing).
+
 ## error-sink
 
 Every app, on or off the Enhanced security checkbox (chapter `enhanced-security`), has one error module with one entry
@@ -1042,7 +1115,7 @@ only then execute the review. The board validates distinctness before changing
 the state to “review executing.” A reservation with no valid attached ledger
 expires after ten minutes and visibly reopens, so never use reservation as a
 parking state. If you hold a reservation you cannot use (the check cannot be
-done from here, or the review is not yours to do), give it back at once with
+done from here, or the review is not yours to do; never because a screen capture is not possible for a task that has no screen), give it back at once with
 `relinquish-qa --request <id> --reason "<one plain sentence>"`: the request goes
 back to the queue for another reviewer, no test is counted as failed, and you
 are not offered that request again. It is not a verdict; if you found a real

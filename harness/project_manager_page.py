@@ -149,7 +149,8 @@ PAGE = r'''<!doctype html>
     .settings-footer { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
     .settings-notice { margin: 0 0 10px; color: var(--ink, #1f2937); background: #f4f1e6; border: 1px solid #e0d9b8; border-radius: 6px; padding: 8px 12px; font-size: 13px; }
     .settings-notice[hidden] { display: none; }
-    .settings-error { flex: 1; margin: 0; color: var(--red); font-size: 13px; }
+    .settings-error { flex: 1; margin: 0; color: var(--red); font-size: 13px; font-weight: 600; }
+    .settings-switch { min-height: 0; margin: 0; font-weight: 600; }
     .help-shell { display: grid; gap: 14px; padding-bottom: 30px; }
     .help-section { min-width: 0; padding: 18px 20px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 2px 5px rgba(23,36,58,.035); overflow-wrap: anywhere; }
     .help-section h2 { margin: 0 0 8px; font-size: 18px; letter-spacing: -.02em; }
@@ -163,6 +164,26 @@ PAGE = r'''<!doctype html>
     .help-table th, .help-table td { padding: 9px 10px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
     .help-table th { color: var(--muted); font-size: 12px; font-weight: 820; letter-spacing: .06em; text-transform: uppercase; }
     .help-callout { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 9px 9px 0; color: #27476f; background: var(--blue-soft); font-size: 13px; }
+    .help-how, .help-find { padding: 18px 20px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 2px 5px rgba(23,36,58,.035); }
+    .help-how h2, .help-group-title { margin: 0 0 8px; font-size: 20px; letter-spacing: -.02em; }
+    .help-how p { margin: 6px 0; color: #4f5e74; max-width: 760px; }
+    .help-phases { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .help-phase { padding: 14px 16px; border: 1px solid var(--line); border-top: 4px solid var(--phase, #f5a524); border-radius: 12px; background: white; }
+    .help-phase-when { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #4b5a70; }
+    .help-phase h3 { margin: 3px 0 0; font-size: 16px; }
+    .help-phase p { margin: 6px 0 0; font-size: 14px; }
+    .help-phase ol { margin: 8px 0 0; padding-left: 20px; color: #4f5e74; font-size: 13.5px; }
+    .help-find label { font-size: 16px; }
+    .help-find input { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; min-height: 44px; padding: 10px 14px; border: 1px solid #b8c4cf; border-radius: 10px; font: inherit; }
+    .help-find input:focus-visible, .help-topics a:focus-visible { outline: 3px solid #1d4fd8; outline-offset: 2px; }
+    .help-search-status { margin: 8px 0 0; min-height: 1.2em; color: #4b5a70; font-size: 13px; }
+    .help-topics { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .help-topics a { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--ink); text-decoration: none; min-height: 44px; box-sizing: border-box; }
+    .help-topics a:hover { border-color: var(--blue); }
+    .help-topics strong { display: block; font-size: 15px; }
+    .help-topics span { display: block; margin-top: 3px; color: #4b5a70; font-size: 13px; line-height: 1.4; }
+    .help-group { display: grid; gap: 14px; margin-top: 8px; }
+    .help-group[hidden], .help-section[hidden], .help-how[hidden], .help-topics[hidden] { display: none; }
 
     .machine-card { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; font-size: 14px; line-height: 1.45; }
     .machine-card.needs { border-color: #e3a34a; background: #fff6e6; color: #4a2e00; }
@@ -279,6 +300,92 @@ PAGE = r'''<!doctype html>
       *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
     }
     .metric.waiting-you { color: #8a2c0d; font-weight: 600; }
+
+    /* Mission Control story (2026-10-27): the Now card, the "needs you" banner, the Advanced menu, the regrouped Settings.
+       Text colours are chosen for at least 4.5:1 on their backgrounds; no grey body text on the dark bar. */
+    :root { --muted: #566680; --subtle: #5c6b82; --mc-muted: #4b5a70; --mc-amber-bg: #fff7e6; --mc-amber-line: #f5c26b; --mc-amber-ink: #78350f; --mc-teal: #14b8a6; --mc-coral: #f97361; --mc-purple: #8b7cf6; }
+    .needs-banner { display: grid; gap: 10px; max-height: 38vh; overflow-y: auto; margin: 0 0 14px; padding: 14px 18px; border: 1px solid var(--mc-amber-line); border-radius: 14px; background: var(--mc-amber-bg); color: var(--mc-amber-ink); }
+    .needs-banner h2 { margin: 0; font-size: 16px; color: var(--mc-amber-ink); }
+    .need-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--mc-amber-line); }
+    .need-row:first-of-type { border-top: 0; padding-top: 0; }
+    .need-row > div { flex: 1 1 320px; min-width: 0; }
+    .need-title { font-weight: 700; font-size: 15px; }
+    .need-detail, .need-action { font-size: 14px; color: #7c2d12; overflow-wrap: anywhere; }
+    .need-row .button { background: var(--mc-amber-ink); box-shadow: none; }
+    .need-row .button:hover { background: #5b2a0b; }
+    .project .now-block { margin: 10px 0 2px; }
+    .now-label { color: var(--mc-muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .now-sentence { margin-top: 2px; font-size: 16px; line-height: 1.45; overflow-wrap: anywhere; }
+    .now-next { margin-top: 4px; color: var(--mc-muted); font-size: 14px; overflow-wrap: anywhere; }
+    .now-needs { margin-top: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--mc-amber-line); background: var(--mc-amber-bg); color: var(--mc-amber-ink); font-size: 14px; font-weight: 600; }
+    .now-task { margin-top: 6px; color: var(--mc-muted); font-size: 12px; overflow-wrap: anywhere; }
+    .step-line { display: flex; justify-content: space-between; gap: 10px; margin: 10px 0 5px; color: var(--mc-muted); font-size: 12.5px; }
+    .bar { height: 8px; overflow: hidden; border-radius: 999px; background: #e2e8f0; }
+    .bar > i { display: block; height: 100%; background: var(--mc-teal); }
+    .project.needs-you .bar > i { background: #d98a0b; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .pill { padding: 5px 10px; border-radius: 8px; background: #f1f5f9; color: #334155; font-size: 12.5px; }
+    .pill.metric { margin: 0; }
+    .card-links { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+    .card-links button { min-height: 44px; padding: 8px 0; border: 0; border-radius: 8px; background: transparent; color: #1e3a8a; font-weight: 650; font-size: 14px; }
+    .card-links button:hover { text-decoration: underline; }
+    .tell-builder { margin-top: 12px; min-height: 46px; font-size: 15px; }
+    details.adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+    details.adv > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; color: var(--mc-muted); font-size: 13px; font-weight: 700; }
+    details.adv > summary:focus-visible { outline: 3px solid rgba(54, 92, 245, .35); outline-offset: 2px; border-radius: 6px; }
+    .adv-body { margin-top: 6px; }
+    .adv-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .adv-actions .button { min-height: 38px; }
+    .adv-body .last-active { text-align: left; margin-top: 8px; }
+    .settings-section { display: grid; gap: 14px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 16px; background: white; }
+    .settings-section > .settings-cards, .settings-section > .settings-card { box-shadow: none; }
+    .settings-section h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .settings-section > p, .settings-section-copy { margin: 0; color: var(--mc-muted); font-size: 14px; }
+    .settings-section.openai-card { max-width: none; }
+    details.settings-section > summary { cursor: pointer; font-size: 16px; font-weight: 700; }
+    .plumbing-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .plumbing-table th, .plumbing-table td { padding: 8px 10px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .plumbing-table th { color: var(--mc-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    /* The Now cards sit side by side on a wide window (the approved mockup) and stack on a narrow one; the actions sit under the text. */
+    #projects { grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); }
+    .project { grid-template-columns: minmax(0, 1fr); align-content: start; }
+    .project-side { min-width: 0; flex-direction: row; align-items: center; justify-content: flex-start; flex-wrap: wrap; }
+    .project-side .actions { justify-content: flex-start; }
+    @media (max-height: 700px) and (min-width: 761px) {
+      .project .description, .now-task, .now-next, .pills, .project [data-reopen-restores] { display: none; }
+      details.adv { margin-top: 4px; padding-top: 2px; }
+      details.adv > summary { min-height: 26px; }
+      .project .now-block { margin: 4px 0 0; }
+      .now-sentence { font-size: 14px; }
+      .step-line { margin: 6px 0 4px; }
+      .card-links button { min-height: 30px; padding: 2px 0; }
+      .project-side { margin-top: 2px; }
+    }
+    /* Costs page (slice 4): three tiles, one table per project that scrolls inside its own box on a phone. */
+    .cost-tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 18px; }
+    .cost-tile { flex: 1 1 200px; min-width: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+    .cost-tile-label { color: #475569; font-size: 12px; font-weight: 700; }
+    .cost-tile-value { margin-top: 2px; font-size: 22px; font-weight: 760; overflow-wrap: anywhere; }
+    .cost-tile-value.unmeasured { font-size: 16px; font-weight: 650; color: #334155; padding-top: 4px; }
+    .cost-tile-note { margin-top: 2px; color: #475569; font-size: 12px; }
+    .cost-box { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: white; }
+    .cost-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; }
+    .cost-table th, .cost-table td { padding: 11px 12px; text-align: left; vertical-align: top; border-top: 1px solid var(--line); }
+    .cost-table thead th { border-top: 0; background: #f8fafc; color: #475569; font-weight: 700; }
+    .cost-table th:first-child, .cost-table td:first-child { padding-left: 18px; }
+    .cost-table tr.cost-project th, .cost-table tr.cost-project td { background: #f8fafc; font-weight: 700; }
+    .cost-table tr.cost-task th { font-weight: 400; padding-left: 34px; }
+    .cost-table td.cost-total { font-weight: 700; }
+    .cost-table .cost-sub { display: block; margin-top: 3px; color: #475569; font-size: 12px; font-weight: 400; }
+    .cost-table td.unmeasured { color: #334155; font-style: italic; }
+    .cost-box h3 { margin: 0; padding: 12px 18px 0; font-size: 13px; color: #475569; font-weight: 600; }
+    .cost-foot { margin: 14px 0 0; color: #475569; font-size: 12px; }
+    @media (max-width: 760px) {
+      .need-row .button { width: 100%; min-height: 44px; }
+      .card-links button, .tell-builder, .project .actions .button { min-height: 44px; }
+      .plumbing-table, .plumbing-table tbody, .plumbing-table tr, .plumbing-table th, .plumbing-table td { display: block; width: 100%; }
+      .plumbing-table thead { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -286,6 +393,7 @@ PAGE = r'''<!doctype html>
     <div class="brand"><img class="brand-logo" src="/favicon.png" alt="" aria-hidden="true"><span>NoMoreHappyPath</span></div>
     <nav class="nav" aria-label="Primary navigation">
       <button type="button" data-page="projects" aria-current="page">Projects</button>
+      <button type="button" data-page="costs">Costs</button>
       <button type="button" data-page="settings">Settings</button>
       <button type="button" data-page="help">Help</button>
       <button type="button" data-page="legal">Legal</button>
@@ -302,38 +410,56 @@ PAGE = r'''<!doctype html>
         <div>
           <div class="eyebrow">Your workspace</div>
           <h1>Projects</h1>
-          <p class="hero-copy">Open a project to continue exactly where you left off, or create a focused workspace for something new.</p>
+          <p class="hero-copy" id="hero-sentence" role="status">Loading your projects…</p>
         </div>
         <div class="hero-actions">
           <button class="button secondary" id="adopt-btn" type="button">Adopt existing</button>
           <button class="button" id="new-btn" type="button">New project</button>
         </div>
       </div>
-
-      <section class="summary" aria-label="Project summary">
-        <div class="summary-card"><div class="summary-label">Projects</div><div class="summary-value" id="summary-total">—</div><div class="summary-note">Available workspaces</div></div>
-        <div class="summary-card"><div class="summary-label">Active work</div><div class="summary-value" id="summary-active">—</div><div class="summary-note">Open projects and running tasks</div></div>
-        <div class="summary-card"><div class="summary-label">Needs attention</div><div class="summary-value" id="summary-health">—</div><div class="summary-note">Folder or board health issues</div></div>
-      </section>
+      <section class="needs-banner" id="needs-banner" hidden aria-label="Needs you"></section>
 
       <div class="list-head"><h2>All projects</h2><span class="list-note">One project can be open at a time</span></div>
       <div id="projects" aria-busy="true"><div class="skeleton"><div class="spinner" aria-label="Loading projects"></div></div></div>
 
     </section>
 
+    <section id="costs-page" hidden>
+      <div class="hero"><div><div class="eyebrow">What the agents used</div><h1>Costs</h1><p class="hero-copy">What your projects would have cost at the providers' published prices. You pay by subscription, so this is a measure, not a bill. Codex also shows how much of your usage window each task used.</p></div></div>
+      <div class="cost-tiles" id="costs-tiles" aria-label="Cost summary"></div>
+      <div id="costs-list"><div class="skeleton"><div class="spinner" aria-label="Loading costs"></div></div></div>
+      <p class="cost-foot" id="costs-foot"></p>
+    </section>
+
     <section id="settings-page" hidden>
-      <div class="hero"><div><div class="eyebrow">NoMoreHappyPath configuration</div><h1>Settings</h1><p class="hero-copy">Agent models, effort, and connectivity in one place.</p></div></div>
+      <div class="hero"><div><div class="eyebrow">NoMoreHappyPath configuration</div><h1>Settings</h1><p class="hero-copy">Chosen once, used by every project. No one asks you these during a task.</p></div></div>
       <form class="settings-shell" id="settings-form">
-        <div class="settings-intro"><div><strong>Global agent defaults</strong><p>These choices apply to new agent sessions in every project. Running sessions keep the model and effort they started with.</p></div><span class="badge open">Manager-wide</span></div>
-        <section class="settings-card openai-card" id="openai-card" aria-labelledby="openai-title">
-          <div><h2 id="openai-title">Project chat key</h2><p class="settings-card-copy">Project chat answers questions about the project you have open, using your own OpenAI account. Chat stays switched off until this key connects.</p></div>
+        <section class="settings-section" id="settings-who" aria-labelledby="who-title">
+          <div><h2 id="who-title">Who does the work</h2><p class="settings-section-copy">Global agent defaults. The reviewer is always from a different AI company than the builder: change one and the other switches for you. These choices apply to new agent sessions in every project; running sessions keep the model and effort they started with. Chosen once, used by every project.</p></div>
+          <div class="settings-cards" id="settings-fields"><div class="skeleton"><div class="spinner" aria-label="Loading settings"></div></div></div>
+          <p class="settings-section-copy" id="cto-heartbeat-line"></p>
+        </section>
+        <section class="settings-section" id="settings-safety" aria-labelledby="safety-title">
+          <div><h2 id="safety-title">Safety nets</h2><p class="settings-section-copy">Used once, silently, when a task gets stuck. If the retry also fails, the task says it could not finish and nothing ships; you are never asked at that moment.</p></div>
+          <div class="settings-cards" id="recovery-fields"></div>
+        </section>
+        <section class="settings-section" id="settings-costs" aria-labelledby="costs-title">
+          <h2 id="costs-title">Costs</h2>
+          <p class="settings-section-copy" id="costs-settings-copy">Costs are shown as what the same work would cost at the programs' published prices. It is a yardstick, not a bill: you pay by subscription. Gemini is not measured yet.</p>
+          <div><button class="button secondary" type="button" data-page="costs">See what each project cost</button></div>
+        </section>
+        <section class="settings-section openai-card" id="openai-card" aria-labelledby="openai-title">
+          <div><h2 id="openai-title">Project chat key</h2><p class="settings-card-copy">Project chat ("Ask about this project") answers questions about the project you have open, using your own OpenAI account. Chat stays switched off until this key connects.</p></div>
           <div class="openai-state"><span class="badge idle" id="openai-badge">Checking</span><span id="openai-detail"></span></div>
           <div class="field"><label for="openai-key">OpenAI API key</label><input id="openai-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" aria-describedby="openai-result"></div>
           <div class="openai-actions"><button class="button" type="button" id="openai-save">Save and connect</button><button class="button secondary" type="button" id="openai-test" hidden>Test connection</button><button class="button secondary" type="button" id="openai-remove" hidden>Remove key</button></div>
           <div class="connection-result" id="openai-result" role="status" aria-live="polite"></div>
         </section>
-        <div class="settings-cards" id="settings-fields"><div class="skeleton"><div class="spinner" aria-label="Loading settings"></div></div></div>
-        <div class="settings-cards" id="recovery-fields"></div>
+        <details class="settings-section" id="settings-advanced">
+          <summary>Advanced (time limits, review input limits, check-in timing)</summary>
+          <p class="settings-section-copy" id="plumbing-where">These limits are read-only here.</p>
+          <div id="plumbing-view"></div>
+        </details>
         <p class="settings-notice" id="settings-notices" role="status" aria-live="polite" hidden></p>
         <div class="settings-footer"><p class="settings-error" id="settings-error" role="alert" aria-live="polite"></p><button class="button" type="submit" id="settings-save">Save agent settings</button></div>
       </form>
@@ -342,297 +468,357 @@ PAGE = r'''<!doctype html>
     <section id="help-page" hidden>
       <div class="hero"><div><div class="eyebrow">Owner guide</div><h1>Help</h1><p class="hero-copy">A practical walkthrough for creating or adopting a project, giving useful direction, reading progress, and accepting completed work.</p></div></div>
       <div class="help-shell">
-        <section class="help-section" aria-labelledby="help-start-title">
-          <h2 id="help-start-title">Create Or Adopt A Project</h2>
-          <ol class="help-steps">
-            <li><strong>Use New project</strong> when NoMoreHappyPath should create a fresh project folder for new work. Choose a parent folder, name the project, and add a short description that explains the purpose.</li>
-            <li><strong>Use Adopt existing</strong> when the code already exists. Choose the exact repository or project folder you want agents to work on. NoMoreHappyPath keeps its board, evidence, and workspaces outside the adopted repository.</li>
-            <li><strong>Open project</strong> restores Mission Control for that project. A paused project opens from the saved board state instead of starting over.</li>
-            <li><strong>Repair project folder</strong> is only for a moved folder. It reconnects NoMoreHappyPath history to the new location and does not delete the old folder.</li>
-          </ol>
-          <p class="help-callout">Best practice: one NoMoreHappyPath project should map to one real code folder and one clear product objective. Create a separate project when the code, audience, or release path is different.</p>
+        <section class="help-how" id="help-how" data-help-item aria-labelledby="help-how-title">
+          <h2 id="help-how-title">How a task works</h2>
+          <p>You decide what to build and you accept the result. In between, a builder and an independent reviewer from a different AI company prove the work, and you are only asked when it is your decision. Mission Control shows the same 26 steps on every task, on its Story tab.</p>
+          <ol class="help-phases">__HELP_PHASES__</ol>
         </section>
 
-        <section class="help-section" aria-labelledby="help-reviewer-first-title">
-          <h2 id="help-reviewer-first-title">Before Work Starts: The Reviewer Reads Your Requirements</h2>
-          <ul class="help-list">
-            <li><strong>What happens:</strong> when Delivery writes down the final requirements, the Reviewer reads them first, before any work starts. It works out how each requirement can be tested and writes those tests. You do not have to wait for it: <strong>Go ahead without waiting</strong> is always there, and <strong>Wait for the review</strong> just leaves the card as it is until the review is in.</li>
-            <li><strong>Questions from the Reviewer:</strong> if it cannot write a test without guessing, it asks you, once, at most four questions on one card in Mission Control. Every question has a recommended answer already chosen, a few other choices, and <strong>Other</strong> for your own words. Press <strong>Answer the questions</strong>, or <strong>Go ahead using the recommended answers</strong>. After you answer, the Reviewer updates its tests for anything your answers changed; the card then asks whether you want to go ahead without waiting or wait for the review.</li>
-            <li><strong>Decided before coding:</strong> your answers are added to the end of the requirements under that heading, so the agreement itself says them, and your Go ahead covers them.</li>
-            <li><strong>What was checked:</strong> when the work is ready, each requirement says <strong>checked</strong>, <strong>partly checked</strong> or <strong>not checked in advance</strong>. This is information only; there is nothing for you to do.</li>
-            <li><strong>Where questions appear:</strong> an agent's questions about your product always appear in Mission Control, under a banner at the top that says how many questions need your answer. Agents never ask them in their own terminal windows. Signing in to an account and one-time setup steps are different and keep their own instructions.</li>
-            <li><strong>A passing flag is not proof:</strong> when a project runs its own final check before it is called done, it prints one <code>FINAL CHECK</code> line saying passed, failed, not run, warnings only or skipped. The board reads those lines. Anything other than passed stops the project from being called done, even if the program itself exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.</li>
-          </ul>
+        <section class="help-find" aria-label="Search help">
+          <label for="help-search"><strong>Search help</strong></label>
+          <input id="help-search" type="search" placeholder="e.g. connect a Windows test machine" autocomplete="off">
+          <p class="help-search-status" id="help-search-status" role="status" aria-live="polite"></p>
         </section>
 
-        <section class="help-section" aria-labelledby="help-setup-title">
-          <h2 id="help-setup-title">What This App Needs To Run</h2>
-          <ul class="help-list">
-            <li>The app runs on your Mac or Linux machine and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
-            <li>The AI agents run on <strong>your own accounts</strong> through up to three CLIs: the Codex CLI (OpenAI account), the Claude Code CLI (Anthropic account) and Google's Antigravity CLI, <code>agy</code>, for <strong>Gemini</strong> (Google account, free or on a Google AI plan). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use any installed CLI. Install at least two and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors. Gemini shows in Settings once <code>agy</code> is installed and the app's own checks of that CLI pass; a successful Test Gemini connection only confirms the sign-in and the model, it does not switch Gemini on. Until the checks pass it is listed greyed out with the reason, and an updated <code>agy</code> may need to be checked again. Gemini asks for its own sign-in once inside the agent's window (the app tells you when), because the agent's sandbox keeps its own copy of that sign-in.</li>
-            <li><strong>Linux, including a VM on Windows:</strong> install and sign in to the CLIs you use (<strong>Codex CLI</strong>, <strong>Claude Code CLI</strong>, optionally <strong>Antigravity CLI</strong> for Gemini) inside Linux. Make <code>codex</code>, <code>claude</code> and <code>agy</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
-            <li><strong>Setting up Gemini (optional):</strong> install Google's Antigravity CLI with <code>curl -fsSL https://antigravity.google/cli | bash</code> (it installs <code>agy</code> into <code>~/.local/bin</code>), run <code>agy</code> once in your own terminal, choose <em>Google OAuth</em>, open the link, approve and paste the code back. It then shows a <em>Terms of Service &amp; Data Use</em> checkbox about letting Google use your interactions data; that choice is yours, the app never makes it for you. A Gemini agent's CLI can send what the agent reaches (prompts, files it reads, command output, not only your project folder) to Google under Google's terms and that choice. A free Google account runs out of quota quickly; a Google AI Pro or Ultra plan is recommended. In <strong>Settings</strong> pick <em>Gemini (Antigravity CLI)</em> for a role and click <strong>Test Gemini connection</strong>. The app records folder trust for you, and each agent window may ask for its own sign-in once because the agent's sandbox keeps its own copy.</li>
-            <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
-            <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
-            <li><strong>Linux Claude sign-in and browser:</strong> in your own terminal run <code>claude setup-token</code> and then <code>python3 -m harness.claude_auth store-token</code> (a hidden prompt). The token is kept in <code>~/.config/nmhp-harness/claude-setup-token</code>, owner-only, and survives a reboot; press <strong>Test Claude connection</strong> in Settings. On Ubuntu where Chromium is a snap, set <code>HARNESS_BROWSER_BIN</code> to a native browser such as <code>/usr/bin/google-chrome</code> for screen checks.</li>
-            <li><strong>A project is slow to open, or still shows an old red warning:</strong> the app waits while the board makes progress (set <code>HARNESS_WORKER_START_TIMEOUT</code> in seconds, or <code>--worker-start-timeout</code>, to change it). To clear an old warning yourself, with the project resumed, run in your terminal <code>python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE clear-hold --task TASK --source SOURCE</code>; it refuses a wrong source and never changes a result the reviewers already confirmed.</li>
-            <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
-            <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
-          </ul>
-        </section>
+        <nav class="help-topics" id="help-topics" aria-label="Help topics">
+          <a href="#help-group-getting-started"><strong>Getting started</strong><span>Install, sign in, your first project and how to read it.</span></a>
+          <a href="#help-group-who-does-the-work"><strong>Who does the work</strong><span>Builder, reviewer and CTO, and why the reviewer is from another company.</span></a>
+          <a href="#help-group-talking-to-agents"><strong>Talking to agents</strong><span>Say go ahead, message an agent, view its screen, ask about your project.</span></a>
+          <a href="#help-group-windows-programs"><strong>Windows programs</strong><span>Connect a test machine and download the tested build.</span></a>
+          <a href="#help-group-costs-and-limits"><strong>Costs and limits</strong><span>What happens when Claude or Codex runs out of allowance.</span></a>
+          <a href="#help-group-when-stuck"><strong>When something is stuck</strong><span>What the app does by itself, and the rare times it needs you.</span></a>
+          <a href="#help-group-legal"><strong>Legal</strong><span>Licence, disclaimer, and what is your responsibility.</span></a>
+        </nav>
 
-        <section class="help-section" aria-labelledby="help-limit-title">
-          <h2 id="help-limit-title">When Claude Or Codex Runs Out Of Allowance</h2>
-          <p>Claude and Codex work on your own accounts, and an account has a usage allowance. When one runs out, the program stops and prints its own message ("You've hit your session limit &middot; resets 9:43pm" for Claude, "You've hit your usage limit ... try again at 9:45 PM" for Codex). The harness reads that message and waits with it instead of treating the silence as a crash.</p>
-          <ul class="help-list">
-            <li><strong>What you see:</strong> one amber note on the project page (and on the Projects page) in plain words, for example <em>"The Delivery agent (Codex) shows Codex's usage-limit message; it announced 10:06 PM. Nothing is sent to it until the message goes; it continues then."</em> That agent's row reads <strong>WAITING: USAGE LIMIT</strong>. If the program printed no usable time, the note says <strong>(estimated)</strong> and the harness looks again about an hour later. A time on another day shows its date. There is no red alarm, because nothing is needed from you.</li>
-            <li><strong>What the harness does:</strong> it holds <strong>that one agent</strong>. Nothing is typed into its window, it is not restarted and not replaced, and its messages wait in line. The other agents keep working. Claude Code continues by itself at the announced time. If the message is still on the screen a minute after the announced time, the harness types <strong>one</strong> short line ("Please continue where you stopped"; a Reviewer is asked to check the board for its current assignment). If it is still there a minute after that, the note says so and the agent keeps waiting.</li>
-            <li><strong>When the message goes away</strong> (the program answered, or the line left the screen) the waiting ends, the queued messages are delivered, and for two minutes the harness will not treat the agent as stuck while it picks up again.</li>
-            <li><strong>Reviews stay independent.</strong> If the Reviewer is the one waiting, the review waits for it. The harness does not start a second Reviewer against the same allowance, and it never hands a review to the company that wrote the work. A review that was waiting for a long time may be reopened and picked up again; an obsolete assignment is never typed.</li>
-            <li><strong>What it does not do:</strong> it does not switch an agent to another company mid-task, use a different account, or use an API key to get around a limit. Gemini's own quota message is handled as before: the banner asks you to choose another provider for that role in Settings.</li>
-          </ul>
-          <p class="help-callout">If the note is wrong (for example the agent only quoted the message in its own text), <strong>type any message into that agent's terminal window</strong>. When the program answers, the harness continues by itself. Usually you only wait: the note tells you the time.</p>
-        </section>
+        <div class="help-group" id="help-group-getting-started" data-help-group>
+          <h2 class="help-group-title">Getting started</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-start-title">
+            <h2 id="help-start-title">Create Or Adopt A Project</h2>
+            <ol class="help-steps">
+              <li><strong>Use New project</strong> when NoMoreHappyPath should create a fresh project folder for new work. Choose a parent folder, name the project, and add a short description that explains the purpose.</li>
+              <li><strong>Use Adopt existing</strong> when the code already exists. Choose the exact repository or project folder you want agents to work on. NoMoreHappyPath keeps its board, evidence, and workspaces outside the adopted repository.</li>
+              <li><strong>Open project</strong> restores Mission Control for that project. A paused project opens from the saved board state instead of starting over.</li>
+              <li><strong>Repair project folder</strong> is only for a moved folder. It reconnects NoMoreHappyPath history to the new location and does not delete the old folder.</li>
+            </ol>
+            <p class="help-callout">Best practice: one NoMoreHappyPath project should map to one real code folder and one clear product objective. Create a separate project when the code, audience, or release path is different.</p>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-version-title">
-          <h2 id="help-version-title">Check Your Version And Update</h2>
-          <ol class="help-steps">
-            <li>Your installed version is always visible in the <strong>top bar</strong> — the small pill next to "Manager connected" (for example <strong>v0.1.7</strong>).</li>
-            <li><strong>Click the version pill.</strong> The Software Update dialog opens and checks automatically — it asks only the GitHub page this copy was installed from; nothing is sent anywhere else. It answers plainly: you are up to date, or a newer version exists, with a <strong>What changed</strong> link to the release notes.</li>
-            <li>When a newer version exists and no project is running (<strong>paused is fine</strong>), click <strong>Update now</strong>. The update is fast-forward only, never touches your projects, boards, or settings, and the app restarts itself — the page reloads on the new version.</li>
-          </ol>
-          <p class="help-callout">If <strong>Update now</strong> does not appear: a project is running — pause or close it and check again. If the dialog reports local changes, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command instead.</p>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-setup-title">
+            <h2 id="help-setup-title">What This App Needs To Run</h2>
+            <ul class="help-list">
+              <li>The app runs on your Mac or Linux machine and lives at <strong>http://127.0.0.1:8740</strong>. Nothing is sent to a server of ours; projects, boards, and settings stay in your home folder.</li>
+              <li>The AI agents run on <strong>your own accounts</strong> through up to three CLIs: the Codex CLI (OpenAI account), the Claude Code CLI (Anthropic account) and Google's Antigravity CLI, <code>agy</code>, for <strong>Gemini</strong> (Google account, free or on a Google AI plan). In <strong>Settings you choose which vendor plays each role</strong> — Delivery, Reviewer, and CTO can each use any installed CLI. Install at least two and sign each in once from a terminal; the platform's core guarantee — a competing vendor reviews the work — needs the builder and the reviewer on different vendors. Gemini shows in Settings once <code>agy</code> is installed and the app's own checks of that CLI pass; a successful Test Gemini connection only confirms the sign-in and the model, it does not switch Gemini on. Until the checks pass it is listed greyed out with the reason, and an updated <code>agy</code> may need to be checked again. Gemini asks for its own sign-in once inside the agent's window (the app tells you when), because the agent's sandbox keeps its own copy of that sign-in.</li>
+              <li><strong>Linux, including a VM on Windows:</strong> install and sign in to the CLIs you use (<strong>Codex CLI</strong>, <strong>Claude Code CLI</strong>, optionally <strong>Antigravity CLI</strong> for Gemini) inside Linux. Make <code>codex</code>, <code>claude</code> and <code>agy</code> available in <code>PATH</code> for all shells used by this account, including login shells, non-interactive shells, tmux, and the app's systemd service. An alias or a PATH change in just one terminal is insufficient. Check <code>codex --version</code> and <code>claude --version</code> from a fresh shell. Run <code>bash install.sh --check</code> under the same Linux account to confirm the app can find both CLIs for its service.</li>
+              <li><strong>Setting up Gemini (optional):</strong> install Google's Antigravity CLI with <code>curl -fsSL https://antigravity.google/cli | bash</code> (it installs <code>agy</code> into <code>~/.local/bin</code>), run <code>agy</code> once in your own terminal, choose <em>Google OAuth</em>, open the link, approve and paste the code back. It then shows a <em>Terms of Service &amp; Data Use</em> checkbox about letting Google use your interactions data; that choice is yours, the app never makes it for you. A Gemini agent's CLI can send what the agent reaches (prompts, files it reads, command output, not only your project folder) to Google under Google's terms and that choice. A free Google account runs out of quota quickly; a Google AI Pro or Ultra plan is recommended. In <strong>Settings</strong> pick <em>Gemini (Antigravity CLI)</em> for a role and click <strong>Test Gemini connection</strong>. The app records folder trust for you, and each agent window may ask for its own sign-in once because the agent's sandbox keeps its own copy.</li>
+              <li><strong>Linux sandbox:</strong> Bubblewrap must actually run, not just be installed. If Ubuntu reports <code>setting up uid map: Permission denied</code>, run <code>sudo apt install apparmor-profiles</code>, then <code>sudo install -m 644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict</code> and <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict</code>. Retry <code>bash install.sh --check</code>. Keep AppArmor and the system user namespace restriction enabled.</li>
+              <li><strong>Linux project folders:</strong> press <strong>Choose folder</strong> to browse the Linux machine. Pick a place on the left (Home, Computer, or a connected drive), open folders, use <strong>New Folder</strong> if you need one, then press <strong>Choose</strong>. You can also type a path in the box at the top and press Enter. These are Linux paths, even when your browser is on Windows.</li>
+              <li><strong>Linux Claude sign-in and browser:</strong> in your own terminal run <code>claude setup-token</code> and then <code>python3 -m harness.claude_auth store-token</code> (a hidden prompt). The token is kept in <code>~/.config/nmhp-harness/claude-setup-token</code>, owner-only, and survives a reboot; press <strong>Test Claude connection</strong> in Settings. On Ubuntu where Chromium is a snap, set <code>HARNESS_BROWSER_BIN</code> to a native browser such as <code>/usr/bin/google-chrome</code> for screen checks.</li>
+              <li><strong>A project is slow to open, or still shows an old red warning:</strong> the app waits while the board makes progress (set <code>HARNESS_WORKER_START_TIMEOUT</code> in seconds, or <code>--worker-start-timeout</code>, to change it). To clear an old warning yourself, with the project resumed, run in your terminal <code>python3 -m harness.board --root PROJECT --data-root DATA --workspace-root WORKSPACE clear-hold --task TASK --source SOURCE</code>; it refuses a wrong source and never changes a result the reviewers already confirmed.</li>
+              <li>Project chat uses your own <strong>OpenAI API key</strong> (pay-per-use, fractions of a cent per question) — see the next section.</li>
+              <li>Updating is built in — see <strong>Check Your Version And Update</strong> just below.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-nohappy-title">
-          <h2 id="help-nohappy-title">Why It Takes Its Time (No Happy Path)</h2>
-          <p>The happy path is the demo where everything goes right on the first try. This app is built on the opposite assumption: an agent saying "done" proves nothing. So it deliberately spends time other tools skip:</p>
-          <ul class="help-list">
-            <li><strong>Cross-checking by a competing vendor.</strong> The agent that wrote the code never judges it; a reviewer from the other company runs the work itself and can fail it.</li>
-            <li><strong>Scenario tests, not just the sunny case.</strong> Agents are required to build and run tests for the failure paths — wrong input, missing files, things breaking mid-way — before claiming success.</li>
-            <li><strong>Ledgers.</strong> Every claim is written down with the command that proves it and its output, so "it works" is always traceable to evidence you can reread later.</li>
-            <li><strong>Simulations.</strong> Risky changes are rehearsed against realistic conditions before they are allowed to land.</li>
-          </ul>
-          <p class="help-callout">This is why a task can look slow while the bars barely move: the time is going into checks designed to catch what a quick demo would hide. Slower to say done — far less likely to be wrong when it does.</p>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-version-title">
+            <h2 id="help-version-title">Check Your Version And Update</h2>
+            <ol class="help-steps">
+              <li>Your installed version is always visible in the <strong>top bar</strong> — the small pill next to "Manager connected" (for example <strong>v0.1.7</strong>).</li>
+              <li><strong>Click the version pill.</strong> The Software Update dialog opens and checks automatically — it asks only the GitHub page this copy was installed from; nothing is sent anywhere else. It answers plainly: you are up to date, or a newer version exists, with a <strong>What changed</strong> link to the release notes.</li>
+              <li>When a newer version exists and no project is running (<strong>paused is fine</strong>), click <strong>Update now</strong>. The update is fast-forward only, never touches your projects, boards, or settings, and the app restarts itself — the page reloads on the new version.</li>
+            </ol>
+            <p class="help-callout">If <strong>Update now</strong> does not appear: a project is running — pause or close it and check again. If the dialog reports local changes, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command instead.</p>
+          </section>
 
-        <section class="help-section" id="help-windows-vm" aria-labelledby="help-windows-vm-title">
-          <h2 id="help-windows-vm-title">Create The Windows Test Machine</h2>
-          <p><strong>Why.</strong> Some programs only prove themselves on real Windows. The agents build the program (here, or on the machine, whichever works) and run its tests on a Windows machine that you give them. Make it a disposable one, with none of your personal files, no shared folders, no disks of yours attached, and no access to anything on your network you care about: the agents run commands there with the account you give them. Use one machine per project. You create it and, when the project is finished, you destroy it; NoMoreHappyPath never creates, resets or deletes it.</p>
-          <p><strong>Where it runs does not matter.</strong> A virtual machine on a Mac, a Linux computer or a PC, or a spare Windows computer: Windows is Windows. You do four things.</p>
-          <ol class="help-steps">
-            <li><strong>Create it and size it.</strong> In your virtual machine software (or on the spare computer), install Windows 10 or 11 (or Windows Server 2019 or newer) from Microsoft&rsquo;s own installer (<a href="https://www.microsoft.com/software-download/windows11" target="_blank" rel="noopener">Microsoft&rsquo;s Windows 11 download</a>; on a Mac with Apple silicon, <a href="https://docs.getutm.app/guides/windows/" target="_blank" rel="noopener">UTM&rsquo;s Windows guide</a> shows how to get and install the right image; any virtual machine software has a similar guide), make a local account with a password you use nowhere else, and get to its desktop. Give it at least 2 processor cores, 4 GB of memory and 64 GB of disk; comfortable is 4 cores, 8 GB and 100 GB. Delivery restates the exact needs for your project before its first test, so a small machine now can still be enlarged.</li>
-            <li><strong>Turn on the ssh server.</strong> On the Windows machine, open PowerShell as Administrator and run these three lines once (Microsoft&rsquo;s own steps: <a href="https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse" target="_blank" rel="noopener">Get started with OpenSSH Server for Windows</a>; Windows Server 2025 already has it installed):
-              <pre class="help-code">Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-Set-Service -Name sshd -StartupType Automatic
-Start-Service sshd</pre>
-              Password sign-in is on by default. The installer also opens port 22 in the Windows firewall; to check, run <code>Get-NetFirewallRule -Name OpenSSH-Server-In-TCP</code>.</li>
-            <li><strong>Make sure this computer can reach it.</strong> On the Windows machine run <code>ipconfig</code> and note the &ldquo;IPv4 Address&rdquo;. In the Terminal of the computer that runs Mission Control, run <code>ssh -F /dev/null -o PubkeyAuthentication=no account@address</code> (the same plain password sign-in Mission Control uses) (add <code>-p port</code> if you changed the port) and type the password: a Windows prompt means it works (type <code>exit</code>). &ldquo;Connection refused&rdquo; or a timeout means the machine is off, the address is wrong, the ssh service is not running, or its network is not shared or bridged with this computer. &ldquo;Permission denied&rdquo; means it is reachable but the account or password is wrong, or the server has password sign-in turned off. A warning that the host key changed means this address now answers with a different identity: stop, and go on only if you know you rebuilt the machine.</li>
-            <li><strong>Give NoMoreHappyPath access.</strong> In Mission Control, on the <strong>Projects</strong> page, press <strong>Test machine</strong> on the project (or <strong>Connect</strong> on the orange card an agent raised; the same <strong>Test machine</strong> button is also in the project&rsquo;s own Mission Control header), type the address, the account name and the password, and press <strong>Connect</strong>. The first connection trusts the machine&rsquo;s identity as it finds it at that moment, which is why it should be a machine on your own network that you just made; the window then shows the machine&rsquo;s host key, and on the Windows machine <code>ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub</code> prints the same one if you want to compare. The password is used for that one sign-in and forgotten.</li>
-          </ol>
-          <p><strong>Everything else is the agents&rsquo; job.</strong> They find out which Windows it is (including whether it is the ARM or the x86-64 kind), choose the matching toolchain, install the tools they need, and clean up after every test. Some projects need an Administrator account (for example to test changes to the registry) or extra tools; Delivery tells you before its first test, so you never have to guess.</p>
-          <ul class="help-list">
-            <li><strong>Snapshot.</strong> Right after step 3, take a snapshot of the clean machine if your virtual machine software offers it. It is the easy way to start over.</li>
-            <li><strong>After you restore a snapshot, rebuild or change the machine,</strong> press <strong>Test machine</strong> and <strong>Connect</strong> again (the card does not know the machine was swapped under it) and tell Delivery. Connecting again makes every earlier result that depended on the machine stale; Delivery then sends the work for review again and the reviewer runs the tests again. A pause, a close, an app restart or a key that stops working makes the card ask for the password by itself; if you press Connect while the project is paused, the Resume keeps it.</li>
-            <li><strong>If Windows asks to restart</strong> (for example after an update), let it restart: the ssh server starts again by itself. Because an update changes the machine, press <strong>Connect</strong> again afterwards and tell Delivery, as for a restored snapshot.</li>
-            <li><strong>If the address changes,</strong> press Connect with the new address. To avoid it, give the machine a fixed address in your router or virtual machine software.</li>
-            <li><strong>When the project is finished,</strong> press <strong>Release this machine</strong> in the Test machine window (that frees it for another project; the key the agents installed stays on the machine), then destroy the virtual machine in your software, or, for a spare computer, wipe and reinstall Windows (or at least turn the ssh server off with <code>Stop-Service sshd</code> and <code>Set-Service sshd -StartupType Disabled</code>).</li>
-            <li><strong>Optional:</strong> on a Mac with Apple silicon, virtual machine software such as UTM runs the ARM version of Windows 11; on a PC, VMware, VirtualBox or Hyper-V run the usual x86-64 one. Either is fine.</li>
-          </ul>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-direction-title">
+            <h2 id="help-direction-title">Frame A Good Task</h2>
+            <p>Give Delivery enough context to make the right tradeoffs before it starts writing code.</p>
+            <ul class="help-list">
+              <li><strong>Choose the kind of work first.</strong> When you start the Delivery agent, the first question is <strong>What kind of work is this?</strong>
+                <ul class="help-list">
+                  <li><strong>Write code:</strong> build or change code with the full process: tests first, an independent review, end to end.</li>
+                  <li><strong>Analyze code:</strong> find issues and refactoring ideas across all the code and change nothing. After you press Go ahead, the builder and the reviewer each read all the code and make their own list, without seeing each other's. Then each checks the other's list for false alarms and wrong findings, once (each side can also add a problem it notices while checking); the CTO removes the duplicates; and the result is one clean list that the builder writes into the report and the reviewer checks. Tell it only the facts about your project: the code folder, what the product is and who uses it, where its tests run and which test database is allowed, and what is out of scope. The builder finds the languages and the setup itself. The result is one report, <code>FINDINGS.md</code>: every issue has a severity, where it is, the proof, how it fails, what it costs you, what to do, and how sure the builder is, and the report ends with what was checked and what could not be.</li>
+                  <li><strong>Write specs:</strong> a spec, a deck or text. The reviewer always reads and judges the text before it is finished.</li>
+                </ul>
+                If you start with <strong>Give direction</strong> and did not choose at launch, the same three choices are at the top of that box. The Story tab shows what the task is running as.</li>
+              <li>State the outcome you want in plain language: what the user should be able to do when the task is done.</li>
+              <li>Name the target app, screen, folder, platform, or command when it matters.</li>
+              <li>List constraints: what must stay unchanged, what is out of scope, and what quality checks are mandatory.</li>
+              <li>Include visual acceptance checks for UI work: screen sizes, buttons to click, data to enter, and what should appear.</li>
+              <li>Keep unrelated goals separate. A smaller task with clear acceptance usually finishes faster and reviews more cleanly.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" id="help-windows-tools" aria-labelledby="help-windows-tools-title">
-          <h2 id="help-windows-tools-title">Windows Programs: What To Expect</h2>
-          <p>Once your Windows test machine is connected (above), this is what happens, in plain words. You do not need to know how the program is built.</p>
-          <ol class="help-steps">
-            <li><strong>You say what you want.</strong> For example &ldquo;a small Windows tool that tells me which program is using a port&rdquo;. Delivery says which Windows machine it needs and builds the program.</li>
-            <li><strong>The agents set up the machine themselves.</strong> After the one-time setup above, they connect to it over ssh and install the build and test tools they need there; you do not install those or type commands into the machine to get the work done.</li>
-            <li><strong>The program is tested on the real Windows machine</strong>, and the independent reviewer (from the other AI company) runs the tests again on the same machine in its own folder.</li>
-            <li><strong>You are asked for the password again after any stop.</strong> Pausing, closing or restarting the project, or a key that stops working, makes the <strong>Test machine</strong> card ask for the password again. Enter it and press Connect; the agents carry on. The same <strong>Test machine</strong> button is in the project&rsquo;s own header.</li>
-            <li><strong>If part of the work could not be tested, you are told.</strong> The project says <strong>Not fully tested</strong> as soon as a review ends that way, and the agents settle it themselves; you are not asked to wait or to choose. If it still cannot be completed after the safety nets chosen in Settings, the task says <strong>could not finish</strong> and nothing ships. Security, the independent review itself and the integrity of the code cannot be waived.</li>
-            <li><strong>When it passes, you get the program: Get the build.</strong> For a new task whose Delivery declared a program build, the acceptance card shows <strong>Get the build</strong> instead of <strong>View app</strong> (a Windows program has nothing to open in a browser; a task that also delivers a web app keeps View app). Projects accepted before this existed keep their old card; a new task is needed to get a program this way. It lists each file with its size and its SHA-256 fingerprint, which machine it was built and tested on, and from which version of the code; it says which Windows it is for, what you need (for example Administrator rights), the steps to try it and what you should see; a line under each file says whether it was started on the test machine before it was collected.</li>
-          </ol>
-          <p><strong>How to try the program.</strong> Press <strong>Download</strong>, then check that the file is the one that was tested: on Windows run <code>Get-FileHash file.exe</code> in PowerShell (on a Mac <code>shasum -a 256 file</code>, on Linux <code>sha256sum file</code>) and compare it with the SHA-256 on the card; they must match. If they do not, stop and report it: do not run the file. Then follow the steps on the card on a compatible Windows machine (the program is for Windows even when Mission Control runs on a Mac or Linux computer). Windows may warn you that the program is from an unknown publisher: the programs are not code-signed, so run one only because you asked for it. The download keeps working after you accept the work and after you destroy the test machine.</p>
-          <ul class="help-list">
-            <li><strong>What the app does not do.</strong> It never creates, resets or deletes your Windows machine; one machine serves one project; keep it a throwaway; it does not run on Windows itself (only the machine under test is Windows); it does not sign or publish your program; it does not run the program for you.</li>
-            <li><strong>What a test can and cannot show.</strong> The tests only prove what that one machine can show. When a case cannot happen there, the reviewer says <strong>NOT TESTED</strong> and the project is marked <strong>Not fully tested</strong>, as above.</li>
-          </ul>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-progress-title">
+            <h2 id="help-progress-title">Read The Progress Bars</h2>
+            <ul class="help-list">
+              <li><strong>Whole task</strong> shows the required steps done so far: your direction, the building and its checks, the independent review, the final checks, your test, and your acceptance.</li>
+              <li><strong>Current stage</strong> shows progress inside the active phase. It can move while the whole-task bar stays flat.</li>
+              <li>On the <strong>Story</strong> tab each finished step turns green, and a line under the task says what it is <strong>Running as</strong> (the kind of work you chose).</li>
+              <li>The bars are not a timer. Review, repair, release checks, or owner validation can add time without meaning the code is being rewritten.</li>
+              <li>Red or repair-colored progress means a gate needs attention or a repair cycle. Open the task or agent status and read <strong>What happens next</strong>.</li>
+              <li>If progress appears stuck, check the CTO status first. It should say whether work is active, waiting for review, waiting for release checks, or waiting for you.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-reach-title">
-          <h2 id="help-reach-title">What The Agents Can Reach</h2>
-          <p>These agents run on your own machine, as you. Here is exactly where that stops, without softening:</p>
-          <ul class="help-list">
-            <li><strong>An agent cannot change files outside your project on this machine.</strong> It is launched with write access limited to the project folder and the app&rsquo;s own working folders; that limit does not follow a command onto a test machine you name (below). A write anywhere else &mdash; your Documents, your keys, another project &mdash; is refused by the operating system, not merely discouraged.</li>
-            <li><strong>On Linux, a Claude or Gemini agent (and the test commands the app runs for it) can read only what it needs.</strong> It is launched in a sandbox that holds the system programs and settings (<code>/usr</code>, <code>/etc</code>, the libraries), the project, the app&rsquo;s working folders, the agent&rsquo;s own settings and caches, and the tools it runs with (node, python, the CLI, the app&rsquo;s own install). Your home folder, other projects, ssh keys and tokens are not there at all &mdash; a read fails as &ldquo;no such file&rdquo; &mdash; except the folders of programs found on your PATH (that folder only) and anything you list below. Still visible to it: the shared <code>/tmp</code> and <code>/var/tmp</code>, the shared caches and settings folders of its own CLI, and everything in the system folders above (including any file of yours kept in <code>/etc</code> or <code>/usr</code>, and the install folders of the tools it runs) &mdash; so these are limits, not a guarantee that nothing outside the project can be read. If an agent genuinely needs another folder (for example an ssh key), list it in <code>HARNESS_AGENT_READ_PATHS</code> (folders separated by a colon) before starting the app. This applies to agents started after this update: an agent that was already running keeps its old, wider access until you restart it.</li>
-            <li><strong>On macOS, and for Codex agents on any system, an agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: macOS and the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI, Anthropic or Google (for a Gemini agent) as part of doing the work.</li>
-            <li><strong>The app&rsquo;s own Git work is sandboxed too</strong>, to the paths that operation needs.</li>
-            <li><strong>An agent can reach the network, including a test machine you name.</strong> If you tell the agents to build here and test on another machine (for example a Windows VM), you do one thing: press <em>Connect</em> on the project&rsquo;s <em>Test machine</em> card in this list and enter the machine&rsquo;s address, account name and password. Mission Control itself (not an agent) reads the machine&rsquo;s identity (its host key, shown to you and saved), makes a key for this project, signs in once with the password, installs the key, and proves the key works. The password is used for that one connection and forgotten: it is never saved, logged or shown to an agent, and it is only accepted on the computer that runs Mission Control. Whenever the project stops for any reason (pause, close, restart), or the key stops working, the card asks for the password again (a connection you make while the project is paused stays valid when you resume it), and any test result that depends on the machine waits for it; everything else keeps going. If an agent needs the machine and it is not connected, the card appears here by itself with what the agent said it needs it for; you never have to look in a terminal window. Use a throwaway machine and a password that exists only for it: the agents hold a key with the same power over it as the password gives, so keep it away from your files and the other machines on your network, and use one machine per project. You create it and destroy it when you are done; Delivery tells you what size to make it, and the agents install what they need on it themselves and clean up what their runs leave. The board keeps a passed result for an unchanged test command, unchanged code and an unchanged machine; reconnecting, restarting or changing the machine makes those results stale and the agents re-run them. What Mission Control cannot detect: an agent&rsquo;s own ssh with its key (the reviewer rejects a test that reaches the machine without the machine&rsquo;s test form). Each test command the board certifies must finish within five minutes, copying included, so long batteries are split. The first connection trusts the identity Mission Control reads from the machine at that moment; if it later changes, the card stops before any password is sent and asks you to confirm that you rebuilt the VM.</li>
-          </ul>
-          <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project on this machine (not on a test machine you name, where the account you give the agents decides), and from being <em>read</em> by Claude and Gemini agents on Linux. On macOS, and for Codex agents, they are not safe from being <em>read</em>: if there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Judge the app on what it does now, not on what may come.</p>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-accept-title">
+            <h2 id="help-accept-title">Accept Or Reject Completed Work</h2>
+            <ol class="help-steps">
+              <li>Wait until Mission Control explicitly says the reviewed release is ready for your test. Delivery saying it is done is not enough.</li>
+              <li>Open the app from the release panel (View app) when one is provided.</li>
+              <li>Run the visible checklist shown under <strong>What to test before accepting</strong>. Add your own checks when the task needs them.</li>
+              <li>Click <strong>Accepted</strong> only when the reviewed version works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
+              <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation.</li>
+            </ol>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-key-title">
-          <h2 id="help-key-title">Switch On Project Chat (OpenAI Key)</h2>
-          <ol class="help-steps">
-            <li>The chat box on every project board stays <strong>greyed off until a working key is saved</strong>. The notice above the box says exactly this.</li>
-            <li>Open <strong>Settings</strong> and find the <strong>Project chat key</strong> card. Paste the key from your OpenAI account (platform.openai.com → API keys) and click <strong>Save and connect</strong>.</li>
-            <li>The key is checked with OpenAI <strong>before</strong> it is stored. A key OpenAI rejects is never saved, and the card tells you why in plain words.</li>
-            <li>When the badge shows <strong>Connected</strong>, chat is on everywhere. The key is kept on this Mac in a file only you can read, shown on screen only as its last 4 characters.</li>
-            <li>Use <strong>Test connection</strong> any time to re-check the saved key, <strong>Replace and connect</strong> to change it, and <strong>Remove key</strong> to switch chat off.</li>
-          </ol>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-history-title">
+            <h2 id="help-history-title">Use Task History</h2>
+            <p>Completed tasks move into Task history after release and owner response. History keeps the full user directive, final agreed requirements, owner-readable Delivery checks, reviewer checks, failed attempts, repairs, and final outcomes.</p>
+            <ul class="help-list">
+              <li>Use search with normal words from the task, requirement, or test description.</li>
+              <li>Open older entries to see what was accepted, what was rejected, and what was tested.</li>
+              <li>History is evidence for the project assistant. If the board has no data for a question, the assistant should say it does not know.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-settings-title">
-          <h2 id="help-settings-title">Configure The Agents (Settings)</h2>
-          <ul class="help-list">
-            <li>Settings has one card per role — <strong>Delivery Agent</strong>, <strong>Independent Reviewer</strong>, and <strong>CTO</strong>. Each picks a CLI provider, a model, and a reasoning effort.</li>
-            <li>Keep Delivery and Reviewer on <strong>different providers</strong>; that separation is the point of independent review.</li>
-            <li>Bigger models and higher effort cost more on your provider plans and think longer. A common setup: strong models for Delivery and Reviewer, a medium setting for the CTO.</li>
-            <li><strong>Test connection</strong> on a card sends one tiny real request to the AI service, the way an agent would, to check that its program is installed, signed in and accepts the model you chose. It starts no agent and does not touch your projects, but it does count against your plan (Gemini uses a little of its quota). A stored result is history: it shows when and with what it was made, and asks you to test again if the model, the effort or the CLI has changed. For Gemini the thinking level is part of the model name (<code>-low</code>, <code>-medium</code>, <code>-high</code>), so the effort you choose selects it, and Settings tells you when it changed one.</li>
-            <li>Saving applies to <strong>new agent sessions only</strong>; running terminals keep the model and effort they started with.</li>
-            <li><strong>Choosing a model for one launch.</strong> The Delivery button in Mission Control opens a small dialog pre-filled with the Delivery card's provider, model and effort. The Model list shows the same models as the Settings card, each with what it is for; pick <strong>Custom model ID…</strong> to type any other id. Change them there and the choice applies to <strong>that launch only</strong>: Settings is not changed, and the next launch is pre-filled from Settings again. Use it to write a spec with a strong model and code with a cheaper one without editing Settings each time. The Independent Reviewer and the CTO always use their Settings values. The provider list offers only providers that keep review independent (never the Reviewer's provider). A replacement the harness opens for a stopped agent, and a project resume, keep the choice. Typing <code>/model</code> inside an agent's terminal is not recorded by the harness, and a relaunch uses the saved model. If the model you typed makes the CLI quit or keep printing an error, the harness does not yet explain it: read the error in that agent's terminal, then Stop it and start again with a corrected model.</li>
-          </ul>
-        </section>
+        </div>
 
-        <section class="help-section" aria-labelledby="help-direction-title">
-          <h2 id="help-direction-title">Frame A Good Task</h2>
-          <p>Give Delivery enough context to make the right tradeoffs before it starts writing code.</p>
-          <ul class="help-list">
-            <li>State the outcome you want in plain language: what the user should be able to do when the task is done.</li>
-            <li>Name the target app, screen, folder, platform, or command when it matters.</li>
-            <li>List constraints: what must stay unchanged, what is out of scope, and what quality checks are mandatory.</li>
-            <li>Include visual acceptance checks for UI work: screen sizes, buttons to click, data to enter, and what should appear.</li>
-            <li>Keep unrelated goals separate. A smaller task with clear acceptance usually finishes faster and reviews more cleanly.</li>
-          </ul>
-        </section>
+        <div class="help-group" id="help-group-who-does-the-work" data-help-group>
+          <h2 class="help-group-title">Who does the work</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-settings-title">
+            <h2 id="help-settings-title">Configure The Agents (Settings)</h2>
+            <ul class="help-list">
+              <li>Settings has one card per role — <strong>Delivery Agent</strong>, <strong>Independent Reviewer</strong>, and <strong>CTO</strong>. Each picks a CLI provider, a model, and a reasoning effort.</li>
+              <li>Keep Delivery and Reviewer on <strong>different providers</strong>; that separation is the point of independent review.</li>
+              <li>Bigger models and higher effort cost more on your provider plans and think longer. A common setup: strong models for Delivery and Reviewer, a medium setting for the CTO.</li>
+              <li><strong>Test connection</strong> on a card sends one tiny real request to the AI service, the way an agent would, to check that its program is installed, signed in and accepts the model you chose. It starts no agent and does not touch your projects, but it does count against your plan (Gemini uses a little of its quota). A stored result is history: it shows when and with what it was made, and asks you to test again if the model, the effort or the CLI has changed. For Gemini the thinking level is part of the model name (<code>-low</code>, <code>-medium</code>, <code>-high</code>), so the effort you choose selects it, and Settings tells you when it changed one.</li>
+              <li>Saving applies to <strong>new agent sessions only</strong>; running terminals keep the model and effort they started with.</li>
+              <li><strong>Choosing a model for one launch.</strong> The Delivery button in Mission Control opens a small dialog pre-filled with the Delivery card's provider, model and effort. The Model list shows the same models as the Settings card, each with what it is for; pick <strong>Custom model ID…</strong> to type any other id. Change them there and the choice applies to <strong>that launch only</strong>: Settings is not changed, and the next launch is pre-filled from Settings again. Use it to write a spec with a strong model and code with a cheaper one without editing Settings each time. The Independent Reviewer and the CTO always use their Settings values. The provider list offers only providers that keep review independent (never the Reviewer's provider). A replacement the harness opens for a stopped agent, and a project resume, keep the choice. Typing <code>/model</code> inside an agent's terminal is not recorded by the harness, and a relaunch uses the saved model. If the model you typed makes the CLI quit or keep printing an error, the harness does not yet explain it: read the error in that agent's terminal, then Stop it and start again with a corrected model.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-go-title">
-          <h2 id="help-go-title">Agree The Requirements And Say Go Ahead</h2>
-          <ol class="help-steps">
-            <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once. Gemini does not ask: the project you open in this app is recorded as trusted for it. If Gemini ever shows that question anyway, the app says so and waits for you to answer it in its window.</li>
-            <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long.</li>
-            <li>Delivery may ask clarifying questions in its terminal window — answer there; that conversation shapes the requirements.</li>
-            <li>When the requirements are agreed, Delivery <strong>files them on the board</strong>. The task card then shows <strong>"Final agreed requirements — your decision"</strong> with the full text and two buttons. Nothing is built before your decision.</li>
-            <li>Read the text as the task contract it is. Click <strong>Go ahead — this is the contract</strong> when it matches what you want built; click <strong>Modify…</strong> to describe changes — Delivery revises and files a new version for your decision. Every click is recorded with a timestamp; typing "go ahead" in the terminal is not authorization.</li>
-            <li>After work starts, use <strong>Send clarification</strong> for necessary corrections. New feature ideas should usually become a new task after the current one is accepted.</li>
-          </ol>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-buttons-title">
+            <h2 id="help-buttons-title">Main Buttons And What They Show</h2>
+            <p class="help-callout"><strong>A task needs all three roles running: at least one Delivery agent, one Independent Reviewer, and the CTO.</strong> Delivery builds, the Reviewer verifies, and the CTO routes work and watches the gates. With any of them missing, the task stalls at that role's stage — direction with no builder, a finished build with no verdict, or a passed review that never reaches release. Pressing <strong>Give direction</strong> in Mission Control when nothing is running starts all three for you (your terminal may ask you to trust the folder once: choose the Yes option it shows); you can also start them one by one with the buttons.</p>
+            <table class="help-table">
+              <thead><tr><th>Button or area</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td>Open Mission Control</td><td>Opens the live board for the selected project.</td></tr>
+                <tr><td>Pause project</td><td>Stops active work after board writes finish and preserves tasks, reviews, and evidence.</td></tr>
+                <tr><td>CODEX CLI - Delivery Agent</td><td>Opens <strong>Start a Delivery Agent</strong>: choose the kind of work (Write code, Analyze code or Write specs), then the provider, model and reasoning effort for this launch, then a terminal color. It starts or attaches the implementation agent for owner direction, planning, coding, and Delivery evidence.</td></tr>
+                <tr><td>CLAUDE CLI - Reviewer</td><td>Starts or attaches the independent reviewer. It tests the finished work with its own checks instead of repeating Delivery's.</td></tr>
+                <tr><td>CTO</td><td>Starts or attaches the monitoring role that keeps tasks routed, watches release gates, and reports owner action.</td></tr>
+                <tr><td>View status</td><td>Shows the selected agent's current task, stage, last update, next step, and whether you need to act.</td></tr>
+                <tr><td>Stop terminal / Stop all agents</td><td>Stops visible terminals. Use it when you intentionally want work to stop; saved board records remain.</td></tr>
+                <tr><td>Enhanced security (checkbox on a task card)</td><td>Off by default. Tick it to make that task's app also ship a short threat model, a security test pass and a controls register, which the Reviewer then checks. Choose before Delivery's first review request: the choice locks at that moment and shows "locked at review". Every app gets the central error catch-all regardless.</td></tr>
+                <tr><td>Settings</td><td>Changes default provider, model, effort, and connection tests for new agent sessions.</td></tr>
+                <tr><td>Help</td><td>Opens this guide.</td></tr>
+              </tbody>
+            </table>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-direct-title">
-          <h2 id="help-direct-title">Talking To The Agents Directly</h2>
-          <p>Click <strong>View agent</strong> beside any agent: Linux opens its existing live session in your browser; macOS focuses its Terminal window or reopens a closed window for that same session. Closing the view or CLI window leaves the agent running. You can type to any agent at any time — ask what they are doing, why a decision was made, or for a plain-language summary.</p>
-          <p class="help-callout"><strong>First time an agent opens in a project, stay at your computer.</strong> Claude may ask <em>Do you trust this folder?</em> &mdash; choose <strong>Yes, I trust this folder</strong>. Codex may ask the same &mdash; choose <strong>Trust and continue</strong>. Open the agent with <strong>View agent</strong> to answer. Mission Control shows the agent as waiting for you until you do, and nothing else moves on that agent until then.</p>
-          <p class="help-callout"><strong>Be careful while work is running.</strong> A message typed into a busy agent is not a side conversation — the agent stops to handle it. Interrupting a build, a review, or a release check inserts your request into the middle of that work and can slow it down or derail it. If it can wait, let the current stage finish and read the agent's status first; if you must redirect running work, use <strong>Send clarification</strong> so the change is recorded on the task, not lost in scrollback. New ideas belong in a new task after this one is accepted.</p>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-reviewer-first-title">
+            <h2 id="help-reviewer-first-title">Before Work Starts: The Reviewer Reads Your Requirements</h2>
+            <ul class="help-list">
+              <li><strong>What happens:</strong> when Delivery writes down the final requirements, the Reviewer reads them first, before any work starts. It works out how each requirement can be tested and writes those tests. You do not have to wait for it: <strong>Go ahead without waiting</strong> is always there, and <strong>Wait for the review</strong> just leaves the card as it is until the review is in.</li>
+              <li><strong>Questions from the Reviewer:</strong> if it cannot write a test without guessing, it asks you, once, at most four questions on one card in Mission Control. Every question has a recommended answer already chosen, a few other choices, and <strong>Other</strong> for your own words. Press <strong>Answer the questions</strong>, or <strong>Go ahead using the recommended answers</strong>. After you answer, the Reviewer updates its tests for anything your answers changed; the card then asks whether you want to go ahead without waiting or wait for the review.</li>
+              <li><strong>Decided before coding:</strong> your answers are added to the end of the requirements under that heading, so the agreement itself says them, and your Go ahead covers them.</li>
+              <li><strong>What was checked:</strong> when the work is ready, each requirement says <strong>checked</strong>, <strong>partly checked</strong> or <strong>not checked in advance</strong>. This is information only; there is nothing for you to do.</li>
+              <li><strong>Where questions appear:</strong> an agent's questions about your product always appear in Mission Control, under a banner at the top that says how many questions need your answer. Agents never ask them in their own terminal windows. Signing in to an account and one-time setup steps are different and keep their own instructions.</li>
+              <li><strong>A passing flag is not proof:</strong> when a project runs its own final check before it is called done, it prints one <code>FINAL CHECK</code> line saying passed, failed, not run, warnings only or skipped. The board reads those lines. Anything other than passed stops the project from being called done, even if the program itself exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.</li>
+            </ul>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-buttons-title">
-          <h2 id="help-buttons-title">Main Buttons And What They Show</h2>
-          <p class="help-callout"><strong>A task needs all three roles running: at least one Delivery agent, one Independent Reviewer, and the CTO.</strong> Delivery builds, the Reviewer verifies, and the CTO routes work and watches the gates. With any of them missing, the task stalls at that role's stage — direction with no builder, a finished build with no verdict, or a passed review that never reaches release. Pressing <strong>Give direction</strong> in Mission Control when nothing is running starts all three for you (your terminal may ask you to trust the folder once: choose the Yes option it shows); you can also start them one by one with the buttons.</p>
-          <table class="help-table">
-            <thead><tr><th>Button or area</th><th>What it does</th></tr></thead>
-            <tbody>
-              <tr><td>Open Mission Control</td><td>Opens the live board for the selected project.</td></tr>
-              <tr><td>Pause project</td><td>Stops active work after board writes finish and preserves tasks, reviews, and evidence.</td></tr>
-              <tr><td>CODEX CLI - Delivery Agent</td><td>Starts or attaches the implementation agent for owner direction, planning, coding, and Delivery evidence.</td></tr>
-              <tr><td>CLAUDE CLI - Reviewer</td><td>Starts or attaches the independent reviewer. It tests the finished work with its own checks instead of repeating Delivery's.</td></tr>
-              <tr><td>CTO</td><td>Starts or attaches the monitoring role that keeps tasks routed, watches release gates, and reports owner action.</td></tr>
-              <tr><td>View status</td><td>Shows the selected agent's current task, stage, last update, next step, and whether you need to act.</td></tr>
-              <tr><td>Stop terminal / Stop all agents</td><td>Stops visible terminals. Use it when you intentionally want work to stop; saved board records remain.</td></tr>
-              <tr><td>Enhanced security (checkbox on a task card)</td><td>Off by default. Tick it to make that task's app also ship a short threat model, a security test pass and a controls register, which the Reviewer then checks. Choose before Delivery's first review request: the choice locks at that moment and shows "locked at review". Every app gets the central error catch-all regardless.</td></tr>
-              <tr><td>Settings</td><td>Changes default provider, model, effort, and connection tests for new agent sessions.</td></tr>
-              <tr><td>Help</td><td>Opens this guide.</td></tr>
-            </tbody>
-          </table>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-nohappy-title">
+            <h2 id="help-nohappy-title">Why It Takes Its Time (No Happy Path)</h2>
+            <p>The happy path is the demo where everything goes right on the first try. This app is built on the opposite assumption: an agent saying "done" proves nothing. So it deliberately spends time other tools skip:</p>
+            <ul class="help-list">
+              <li><strong>Cross-checking by a competing vendor.</strong> The agent that wrote the code never judges it; a reviewer from the other company runs the work itself and can fail it.</li>
+              <li><strong>Scenario tests, not just the sunny case.</strong> Agents are required to build and run tests for the failure paths — wrong input, missing files, things breaking mid-way — before claiming success.</li>
+              <li><strong>Ledgers.</strong> Every claim is written down with the command that proves it and its output, so "it works" is always traceable to evidence you can reread later.</li>
+              <li><strong>Simulations.</strong> Risky changes are rehearsed against realistic conditions before they are allowed to land.</li>
+            </ul>
+            <p class="help-callout">This is why a task can look slow while the bars barely move: the time is going into checks designed to catch what a quick demo would hide. Slower to say done — far less likely to be wrong when it does.</p>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-progress-title">
-          <h2 id="help-progress-title">Read The Progress Bars</h2>
-          <ul class="help-list">
-            <li><strong>Whole task</strong> shows the required steps done so far: your direction, the building and its checks, the independent review, the final checks, your test, and your acceptance.</li>
-            <li><strong>Current stage</strong> shows progress inside the active phase. It can move while the whole-task bar stays flat.</li>
-            <li>The bars are not a timer. Review, repair, release checks, or owner validation can add time without meaning the code is being rewritten.</li>
-            <li>Red or repair-colored progress means a gate needs attention or a repair cycle. Open the task or agent status and read <strong>What happens next</strong>.</li>
-            <li>If progress appears stuck, check the CTO status first. It should say whether work is active, waiting for review, waiting for release checks, or waiting for you.</li>
-          </ul>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-reach-title">
+            <h2 id="help-reach-title">What The Agents Can Reach</h2>
+            <p>These agents run on your own machine, as you. Here is exactly where that stops, without softening:</p>
+            <ul class="help-list">
+              <li><strong>An agent cannot change files outside your project on this machine.</strong> It is launched with write access limited to the project folder and the app&rsquo;s own working folders; that limit does not follow a command onto a test machine you name (below). A write anywhere else &mdash; your Documents, your keys, another project &mdash; is refused by the operating system, not merely discouraged.</li>
+              <li><strong>On Linux, a Claude or Gemini agent (and the test commands the app runs for it) can read only what it needs.</strong> It is launched in a sandbox that holds the system programs and settings (<code>/usr</code>, <code>/etc</code>, the libraries), the project, the app&rsquo;s working folders, the agent&rsquo;s own settings and caches, and the tools it runs with (node, python, the CLI, the app&rsquo;s own install). Your home folder, other projects, ssh keys and tokens are not there at all &mdash; a read fails as &ldquo;no such file&rdquo; &mdash; except the folders of programs found on your PATH (that folder only) and anything you list below. Still visible to it: the shared <code>/tmp</code> and <code>/var/tmp</code>, the shared caches and settings folders of its own CLI, and everything in the system folders above (including any file of yours kept in <code>/etc</code> or <code>/usr</code>, and the install folders of the tools it runs) &mdash; so these are limits, not a guarantee that nothing outside the project can be read. If an agent genuinely needs another folder (for example an ssh key), list it in <code>HARNESS_AGENT_READ_PATHS</code> (folders separated by a colon) before starting the app. This applies to agents started after this update: an agent that was already running keeps its old, wider access until you restart it.</li>
+              <li><strong>On macOS, and for Codex agents on any system, an agent can still READ anything you can.</strong> That is a real limit of the tooling, not a choice: macOS and the Codex CLI can scope writes but not reads. Anything it reads can travel to OpenAI, Anthropic or Google (for a Gemini agent) as part of doing the work.</li>
+              <li><strong>The app&rsquo;s own Git work is sandboxed too</strong>, to the paths that operation needs.</li>
+              <li><strong>An agent can reach the network, including a test machine you name.</strong> If you tell the agents to build here and test on another machine (for example a Windows VM), you do one thing: press <em>Connect</em> on the project&rsquo;s <em>Test machine</em> card in this list and enter the machine&rsquo;s address, account name and password. Mission Control itself (not an agent) reads the machine&rsquo;s identity (its host key, shown to you and saved), makes a key for this project, signs in once with the password, installs the key, and proves the key works. The password is used for that one connection and forgotten: it is never saved, logged or shown to an agent, and it is only accepted on the computer that runs Mission Control. Whenever the project stops for any reason (pause, close, restart), or the key stops working, the card asks for the password again (a connection you make while the project is paused stays valid when you resume it), and any test result that depends on the machine waits for it; everything else keeps going. If an agent needs the machine and it is not connected, the card appears here by itself with what the agent said it needs it for; you never have to look in a terminal window. Use a throwaway machine and a password that exists only for it: the agents hold a key with the same power over it as the password gives, so keep it away from your files and the other machines on your network, and use one machine per project. You create it and destroy it when you are done; Delivery tells you what size to make it, and the agents install what they need on it themselves and clean up what their runs leave. The board keeps a passed result for an unchanged test command, unchanged code and an unchanged machine; reconnecting, restarting or changing the machine makes those results stale and the agents re-run them. What Mission Control cannot detect: an agent&rsquo;s own ssh with its key (the reviewer rejects a test that reaches the machine without the machine&rsquo;s test form). Each test command the board certifies must finish within five minutes, copying included, so long batteries are split. The first connection trusts the identity Mission Control reads from the machine at that moment; if it later changes, the card stops before any password is sent and asks you to confirm that you rebuilt the VM.</li>
+            </ul>
+            <p class="help-callout">In practice: your files are safe from being <em>changed</em> outside the project on this machine (not on a test machine you name, where the account you give the agents decides), and from being <em>read</em> by Claude and Gemini agents on Linux. On macOS, and for Codex agents, they are not safe from being <em>read</em>: if there are files you would not hand to OpenAI, Anthropic or Google, keep them off this machine, put them under an account these agents do not run as, or run NoMoreHappyPath inside a virtual machine that only has the code you are willing to share. Judge the app on what it does now, not on what may come.</p>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-accept-title">
-          <h2 id="help-accept-title">Accept Or Reject Completed Work</h2>
-          <ol class="help-steps">
-            <li>Wait until Mission Control explicitly says the reviewed release is ready for your test. Delivery saying it is done is not enough.</li>
-            <li>Open the app from the release panel (View app) when one is provided.</li>
-            <li>Run the visible checklist shown under <strong>What to test before accepting</strong>. Add your own checks when the task needs them.</li>
-            <li>Click <strong>Accepted</strong> only when the reviewed version works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
-            <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation.</li>
-          </ol>
-        </section>
+        </div>
 
-        <section class="help-section" aria-labelledby="help-history-title">
-          <h2 id="help-history-title">Use Task History</h2>
-          <p>Completed tasks move into Task history after release and owner response. History keeps the full user directive, final agreed requirements, owner-readable Delivery checks, reviewer checks, failed attempts, repairs, and final outcomes.</p>
-          <ul class="help-list">
-            <li>Use search with normal words from the task, requirement, or test description.</li>
-            <li>Open older entries to see what was accepted, what was rejected, and what was tested.</li>
-            <li>History is evidence for the project assistant. If the board has no data for a question, the assistant should say it does not know.</li>
-          </ul>
-        </section>
+        <div class="help-group" id="help-group-talking-to-agents" data-help-group>
+          <h2 class="help-group-title">Talking to agents</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-go-title">
+            <h2 id="help-go-title">Agree The Requirements And Say Go Ahead</h2>
+            <ol class="help-steps">
+              <li><strong>The first time an agent opens a project folder, its CLI asks whether you trust that folder.</strong> This comes from Codex and Claude themselves, not from this app — read it and answer deliberately: it is your confirmation that these agents may work in that exact folder. Each role (Delivery, Reviewer, CTO) asks once. Gemini does not ask: the project you open in this app is recorded as trusted for it. If Gemini ever shows that question anyway, the app says so and waits for you to answer it in its window.</li>
+              <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long. Choose the kind of work (Write code, Analyze code or Write specs) when you start the Delivery agent; if you did not, the Give direction box asks.</li>
+              <li>Delivery may ask clarifying questions in its terminal window — answer there; that conversation shapes the requirements.</li>
+              <li>When the requirements are agreed, Delivery <strong>files them on the board</strong>. The task card then shows <strong>"Final agreed requirements — your decision"</strong> with the full text and two buttons. Nothing is built before your decision.</li>
+              <li>Read the text as the task contract it is. Click <strong>Go ahead — this is the contract</strong> when it matches what you want built; click <strong>Modify…</strong> to describe changes — Delivery revises and files a new version for your decision. Every click is recorded with a timestamp; typing "go ahead" in the terminal is not authorization.</li>
+              <li>After work starts, use <strong>Send clarification</strong> for necessary corrections. New feature ideas should usually become a new task after the current one is accepted.</li>
+            </ol>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-lifecycle-title">
-          <h2 id="help-lifecycle-title">Pause, Close, Or Remove A Project</h2>
-          <table class="help-table">
-            <thead><tr><th>Action</th><th>What it means</th></tr></thead>
-            <tbody>
-              <tr><td>Pause project</td><td>Stops agent work safely and freezes the board. Open it later and everything resumes from the saved state.</td></tr>
-              <tr><td>Close project (on the board)</td><td>Parks the board and returns to Projects. Nothing is lost; Open brings it right back. Closing also lets a waiting app update apply.</td></tr>
-              <tr><td>Remove</td><td>Takes the project off this list only. Your code folder on disk is never deleted.</td></tr>
-            </tbody>
-          </table>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-direct-title">
+            <h2 id="help-direct-title">Talking To The Agents Directly</h2>
+            <p>Click <strong>View agent</strong> beside any agent: Linux opens its existing live session in your browser; macOS focuses its Terminal window or reopens a closed window for that same session. Closing the view or CLI window leaves the agent running. You can type to any agent at any time — ask what they are doing, why a decision was made, or for a plain-language summary.</p>
+            <p class="help-callout"><strong>First time an agent opens in a project, stay at your computer.</strong> Claude may ask <em>Do you trust this folder?</em> &mdash; choose <strong>Yes, I trust this folder</strong>. Codex may ask the same &mdash; choose <strong>Trust and continue</strong>. Open the agent with <strong>View agent</strong> to answer. Mission Control shows the agent as waiting for you until you do, and nothing else moves on that agent until then.</p>
+            <p class="help-callout"><strong>Be careful while work is running.</strong> A message typed into a busy agent is not a side conversation — the agent stops to handle it. Interrupting a build, a review, or a release check inserts your request into the middle of that work and can slow it down or derail it. If it can wait, let the current stage finish and read the agent's status first; if you must redirect running work, use <strong>Send clarification</strong> so the change is recorded on the task, not lost in scrollback. New ideas belong in a new task after this one is accepted.</p>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-limits-title">
-          <h2 id="help-limits-title">Your Responsibility, And What The Agents Can Do</h2>
-          <p class="help-callout"><strong>Using this software is entirely your own responsibility.</strong> It is provided as-is, with no warranty of any kind — see the LICENSE. You decide what the agents work on, you review the results, and you own what you accept and where you deploy it. Bugs and defects in the app, or in what its agents build, are not the responsibility of KpiMinds LLC to the extent applicable law allows; the license covers this software, not the projects you build with it.</p>
-          <ul class="help-list">
-            <li><strong>The Codex and Claude CLI agents can do whatever they need to do inside the project folder you choose</strong> — create, edit, delete, and run code there. That power is what makes them useful, and it is real: <strong>be careful which folder you point them at.</strong></li>
-            <li>Never choose a folder holding things you cannot afford to lose without a safety net. Keep the project in version control (git) or back it up first; adopt the exact project folder, not a parent folder that contains unrelated work.</li>
-            <li>Agents spend money on <strong>your</strong> OpenAI, Anthropic and Google accounts while they work. Their usage is your bill; the Stop buttons exist for a reason.</li>
-            <li>Everything runs and stays on your Mac. Nothing is sent to us — which also means we cannot see, restore, or recover anything for you.</li>
-            <li>Clicking <strong>Accepted</strong> is your decision. The platform gates and collects evidence, but the final judgment — especially before anything reaches real users — is yours.</li>
-          </ul>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-chat-title">
+            <h2 id="help-chat-title">Ask About This Project</h2>
+            <p>The project assistant is read-only. Ask about anything in the project's history — what has been finished so far, whether something was already done ("did we upgrade the SEO agent?"), current status, remaining work, blockers, reviews, releases, timing, or what you should do next. Answers cover every task the project has recorded, in plain sentences. It answers from project records only and refuses unrelated general questions or requests to build code. It needs your OpenAI key from Settings (see "Switch On Project Chat") and costs a fraction of a cent per question.</p>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-trouble-title">
-          <h2 id="help-trouble-title">When Something Looks Wrong</h2>
-          <table class="help-table">
-            <thead><tr><th>What you see</th><th>What it means and what to do</th></tr></thead>
-            <tbody>
-              <tr><td>Chat box is greyed with a notice</td><td>No working OpenAI key. Open Settings → Project chat key and save one; the notice names the exact problem when a key exists but cannot be used.</td></tr>
-              <tr><td>An agent launch button is greyed</td><td>That role is at its session limit. Stop one of its running terminals first.</td></tr>
-              <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
-              <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes.</td></tr>
-              <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
-              <tr><td>A red blinking banner says an agent is waiting for you</td><td>That agent's Terminal window has stopped at a question — usually a "Do you want to proceed?" permission prompt, or a line that says it needs you to act — and nothing moves until it is answered. Switch to that Terminal window and answer it. Managed agents are launched so this should not happen; if it keeps happening, note which prompt you saw and tell your developer.</td></tr>
-              <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI, Anthropic or Google account ran out of credit or hit its usage limit (Gemini: your Google AI plan's quota, billing at one.google.com). <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
-              <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
-              <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
-              <tr><td>"Update now" does not appear although a newer version exists</td><td>A project is running. Pause or close it and check again — the app never restarts under running work. If the dialog reports local changes instead, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command.</td></tr>
-              <tr><td>Leftover app processes ("ghost shells")</td><td>Run <strong>bash scripts/stop_all.sh</strong> from the installation folder — it stops only that installation's processes and its auto-start service; --list previews first.</td></tr>
-              <tr><td>Something else</td><td>The app's log is at ~/Library/Logs/harness-next.log — its last lines usually name the problem.</td></tr>
-            </tbody>
-          </table>
-        </section>
+          <section class="help-section" data-help-item aria-labelledby="help-key-title">
+            <h2 id="help-key-title">Switch On Project Chat (OpenAI Key)</h2>
+            <ol class="help-steps">
+              <li>The chat box on every project board stays <strong>greyed off until a working key is saved</strong>. The notice above the box says exactly this.</li>
+              <li>Open <strong>Settings</strong> and find the <strong>Project chat key</strong> card. Paste the key from your OpenAI account (platform.openai.com → API keys) and click <strong>Save and connect</strong>.</li>
+              <li>The key is checked with OpenAI <strong>before</strong> it is stored. A key OpenAI rejects is never saved, and the card tells you why in plain words.</li>
+              <li>When the badge shows <strong>Connected</strong>, chat is on everywhere. The key is kept on this Mac in a file only you can read, shown on screen only as its last 4 characters.</li>
+              <li>Use <strong>Test connection</strong> any time to re-check the saved key, <strong>Replace and connect</strong> to change it, and <strong>Remove key</strong> to switch chat off.</li>
+            </ol>
+          </section>
 
-        <section class="help-section" aria-labelledby="help-legal-title">
-          <h2 id="help-legal-title">Legal — Apache 2.0, and a Safety Notice</h2>
-          <p class="help-callout"><strong>This software is open source under the Apache License, Version 2.0.</strong> It is provided as-is, without warranty, and the license limits liability (sections 7 and 8). The AI agents act autonomously and can create, change, delete, execute and spend on the accounts you connect; the <strong>Legal</strong> page carries an informational safety notice about that. The notice adds no conditions to the license.</p>
-          <p>The full license ships as the LICENSE file with the software; the safety notice ships as the DISCLAIMER file beside it and is repeated on the <strong>Legal</strong> page in the top menu.</p>
-        </section>
+        </div>
 
-        <section class="help-section" aria-labelledby="help-chat-title">
-          <h2 id="help-chat-title">Ask About This Project</h2>
-          <p>The project assistant is read-only. Ask about anything in the project's history — what has been finished so far, whether something was already done ("did we upgrade the SEO agent?"), current status, remaining work, blockers, reviews, releases, timing, or what you should do next. Answers cover every task the project has recorded, in plain sentences. It answers from project records only and refuses unrelated general questions or requests to build code. It needs your OpenAI key from Settings (see "Switch On Project Chat") and costs a fraction of a cent per question.</p>
-        </section>
+        <div class="help-group" id="help-group-windows-programs" data-help-group>
+          <h2 class="help-group-title">Windows programs</h2>
+          <section class="help-section" data-help-item id="help-windows-vm" aria-labelledby="help-windows-vm-title">
+            <h2 id="help-windows-vm-title">Create The Windows Test Machine</h2>
+            <p><strong>Why.</strong> Some programs only prove themselves on real Windows. The agents build the program (here, or on the machine, whichever works) and run its tests on a Windows machine that you give them. Make it a disposable one, with none of your personal files, no shared folders, no disks of yours attached, and no access to anything on your network you care about: the agents run commands there with the account you give them. Use one machine per project. You create it and, when the project is finished, you destroy it; NoMoreHappyPath never creates, resets or deletes it.</p>
+            <p><strong>Where it runs does not matter.</strong> A virtual machine on a Mac, a Linux computer or a PC, or a spare Windows computer: Windows is Windows. You do four things.</p>
+            <ol class="help-steps">
+              <li><strong>Create it and size it.</strong> In your virtual machine software (or on the spare computer), install Windows 10 or 11 (or Windows Server 2019 or newer) from Microsoft&rsquo;s own installer (<a href="https://www.microsoft.com/software-download/windows11" target="_blank" rel="noopener">Microsoft&rsquo;s Windows 11 download</a>; on a Mac with Apple silicon, <a href="https://docs.getutm.app/guides/windows/" target="_blank" rel="noopener">UTM&rsquo;s Windows guide</a> shows how to get and install the right image; any virtual machine software has a similar guide), make a local account with a password you use nowhere else, and get to its desktop. Give it at least 2 processor cores, 4 GB of memory and 64 GB of disk; comfortable is 4 cores, 8 GB and 100 GB. Delivery restates the exact needs for your project before its first test, so a small machine now can still be enlarged.</li>
+              <li><strong>Turn on the ssh server.</strong> On the Windows machine, open PowerShell as Administrator and run these three lines once (Microsoft&rsquo;s own steps: <a href="https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse" target="_blank" rel="noopener">Get started with OpenSSH Server for Windows</a>; Windows Server 2025 already has it installed):
+                <pre class="help-code">Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+  Set-Service -Name sshd -StartupType Automatic
+  Start-Service sshd</pre>
+                Password sign-in is on by default. The installer also opens port 22 in the Windows firewall; to check, run <code>Get-NetFirewallRule -Name OpenSSH-Server-In-TCP</code>.</li>
+              <li><strong>Make sure this computer can reach it.</strong> On the Windows machine run <code>ipconfig</code> and note the &ldquo;IPv4 Address&rdquo;. In the Terminal of the computer that runs Mission Control, run <code>ssh -F /dev/null -o PubkeyAuthentication=no account@address</code> (the same plain password sign-in Mission Control uses) (add <code>-p port</code> if you changed the port) and type the password: a Windows prompt means it works (type <code>exit</code>). &ldquo;Connection refused&rdquo; or a timeout means the machine is off, the address is wrong, the ssh service is not running, or its network is not shared or bridged with this computer. &ldquo;Permission denied&rdquo; means it is reachable but the account or password is wrong, or the server has password sign-in turned off. A warning that the host key changed means this address now answers with a different identity: stop, and go on only if you know you rebuilt the machine.</li>
+              <li><strong>Give NoMoreHappyPath access.</strong> In Mission Control, on the <strong>Projects</strong> page, press <strong>Test machine</strong> on the project (or <strong>Connect</strong> on the orange card an agent raised; the same <strong>Test machine</strong> button is also in the project&rsquo;s own Mission Control header), type the address, the account name and the password, and press <strong>Connect</strong>. The first connection trusts the machine&rsquo;s identity as it finds it at that moment, which is why it should be a machine on your own network that you just made; the window then shows the machine&rsquo;s host key, and on the Windows machine <code>ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub</code> prints the same one if you want to compare. The password is used for that one sign-in and forgotten.</li>
+            </ol>
+            <p><strong>Everything else is the agents&rsquo; job.</strong> They find out which Windows it is (including whether it is the ARM or the x86-64 kind), choose the matching toolchain, install the tools they need, and clean up after every test. Some projects need an Administrator account (for example to test changes to the registry) or extra tools; Delivery tells you before its first test, so you never have to guess.</p>
+            <ul class="help-list">
+              <li><strong>Snapshot.</strong> Right after step 3, take a snapshot of the clean machine if your virtual machine software offers it. It is the easy way to start over.</li>
+              <li><strong>After you restore a snapshot, rebuild or change the machine,</strong> press <strong>Test machine</strong> and <strong>Connect</strong> again (the card does not know the machine was swapped under it) and tell Delivery. Connecting again makes every earlier result that depended on the machine stale; Delivery then sends the work for review again and the reviewer runs the tests again. A pause, a close, an app restart or a key that stops working makes the card ask for the password by itself; if you press Connect while the project is paused, the Resume keeps it.</li>
+              <li><strong>If Windows asks to restart</strong> (for example after an update), let it restart: the ssh server starts again by itself. Because an update changes the machine, press <strong>Connect</strong> again afterwards and tell Delivery, as for a restored snapshot.</li>
+              <li><strong>If the address changes,</strong> press Connect with the new address. To avoid it, give the machine a fixed address in your router or virtual machine software.</li>
+              <li><strong>When the project is finished,</strong> press <strong>Release this machine</strong> in the Test machine window (that frees it for another project; the key the agents installed stays on the machine), then destroy the virtual machine in your software, or, for a spare computer, wipe and reinstall Windows (or at least turn the ssh server off with <code>Stop-Service sshd</code> and <code>Set-Service sshd -StartupType Disabled</code>).</li>
+              <li><strong>Optional:</strong> on a Mac with Apple silicon, virtual machine software such as UTM runs the ARM version of Windows 11; on a PC, VMware, VirtualBox or Hyper-V run the usual x86-64 one. Either is fine.</li>
+            </ul>
+          </section>
+
+          <section class="help-section" data-help-item id="help-windows-tools" aria-labelledby="help-windows-tools-title">
+            <h2 id="help-windows-tools-title">Windows Programs: What To Expect</h2>
+            <p>Once your Windows test machine is connected (above), this is what happens, in plain words. You do not need to know how the program is built.</p>
+            <ol class="help-steps">
+              <li><strong>You say what you want.</strong> For example &ldquo;a small Windows tool that tells me which program is using a port&rdquo;. Delivery says which Windows machine it needs and builds the program.</li>
+              <li><strong>The agents set up the machine themselves.</strong> After the one-time setup above, they connect to it over ssh and install the build and test tools they need there; you do not install those or type commands into the machine to get the work done.</li>
+              <li><strong>The program is tested on the real Windows machine</strong>, and the independent reviewer (from the other AI company) runs the tests again on the same machine in its own folder.</li>
+              <li><strong>You are asked for the password again after any stop.</strong> Pausing, closing or restarting the project, or a key that stops working, makes the <strong>Test machine</strong> card ask for the password again. Enter it and press Connect; the agents carry on. The same <strong>Test machine</strong> button is in the project&rsquo;s own header.</li>
+              <li><strong>If part of the work could not be tested, you are told.</strong> The project says <strong>Not fully tested</strong> as soon as a review ends that way, and the agents settle it themselves; you are not asked to wait or to choose. If it still cannot be completed after the safety nets chosen in Settings, the task says <strong>could not finish</strong> and nothing ships. Security, the independent review itself and the integrity of the code cannot be waived.</li>
+              <li><strong>When it passes, you get the program: Get the build.</strong> For a new task whose Delivery declared a program build, the acceptance card shows <strong>Get the build</strong> instead of <strong>View app</strong> (a Windows program has nothing to open in a browser; a task that also delivers a web app keeps View app). Projects accepted before this existed keep their old card; a new task is needed to get a program this way. It lists each file with its size and its SHA-256 fingerprint, which machine it was built and tested on, and from which version of the code; it says which Windows it is for, what you need (for example Administrator rights), the steps to try it and what you should see; a line under each file says whether it was started on the test machine before it was collected.</li>
+            </ol>
+            <p><strong>How to try the program.</strong> Press <strong>Download</strong>, then check that the file is the one that was tested: on Windows run <code>Get-FileHash file.exe</code> in PowerShell (on a Mac <code>shasum -a 256 file</code>, on Linux <code>sha256sum file</code>) and compare it with the SHA-256 on the card; they must match. If they do not, stop and report it: do not run the file. Then follow the steps on the card on a compatible Windows machine (the program is for Windows even when Mission Control runs on a Mac or Linux computer). Windows may warn you that the program is from an unknown publisher: the programs are not code-signed, so run one only because you asked for it. The download keeps working after you accept the work and after you destroy the test machine.</p>
+            <ul class="help-list">
+              <li><strong>What the app does not do.</strong> It never creates, resets or deletes your Windows machine; one machine serves one project; keep it a throwaway; it does not run on Windows itself (only the machine under test is Windows); it does not sign or publish your program; it does not run the program for you.</li>
+              <li><strong>What a test can and cannot show.</strong> The tests only prove what that one machine can show. When a case cannot happen there, the reviewer says <strong>NOT TESTED</strong> and the project is marked <strong>Not fully tested</strong>, as above.</li>
+            </ul>
+          </section>
+
+        </div>
+
+        <div class="help-group" id="help-group-costs-and-limits" data-help-group>
+          <h2 class="help-group-title">Costs and limits</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-limit-title">
+            <h2 id="help-limit-title">When Claude Or Codex Runs Out Of Allowance</h2>
+            <p>Claude and Codex work on your own accounts, and an account has a usage allowance. When one runs out, the program stops and prints its own message ("You've hit your session limit &middot; resets 9:43pm" for Claude, "You've hit your usage limit ... try again at 9:45 PM" for Codex). The harness reads that message and waits with it instead of treating the silence as a crash.</p>
+            <ul class="help-list">
+              <li><strong>What you see:</strong> one amber note on the project page (and on the Projects page) in plain words, for example <em>"The Delivery agent (Codex) shows Codex's usage-limit message; it announced 10:06 PM. Nothing is sent to it until the message goes; it continues then."</em> That agent's row reads <strong>WAITING: USAGE LIMIT</strong>. If the program printed no usable time, the note says <strong>(estimated)</strong> and the harness looks again about an hour later. A time on another day shows its date. There is no red alarm, because nothing is needed from you.</li>
+              <li><strong>What the harness does:</strong> it holds <strong>that one agent</strong>. Nothing is typed into its window, it is not restarted and not replaced, and its messages wait in line. The other agents keep working. Claude Code continues by itself at the announced time. If the message is still on the screen a minute after the announced time, the harness types <strong>one</strong> short line ("Please continue where you stopped"; a Reviewer is asked to check the board for its current assignment). If it is still there a minute after that, the note says so and the agent keeps waiting.</li>
+              <li><strong>When the message goes away</strong> (the program answered, or the line left the screen) the waiting ends, the queued messages are delivered, and for two minutes the harness will not treat the agent as stuck while it picks up again.</li>
+              <li><strong>Reviews stay independent.</strong> If the Reviewer is the one waiting, the review waits for it. The harness does not start a second Reviewer against the same allowance, and it never hands a review to the company that wrote the work. A review that was waiting for a long time may be reopened and picked up again; an obsolete assignment is never typed.</li>
+              <li><strong>What it does not do:</strong> it does not switch an agent to another company mid-task, use a different account, or use an API key to get around a limit. Gemini's own quota message is handled as before: the banner asks you to choose another provider for that role in Settings.</li>
+            </ul>
+            <p class="help-callout">If the note is wrong (for example the agent only quoted the message in its own text), <strong>type any message into that agent's terminal window</strong>. When the program answers, the harness continues by itself. Usually you only wait: the note tells you the time.</p>
+          </section>
+
+        </div>
+
+        <div class="help-group" id="help-group-when-stuck" data-help-group>
+          <h2 class="help-group-title">When something is stuck</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-trouble-title">
+            <h2 id="help-trouble-title">When Something Looks Wrong</h2>
+            <table class="help-table">
+              <thead><tr><th>What you see</th><th>What it means and what to do</th></tr></thead>
+              <tbody>
+                <tr><td>Chat box is greyed with a notice</td><td>No working OpenAI key. Open Settings → Project chat key and save one; the notice names the exact problem when a key exists but cannot be used.</td></tr>
+                <tr><td>An agent launch button is greyed</td><td>That role is at its session limit. Stop one of its running terminals first.</td></tr>
+                <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
+                <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes. <strong>Cancel this task</strong> still works while paused.</td></tr>
+                <tr><td>An agent was refused the same thing three times</td><td>The app logs it as a defect and wakes the CTO to fix it or hand the agent the exact workaround. The task is not put on hold and you do not need to do anything.</td></tr>
+                <tr><td>A change you expected has not appeared</td><td>An update is waiting for the open project to close. Close or pause it and the app restarts itself within seconds.</td></tr>
+                <tr><td>A red blinking banner says an agent is waiting for you</td><td>That agent's Terminal window has stopped at a question — usually a "Do you want to proceed?" permission prompt, or a line that says it needs you to act — and nothing moves until it is answered. Switch to that Terminal window and answer it. Managed agents are launched so this should not happen; if it keeps happening, note which prompt you saw and tell your developer.</td></tr>
+                <tr><td>An agent stops with quota, credit, or billing errors — or just stalls</td><td>Your OpenAI, Anthropic or Google account ran out of credit or hit its usage limit (Gemini: your Google AI plan's quota, billing at one.google.com). <strong>The app does not crash</strong> — the agent's terminal shows the provider's error, and Settings → Test connection names the account that needs attention. Top up or upgrade on the provider's site (OpenAI: platform.openai.com/billing · Anthropic: your Claude plan), then continue the task; nothing on the board is lost.</td></tr>
+                <tr><td>An agent dies with "requires a newer version" or a 400 error about the model</td><td>The installed CLI is older than the model you chose, or your account has no access to it. Update that CLI (Codex: <strong>npm install -g @openai/codex</strong>; Claude: reinstall from claude.com/claude-code), or pick a different model in Settings. <strong>Test connection</strong> now makes a real one-word request, so it catches this before a task starts.</td></tr>
+                <tr><td>The console runs a CLI but the app says it is not found</td><td>The app does not read your shell profile. It searches the standard install locations itself (including ~/.local/bin); click Test connection again after installing. If the CLI lives somewhere unusual, move or link it into ~/.local/bin.</td></tr>
+                <tr><td>"Update now" does not appear although a newer version exists</td><td>A project is running. Pause or close it and check again — the app never restarts under running work. If the dialog reports local changes instead, your installation folder was edited by hand; the update refuses to overwrite anything and shows the manual command.</td></tr>
+                <tr><td>Leftover app processes ("ghost shells")</td><td>Run <strong>bash scripts/stop_all.sh</strong> from the installation folder — it stops only that installation's processes and its auto-start service; --list previews first.</td></tr>
+                <tr><td>Something else</td><td>The app's log is at ~/Library/Logs/harness-next.log — its last lines usually name the problem.</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="help-section" data-help-item aria-labelledby="help-lifecycle-title">
+            <h2 id="help-lifecycle-title">Pause, Close, Or Delete A Project</h2>
+            <table class="help-table">
+              <thead><tr><th>Action</th><th>What it means</th></tr></thead>
+              <tbody>
+                <tr><td>Pause project</td><td>Stops agent work safely and freezes the board. Open it later and everything resumes from the saved state. You can still cancel a task while the project is paused.</td></tr>
+                <tr><td>Close project (on the board)</td><td>Parks the board and returns to Projects. Nothing is lost; Open brings it right back. Closing also lets a waiting app update apply.</td></tr>
+                <tr><td>Projects list</td><td>Only the project that is open is loaded. Every other project shows <em>Not open. Open or resume it to see its progress.</em> Its Open, Resume, Delete and Test machine buttons still work, and its Test machine window shows that project's saved machine when you open it.</td></tr>
+                <tr><td>Delete</td><td>Takes the project off this list, including the one that is open (it is closed first). Your code folder on disk is never deleted; delete it in Finder if you want it gone.</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+        </div>
+
+        <div class="help-group" id="help-group-legal" data-help-group>
+          <h2 class="help-group-title">Legal</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-limits-title">
+            <h2 id="help-limits-title">Your Responsibility, And What The Agents Can Do</h2>
+            <p class="help-callout"><strong>Using this software is entirely your own responsibility.</strong> It is provided as-is, with no warranty of any kind — see the LICENSE. You decide what the agents work on, you review the results, and you own what you accept and where you deploy it. Bugs and defects in the app, or in what its agents build, are not the responsibility of KpiMinds LLC to the extent applicable law allows; the license covers this software, not the projects you build with it.</p>
+            <ul class="help-list">
+              <li><strong>The Codex and Claude CLI agents can do whatever they need to do inside the project folder you choose</strong> — create, edit, delete, and run code there. That power is what makes them useful, and it is real: <strong>be careful which folder you point them at.</strong></li>
+              <li>Never choose a folder holding things you cannot afford to lose without a safety net. Keep the project in version control (git) or back it up first; adopt the exact project folder, not a parent folder that contains unrelated work.</li>
+              <li>Agents spend money on <strong>your</strong> OpenAI, Anthropic and Google accounts while they work. Their usage is your bill; the Stop buttons exist for a reason.</li>
+              <li>Everything runs and stays on your Mac. Nothing is sent to us — which also means we cannot see, restore, or recover anything for you.</li>
+              <li>Clicking <strong>Accepted</strong> is your decision. The platform gates and collects evidence, but the final judgment — especially before anything reaches real users — is yours.</li>
+            </ul>
+          </section>
+
+          <section class="help-section" data-help-item aria-labelledby="help-legal-title">
+            <h2 id="help-legal-title">Legal — Apache 2.0, and a Safety Notice</h2>
+            <p class="help-callout"><strong>This software is open source under the Apache License, Version 2.0.</strong> It is provided as-is, without warranty, and the license limits liability (sections 7 and 8). The AI agents act autonomously and can create, change, delete, execute and spend on the accounts you connect; the <strong>Legal</strong> page carries an informational safety notice about that. The notice adds no conditions to the license.</p>
+            <p>The full license ships as the LICENSE file with the software; the safety notice ships as the DISCLAIMER file beside it and is repeated on the <strong>Legal</strong> page in the top menu.</p>
+          </section>
+
+        </div>
       </div>
     </section>
 
@@ -741,11 +927,11 @@ Start-Service sshd</pre>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">
     <form class="modal" id="remove-form">
-      <h2 id="remove-title">Remove project?</h2>
-      <p class="modal-copy">Remove <strong id="remove-project-name"></strong> from this list?</p>
-      <p class="danger-copy">Only the registry entry is removed. The project folder, source files, harness data, and workspaces are never deleted.</p>
+      <h2 id="remove-title">Delete project?</h2>
+      <p class="modal-copy">Delete <strong id="remove-project-name"></strong>? This removes it from your list.</p>
+      <p class="danger-copy">Your folder <strong id="remove-project-folder"></strong> is not deleted; delete it in Finder if you want it gone.</p>
       <p class="form-error" id="remove-error" role="alert" aria-live="polite"></p>
-      <div class="dialog-actions"><button class="button secondary" type="button" id="remove-cancel">Cancel</button><button class="button danger" type="submit" id="remove-confirm">Remove from list</button></div>
+      <div class="dialog-actions"><button class="button secondary" type="button" id="remove-cancel">Cancel</button><button class="button danger" type="submit" id="remove-confirm">Delete</button></div>
     </form>
   </dialog>
 
@@ -775,9 +961,9 @@ Start-Service sshd</pre>
       if (Number.isNaN(date.getTime())) return 'Activity recorded';
       return new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}).format(date);
     };
-    const machineStrip = (project) => {
+    const machineParts = (project) => {
       const m = project.test_machine || {};
-      if (!m.state || m.state === 'unknown') return '';
+      if (!m.state || m.state === 'unknown') return {html: '', needs: false};
       const needsWork = Boolean(m.request && m.request.reason) || (m.connected && !m.usable) || ['damaged', 'reauth_required', 'manager_down', 'baseline_incomplete'].includes(m.state);
       const where = m.connected ? `${esc(m.user)}@${esc(m.address)}` : '';
       let text;
@@ -785,12 +971,40 @@ Start-Service sshd</pre>
       else if (m.connected && !m.usable && m.state === 'baseline_incomplete') text = `<strong>Test machine ${where}: tools are being changed.</strong> The agents finish this themselves; nothing for you to do.`;
       else if (m.connected && !m.usable) text = `<strong>Test machine ${where} needs you.</strong> ${esc(m.cause_text || m.message)}`;
       else if (m.connected) text = `<strong>Test machine connected: ${where}</strong>, ${m.ready ? 'ready for testing' : 'agents are still setting it up'}.`;
-      else if (m.state === 'not_connected' && !(m.request && m.request.reason)) return '';
+      else if (m.state === 'not_connected' && !(m.request && m.request.reason)) return {html: '', needs: false};
       else text = `<strong>Test machine not connected.</strong> ${esc(m.message || '')}`;
       const recovering = (m.recovering || []).length ? `<small>Recovering ${(m.recovering || []).length} request${(m.recovering || []).length === 1 ? '' : 's'}: the agents are re-running work that depended on the old connection.</small>` : '';
       const fingerprint = m.connected && m.fingerprint ? `<small>Machine identity ${esc(m.fingerprint)}</small>` : '';
       const helpLink = m.connected && m.usable ? '' : '<small><a href="?page=help#help-windows-vm" data-help-link>How to create the Windows test machine</a></small>';
-      return `<div class="machine-card ${needsWork ? 'needs' : m.usable ? 'ok' : ''}" data-machine-card="${esc(project.id)}"><div class="machine-line"><span>${text}</span><button class="button ${needsWork ? '' : 'secondary'}" data-act="machine" data-id="${esc(project.id)}">${m.connected && m.usable ? 'Manage' : 'Connect'}</button></div>${fingerprint}${recovering}${helpLink}</div>`;
+      return {needs: needsWork, html: `<div class="machine-card ${needsWork ? 'needs' : m.usable ? 'ok' : ''}" data-machine-card="${esc(project.id)}"><div class="machine-line"><span>${text}</span><button class="button ${needsWork ? '' : 'secondary'}" data-act="machine" data-id="${esc(project.id)}">${m.connected && m.usable ? 'Manage' : 'Connect'}</button></div>${fingerprint}${recovering}${helpLink}</div>`};
+    };
+    const machineStrip = (project) => machineParts(project).html;
+    // ---- Mission Control story (2026-10-27): the Now card. Every sentence comes from the manager's project_now (story.py) and is escaped here. ----
+    const stepPercent = (now) => Math.max(0, Math.min(100, Math.round(100 * Number(now.step || 0) / Number(now.of || 26))));
+    const nowBlock = (project, held) => {
+      const pn = project.project_now || null;
+      const text = held ? 'Needs repair: ' + project.control_plane_hold : pn ? pn.now : project.latest_progress;
+      const next = !held && pn && pn.next ? `<div class="now-next">${esc(pn.next)}</div>` : '';
+      const need = !held && pn && pn.needs_you ? `<div class="now-needs" role="status">Needs you: ${esc(pn.needs_you.action)}</div>` : '';
+      const stepped = pn && pn.has_task && Number(pn.step) > 0;
+      const bar = stepped
+        ? `<div class="step-line"><span>Step ${Number(pn.step)} of ${Number(pn.of)} · ${esc(pn.step_title)}</span><span>${esc(pn.elapsed || '')}</span></div><div class="bar" role="progressbar" aria-label="Step ${Number(pn.step)} of ${Number(pn.of)}" aria-valuemin="0" aria-valuemax="${Number(pn.of)}" aria-valuenow="${Number(pn.step)}"><i style="width:${stepPercent(pn)}%"></i></div>`
+        : '';
+      const task = project.control_plane_hold ? project.control_plane_hold_task : project.latest_task;
+      const label = task ? `<div class="now-task">Task: ${esc(task)}</div>` : '';
+      return `<div class="now-block"><div class="now-label">Now</div><div class="now-sentence" data-now-sentence>${esc(text)}</div>${next}${need}${bar}${label}</div>`;
+    };
+    const pillRow = (project, counts) => {
+      const pn = project.project_now || {};
+      const companies = pn.companies || {};
+      const pills = [];
+      if (companies.builder) pills.push(`Builder · ${esc(companies.builder)}`);
+      if (companies.reviewer) pills.push(`Reviewer · ${esc(companies.reviewer)}`);
+      if (pn.has_task && pn.cost) pills.push(esc(pn.cost));
+      if (pn.has_task && pn.codex_window) pills.push(esc(pn.codex_window));
+      const spans = pills.map((text) => `<span class="pill">${text}</span>`);
+      if (counts.awaiting_owner) spans.push(`<span class="pill metric waiting-you"><strong>${counts.awaiting_owner}</strong> waiting for you</span>`);
+      return spans.length ? `<div class="pills">${spans.join('')}</div>` : '';
     };
     const row = (project) => {
       const starting = Boolean(project.starting);
@@ -799,13 +1013,13 @@ Start-Service sshd</pre>
       const state = !project.health.ok || held ? 'unhealthy' : project.paused ? 'paused' : starting ? 'running' : workerStopped ? 'stopped' : project.active ? 'active' : project.running ? 'running' : 'idle';
       const stateLabel = !project.health.ok ? 'Needs repair' : held ? 'Needs repair' : project.paused ? (project.active ? 'Paused · open' : 'Paused') : starting ? 'Starting' : workerStopped ? 'Board stopped' : project.active ? 'Open' : project.running ? 'Running' : 'Idle';
       const health = project.health.ok ? '' : `<span class="badge bad" title="${esc(project.health.reasons.join('; '))}">Needs repair</span>`;
-      // The open project cannot be removed (see Remove below); a paused one
-      // looked identical to the closed paused ones, so it says why.
+      // A paused open project looked identical to the closed paused ones, so it says it is the open one.
       const pausedOpen = project.health.ok && !held && project.paused && project.active;
-      const stateTitle = pausedOpen ? ' title="Still your open project. Close it from its board to remove it from this list."'
+      const stateTitle = pausedOpen ? ' title="Still your open project. Delete closes it first, then takes it off the list."'
         : workerStopped ? ` title="${esc(project.worker_error)}"` : '';
       const counts = project.task_counts;
       const agents = project.agent_counts || {total: 0};
+      const pn = project.project_now || {};
       const description = project.description
         ? `<p class="description">${esc(project.description)}</p>`
         : '<p class="description empty-copy">No description added yet.</p>';
@@ -820,27 +1034,43 @@ Start-Service sshd</pre>
         : `<button class="button" data-act="open" data-id="${esc(project.id)}">${project.paused ? 'Resume project' : 'Open project'}</button>`;
       const reopen = project.reopen_restores
         ? '<p class="description" data-reopen-restores="1">Open it and your agents come back with their saved work.</p>' : '';
-      const machineBtn = machineStrip(project) ? '' : `<button class="button ghost" data-act="machine" data-id="${esc(project.id)}">Test machine</button>`;
-      const remove = project.active ? '' : `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Remove</button>`;
-      return `<article class="project ${state}" data-project-id="${esc(project.id)}">
+      const machine = machineParts(project);
+      const machineBtn = machine.html ? '' : `<button class="button ghost" data-act="machine" data-id="${esc(project.id)}">Test machine</button>`;
+      const remove = `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Delete</button>`;
+      // Where each link goes: an open, running project goes straight to its board; any other opens (or resumes) it first.
+      const goAct = project.active && !project.paused ? 'view' : 'open';
+      const link = (label, hash) => starting ? '' : `<button type="button" data-act="${goAct}" data-id="${esc(project.id)}" data-go="${hash}">${label}</button>`;
+      const links = project.paused ? '' : `<div class="card-links">${link('Open the story →', '')}${counts.total ? link(`History (${Number(counts.total)} ${counts.total === 1 ? 'task' : 'tasks'})`, '#history') : ''}${link('Ask about it', '#project-chat')}</div>`;
+      const tell = pn.tell_builder && !starting && !project.paused && project.health.ok
+        ? `<button type="button" class="button tell-builder" data-act="${goAct}" data-id="${esc(project.id)}" data-go="#start-direction">Tell the builder what to build</button>` : '';
+      const needsYou = (pn.needs_you || (project.waiting_sessions || []).length) ? ' needs-you' : '';
+      // Everything operational sits in this project's Advanced menu (same ids and data-act values as before). A test machine that
+      // needs the owner is the one exception: it stays out in the open, because something is waiting on him.
+      return `<article class="project ${state}${needsYou}" data-project-id="${esc(project.id)}">
         <div>
           <div class="project-top"><h3>${esc(project.name)}</h3><span class="badges"><span class="badge ${state}"${stateTitle}>${stateLabel}</span><span class="badge kind">${esc(project.kind)}</span>${(project.waiting_sessions||[]).length ? `<span class="badge waiting">${(project.waiting_sessions||[]).length === 1 ? "Waiting for you" : (project.waiting_sessions||[]).length + " waiting for you"}</span>` : ""}${health}</span></div>
           ${description}
-          <div class="metrics">
-            <span class="metric"><strong>${counts.total}</strong> tasks</span>
-            <span class="metric"><strong>${counts.passed}</strong> accepted</span>
-            <span class="metric"><strong>${counts.open}</strong> in progress</span>
-            ${counts.awaiting_owner ? `<span class="metric waiting-you"><strong>${counts.awaiting_owner}</strong> waiting for you</span>` : ''}
-            <span class="metric"><strong>${agents.total || 0}</strong> active agents</span>
-          </div>
-          <div class="progress"><span class="progress-icon" aria-hidden="true">↗</span><span><strong>${(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) ? esc(project.control_plane_hold ? project.control_plane_hold_task : project.latest_task) + ' · ' : ''}</strong>${esc(project.control_plane_hold ? 'Needs repair: ' + project.control_plane_hold : project.latest_progress)}</span></div>
+          ${nowBlock(project, held)}
+          ${pillRow(project, counts)}
+          ${tell}
+          ${links}
           ${reopen}
-          ${machineStrip(project)}
-          <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
+          ${machine.needs ? machine.html : ''}
+          <details class="adv" data-adv="${esc(project.id)}"><summary>Advanced</summary><div class="adv-body">
+            ${project.board_loaded === false ? '' : `<div class="metrics">
+              <span class="metric"><strong>${counts.total}</strong> tasks</span>
+              <span class="metric"><strong>${counts.passed}</strong> accepted</span>
+              <span class="metric"><strong>${counts.open}</strong> in progress</span>
+              <span class="metric"><strong>${agents.total || 0}</strong> active agents</span>
+            </div>`}
+            ${machine.needs ? '' : machine.html}
+            <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
+            <div class="last-active">Last activity <strong>${when(project.last_board_activity || project.last_active_at)}</strong></div>
+            <div class="adv-actions">${machineBtn}${remove}</div>
+          </div></details>
         </div>
         <div class="project-side">
-          <div class="last-active">Last activity<br><strong>${when(project.last_board_activity || project.last_active_at)}</strong></div>
-          <div class="actions">${machineBtn}${remove}${primary}</div>
+          <div class="actions">${primary}</div>
         </div>
       </article>`;
     };
@@ -867,14 +1097,34 @@ Start-Service sshd</pre>
       box.hidden = false;
       box.innerHTML = notices.map(({project, item}) => `<p><strong>${esc(project.name)}:</strong> ${esc(item.notice)}</p>`).join('');
     };
+    const greeting = () => { const hour = new Date().getHours(); return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'; };
+    const needsYouRows = (projects) => projects.filter((project) => !project.paused && project.project_now && project.project_now.needs_you);
     const renderSummary = (projects) => {
-      q('#summary-total').textContent = projects.length;
-      q('#summary-active').textContent = projects.filter((project) => project.active || project.running).length;
-      q('#summary-health').textContent = projects.filter((project) => !project.health.ok).length;
+      const running = projects.filter((project) => (project.active || project.running) && !project.paused).length;
+      const needing = new Set(needsYouRows(projects).map((project) => project.id));
+      for (const project of projects) if ((project.waiting_sessions || []).length) needing.add(project.id);
+      const broken = projects.filter((project) => !project.health.ok).length;
+      const parts = [`${running} ${running === 1 ? 'project' : 'projects'} running`, needing.size ? `${needing.size} needs you` : 'nothing needs you'];
+      if (broken) parts.push(`${broken} ${broken === 1 ? 'needs' : 'need'} repair`);
+      q('#hero-sentence').textContent = `${greeting()}. ${projects.length ? parts.join(' · ') + (needing.size ? '.' : ' right now.') : 'Create a project or adopt an existing folder to begin.'}`;
+    };
+    const renderNeeds = (projects) => {
+      const box = q('#needs-banner'); if (!box) return;
+      const rows = needsYouRows(projects);
+      if (!rows.length) { box.hidden = true; box.replaceChildren(); return; }
+      const html = `<h2>${rows.length === 1 ? 'One thing needs you' : rows.length + ' things need you'}</h2>` + rows.map((project) => {
+        const need = project.project_now.needs_you;
+        const go = need.kind === 'ready' || need.kind === 'go_ahead' || need.kind === 'accept_retry' ? '#tasks' : '';
+        const act = project.active && !project.paused ? 'view' : 'open';
+        const label = need.kind === 'ready' ? 'Review and accept' : need.kind === 'go_ahead' ? 'Read and say Go ahead' : 'Open the project';
+        return `<div class="need-row" data-need-project="${esc(project.id)}"><div><div class="need-title">${esc(project.name)}: ${esc(need.title)}</div>${need.detail ? `<div class="need-detail">${esc(need.detail)}</div>` : ''}<div class="need-action">What to do: ${esc(need.action)}</div></div>${project.starting ? '' : `<button type="button" class="button" data-act="${act}" data-id="${esc(project.id)}" data-go="${go}">${label}</button>`}</div>`;
+      }).join('');
+      if (box.dataset.html === html && !box.hidden) return;
+      box.dataset.html = html; box.hidden = false; box.innerHTML = html;
     };
     const settingRoles = [
-      {id: 'delivery', label: 'Delivery Agent', copy: 'Builds, designs, tests, and prepares the owner’s work.'},
-      {id: 'reviewer', label: 'Independent Reviewer', copy: 'Checks the finished work using a different AI service from the builder.'},
+      {id: 'delivery', label: 'Builder', copy: 'Builds, designs, tests, and prepares your work.'},
+      {id: 'reviewer', label: 'Independent reviewer', copy: 'Checks the finished work using a different AI company from the builder.'},
       {id: 'cto', label: 'CTO', copy: 'Keeps the work moving and checks it is ready for your test.'},
     ];
     let settingsCatalog = null;
@@ -937,6 +1187,39 @@ Start-Service sshd</pre>
         ['#openai-save', '#openai-test', '#openai-remove'].forEach((selector) => q(selector).disabled = false);
       }
     }
+    const plumbingWords = {
+      hook_gate_timeout_seconds: ['Longest a safety-gate check may take', 's'],
+      hook_gate_latency_budget_ms: ['Slowest a safety-gate check may be before it is reported', 'ms'],
+      app_server_start_timeout_seconds: ['Longest to wait for the Codex helper to start', 's'],
+      delivery_receipt_timeout_seconds: ['Longest to wait for an agent to confirm a message arrived', 's'],
+      delivery_busy_wait_seconds: ['Longest a message may wait while an agent is busy', 's'],
+      gemini_conversation_wait_seconds: ['Longest to wait for a Gemini conversation to start', 's'],
+      review_input_max_files: ['Most changed files the reviewer reads in full', 'files'],
+      review_input_max_bytes: ['Most change the reviewer reads in full', 'bytes'],
+      review_input_measure_seconds: ['Longest spent measuring the size of a change', 's'],
+      difficulty_note_max_chars: ['Longest note an agent can leave about what slowed it', 'characters'],
+      contract_check_wait_seconds: ['Longest the reviewer’s early look at the requirements may take', 's'],
+      revert_proof_max_files: ['Most changed files put back one at a time at the final review', 'files'],
+      revert_proof_budget_seconds: ['Longest spent putting changed files back', 's'],
+      cto_heartbeat_seconds: ['How often the CTO checks in while a task is live', 's'],
+      cto_no_progress_seconds: ['How long a task may go without progress before the CTO is woken', 's'],
+      cost_collect_max_bytes: ['Most a single cost check reads', 'bytes'],
+      cost_collect_seconds: ['Longest a single cost check takes', 's'],
+    };
+    // The plumbing limits and stage switches are not editable on this page (settings file only): show each value and its range, read-only.
+    function renderPlumbing(value) {
+      const view = value.plumbing_view || {};
+      q('#plumbing-where').textContent = view.file
+        ? `These limits are read-only here. To change one, edit the settings file on this computer (${view.file}) while the app is closed.`
+        : 'These limits are read-only here.';
+      const limits = (view.limits || []).map((item) => {
+        const words = plumbingWords[item.name] || [item.name, ''];
+        return `<tr><td>${esc(words[0])}</td><td data-plumbing-value="${esc(item.name)}">${esc(item.value)} ${esc(words[1])}</td><td>${esc(item.low)} to ${esc(item.high)} ${esc(words[1])} (standard ${esc(item.default)})</td></tr>`;
+      }).join('');
+      const stages = (view.stages || []).map((item) => `<tr><td>${esc(item.label)}</td><td>${item.enabled ? 'On' : 'Off'}</td><td>${esc(item.reason || '')}</td></tr>`).join('');
+      q('#plumbing-view').innerHTML = `<table class="plumbing-table" aria-label="Limits"><thead><tr><th scope="col">Limit</th><th scope="col">Now</th><th scope="col">Allowed</th></tr></thead><tbody>${limits}</tbody></table>`
+        + (stages ? `<table class="plumbing-table" aria-label="Plumbing stages"><thead><tr><th scope="col">Plumbing stage</th><th scope="col">Now</th><th scope="col">Note</th></tr></thead><tbody>${stages}</tbody></table>` : '');
+    }
     function renderSettings(value) {
       settingsCatalog = value;
       renderOpenAI(value);
@@ -945,6 +1228,9 @@ Start-Service sshd</pre>
       const noticeBox = q('#settings-notices');
       noticeBox.textContent = (value.notices || []).join(' ');
       noticeBox.hidden = !(value.notices || []).length;
+      const beat = Number(value.plumbing?.cto_heartbeat_seconds || 0);
+      q('#cto-heartbeat-line').textContent = beat ? `The CTO wakes only for judgment calls and for a task with no progress, plus a check-in every ${beat >= 7200 ? Math.round(beat / 3600) + ' hours' : beat >= 120 ? Math.round(beat / 60) + ' min' : beat + ' s'} while a task is live.` : '';
+      renderPlumbing(value);
       q('#settings-fields').innerHTML = settingRoles.map((role) => {
         const selected = value.agent_settings?.[role.id] || {};
         const result = value.connectivity?.[selected.provider];
@@ -969,12 +1255,13 @@ Start-Service sshd</pre>
           : `${result.message || ''}${when}`;
         return `<section class="settings-card" data-settings-role="${role.id}">
           <div><h2>${esc(role.label)}</h2><p class="settings-card-copy">${esc(role.copy)}</p></div>
-          <div class="field"><label for="provider-${role.id}">CLI provider</label><select id="provider-${role.id}" data-setting-provider="${role.id}">${providers.map(([id, provider]) => { const availability = value.provider_availability?.[id] || {available: true}; return `<option value="${esc(id)}"${id === selected.provider ? ' selected' : ''}${availability.available || id === selected.provider ? '' : ' disabled'}>${esc(availability.available ? provider.label : availability.reason)}</option>`; }).join('')}</select></div>
+          <div class="field"><label for="provider-${role.id}">AI company</label><select id="provider-${role.id}" data-setting-provider="${role.id}">${providers.map(([id, provider]) => { const availability = value.provider_availability?.[id] || {available: true}; return `<option value="${esc(id)}"${id === selected.provider ? ' selected' : ''}${availability.available || id === selected.provider ? '' : ' disabled'}>${esc(availability.available ? provider.label : availability.reason)}</option>`; }).join('')}</select></div>
           <div class="field"><label for="model-${role.id}">Model</label><select id="model-${role.id}" data-setting-model-choice="${role.id}">${modelOptions(selected.provider, selected.model)}</select></div>
           <div class="field" data-setting-custom="${role.id}"${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? ' hidden' : ''}><label for="custom-model-${role.id}">Custom model ID</label><input id="custom-model-${role.id}" data-setting-model="${role.id}" value="${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? '' : esc(selected.model || '')}" autocomplete="off" placeholder="Provider model ID"></div>
-          <div class="field"><label for="effort-${role.id}">Reasoning effort</label><select id="effort-${role.id}" data-setting-effort="${role.id}">${effortOptions(selected.provider, selected.effort)}</select></div>
+          <div class="field"><label for="effort-${role.id}">Effort</label><select id="effort-${role.id}" data-setting-effort="${role.id}">${effortOptions(selected.provider, selected.effort)}</select></div>
           <button class="button secondary" type="button" data-settings-test="${role.id}">Test ${esc(value.providers?.[selected.provider]?.short || 'the')} connection</button>
           <div class="connection-result ${resultClass}" data-settings-result="${role.id}" role="status" aria-live="polite">${esc(resultText)}</div>
+          <p class="settings-card-copy settings-switch" data-settings-switch="${role.id}" role="status" hidden></p>
         </section>`;
       }).join('');
       // "If repairs keep failing, retry once with": one choice per vendor, saved with the rest; the harness reads it silently when it is needed.
@@ -992,16 +1279,41 @@ Start-Service sshd</pre>
       document.querySelectorAll('[data-setting-model-choice]').forEach((select) => select.onchange = () => { syncCustomModel(select.dataset.settingModelChoice); markRetest(select.dataset.settingModelChoice); });
       document.querySelectorAll('[data-setting-effort]').forEach((select) => select.addEventListener('change', () => markRetest(select.dataset.settingEffort)));
       document.querySelectorAll('[data-setting-custom] input').forEach((input) => input.addEventListener('input', () => markRetest(input.closest('[data-setting-custom]').dataset.settingCustom)));
-      document.querySelectorAll('[data-setting-provider]').forEach((select) => select.onchange = () => {
-        const role = select.dataset.settingProvider;
-        const models = settingsCatalog.provider_models?.[select.value] || [];
-        q(`[data-setting-model-choice="${role}"]`).innerHTML = modelOptions(select.value, models[0] || '');
+      // Delivery and Reviewer must be different AI companies. Picking the other one's company moves the other one aside
+      // at once (to the company this role just left when possible) and says so, so a refused Save never surprises.
+      const roleLabels = {delivery: 'Builder', reviewer: 'Independent reviewer'};
+      const applyProvider = (role, provider) => {
+        const models = settingsCatalog.provider_models?.[provider] || [];
+        q(`[data-setting-model-choice="${role}"]`).innerHTML = modelOptions(provider, models[0] || '');
         syncCustomModel(role);
-        q(`[data-setting-effort="${role}"]`).innerHTML = effortOptions(select.value);
-        q(`[data-settings-test="${role}"]`).textContent = `Test ${settingsCatalog.providers?.[select.value]?.short || 'the'} connection`;
+        q(`[data-setting-effort="${role}"]`).innerHTML = effortOptions(provider);
+        q(`[data-settings-test="${role}"]`).textContent = `Test ${settingsCatalog.providers?.[provider]?.short || 'the'} connection`;
         const result = q(`[data-settings-result="${role}"]`);
         result.className = 'connection-result';
         result.textContent = 'Settings changed. Test this provider before saving if you want to verify local access.';
+        const note = q(`[data-settings-switch="${role}"]`);
+        if (note) note.hidden = true;
+      };
+      document.querySelectorAll('[data-setting-provider]').forEach((select) => {
+        select.dataset.previous = select.value;
+        select.onchange = () => {
+          const role = select.dataset.settingProvider;
+          const previous = select.dataset.previous;
+          select.dataset.previous = select.value;
+          applyProvider(role, select.value);
+          const other = {delivery: 'reviewer', reviewer: 'delivery'}[role];
+          const otherSelect = other && q(`[data-setting-provider="${other}"]`);
+          if (!otherSelect || otherSelect.value !== select.value) return;
+          const usable = [...otherSelect.options].filter((option) => !option.disabled && option.value !== select.value).map((option) => option.value);
+          const target = usable.includes(previous) ? previous : usable[0];
+          if (!target) return;
+          otherSelect.value = target;
+          otherSelect.dataset.previous = target;
+          applyProvider(other, target);
+          const note = q(`[data-settings-switch="${other}"]`);
+          note.textContent = `${roleLabels[other]} switched to ${settingsCatalog.providers?.[target]?.short || settingsCatalog.providers?.[target]?.label || target}, so your work is always checked by a different AI company. Save to keep it.`;
+          note.hidden = false;
+        };
       });
       document.querySelectorAll('[data-settings-test]').forEach((button) => button.onclick = async () => {
         const role = button.dataset.settingsTest;
@@ -1046,7 +1358,9 @@ Start-Service sshd</pre>
         renderSettings(await api('/api/settings', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({agent_settings: agentSettings, recovery_models: Object.fromEntries([...document.querySelectorAll('[data-recovery-model]')].map((select) => [select.dataset.recoveryModel, select.value])), reviewer_retry_models: Object.fromEntries([...document.querySelectorAll('[data-reviewer-retry-model]')].map((select) => [select.dataset.reviewerRetryModel, select.value]))})}));
         status('Global agent settings saved. They will apply to new sessions in every project.');
       } catch (error) {
-        q('#settings-error').textContent = error.message;
+        const plain = /different providers/.test(error.message) ? 'The builder and the independent reviewer must be different AI companies. Change one of them, then press Save again.' : error.message;
+        q('#settings-error').textContent = `Not saved. ${plain}`;
+        status(`Agent settings were not saved. ${plain}`, 'error');
       } finally {
         save.disabled = false;
       }
@@ -1104,6 +1418,9 @@ Start-Service sshd</pre>
       } catch (error) { status.textContent = error.message; q('#update-apply').disabled = false; }
     };
     let projectsById = new Map();
+    const openAdvanced = new Set();
+    let lastProjectsHtml = '';
+    document.addEventListener('toggle', (event) => { const node = event.target; if (node && node.dataset && node.dataset.adv) { if (node.open) openAdvanced.add(node.dataset.adv); else openAdvanced.delete(node.dataset.adv); } }, true);
     let pendingMachineProject = new URLSearchParams(window.location.search).get('machine') || '';
     const loadedPageVersion = '__PAGE_VERSION__';
     async function refresh() {
@@ -1121,10 +1438,28 @@ Start-Service sshd</pre>
         }
         const container = q('#projects');
         container.setAttribute('aria-busy', 'false');
-        container.innerHTML = value.projects.length
+        const html = value.projects.length
           ? value.projects.map(row).join('')
           : '<div class="empty"><strong>No projects yet</strong>Create a new project or adopt an existing folder to get started.</div>';
+        // The page is rewritten only when something changed, and then the owner's place is put back: scroll, which Advanced menus
+        // are open, and the keyboard focus (a button by its project and action, a menu summary by its project).
+        if (lastProjectsHtml !== html) {
+          const scroll = container.scrollTop;
+          const active = document.activeElement;
+          const focusKey = active && container.contains(active) ? (active.dataset.act ? `act:${active.dataset.act}:${active.dataset.id}:${active.dataset.go || ''}` : active.tagName === 'SUMMARY' && active.parentElement.dataset.adv ? `adv:${active.parentElement.dataset.adv}` : '') : '';
+          lastProjectsHtml = html;
+          container.innerHTML = html;
+          container.querySelectorAll('details[data-adv]').forEach((node) => { if (openAdvanced.has(node.dataset.adv)) node.open = true; });
+          container.scrollTop = scroll;
+          if (focusKey) {
+            const again = focusKey.startsWith('adv:')
+              ? container.querySelector(`details[data-adv="${CSS.escape(focusKey.slice(4))}"] > summary`)
+              : [...container.querySelectorAll('button[data-act]')].find((node) => `act:${node.dataset.act}:${node.dataset.id}:${node.dataset.go || ''}` === focusKey);
+            if (again) again.focus({preventScroll: true});
+          }
+        }
         renderSummary(value.projects);
+        renderNeeds(value.projects);
         renderWaiting(value.projects);
         renderLimitNotice(value.projects);
         if (typeof value.native_folder_picker === 'boolean') {
@@ -1132,18 +1467,20 @@ Start-Service sshd</pre>
           applyFolderPickerMode();
         }
       } catch (error) {
+        lastProjectsHtml = '';
         q('#projects').innerHTML = '<div class="empty"><strong>Projects could not be loaded</strong>The manager will keep trying. Check the connection and try again.</div>';
         status(`Could not load projects: ${error.message}`, 'error');
       }
     }
 
     async function showPage(requestedPage, updateUrl = false) {
-      const page = ['projects', 'settings', 'help', 'legal'].includes(requestedPage) ? requestedPage : 'projects';
+      const page = ['projects', 'costs', 'settings', 'help', 'legal'].includes(requestedPage) ? requestedPage : 'projects';
       document.querySelectorAll('button[data-page]').forEach((button) => {
         if (button.dataset.page === page) button.setAttribute('aria-current', 'page');
         else button.removeAttribute('aria-current');
       });
       q('#projects-page').hidden = page !== 'projects';
+      q('#costs-page').hidden = page !== 'costs';
       q('#settings-page').hidden = page !== 'settings';
       q('#help-page').hidden = page !== 'help';
       q('#legal-page').hidden = page !== 'legal';
@@ -1152,6 +1489,45 @@ Start-Service sshd</pre>
         window.history.replaceState({page}, '', target);
       }
       if (page === 'settings') await loadSettings();
+      if (page === 'costs') await loadCosts();
+    }
+
+    let costsShown = '';
+    function costCell(text, extra = '') {
+      return `<td class="${extra}${text === 'not measured' ? ' unmeasured' : ''}">${esc(text)}</td>`;
+    }
+    function costRows(project) {
+      const notes = (items) => (items || []).map((note) => `<span class="cost-sub">${esc(note)}</span>`).join('');
+      if (!project.available) {
+        return `<tr class="cost-project" data-cost-project="${esc(project.id)}"><th scope="row">${esc(project.name)}<span class="cost-sub">Nothing counted yet for this project.</span></th>${costCell('not measured')}${costCell('not measured')}${costCell('not measured')}${costCell('not measured', 'cost-total')}<td></td></tr>`;
+      }
+      const head = `<tr class="cost-project" data-cost-project="${esc(project.id)}"><th scope="row">${esc(project.name)}<span class="cost-sub" data-cost-line>${esc(project.line)}</span>${notes(project.notes)}</th>`
+        + `${costCell(project.builder)}${costCell(project.reviewer)}${costCell(project.cto)}${costCell(project.total, 'cost-total')}<td></td></tr>`;
+      return head + (project.tasks || []).map((item) => `<tr class="cost-task" data-cost-task="${esc(item.task)}"><th scope="row">${esc(item.task)}${notes(item.notes)}</th>`
+        + `${costCell(item.builder)}${costCell(item.reviewer)}<td><span aria-label="The CTO works for the whole project">on the project row</span></td>${costCell(item.total, 'cost-total')}<td>${esc(item.window || '–')}</td></tr>`).join('');
+    }
+    async function loadCosts() {
+      const target = q('#costs-list');
+      try {
+        const value = await (await fetch('/api/costs')).json();
+        const projects = value.projects || [];
+        const tiles = value.tiles || {};
+        const tile = (label, item) => item ? `<div class="cost-tile" data-cost-tile="${esc(label)}"><div class="cost-tile-label">${esc(label)}</div><div class="cost-tile-value${item.value === 'not measured yet' ? ' unmeasured' : ''}">${esc(item.value)}</div><div class="cost-tile-note">${esc(item.note || '')}</div></div>` : '';
+        const tilesHtml = projects.length ? tile('This week', tiles.week) + tile('Average per task', tiles.average) + tile('Split', tiles.split) : '';
+        const tableHtml = projects.length
+          ? `<div class="cost-box" tabindex="0" role="region" aria-label="Costs per project and task"><table class="cost-table"><thead><tr><th scope="col">Project / task</th><th scope="col">Builder</th><th scope="col">Reviewer</th><th scope="col">CTO</th><th scope="col">Total</th><th scope="col">Codex window</th></tr></thead><tbody>${projects.map(costRows).join('')}</tbody></table></div>`
+          : '<div class="empty">No projects yet.</div>';
+        const foot = value.prices ? `${value.prices} Gemini sessions show as "not measured yet".` : '';
+        const html = tilesHtml + '|' + tableHtml + '|' + foot;
+        if (html !== costsShown) {   // an unchanged answer leaves the page (scroll, focus, the table's own scroll) untouched
+          costsShown = html;
+          q('#costs-tiles').innerHTML = tilesHtml;
+          target.innerHTML = tableHtml;
+          q('#costs-foot').textContent = foot;
+        }
+      } catch (error) {
+        if (!costsShown) target.innerHTML = '<div class="empty"><strong>Costs could not be loaded</strong>Try again in a moment.</div>';   // a refresh that fails keeps what is already shown
+      }
     }
 
     document.addEventListener('click', async (event) => {
@@ -1178,18 +1554,18 @@ Start-Service sshd</pre>
           status('Opening the project and restoring its saved board…');
           const value = await postAction(`/api/projects/${id}/open`);
           status('Project ready. Opening Mission Control…');
-          setTimeout(() => { window.location = value.board_url; }, 800);
+          setTimeout(() => { window.location = value.board_url + (button.dataset.go || ''); }, 800);
         }
         if (button.dataset.act === 'view') {
           const boardUrl = projectsById.get(id)?.board_url;
           if (!boardUrl) throw new Error('The open project does not have a verified Mission Control route.');
-          window.location = boardUrl;
+          window.location = boardUrl + (button.dataset.go || '');
         }
         if (button.dataset.act === 'resume') {
           status('Resuming from the exact saved gate…');
           const value = await postAction(`/api/projects/${id}/resume`);
           status('Project resumed. Opening Mission Control…');
-          setTimeout(() => { window.location = value.board_url; }, 800);
+          setTimeout(() => { window.location = value.board_url + (button.dataset.go || ''); }, 800);
         }
         if (button.dataset.act === 'pause') {
           status('Pausing agents after their in-flight board writes finish…');
@@ -1541,6 +1917,7 @@ Start-Service sshd</pre>
       removeProject = project;
       q('#remove-error').textContent = '';
       q('#remove-project-name').textContent = project.name;
+      q('#remove-project-folder').textContent = project.code_root;
       removeDialog.showModal();
       q('#remove-cancel').focus();
     }
@@ -1552,7 +1929,7 @@ Start-Service sshd</pre>
       try {
         await api(`/api/projects/${removeProject.id}`, {method: 'DELETE'});
         removeDialog.close();
-        status('Project removed from the list. Its folders were not changed.');
+        status('Project deleted from the list. Its folders were not changed.');
         await refresh();
       } catch (problem) {
         q('#remove-error').textContent = problem.message;
@@ -1609,9 +1986,11 @@ Start-Service sshd</pre>
         q('#machine-error').textContent = 'The password can only be typed on the computer that runs Mission Control. Open Mission Control there (or through an ssh tunnel to 127.0.0.1) and try again.';
       }
     }
-    function openMachine(project) {
+    let machineEdited = false;
+    for (const id of ['#machine-address', '#machine-user', '#machine-port']) q(id).addEventListener('input', () => { machineEdited = true; });
+    async function openMachine(project) {
       if (!project) return;
-      machineProject = project; machineChallenge = null;
+      machineProject = project; machineChallenge = null; machineEdited = false;
       const m = project.test_machine || {};
       q('#machine-title').textContent = `Test machine — ${project.name}`;
       q('#machine-address').value = m.address || ''; q('#machine-user').value = m.user || ''; q('#machine-port').value = m.port || 22;
@@ -1619,6 +1998,20 @@ Start-Service sshd</pre>
       machineBusy(false); renderMachineDialog(m); machineReleaseDisarm();
       machineDialog.showModal();
       (m.address ? q('#machine-password') : q('#machine-address')).focus();
+      // A project that is not open is listed without its machine details (only one project is loaded at a time):
+      // opening this window is an explicit machine operation, so ask for THIS project's saved target now.
+      if (project.board_loaded === false) {
+        try {
+          const fresh = await machinePost('status');
+          if (machineProject !== project || !machineDialog.open) return;
+          project.test_machine = fresh;
+          if (!machineEdited) {
+            q('#machine-address').value = fresh.address || ''; q('#machine-user').value = fresh.user || ''; q('#machine-port').value = fresh.port || 22;
+          }
+          renderMachineDialog(fresh);
+          if (fresh.address && !machineEdited) q('#machine-password').focus();
+        } catch (ignored) { /* the empty form still lets the owner type the target */ }
+      }
     }
     async function machinePost(action, body) {
       return api(`/api/projects/${machineProject.id}/test-machine/${action}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
@@ -1694,9 +2087,49 @@ Start-Service sshd</pre>
       catch (problem) { q('#machine-error').textContent = problem.message; }
     };
 
+    (function wireHelpSearch() {
+      const input = q('#help-search');
+      if (!input) return;
+      const status = q('#help-search-status');
+      const items = Array.from(document.querySelectorAll('#help-page [data-help-item]'));
+      const groups = Array.from(document.querySelectorAll('#help-page [data-help-group]'));
+      const topics = q('#help-topics');
+      const apply = () => {
+        const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        for (const item of items) {
+          const match = !words.length || words.every((word) => item.textContent.toLowerCase().includes(word));
+          item.hidden = !match;
+          if (match) shown += 1;
+        }
+        for (const group of groups) group.hidden = !Array.from(group.querySelectorAll('[data-help-item]')).some((item) => !item.hidden);
+        if (topics) topics.hidden = words.length > 0;
+        status.textContent = !words.length ? '' : shown ? `${shown} help ${shown === 1 ? 'topic matches' : 'topics match'}.` : 'No help topic matches. Try fewer or different words.';
+      };
+      input.addEventListener('input', apply);
+    })();
+
     showPage(new URLSearchParams(window.location.search).get('page')).then(() => { if (window.location.hash === '#help-windows-vm' && q('#help-page') && !q('#help-page').hidden) q('#help-windows-vm').scrollIntoView({block: 'start'}); });
     refresh();
     setInterval(refresh, 4000);
+    setInterval(() => { if (!q('#costs-page').hidden) loadCosts(); }, 10000);
   </script>
 </body>
 </html>'''
+
+
+def _help_phases_html() -> str:
+    """'How a task works': the five phases with their step titles, from the one table in harness/story.py (escaped, no copy of the titles here)."""
+    from html import escape
+    from harness import story
+    colours = ("#f5a524", "#f97361", "#14b8a6", "#8b7cf6", "#f5a524")
+    cards = []
+    for index, phase in enumerate(story.help_phases()):
+        steps = "".join(f"<li>{escape(step['title'])}</li>" for step in phase["steps"])
+        cards.append(
+            f'<li class="help-phase" style="--phase:{colours[index % len(colours)]}"><div class="help-phase-when">{escape(phase["when"])} \u00b7 steps {phase["first"]} to {phase["last"]}</div>'
+            f'<h3>{escape(phase["title"])}</h3><p>{escape(phase["text"])}</p><ol start="{phase["first"]}">{steps}</ol></li>')
+    return "".join(cards)
+
+
+PAGE = PAGE.replace("__HELP_PHASES__", _help_phases_html())

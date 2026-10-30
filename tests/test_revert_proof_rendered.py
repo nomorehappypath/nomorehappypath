@@ -1,0 +1,70 @@
+# Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
+"""Rendered proof (headless Chrome) for the revert proof: the task card shows one plain line naming the changed files no test notices, and markup in a file name is not run.
+
+Run:  PYTHONPATH=. python3 -m unittest tests.test_revert_proof_rendered -v
+"""
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from harness import board, browser_acceptance, revert_proof
+from tests.environment_support import require_loopback
+from tests.requirements_support import agreed_requirements
+from tests.test_no_terminal_questions_rendered import run_page
+from tests.test_requirements_contract import context, delivery_with_direction
+
+PROBE = r"""
+<script>
+(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const out = {errors: []};
+  window.addEventListener('error', event => out.errors.push(String(event.message)));
+  try {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (document.querySelector('[data-task-revert-proof]')) break;
+      await wait(150);
+    }
+    const node = document.querySelector('[data-task-revert-proof]');
+    out.line = node ? node.textContent : null;
+    out.injected = document.querySelectorAll('[data-task-revert-proof] img').length;
+    out.asked = document.querySelectorAll('[data-cq]').length;
+  } catch (error) { out.error = String(error); }
+  await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(out)});
+})();
+</script>
+"""
+
+
+class RenderedRevertProofTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            browser_acceptance.resolve_binary()
+        except (FileNotFoundError, ValueError) as error:
+            raise unittest.SkipTest(str(error)) from error
+        require_loopback()
+
+    def test_the_owner_reads_one_plain_line_and_markup_is_not_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = context(Path(temporary))
+            agent = delivery_with_direction(root, "TASK-ACTIVE")
+            agreed_requirements(root, agent["id"], "Final agreed requirements: a command prints a greeting.")
+            files = [
+                {"path": "a.py", "outcome": revert_proof.NOT_NOTICED},
+                {"path": "<img src=x>.py", "outcome": revert_proof.NOT_NOTICED},
+                {"path": "c.py", "outcome": revert_proof.NOTICED, "check": "1.1"},
+                {"path": "README.md", "outcome": revert_proof.SKIPPED, "reason": "a document, image or lockfile"},
+            ]
+            with board.locked_state(root) as state:
+                state.setdefault("revert_proofs", {})["TASK-ACTIVE"] = {"tree": "t", "files": files, "line": revert_proof.line({"files": files})}
+            result = run_page(self, root, PROBE, width=1200, height=1000, wait=120)
+        self.assertTrue(result and "error" not in result, result)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["line"], "2 of 3 changed files are not noticed by any test: a.py, <img src=x>.py (1 file skipped (documents, images, lockfiles, tests)). For information only.")
+        self.assertEqual(result["injected"], 0)
+        self.assertEqual(result["asked"], 0, "the owner is not asked anything")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -104,7 +104,7 @@ CARD_PROBE = r"""
   const card = () => document.querySelector('.project .metric.waiting-you');
   for (let attempt = 0; attempt < 150 && !card(); attempt++) await new Promise(r => setTimeout(r, 100));
   const node = card();
-  const progress = document.querySelector('.project .progress');
+  const progress = document.querySelector('.project [data-now-sentence]');
   await fetch('/__layout_result__', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({waiting: node ? node.textContent.trim() : '', visible: Boolean(node && node.getBoundingClientRect().width > 0),
                           progress: progress ? progress.textContent.trim() : ''})});
@@ -172,6 +172,7 @@ class RenderedDecisionTests(unittest.TestCase):
         home = self.root / "home"; home.mkdir()
         code = self.root / "code"; code.mkdir()
         entry = registry.register(home, "Studio", code, kind="scaffold", description="A studio.")
+        registry.activate(home, entry["id"])   # only the open project's board is read (owner 2026-10-28)
         board_dir = Path(entry["data_root"]) / "board"; board_dir.mkdir(parents=True, exist_ok=True)
         (board_dir / "state.json").write_text(json.dumps(_state_with("awaiting_owner")), encoding="utf-8")
         manager = project_manager.ProjectManager(home, board_port=0)
@@ -182,7 +183,7 @@ class RenderedDecisionTests(unittest.TestCase):
         self.assertIsNotNone(reading, "Chrome reported nothing")
         self.assertEqual(reading["waiting"], "1 waiting for you", json.dumps(reading))
         self.assertTrue(reading["visible"])
-        self.assertIn("Your decision needed", reading["progress"])
+        self.assertIn("Go ahead", reading["progress"], reading["progress"])     # the Now sentence says what is waiting; the banner above the cards names the project
 
 
 if __name__ == "__main__":

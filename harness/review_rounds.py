@@ -42,6 +42,14 @@ def round_limit() -> int:
     return _env_number("HARNESS_REVIEW_ROUND_LIMIT", 3, 2)
 
 
+# A Code analysis is a report: the owner expects two review rounds, not three (2026-10-28). Development keeps round_limit().
+ANALYSIS_ROUND_LIMIT = 2
+
+
+def limit_for(kind: str) -> int:
+    return min(ANALYSIS_ROUND_LIMIT, round_limit()) if kind == "analysis" else round_limit()
+
+
 def recovery_attempts() -> int:
     """Fresh Delivery attempts allowed per scope (default 1; HARNESS_REVIEW_RECOVERY_ATTEMPTS, 0 switches the attempt off)."""
     return _env_number("HARNESS_REVIEW_RECOVERY_ATTEMPTS", 1, 0)
@@ -101,6 +109,23 @@ def declaration(summary: Any) -> str:
 def is_testing_gap(summary: Any) -> bool:
     """The verdict says the work was NOT TESTED / not reproducible: the review could not be completed, which is not a finding about the work."""
     return declaration(summary).lower().startswith(("not tested", "not reproducible"))
+
+
+# A testing gap whose cause is the Reviewer's own environment (its isolated runner lacks the project's libraries or its test database), not
+# the work: a stronger model cannot fix that, only the project's test environment can (2026-10-28, Acremuse: round 4 ran on a stronger
+# model to re-check a race it could not reach the database for).
+_ENVIRONMENT_GAP = re.compile(
+    r"sandbox|isolated (?:runner|check|environment)|environment limit|reviewer(?:'s)? (?:own )?environment|no module named|not installed|cannot import|"
+    r"could not import|missing (?:librar|depend|package)|sqlmodel|test database|database url|db url|cannot connect|could not connect|connection (?:refused|failed)", re.I)
+
+
+def is_environment_gap(summary: Any) -> bool:
+    return is_testing_gap(summary) and bool(_ENVIRONMENT_GAP.search(str(summary or "")))
+
+
+ENVIRONMENT_GAP_MESSAGE = ("{task}: the review could not run one check because the reviewer's own environment lacks what the project's tests need "
+                           "(its libraries or its test database). That is not a finding about the work and a stronger model would not help, so none is started. "
+                           "The CTO prepares the project's test environment (test-env-set); then Delivery asks for the review again.")
 
 
 def _first_line_says_yes(summary: Any) -> bool:
@@ -315,11 +340,18 @@ def outcome_text(entry: dict[str, Any], reason: str = "") -> str:
             f"{ids} still failed. Nothing from this part was released and the harness will not retry it by itself. Other work continues.")
 
 
+def analysis_outcome_text(entry: dict[str, Any]) -> str:
+    ids = ", ".join(entry.get("open_ids") or []) or "the reviewer's last findings"
+    return (f"Could not finish: this Code analysis failed {entry.get('failed_judgments', 0)} independent reviews and an analysis gets no more. The report is kept "
+            f"in the task's work copy with the reviewer's unresolved findings ({ids}); it is NOT independently verified and nothing was released. "
+            "The harness will not retry it by itself. Other work continues.")
+
+
 _RETRY_KEYS = ("session_id", "old_session_id", "old_agent_id", "started_at", "creating_at", "stopping_at", "stop_mark", "model", "phase", "reviewer_id", "who")
 
 
 def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decision: dict[str, Any], summary: str,
-                    resolutions: dict[str, str], at: str, reviewer_id: str = "", reviewer_session: str = "") -> list[dict[str, str]]:
+                    resolutions: dict[str, str], at: str, reviewer_id: str = "", reviewer_session: str = "", limit: int | None = None, analysis: bool = False) -> list[dict[str, str]]:
     """Update the lineage's escalation record from one completed judgment; returns plain events (kind, message) to record.
 
     A review that cannot be completed (a testing-gap verdict at the round limit) first gets one fresh Reviewer (`who` = "reviewer");
@@ -337,6 +369,15 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
     if decision["effective_result"] == "passed":
         entry.update(status="closed", open_ids=[], closed_at=at)
         return events
+    if analysis and is_environment_gap(summary):
+        # A Code analysis has only two judgments: a review that could not run for want of the Reviewer's own environment is no judgment at all.
+        entry.update(status="needs_environment", needs_environment_at=at)
+        events.append({"kind": "review_needs_environment", "message": ENVIRONMENT_GAP_MESSAGE.format(task=entry["task"])})
+        return events
+    if entry.get("status") == "needs_environment":
+        entry.update(status="watching")          # a new judgment after the environment was prepared counts normally
+        for stale in _RETRY_KEYS:                # ... and the Reviewer retry that ended in the environment wait is over (counters stay)
+            entry.pop(stale, None)
     entry["failed_judgments"] += 1
     entry["request_ids"].append(str(request.get("id") or ""))
     entry["open_ids"] = [str(m.get("id")) for m in decision["blockers"] if m.get("id")]
@@ -345,6 +386,10 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
     if entry["status"] == "recovery" and entry.get("who") == "reviewer":
         if not reviewer_session or reviewer_session != entry.get("session_id"):
             return events           # another Reviewer's verdict counts as a failed judgment but never moves the retry
+        if gap and is_environment_gap(summary):
+            entry.update(status="needs_environment", needs_environment_at=at)
+            events.append({"kind": "review_needs_environment", "message": ENVIRONMENT_GAP_MESSAGE.format(task=entry["task"])})
+            return events
         if gap:
             entry.update(status="could_not_finish", settled_at=at, outcome=outcome_text(entry))
             events.append({"kind": "review_could_not_finish", "message": entry["outcome"]})
@@ -355,8 +400,15 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
     if entry["status"] == "recovery":
         entry.update(status="could_not_finish", settled_at=at, outcome=outcome_text(entry))
         events.append({"kind": "review_could_not_finish", "message": entry["outcome"]})
-    elif entry["status"] == "watching" and entry["failed_judgments"] >= round_limit():
-        if gap and reviewer_retry_attempts() > entry.get("reviewer_attempts", 0):
+    elif entry["status"] == "watching" and entry["failed_judgments"] >= (limit if limit is not None else round_limit()):
+        if gap and is_environment_gap(summary):
+            entry.update(status="needs_environment", needs_environment_at=at)
+            events.append({"kind": "review_needs_environment", "message": ENVIRONMENT_GAP_MESSAGE.format(task=entry["task"])})
+        elif analysis:
+            # A Code analysis has two judgments in all: no fresh Reviewer, no fresh Delivery attempt, no third review. The report stays where it is.
+            entry.update(status="could_not_finish", settled_at=at, outcome=analysis_outcome_text(entry))
+            events.append({"kind": "review_could_not_finish", "message": entry["outcome"]})
+        elif gap and reviewer_retry_attempts() > entry.get("reviewer_attempts", 0):
             entry.update(status="recovery", who="reviewer", phase="requested", reviewer_attempts=entry.get("reviewer_attempts", 0) + 1,
                          requested_at=at, reviewer_id=reviewer_id)
             events.append({"kind": "review_recovery_requested", "message": (
@@ -376,7 +428,7 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
     """What the CTO poll (and the Delivery agent of the task) is shown: only entries past the round limit."""
     shown = []
     for entry in (escalations or {}).values():
-        if entry.get("status") in {"recovery", "could_not_finish"}:
+        if entry.get("status") in {"recovery", "could_not_finish", "needs_environment"}:
             shown.append({
                 "task": entry["task"], "scope": entry.get("scope"), "status": entry["status"], "phase": entry.get("phase", ""),
                 "failed_judgments": entry.get("failed_judgments"), "open_ids": entry.get("open_ids"), "who": entry.get("who", ""),
@@ -384,6 +436,8 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
                                if entry.get("who") == "reviewer" else
                                "The harness is starting one fresh Delivery attempt on the model chosen in Settings; nothing to do and the owner is not asked.")
                               if entry["status"] == "recovery" else
+                              "The reviewer could not run a check for want of the project's test environment; no stronger model is started. The CTO prepares it with test-env-set and Delivery asks for the review again; do not repair anything."
+                              if entry["status"] == "needs_environment" else
                               "Automatic repair of this part has stopped and nothing of it will be released. Note it in one plain line, keep other work moving, and do not ask the owner."),
                 "outcome": entry.get("outcome", ""),
             })

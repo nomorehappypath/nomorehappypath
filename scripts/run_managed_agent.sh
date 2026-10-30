@@ -165,6 +165,14 @@ fi
 for ambient_name in ${!GIT_@}; do
   unset "$ambient_name"
 done
+# An agent starts from a clean Claude Code environment (2026-10-27, measured with the real CLI): a parent Claude Code
+# session's own variables (CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION, CLAUDE_CODE_HOST_SESSION_ID, CLAUDECODE, ...)
+# made an interactive agent write NO transcript file, so its cost was invisible. Everything the harness wants is set below,
+# after this point; the one value kept is the owner's own CLAUDE_CONFIG_DIR.
+for ambient_name in ${!CLAUDE@}; do
+  [[ "$ambient_name" == "CLAUDE_CONFIG_DIR" ]] || unset "$ambient_name"
+done
+unset CLAUDECODE
 unset BASH_ENV ENV CDPATH ZDOTDIR CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_PROFILE CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY HARNESS_REVIEWER_CLAUDE_TOKEN
 if [[ -z "$python_bin" ]]; then
   python_bin="$(command -v python3 || true)"
@@ -1037,6 +1045,8 @@ board as standing by, then wait for the owner to describe what they want. Do
 not invent an objective, task, Completion Contract, scenario ledger, chunk,
 QA request, or bootstrap work before that direction arrives. When it does,
 your Product Manager hat converts it into the internal objective and plan.
+First name the task: run begin-task --agent ${agent_id} --task <short-plain-name>;
+the board refuses every proposal until a task has begun.
 Before implementation, ask clarifying questions as needed (with the board
 command ask-owner, never in the terminal). When the requirements are agreed,
 FILE them with propose-requirements --agent ${agent_id}: the text starts with

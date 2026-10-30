@@ -45,6 +45,15 @@ class ReviewBriefTests(unittest.TestCase):
         self.request["phase"] = "chunk"
         self.assertNotIn("final_stage", review_brief.build(self.root, self.state, self.request))
 
+    def test_a_code_analysis_final_review_does_not_start_the_app(self):
+        """Owner 2026-10-29: the reviewer of a Code analysis checks the report against the code; there is no app to walk."""
+        self.state["task_kinds"] = {"TASK-A": "analysis"}
+        stage = review_brief.build(self.root, self.state, self.request)["final_stage"]
+        self.assertIn("do NOT start the app", stage["end_to_end"])
+        self.assertIn("FINDINGS.md", stage["end_to_end"])
+        self.assertNotIn("Start the whole app", stage["end_to_end"])
+        self.assertTrue(stage["verdict_first_line"].startswith("TASK DONE: YES|NO"))
+
     def test_authoring_brief_withholds_delivery_evidence(self):
         result = review_brief.build(
             self.root, self.state, self.request,

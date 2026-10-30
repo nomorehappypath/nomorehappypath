@@ -231,7 +231,7 @@ class RenderedHelpTests(unittest.TestCase):
             "Talking To The Agents Directly",
             "Check Your Version And Update",
             "Why It Takes Its Time (No Happy Path)",
-            "Pause, Close, Or Remove A Project",
+            "Pause, Close, Or Delete A Project",
             "Your Responsibility, And What The Agents Can Do",
             "When Something Looks Wrong",
             "Ask About This Project",
@@ -244,7 +244,7 @@ class RenderedHelpTests(unittest.TestCase):
         from harness import attention, project_manager_page
         page = project_manager_page.PAGE
         start = page.index('id="help-limit-title"')
-        text = page[start:page.index('id="help-version-title"')]
+        text = page[start:page.index('</section>', start)]   # the section itself (Help is regrouped, so the next section in the file is not fixed)
         for words in ("WAITING: USAGE LIMIT", "amber note", "(estimated)", "one</strong> short line", "Please continue where you stopped",
                       "check the board for its current assignment", "type any message into that agent", "never hands a review",
                       "does not switch an agent to another company", "two minutes"):

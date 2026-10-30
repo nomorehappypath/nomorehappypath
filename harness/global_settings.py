@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import child_process, contract_check, control, difficulty_note, review_cost
+from harness import child_process, contract_check, control, cost_center, cto_wakes, difficulty_note, review_cost, revert_proof
 from harness import platform_support
 
 SETTINGS_VERSION = 1
@@ -99,7 +99,20 @@ PLUMBING_LIMITS = {
     # The longest difficulty note kept (2026-10-26): longer text is trimmed, never refused.
     "difficulty_note_max_chars": (difficulty_note.MAX_CHARS_DEFAULT, difficulty_note.MAX_CHARS_LOW, difficulty_note.MAX_CHARS_HIGH),
     "contract_check_wait_seconds": (contract_check.WAIT_DEFAULT_SECONDS, contract_check.WAIT_MIN_SECONDS, contract_check.WAIT_MAX_SECONDS),
+    # Revert proof (2026-10-26): how many changed files the board puts back one at a time at final review, and the longest it spends doing so.
+    # Information only: files over the limit are listed as not checked.
+    "revert_proof_max_files": (revert_proof.MAX_FILES_DEFAULT, revert_proof.MAX_FILES_LOW, revert_proof.MAX_FILES_HIGH),
+    "revert_proof_budget_seconds": (revert_proof.BUDGET_DEFAULT, revert_proof.BUDGET_LOW, revert_proof.BUDGET_HIGH),
+    # The CTO's slow check-in (2026-10-26): the board wakes the CTO for a reason, plus once per this many seconds while a task is live.
+    "cto_heartbeat_seconds": (cto_wakes.HEARTBEAT_DEFAULT_SECONDS, cto_wakes.HEARTBEAT_LOW_SECONDS, cto_wakes.HEARTBEAT_HIGH_SECONDS),
+    "cto_no_progress_seconds": (cto_wakes.NO_PROGRESS_DEFAULT_SECONDS, cto_wakes.NO_PROGRESS_LOW_SECONDS, cto_wakes.NO_PROGRESS_HIGH_SECONDS),
+    # Cost center (2026-10-27): the most a single background check reads from the programs' session files, and the longest it takes.
+    # Information only: whatever is not reached is read on the next check and labelled partial meanwhile.
+    "cost_collect_max_bytes": (cost_center.MAX_BYTES_DEFAULT, cost_center.MAX_BYTES_LOW, cost_center.MAX_BYTES_HIGH),
+    "cost_collect_seconds": (cost_center.SECONDS_DEFAULT, cost_center.SECONDS_LOW, cost_center.SECONDS_HIGH),
 }
+# Plumbing text fields (default, longest allowed). cost_rate_card_path: the owner's own price list (see harness/rate_card.json for the shape).
+PLUMBING_TEXT = {cost_center.CARD_PATH_FIELD: ("", 1024)}
 
 
 # 2026-10-15: a CTO question to the owner carries a default and a deadline
@@ -161,6 +174,7 @@ def default_plumbing() -> dict[str, Any]:
     value: dict[str, Any] = {f"{stage}_enabled": False for stage in PLUMBING_STAGES}
     value[PROVING_FLAG] = False
     value.update({name: default for name, (default, _low, _high) in PLUMBING_LIMITS.items()})
+    value.update({name: default for name, (default, _longest) in PLUMBING_TEXT.items()})
     return value
 
 
@@ -187,6 +201,11 @@ def _validated_plumbing(value: Any) -> dict[str, Any]:
         if isinstance(number, bool) or not isinstance(number, int) or not low <= number <= high:
             raise ValueError(f"plumbing {name} must be a whole number from {low} to {high}")
         result[name] = number
+    for name, (default, longest) in PLUMBING_TEXT.items():
+        text = value.get(name, default)
+        if not isinstance(text, str) or len(text) > longest or "\0" in text:
+            raise ValueError(f"plumbing {name} must be a short text")
+        result[name] = text.strip()
     return result
 
 
@@ -330,6 +349,11 @@ def _remove_legacy_project_copies(data_roots: list[Path]) -> None:
                         temporary.unlink()
             finally:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def exists(home: Path) -> bool:
+    """True once the global store has been created (its first creation may migrate one legacy project copy)."""
+    return _path(home).exists()
 
 
 def initialize(home: Path, data_roots: list[Path] | None = None) -> dict[str, Any]:

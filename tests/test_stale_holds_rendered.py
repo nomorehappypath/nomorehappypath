@@ -28,7 +28,7 @@ PROBE = r"""
     name: (card.querySelector('h3')?.textContent || '').trim(),
     state: card.className,
     badge: (card.querySelector('.project-top .badge')?.textContent || '').trim(),
-    progress: (card.querySelector('.progress > span:last-child')?.textContent || '').replace(/\s+/g, ' ').trim(),
+    progress: ((card.querySelector('.now-task')?.textContent || '').replace(/^Task: /, '') + ' · ' + (card.querySelector('[data-now-sentence]')?.textContent || '')).replace(/\s+/g, ' ').trim(),
     visible: card.getBoundingClientRect().height > 0,
   }));
   await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cards})});
@@ -48,19 +48,21 @@ class RenderedStaleHoldTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.base = Path(self._tmp.name)
 
-    def project(self, home: Path, name: str, state: dict) -> None:
+    def project(self, home: Path, name: str, state: dict) -> dict:
         code_root = self.base / "code" / name
         code_root.mkdir(parents=True)
         entry = registry.register(home, name, code_root, kind="adopted", description=f"{name} for the hold proof")
         directory = Path(entry["data_root"]) / "board"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "state.json").write_text(__import__("json").dumps({"agents": {}, "events": [], **state}))
+        return entry
 
     def test_the_card_names_the_held_task_and_a_stale_hold_is_not_a_repair(self):
         home = self.base / "home"
         home.mkdir()
-        self.project(home, "Held studio", studio_state("creative-film"))
+        held_entry = self.project(home, "Held studio", studio_state("creative-film"))
         self.project(home, "Stale studio", studio_state("creative-film", cancelled=True))
+        registry.activate(home, held_entry["id"])   # only the open project's board is read (owner 2026-10-28)
         manager = project_manager.ProjectManager(home, board_port=0)
         server = ThreadingHTTPServer(("127.0.0.1", 0), project_manager.make_handler(manager))
         threading.Thread(target=server.serve_forever, daemon=True).start()

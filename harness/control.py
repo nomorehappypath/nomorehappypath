@@ -904,6 +904,7 @@ def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any], only: st
     predecessor = max(candidates, key=lambda item: str(item.get("ended_at") or item.get("created_at") or ""))
     session["cli_session_id"] = predecessor["cli_session_id"]
     session["cli_session_provider"] = predecessor.get("cli_session_provider")
+    session["cli_session_store"] = predecessor.get("cli_session_store")
     session["cli_launches"] = max(int(predecessor.get("cli_launches") or 1), 1)
     session["continues_session"] = predecessor["id"]
     # Plumbing Stage 3: messages the predecessor's channel POSTED into its CLI
@@ -1056,6 +1057,8 @@ def _cli_memory_fields() -> dict[str, Any]:
     """
     return {
         "cli_session_id": None, "cli_session_provider": None,
+        # The program home the id was recorded under (cost center: usage is read from the home the session was launched with).
+        "cli_session_store": None,
         "cli_launches": 0, "cli_last_launch_at": None, "cli_last_launch_resumed": False,
         "continues_session": None,
     }
@@ -1106,6 +1109,11 @@ def cli_session(root: Path, session_id: str) -> dict[str, Any]:
     }
 
 
+def _launch_store(provider: str) -> str | None:
+    from harness import cost_center
+    return cost_center.default_store(provider) or None
+
+
 def record_cli_session(root: Path, session_id: str, cli_session_id: str, provider: str) -> dict[str, Any]:
     cli_session_id = str(cli_session_id or "").strip()
     if not cli_session_id:
@@ -1116,6 +1124,8 @@ def record_cli_session(root: Path, session_id: str, cli_session_id: str, provide
             raise ValueError(f"unknown managed session: {session_id}")
         session["cli_session_id"] = cli_session_id
         session["cli_session_provider"] = str(provider or "")
+        # Every caller runs inside the session's own launch environment, so these are the homes the CLI writes its files to.
+        session["cli_session_store"] = _launch_store(session["cli_session_provider"])
         return {"session_id": session_id, "cli_session_id": cli_session_id, "provider": session["cli_session_provider"]}
 
 

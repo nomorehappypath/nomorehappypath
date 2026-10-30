@@ -255,7 +255,7 @@ class WakeTests(_Fixture):
             state["agents"][cto["id"]].update({"last_poll_at": old, "spawned_at": old})
             state["agents"][dev["id"]].update({"last_poll_at": board.now()})
         self.sign_out(session["id"])
-        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-wake"}) as enqueue:
             for _ in range(4):
                 board.mark_stalled(self.root)
             enqueue.assert_not_called()
@@ -267,7 +267,7 @@ class WakeTests(_Fixture):
         self.assertEqual([e["message"] for e in state["events"] if e["kind"] == "agent_needs_sign_in"],
                          ["The CTO needs you to sign in again: open its terminal and run /login."])
         control.clear_attention(self.root, session["id"])
-        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-wake"}) as enqueue:
             board.mark_stalled(self.root)
             self.assertEqual(enqueue.call_count, 1, "wake-ups resume after sign-in")
         self.assertEqual(len([e for e in board.snapshot(self.root)["events"] if e["kind"] == "agent_signed_in"]), 1)

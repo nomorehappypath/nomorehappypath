@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -139,6 +140,7 @@ class ProjectManagerTests(unittest.TestCase):
         code = self.base / "alpha"; code.mkdir()
         entry = registry.register(self.home, "alpha", code, description="first")
         self._board_fixture(Path(entry["data_root"]))
+        registry.activate(self.home, entry["id"])   # only the open project's board is read (owner 2026-10-28)
         with self.served() as (base, _):
             with urlopen(base + "/", timeout=5) as response:
                 page = response.read().decode()
@@ -314,15 +316,22 @@ class ProjectManagerTests(unittest.TestCase):
             }))
             entries.append(entry)
 
-        project_manager.ProjectManager(self.home)
+        manager = project_manager.ProjectManager(self.home)
 
         self.assertEqual(global_settings.load(self.home)["agent_settings"], selected)
+        local_of = lambda entry: json.loads((Path(entry["data_root"]) / "control" / "sessions.json").read_text())   # noqa: E731
         for entry in entries:
-            local = json.loads(
-                (Path(entry["data_root"]) / "control" / "sessions.json").read_text(),
-            )
-            self.assertNotIn("agent_settings", local)
-            self.assertNotIn("connectivity", local)
+            self.assertIn("agent_settings", local_of(entry), "app start touches no project (owner 2026-10-28)")
+        # opening a project removes the copy from that project, one at a time
+        with patch.object(project_manager.subprocess, "Popen", return_value=unittest.mock.MagicMock(pid=4242, poll=lambda: None)), \
+                patch.object(project_manager.ProjectManager, "_wait_for_worker", lambda *a, **k: None), \
+                patch.object(project_manager.ProjectManager, "_stop_worker", lambda *a, **k: None), \
+                patch.object(project_manager.workspace_settings, "apply_provider_files", return_value={}):
+            manager.open_project(entries[0]["id"])
+        opened = local_of(entries[0])
+        self.assertNotIn("agent_settings", opened)
+        self.assertNotIn("connectivity", opened)
+        self.assertIn("agent_settings", local_of(entries[1]), "opening one project leaves the others alone")
 
     def test_cli_connection_endpoint_executes_flags_and_records_success_and_failure(self):
         fake = self.base / "fake-codex"
@@ -466,11 +475,22 @@ class ProjectManagerTests(unittest.TestCase):
         self.assertEqual(status, 200, "one malformed board must not drop the projects endpoint")
         self.assertEqual(payload["projects"][0]["id"], active["id"])
         by_id = {row["id"]: row for row in payload["projects"]}
-        for entry in broken_entries:
-            broken = by_id[entry["id"]]
+        for entry in broken_entries:   # not open: its board is never read
+            closed = by_id[entry["id"]]
+            self.assertTrue(closed["health"]["ok"])
+            self.assertEqual(closed["latest_progress"], project_manager.NOT_OPEN_NOW)
+            self.assertFalse(closed["board_loaded"])
+        registry.deactivate(self.home, active["id"])
+        for entry in broken_entries:   # opened one at a time: the broken board stays isolated
+            registry.activate(self.home, entry["id"])
+            with self.served() as (base, _):
+                status, payload = self.request(base, "/api/projects")
+            self.assertEqual(status, 200)
+            broken = {row["id"]: row for row in payload["projects"]}[entry["id"]]
             self.assertFalse(broken["health"]["ok"])
             self.assertIn("board state unreadable or malformed", broken["health"]["reasons"][0])
             self.assertEqual(broken["task_counts"], {"total": 0, "passed": 0, "open": 0, "awaiting_owner": 0})
+            registry.deactivate(self.home, entry["id"])
 
     def test_nested_malformed_board_field_is_isolated_over_http(self):
         bad_code = self.base / "nested-bad"; bad_code.mkdir()
@@ -481,6 +501,7 @@ class ProjectManagerTests(unittest.TestCase):
         }))
         healthy_code = self.base / "healthy"; healthy_code.mkdir()
         healthy = registry.register(self.home, "Healthy neighbour", healthy_code)
+        registry.activate(self.home, bad["id"])
 
         with self.served() as (base, _):
             status, payload = self.request(base, "/api/projects")
@@ -508,6 +529,7 @@ class ProjectManagerTests(unittest.TestCase):
             "events": [{"kind": "release_accepted", "at": "2026-08-14T15:00:00+00:00"}],
         }))
 
+        registry.activate(self.home, entry["id"])
         row = project_manager.ProjectManager(self.home).projects_payload()["projects"][0]
 
         self.assertEqual(row["latest_task"], "DONE")
@@ -584,11 +606,14 @@ class ProjectManagerTests(unittest.TestCase):
                 status, payload = self.request(base, "/api/projects")
                 self.assertEqual(status, 200)
                 row = payload["projects"][0]
+                self.assertEqual(row["latest_progress"], project_manager.NOT_OPEN_NOW)   # not open: board not read
+                status, _ = self.request(base, f"/api/projects/{entry['id']}/open", "POST")
+                self.assertEqual(status, 200)
+                status, payload = self.request(base, "/api/projects")
+                row = payload["projects"][0]
                 self.assertTrue(row["resume_available"])
                 self.assertEqual(row["latest_task"], "MEMORY-TASK")
                 self.assertEqual(row["latest_progress"], "Continue from the saved QA gate.")
-                status, _ = self.request(base, f"/api/projects/{entry['id']}/open", "POST")
-                self.assertEqual(status, 200)
                 status, _ = self.request(base, f"/api/projects/{entry['id']}/close", "POST")
                 self.assertEqual(status, 200)
 
@@ -761,11 +786,14 @@ class ProjectManagerTests(unittest.TestCase):
                 by_id = {row["id"]: row for row in listing["projects"]}
                 self.assertEqual(by_id[created["id"]]["description"],
                                  "First paragraph line.\nSecond paragraph line.")
-                self.assertTrue(by_id[created["id"]]["resume_available"])
-                self.assertEqual(by_id[created["id"]]["latest_task"], "T3")
+                self.assertEqual(by_id[created["id"]]["latest_progress"], project_manager.NOT_OPEN_NOW)
                 self.assertFalse(by_id[adopted["id"]]["resume_available"])
                 status, _ = self.request(base, f"/api/projects/{created['id']}/open", "POST")
                 self.assertEqual(status, 200)
+                _, opened = self.request(base, "/api/projects")
+                opened_row = {row["id"]: row for row in opened["projects"]}[created["id"]]
+                self.assertTrue(opened_row["resume_available"])
+                self.assertEqual(opened_row["latest_task"], "T3")
                 self.request(base, f"/api/projects/{created['id']}/close", "POST")
 
             # Returning through a new manager keeps global settings and project memory,
@@ -775,8 +803,7 @@ class ProjectManagerTests(unittest.TestCase):
                 self.assertEqual(settings["agent_settings"], selected)
                 _, listing = self.request(base, "/api/projects")
                 by_id = {row["id"]: row for row in listing["projects"]}
-                self.assertEqual(by_id[created["id"]]["latest_progress"],
-                                 "Waiting for independent review.")
+                self.assertEqual(by_id[created["id"]]["latest_progress"], project_manager.NOT_OPEN_NOW)
                 status, _ = self.request(base, f"/api/projects/{adopted['id']}/open", "POST")
                 self.assertEqual(status, 200)
                 self.request(base, f"/api/projects/{adopted['id']}/close", "POST")
@@ -900,7 +927,8 @@ class ProjectManagerTests(unittest.TestCase):
             self.assertFalse(parent.joinpath("duplicate").exists(),
                              "a failed registry write must roll back its empty scaffold")
 
-            with patch.object(registry, "remove", side_effect=OSError("registry is unavailable")):
+            with patch.object(registry, "_find", return_value={}), \
+                    patch.object(registry, "remove", side_effect=OSError("registry is unavailable")):
                 status, failed_remove = self.request(
                     base, "/api/projects/not-present", "DELETE",
                 )
@@ -1277,7 +1305,7 @@ class HelpPageCoverageTests(unittest.TestCase):
             "Save and connect",
             "Configure The Agents (Settings)",
             "new agent sessions only",
-            "Pause, Close, Or Remove A Project",
+            "Pause, Close, Or Delete A Project",
             "When Something Looks Wrong",
             "harness-next.log",
             "your own accounts",

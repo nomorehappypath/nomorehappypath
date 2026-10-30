@@ -387,6 +387,29 @@ class BoardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "superseded Delivery Agent is read-only"):
             board.status(self.root, dev["id"], "late mutation")
 
+    def test_cancel_leaves_no_proposal_binding_or_resumable_conversation_and_the_name_is_refused_clearly(self):
+        """2026-10-28: a cancelled task kept its waiting proposal card and repository binding, and the next Delivery agent resumed its conversation."""
+        dev = self.delivery("TASK-CANCEL-CLEAN")
+        session_id = board.snapshot(self.root)["agents"][dev["id"]]["session_id"]
+        control.record_cli_session(self.root, session_id, "11111111-2222-3333-4444-555555555555", "claude")
+        with board.locked_state(self.root) as state:
+            state.setdefault("requirement_proposals", {})["TASK-CANCEL-CLEAN"] = {"status": "awaiting_owner", "version": 1}
+            state.setdefault("task_repositories", {})["TASK-CANCEL-CLEAN"] = "/somewhere/repo"
+        board.cancel_task(self.root, "TASK-CANCEL-CLEAN")
+        state = board.snapshot(self.root)
+        self.assertNotIn("TASK-CANCEL-CLEAN", state.get("requirement_proposals", {}))
+        self.assertNotIn("TASK-CANCEL-CLEAN", state.get("task_repositories", {}))
+        recorded = control.cli_session(self.root, session_id)
+        self.assertFalse(recorded.get("cli_session_id"))
+        # a replacement Delivery agent does not inherit the cancelled conversation
+        replacement = control.create(self.root, "codex_delivery")
+        self.assertFalse(control.cli_session(self.root, replacement["id"]).get("cli_session_id"))
+        # the same name is refused in plain words, not with "already has an owner"
+        fresh = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=replacement["id"])
+        board.record_owner_direction(self.root, replacement["id"], "OWNER DIRECTION — again")
+        with self.assertRaisesRegex(ValueError, "was cancelled by the owner.*choose another short task name"):
+            board.begin_task(self.root, fresh["id"], "TASK-CANCEL-CLEAN")
+
     def test_stopping_reviewer_reopens_claim_without_cancelling_delivery_task(self):
         dev = self.delivery("TASK-REVIEWER-STOP")
         reviewer_session = control.create(self.root, "claude_reviewer")
@@ -551,8 +574,8 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(control.take_instructions(self.root, delivery_session["id"]), [])
         self.assertEqual(control.take_instructions(self.root, reviewer_session["id"]), [])
 
-    def test_cto_wakes_for_active_delivery_on_bounded_monitoring_lease(self):
-        """A healthy active task is CTO work, but only after the lease expires."""
+    def test_cto_wakes_for_active_delivery_once_on_launch(self):
+        """A healthy active task wakes a new CTO once (re-triage); a quiet CTO is not stalled for not polling."""
         self.delivery("TASK-CTO-WAKE")
         cto_session = control.create(self.root, "claude_cto")
         cto = board.register(self.root, "cto", "GLOBAL_MONITOR", session_id=cto_session["id"])
@@ -566,8 +589,8 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(current["liveness"], "recovering")
         routed = control.take_instructions(self.root, cto_session["id"])
         self.assertEqual(len(routed), 1)
-        self.assertIn("MONITORING CYCLE DUE", routed[0]["text"])
-        self.assertEqual(routed[0]["source"], "cto-monitoring-lease")
+        self.assertIn("CTO WAKE", routed[0]["text"])
+        self.assertEqual(routed[0]["source"], "cto-wake")
 
     def test_delivery_waiting_on_routed_review_is_healthy_standby(self):
         dev = self.delivery("TASK-REVIEW-STANDBY")
@@ -588,7 +611,9 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(board.snapshot(self.root)["agents"][dev["id"]]["liveness"], "healthy")
         self.assertEqual(control.take_instructions(self.root, dev["session_id"]), [])
 
-    def test_recent_terminal_output_does_not_replace_board_heartbeat(self):
+    def test_recent_terminal_output_means_working_not_silent_until_the_board_silence_bound(self):
+        """2026-10-27 (4ba9bcc): a terminal that is printing is working; it is not called stalled or woken. Thirty minutes of board silence
+        is the bound after which output no longer excuses it."""
         dev = self.delivery("TASK-OUTPUT-CADENCE")
         old = (datetime.now(timezone.utc) - timedelta(minutes=5, seconds=1)).isoformat()
         with board.locked_state(self.root) as state:
@@ -599,8 +624,36 @@ class BoardTests(unittest.TestCase):
             state["sessions"][dev["session_id"]]["last_output_at"] = datetime.now(timezone.utc).isoformat()
         self.assertEqual(board.mark_stalled(self.root), [])
         current = board.snapshot(self.root)["agents"][dev["id"]]
-        self.assertEqual(current["liveness"], "recovering")
-        self.assertEqual(current["recovery_state"], "automatic_requested")
+        self.assertEqual(current["liveness"], "healthy")
+        self.assertNotEqual(current.get("recovery_state"), "automatic_requested")
+        self.assertEqual(control.take_instructions(self.root, dev["session_id"]), [])
+
+    def test_silence_is_counted_from_when_the_work_appeared_for_an_agent_seen_idle(self):
+        """2026-10-28: a reviewer idle for 44 minutes was called silent 3 seconds after its first review was routed."""
+        dev = self.delivery("TASK-WORK-APPEARED")
+        old = (datetime.now(timezone.utc) - timedelta(minutes=44)).isoformat()
+        with board.locked_state(self.root) as state:
+            state["agents"][dev["id"]].update({"spawned_at": old, "last_poll_at": old, "last_progress_at": old, "idle_since": old})
+        self.assertEqual(board.mark_stalled(self.root, stale_seconds=90), [])
+        current = board.snapshot(self.root)["agents"][dev["id"]]
+        self.assertNotEqual(current["liveness"], "recovering")
+        self.assertTrue(current.get("actionable_since"))
+        self.assertNotIn("idle_since", current)
+        self.assertEqual(control.take_instructions(self.root, dev["session_id"]), [])
+        # silence measured from the moment the work appeared still stalls an agent that never answers
+        gone = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+        with board.locked_state(self.root) as state:
+            state["agents"][dev["id"]]["actionable_since"] = gone
+        board.mark_stalled(self.root, stale_seconds=90)
+        self.assertEqual(board.snapshot(self.root)["agents"][dev["id"]]["liveness"], "recovering")
+
+    def test_an_agent_never_seen_idle_keeps_the_ordinary_silence_rule(self):
+        dev = self.delivery("TASK-NEVER-IDLE")
+        old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        with board.locked_state(self.root) as state:
+            state["agents"][dev["id"]].update({"spawned_at": old, "last_poll_at": old, "last_progress_at": old})
+        board.mark_stalled(self.root, stale_seconds=90)
+        self.assertEqual(board.snapshot(self.root)["agents"][dev["id"]]["liveness"], "recovering")
 
     def test_recent_recorded_progress_prevents_false_stall_without_a_fresh_poll(self):
         dev = self.delivery("TASK-PROGRESS-LEASE")

@@ -136,8 +136,14 @@ def _reject_overlap(registry: dict[str, Any], context: ProjectContext, *, ignore
                     raise ValueError(
                         f"project '{entry['name']}' already uses {theirs} — duplicate or shared roots are rejected"
                     )
-        if _is_within(context.data_root, Path(entry["code_root"])) or _is_within(Path(entry["data_root"]), context.code_root):
-            raise ValueError(f"data roots may not nest inside another project's repository ('{entry['name']}')")
+        if _is_within(Path(entry["data_root"]), context.code_root):
+            raise ValueError(
+                f"This folder holds other projects, including '{entry['name']}'. Choose the project's own folder, not a folder that contains other projects."
+            )
+        if _is_within(context.data_root, Path(entry["code_root"])):
+            raise ValueError(
+                f"This project's files would end up inside the project '{entry['name']}'. Choose a folder that is not inside another project."
+            )
 
 
 def _context_for(kind: str, code_root: Path, data_root: Path | None, workspace_root: Path | None) -> ProjectContext:

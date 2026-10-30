@@ -156,6 +156,8 @@ def _read_artifact_checked(path_value: str, field: str) -> dict[str, Any]:
     try:
         before = os.lstat(path)
     except OSError as error:
+        if "\n" in path_value or path_value.count("|") >= 3:
+            raise ArtifactError("this argument must be the PATH of a file, but it holds the file's text. Write the table to a file and pass that file's path") from error
         raise ArtifactError(f"artifact file is unavailable: {path_value}") from error
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
         raise ArtifactError("artifact must be a regular single-link file")

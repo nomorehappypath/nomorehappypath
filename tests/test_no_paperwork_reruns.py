@@ -81,13 +81,13 @@ class SelfExplainingRefusalTests(unittest.TestCase):
         gateway = self.gateway()
         for _ in range(board_threshold() + 2):
             gateway._track_refusal(identity, "qa-result", error, ["qa-result", "--task", task])
-        return board.snapshot(self.context).get("control_plane_holds", {})
+        return holds.defects_by_task(self.context)
 
-    def test_a_refusal_that_names_its_fix_never_holds_the_task(self):
+    def test_a_refusal_that_names_its_fix_is_never_logged_as_a_defect(self):
         self.assertEqual(self.hold_after_repeats(self.NAMES_ITS_FIX), {})
         self.assertEqual(self.hold_after_repeats("a Test changed: <file> - <why the test was wrong> line is missing", "PAPER-TWO"), {})
 
-    def test_a_real_wedge_still_holds_the_task(self):
+    def test_a_real_wedge_is_logged_as_a_defect_not_a_hold(self):
         self.assertEqual(list(self.hold_after_repeats("the board cannot reach the candidate checkout")), ["PAPER-TASK"])
 
 

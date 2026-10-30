@@ -135,7 +135,12 @@ class Stage3ClaudeTests(unittest.TestCase):
         # A relaunch is a NEW session of the same role, continuing the ended one
         # (same project, same Claude conversation file).
         self.session = control.create(self.root, "claude_reviewer")
-        self.agent = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=self.session["id"])
+        if relaunch:
+            # The runner records a continuing launch as resumed before it starts the supervisor (run_managed_agent.sh:
+            # note-cli-launch --resumed). Without that record this terminal reads as a fresh start and, since 2026-10-28,
+            # holds controller messages until its first turn settles (up to FIRST_TURN_HOLD_SECONDS).
+            control.note_cli_launch(self.root, self.session["id"], True, "continues the ended session")
+        self.agent =board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=self.session["id"])
         self.runtime = self.base / "rt"
         master, slave = pty.openpty()
         command = [

@@ -133,7 +133,7 @@ class RuntimeGuardTests(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertIn(needle, (ROOT / relative).read_text(encoding="utf-8"))
         source = (ROOT / "harness" / "board.py").read_text(encoding="utf-8")
-        self.assertEqual(source.count("live_board_root=root"), 7, "every caller of the governed runners passes the live board (the red-proof run on the unbuilt project is the seventh)")
+        self.assertEqual(source.count("live_board_root=root"), 8, "every caller of the governed runners passes the live board (the red-proof run on the unbuilt project is the seventh, the revert-proof run the eighth)")
 
     def test_the_development_qa_branch_really_gives_the_command_the_marker(self):
         work = Path(self._tmp.name).resolve() / "work"
