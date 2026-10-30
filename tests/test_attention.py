@@ -416,6 +416,7 @@ LANDING_PROBE = r"""
 STUDIO_PROBE = r"""
 <script>
 (async () => {
+  document.getElementById('tab-advanced-btn')?.click();   // the agent terminals live in the Advanced tab since the Mission Control redesign
   for (let attempt = 0; attempt < 60; attempt++) {
     const banner = document.querySelector('#waiting-banner');
     if (banner && !banner.hidden && banner.textContent.trim()) break;
@@ -476,6 +477,7 @@ class RenderedBannerTests(unittest.TestCase):
         home = self.base / "home"
         code = self.base / "film"; code.mkdir()
         entry = registry.register(home, "Film project", code)
+        registry.activate(home, entry["id"])   # only the open project's board is read (owner 2026-10-28)
         context = registry.context_for_entry(entry)
         control.initialize(context)
         session = control.create(context, "claude_cto")

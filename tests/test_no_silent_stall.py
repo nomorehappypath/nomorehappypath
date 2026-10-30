@@ -59,6 +59,9 @@ class _Stall(_Fixture):
             agent.update({"last_poll_at": stamp, "last_progress_at": None if agent["role"] == "cto" else stamp, "spawned_at": stamp,
                           "last_status_at": stamp})
             agent.pop("session_reattached_at", None)
+            if agent["role"] == "cto":
+                # 2026-10-26: a quiet CTO is not a stalled one; it is silent only when a wake went unanswered with no board write
+                agent.update({"recovery_state": "automatic_requested", "automatic_recovery_requested_at": stamp})
 
     def reviewer(self, task: str = "BRIEF-TASK") -> tuple[dict, dict, object]:
         session = control.create(self.root, "claude_reviewer")
@@ -135,6 +138,8 @@ class LiveCaseRegressionTests(_Stall):
         with board.locked_state(self.root) as state:
             state["agents"][agent["id"]].pop("automatic_recovery_requested_at")   # nothing woke it yet
             state["agents"][agent["id"]].pop("recovery_state")
+        with control.locked_state(self.root) as state:
+            state["sessions"][session["id"]]["last_output_at"] = _ago(600)   # about the hold, not about a busy terminal (see test_audit_run_defects)
         results = self_heal.run_once(self.root, self.launch, self.at(1), create=self.create)
         self.assertEqual([r["action"] for r in results], ["stall_wake"])
         queued = control.queued_instructions(self.root)["inbox"][session["id"]]
@@ -335,15 +340,18 @@ class GuardTests(_Stall):
         actions = self_heal.plan(self.root, self.at(0))
         self.assertEqual([a["action"] for a in actions], ["announce_launch_failure"])
 
-    def test_the_ctos_heartbeat_is_its_poll_alone(self):
+    def test_a_quiet_cto_is_never_stalled_but_an_unanswered_wake_is(self):
         _, delivery, _ = self.delivery_with_task("CTO-WATCHED")
         session, cto, _ = self.cto()
-        window = self.window + board.CTO_MONITOR_INTERVAL_SECONDS
-        with board.locked_state(self.root) as state:   # status posts are recent, the poll is not
-            state["agents"][cto["id"]].update({"last_poll_at": _ago(window + 30), "last_progress_at": _ago(5), "spawned_at": _ago(window + 60)})
+        long_quiet = self.window + board.CTO_MONITOR_INTERVAL_SECONDS * 10
+        with board.locked_state(self.root) as state:   # no poll for a long time, no wake outstanding: quiet, not stalled
+            state["agents"][cto["id"]].update({"last_poll_at": _ago(long_quiet), "last_progress_at": None, "last_status_at": _ago(long_quiet),
+                                               "spawned_at": _ago(long_quiet + 60)})
+        self.assertEqual([a for a in self.plan() if a["agent_id"] == cto["id"]], [])
+        self.silent(cto["id"], self.window + 60)   # a wake that nothing answered for longer than the window
         self.assertEqual([(a["action"], a["agent_id"]) for a in self.plan() if a["agent_id"] == cto["id"]], [("stall_wake", cto["id"])])
-        with board.locked_state(self.root) as state:
-            state["agents"][cto["id"]]["last_poll_at"] = _ago(self.window + 60)   # a normal five-minute rhythm is healthy
+        with board.locked_state(self.root) as state:   # any board write after the wake answers it
+            state["agents"][cto["id"]]["last_status_at"] = _ago(5)
         self.assertEqual([a for a in self.plan() if a["agent_id"] == cto["id"]], [])
 
     def test_a_plan_made_before_a_poll_does_not_act_on_it(self):

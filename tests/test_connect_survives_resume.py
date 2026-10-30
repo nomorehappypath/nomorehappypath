@@ -145,6 +145,7 @@ class ConnectAfterPauseTests(base.ManagerTests):
 
     def test_a_failed_handoff_stays_pending_and_the_status_refresh_retries_it(self):
         with self.served() as (_base, manager):
+            manager._machine_reconcile_once(self.entry)   # the project's first touch (its restart check) has already happened
             base.connected_descriptor(self.context, alive=True, handoff_pending=1, connected_at_stop_seq=0)
             with mock.patch.object(test_machine_followup, "after_connect", side_effect=OSError("disk")):
                 manager._machine_handoff_if_pending(self.entry["id"], self.context)
@@ -175,6 +176,7 @@ class ResumeThroughTheManagerTests(unittest.TestCase):
         code = self.base / "code"
         code.mkdir()
         self.entry = registry.register(self.home, "resume-project", code)
+        registry.activate(self.home, self.entry["id"])   # only the open project's board is read (owner 2026-10-28)
         self.context = registry.context_for_entry(self.entry)
 
     def resume(self, manager):

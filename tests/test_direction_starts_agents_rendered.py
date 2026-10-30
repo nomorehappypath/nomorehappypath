@@ -27,8 +27,14 @@ HEAD = r"""
   const post = value => fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(value)});
   const result = {};
   const give = async () => {
-    await wait(() => q('#give-direction') && !q('#give-direction').hidden && !q('#give-direction').disabled);
+    await wait(() => q('#give-direction') && !q('#give-direction').hidden && !q('#give-direction').disabled && lastBoard);
     q('#give-direction').click();
+    // nothing running and not paused: the Start a Delivery Agent dialog comes first (the owner picks kind, model, effort)
+    await wait(() => q('#color-dialog').open || q('#owner-message-dialog').open);
+    if (q('#color-dialog').open) {
+      await wait(() => !q('#color-launch').disabled);
+      q('#color-launch').click();
+    }
     await wait(() => q('#owner-message-dialog').open);
     result.help = q('#owner-message-help').textContent;
     result.attachmentsHidden = q('#owner-message-attachments').hidden;

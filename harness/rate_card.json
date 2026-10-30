@@ -1,0 +1,28 @@
+{
+  "as_of": "2026-10-27",
+  "unit": "US dollars per million tokens",
+  "how_to_edit": "Prices change by hand only; nothing downloads prices. To use your own copy, put a file of this shape anywhere and set its path in Settings (plumbing: cost_rate_card_path). A model missing here is priced at the highest rate on the card and shown as estimated.",
+  "sources": {
+    "anthropic": "https://platform.claude.com/docs/en/about-claude/pricing (read 2026-10-27; model ids from https://platform.claude.com/docs/en/models/overview). Cache write is the 5-minute rate.",
+    "openai": "https://developers.openai.com/api/docs/pricing (read 2026-10-27; standard tier, prompts up to 272K tokens; the higher long-prompt rates are not modelled; OpenAI lists no separate cache-write price, so it is 0)."
+  },
+  "models": {
+    "claude-fable-5-1":  {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
+    "claude-fable-5":    {"input": 10.0, "output": 50.0, "cache_read": 1.0,  "cache_write": 12.5},
+    "claude-opus-5-5":   {"input": 4.0,  "output": 20.0, "cache_read": 0.2,  "cache_write": 5.0},
+    "claude-opus-5":     {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
+    "claude-sonnet-5-5": {"input": 2.0,  "output": 10.0, "cache_read": 0.1,  "cache_write": 2.5},
+    "claude-sonnet-5":   {"input": 2.0,  "output": 10.0, "cache_read": 0.2,  "cache_write": 2.5},
+    "gpt-6-astra":       {"input": 10.0, "output": 50.0, "cache_read": 1.0,  "cache_write": 0.0},
+    "gpt-6.1-sol":       {"input": 2.0,  "output": 10.0, "cache_read": 0.1,  "cache_write": 0.0},
+    "gpt-6.1-terra":     {"input": 1.0,  "output": 5.0,  "cache_read": 0.05, "cache_write": 0.0},
+    "gpt-6-luna":        {"input": 0.1,  "output": 0.5,  "cache_read": 0.01, "cache_write": 0.0},
+    "gpt-6-sol":         {"input": 2.0,  "output": 10.0, "cache_read": 0.2,  "cache_write": 0.0},
+    "gpt-5.6-sol":       {"input": 4.0,  "output": 20.0, "cache_read": 0.4,  "cache_write": 0.0},
+    "gpt-5.6-terra":     {"input": 2.0,  "output": 12.0, "cache_read": 0.2,  "cache_write": 0.0},
+    "gpt-5.6-luna":      {"input": 0.2,  "output": 1.2,  "cache_read": 0.02, "cache_write": 0.0},
+    "gpt-5.5":           {"input": 5.0,  "output": 30.0, "cache_read": 0.5,  "cache_write": 0.0},
+    "gpt-5.4":           {"input": 2.5,  "output": 15.0, "cache_read": 0.25, "cache_write": 0.0},
+    "gpt-5.3-codex":     {"input": 1.75, "output": 14.0, "cache_read": 0.175, "cache_write": 0.0}
+  }
+}

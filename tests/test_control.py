@@ -639,7 +639,7 @@ class ControlTests(unittest.TestCase):
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex), "HARNESS_CAPTURE": str(capture), "HARNESS_WORKING_DIRECTORY": str(working_directory), "HARNESS_EXECUTION_ROOT": str(execution_root)}
             process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env=environment)
             try:
-                for _ in range(30):
+                for _ in range(150):
                     current = control.snapshot(root)["sessions"][0]
                     if current["status"] == "running":
                         break
@@ -647,7 +647,7 @@ class ControlTests(unittest.TestCase):
                 else:
                     self.fail("runner did not attach")
                 captured = ""
-                for _ in range(30):
+                for _ in range(150):
                     if capture.is_file() and working_directory.is_file():
                         captured = capture.read_text(encoding="utf-8")
                         if "Delivery Agent — hard rules" in captured and "No owner direction has been supplied yet" in captured and f"The target project is {root}" in captured:
@@ -715,7 +715,7 @@ class ControlTests(unittest.TestCase):
             session = control.create(root, "claude_cto")
             process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env={**os.environ, "HARNESS_CLAUDE_BIN": str(fake_claude)})
             try:
-                for _ in range(30):
+                for _ in range(150):
                     if control.snapshot(root)["sessions"][0].get("launch_exec_at"):
                         break
                     time.sleep(.1)

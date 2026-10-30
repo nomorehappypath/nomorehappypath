@@ -107,12 +107,13 @@ class StartProgress(unittest.TestCase):
         manager = project_manager.ProjectManager(self.home, board_port=45999)
         row = next(r for r in manager.projects_payload()["projects"])
         self.assertFalse(row["reopen_restores"])
+        # A project that is not open is never read (owner 2026-10-28), so its card cannot know it has saved work.
         with patch.object(project_manager, "derive_status", return_value={"resume_available": True, "paused": False,
-                                                                        "agent_counts": {"total": 3}}):
+                                                                        "agent_counts": {"total": 3}}) as read:
             row = next(r for r in manager.projects_payload()["projects"])
-        self.assertTrue(row["reopen_restores"])
+        read.assert_not_called()
+        self.assertFalse(row["reopen_restores"])
         page = (ROOT / "harness/project_manager_page.py").read_text()
-        self.assertIn("Open it and your agents come back with their saved work.", page)
         self.assertIn("Starting · loading the board", page)
 
     def test_progress_is_sampled_from_the_real_ps_without_confusing_failure_with_exit(self):
@@ -270,7 +271,7 @@ class RenderedStates(unittest.TestCase):
         self.assertEqual([b["disabled"] for b in one["buttons"] if "Starting" in b["text"]], [True])
         self.assertNotIn("Open Mission Control", one["text"])
         closed = rows["Closed One"]
-        self.assertIn("Open it and your agents come back with their saved work.", closed["text"])
+        self.assertIn("Not open. Open or resume it to see its progress.", closed["text"])
         self.assertIn("Open project", [b["text"] for b in closed["buttons"]])
 
 del _Rendered  # not a test of this module; keeps the loader from re-running its tests

@@ -19,29 +19,36 @@ two active CLAUDE Independent Reviewers, and one global CTO.
 
 ## monitoring-cycle
 
-At startup print:
+**You are woken for a reason, not on a clock.** The board wakes you when something needs a reader: a new
+finding or a hold proposal, a release step (the final pass, a completed task, `RELEASE PREPARED`, a refused
+release check), an owner card the board pinned, a disputed finding, a stuck item whose recovery ladder is
+exhausted, a resume or launch, and one slow check-in (every 30 minutes while a task is live; it always comes,
+because files, deliverables and final-check output change without a board event). The wake names the reason
+and lists every item still unjudged. The controller automatically wakes this managed terminal for these reasons only. Between wakes you do nothing; a quiet board is not a stalled CTO.
 
-```text
-CTO ONLINE | scope=global-project | poll=0 | board=.harness/board/BOARD.md
-```
+In this directive a "cycle" means one wake: the work from being woken to recording your dispositions.
 
-When the local board control panel is already running, use that existing
-panel as the visible status display; do not start a duplicate viewer. Inside
-the Projects app (board commands use an authenticated endpoint) the panel
-always runs: never start a viewer there. Otherwise, start the harness's
-`scripts/start_board_viewer.sh` when it is available.
+On a wake, first run one bounded board poll: the board command `poll --agent <your agent id>` (your launch
+board command prefix followed by `poll --agent <id>`). It is the only way to read the board; reading `BOARD.md`
+or `state.json` and posting status do not replace it. Then judge each item the wake names and record what you
+decided with `cto-disposition --item <item id> --outcome hold|note|route|nothing --note "<one line>"`
+(`--item all` closes every open item with one note). A poll or a status post alone never closes an item; the
+board keeps it open and names it again at the next wake until you record a disposition, also across a
+restart, a pause or a replaced terminal. Any board write you make answers the wake; a wake with no board write
+at all is the only thing the watchdog calls a stall. Post a short status naming what changed or what you did.
 
-On every controller-routed monitoring cycle, first run one bounded board
-poll — the board command `poll --agent <your agent id>` (your launch board
-command prefix followed by `poll --agent <id>`). That poll is the only
-heartbeat the watchdog accepts: reading `BOARD.md` or `state.json`, terminal
-output and status posts do not count; a CTO that never polls is re-woken
-each cycle. Then scan the board, print active tasks, queued/claimed reviews,
-stale agents, overdue clocks, holds and the next routed action, and post a
-short status. Do not run a polling or sleep loop; the controller
-automatically wakes this managed terminal while actionable work exists and
-escalates only if that wake-up receives no board write at all. If this
-session stops, post `CTO OFFLINE`. 
+When the local board control panel is already running, use that existing panel as the visible status display;
+do not start a duplicate viewer. Inside the Projects app (board commands use an authenticated endpoint) the
+panel always runs: never start a viewer there. Otherwise, start the harness's `scripts/start_board_viewer.sh`
+when it is available. Do not run a polling or sleep loop.
+
+## analysis-merge
+
+In a Code analysis the builder and the reviewer each read all the code and file their own list, then each marks every item of the other's list once (confirmed, false alarm or wrong, with file:line evidence). When both marks are in, the board wakes you with reason `analysis merge`, listing both lists and both sets of marks. Your only job is to group items that describe the SAME problem, between the two lists and also within one list (two items of one side that describe the same bug belong in one group): `analysis-merge --agent <id> --task <task> --group "D2,R4" --group "D5,R1,R6"` (no `--group` when there are no duplicates). An item is in at most one group and every id must exist; the board refuses anything else. You judge no item true or false and you add, drop and reword nothing: the board builds the clean list itself (confirmed items plain, disputed ones marked Disputed with both sides' evidence, a group keeping every source id) and sends it to Delivery. The merge closes the wake item; record no separate disposition. If you were not running when the second cross-check came in, the board raises the same wake, with the same lists, when you start.
+
+When the wake says `[CUT: ...]` the lists are longer than a message can carry: run `analysis-merge --agent <id> --task <task> --show` to read both whole (it changes nothing), then group.
+
+A `no progress` item for an analysis names the silent side (`no_progress:<task>:delivery|reviewer:<stamp>`): the side that still owes its list or its cross-check. Route that side with one note naming the command it owes (`analysis-list --done` or `analysis-crosscheck`); the side that is only waiting is not stalled.
 
 ## logins
 

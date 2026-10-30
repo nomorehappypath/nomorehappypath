@@ -1,5 +1,5 @@
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
-"""Rendered proof: the open paused project says why it has no Remove button (2026-09-28).
+"""Rendered proof: the open paused project says it is the open one; Delete works on it (2026-09-28, Delete 2026-10-28).
 
 Every paused project showed the same "Paused" badge, while Remove is hidden
 for the one that is still the open project. The owner saw two identical cards,
@@ -21,7 +21,7 @@ from harness import board, browser_acceptance, project_manager, project_registry
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
 
-HOVER = "Still your open project. Close it from its board to remove it from this list."
+HOVER = "Still your open project. Delete closes it first, then takes it off the list."
 
 PROBE = r"""
 <script>
@@ -36,7 +36,7 @@ PROBE = r"""
       shown: (badge?.innerText || '').trim(),
       title: badge?.getAttribute('title'),
       badgeClass: badge?.className || '',
-      actions: Array.from(card.querySelectorAll('.actions button')).map(b => b.textContent.trim()),
+      actions: Array.from(card.querySelectorAll('.actions button, .adv-actions button')).map(b => b.textContent.trim()),   // Remove moved into the card's Advanced menu
       visible: card.getBoundingClientRect().height > 0 && (badge?.getBoundingClientRect().width || 0) > 0,
     };
   });
@@ -101,13 +101,14 @@ class RenderedPausedOpenLabelTests(unittest.TestCase):
         self.assertEqual(studio_card["badge"], "Paused · open")
         self.assertEqual(studio_card["title"], HOVER)
         self.assertIn("paused", studio_card["badgeClass"].split())
-        self.assertNotIn("Remove", studio_card["actions"], "no behaviour change: the open project still has no Remove")
+        self.assertIn("Delete", studio_card["actions"], "the open project can be deleted too (owner 2026-10-28): it is closed first")
         self.assertIn("Resume project", studio_card["actions"])
 
-        self.assertEqual(weather["badge"], "Paused")
+        # A project that is not open is not read (owner 2026-10-28), so its card cannot say it is paused; Open still resumes it.
+        self.assertEqual(weather["badge"], "Idle")
         self.assertIsNone(weather["title"])
-        self.assertIn("Remove", weather["actions"])
-        self.assertIn("Resume project", weather["actions"])
+        self.assertIn("Delete", weather["actions"])
+        self.assertIn("Open project", weather["actions"])
 
         self.assertEqual(notes["badge"], "Idle")
         self.assertIsNone(notes["title"])

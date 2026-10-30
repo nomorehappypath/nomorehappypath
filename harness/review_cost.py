@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness import accepted_bytes, git_process
+from harness import accepted_bytes, cto_wakes, git_process
 
 # Defaults and bounds of the two Settings fields (global_settings.PLUMBING_LIMITS routes them; nothing else holds a number).
 MAX_FILES_DEFAULT, MAX_FILES_LOW, MAX_FILES_HIGH = 60, 5, 5000
@@ -243,6 +243,7 @@ def usage(state: dict[str, Any], task: str, at: datetime | None = None) -> dict[
         "line": (
             f"Counted so far: {turns} recorded Delivery and Reviewer {'step' if turns == 1 else 'steps'} and {minutes} "
             f"{'minute' if minutes == 1 else 'minutes'} of review. This is the board's own count, not a provider bill; it leaves out the "
-            "CTO and any work from before counting began."
+            "CTO and any work from before counting began." + cto_wakes.usage_sentence(state, task)
         ),
+        "cto_wakes": sum(int(v or 0) for v in ((state.get("cto_wakes") or {}).get("by_task", {}).get(task) or {}).values()),
     }

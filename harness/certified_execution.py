@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any, Iterator, Mapping
 
-from harness import browser_acceptance, child_process, execution_identity, agent_confinement, test_machine
+from harness import browser_acceptance, child_process, execution_identity, agent_confinement, test_env, test_machine
 
 
 _POSITIVE_COUNT_PATTERNS = (
@@ -218,6 +218,17 @@ def _protected_prompt_processes(table: dict[int, dict[str, Any]]) -> dict[int, d
     }
 
 
+def _scrubbed_tree(value: Any, scrub: Any) -> Any:
+    """`value` with `scrub` applied to every text in it (the process audit keeps its structure and identity fields)."""
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, list):
+        return [_scrubbed_tree(item, scrub) for item in value]
+    if isinstance(value, dict):
+        return {key: _scrubbed_tree(item, scrub) for key, item in value.items()}
+    return value
+
+
 def _write_process_audit(board_root: Any, audit: dict[str, Any]) -> dict[str, str]:
     payload = (json.dumps(audit, indent=2, sort_keys=True) + "\n").encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
@@ -246,7 +257,7 @@ _AMBIENT_PROBLEMS = (
 
 
 def _run_observed(
-    command: str, execution_root: Path, environment: Mapping[str, str], timeout_seconds: int,
+    command: str, execution_root: Path, environment: Mapping[str, str], timeout_seconds: int, cwd: Path | None = None,
 ) -> tuple[int, str, dict[str, Any]]:
     """Execute once while independently observing descendants and owner UI."""
     baseline = browser_acceptance._process_table()
@@ -263,7 +274,7 @@ def _run_observed(
         claude_config_dir=environment.get("CLAUDE_CONFIG_DIR") or None,
     )
     process = subprocess.Popen(
-        guarded, cwd=execution_root, shell=False, stdout=subprocess.PIPE,
+        guarded, cwd=cwd or execution_root, shell=False, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=dict(environment),
         start_new_session=True,
     )
@@ -391,7 +402,11 @@ def run(
     timeout_seconds: int = 300,
     reuse: bool = True,
     unable_not_failure: bool = False,
+    workdir: str = ".",
+    scrub: Any = None,
 ) -> dict[str, Any]:
+    """Run one governed command. `workdir` is the folder (relative to the candidate) the project's declared test environment runs from and is part
+    of the command's identity; `scrub` removes declared secret values from the output before anything is stored or shown."""
     try:
         argv = shlex.split(command, posix=True)
     except ValueError as error:
@@ -400,7 +415,7 @@ def run(
     # result is stamped with the machine's revision, epoch and tools revision (checked again before anything is certified).
     machine = test_machine.stamp_for_command(board_root, argv, who=role)
     identity = execution_identity.command_run_identity(
-        candidate, argv, ".", environment_sha256, lockfile_digests,
+        candidate, argv, workdir or ".", environment_sha256, lockfile_digests,
         role=role, gate=gate, browser=browser, machine=machine,
     )
     with _identity_lock(board_root, identity["sha256"]):
@@ -447,7 +462,11 @@ def run(
         started = datetime.now(timezone.utc)
         exit_code, output, process_audit = _run_observed(
             command, execution_root, child_process.with_live_board(environment, board_root), timeout_seconds,
+            cwd=(execution_root / workdir) if workdir and workdir != "." else None,
         )
+        if scrub is not None:
+            output = scrub(output)
+            process_audit = _scrubbed_tree(process_audit, scrub)   # the observed processes' command lines are stored too
         raw_exit = exit_code           # what the command itself returned, before any rule below changes it
         audit_manifest = _write_process_audit(board_root, process_audit)
         if machine and not test_machine.stamp_is_current(board_root, machine):
@@ -561,7 +580,7 @@ def run(
             ))
         if exit_code != 0:
             raise ValueError(browser_acceptance.with_blocked_note(
-                problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}", output,
+                problem or f"internal-QA test command failed with exit code {exit_code}: {output[-500:]}" + test_env.missing_library_advice(output), output,
             ))
         measurement["final_checks"] = final_check_summary(output)
         return {"output": output, "measurement": measurement}

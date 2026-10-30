@@ -836,6 +836,7 @@ class TranscriptEndpointTests(unittest.TestCase):
 PROBE = r"""
 <script>
 (async () => {
+  document.getElementById('tab-advanced-btn')?.click();   // the agent terminals live in the Advanced tab since the Mission Control redesign
   for (let attempt = 0; attempt < 100; attempt++) {
     if (document.querySelector('#agents .agent-row .conversation-link')) break;
     await new Promise(resolve => setTimeout(resolve, 100));

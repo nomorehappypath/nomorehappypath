@@ -114,7 +114,7 @@ class RenderedStopKeepsTaskTests(_stop_tests._Fixture):
         # criterion 3: Cancel task is on the task, asks plainly, and only it removes the task
         self.assertTrue(reading["cancelVisible"], dump)
         self.assertEqual(reading["cancelLabel"], "Cancel task")
-        self.assertIn("Its board records and its workspace will be removed", reading["cancelPrompt"], dump)
+        self.assertIn("Its board records will be removed (its work copy is kept for recovery)", reading["cancelPrompt"], dump)
         self.assertIn("Task cancelled", reading["cancelNotice"])
         self.assertTrue(reading["cardGone"], dump)
         state = board.snapshot(self.root)

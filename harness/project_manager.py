@@ -8,7 +8,7 @@ context; the manager never mutates a root captured by a running worker. Derived
 information — task counts, running state, health — is computed from each
 project's board at render time, never stored.
 
-Phase 1 scope: Open, New project, Adopt existing, Repair, Remove, Close. The
+Phase 1 scope: Open, New project, Adopt existing, Repair, Delete (list-only), Close. The
 Agent-reach disclosure lives in Help, not on the project view, and states
 plainly that agent sessions run unconfined. Only the app's own Git work is
 sandboxed.
@@ -39,9 +39,9 @@ from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, board_surface, cli_capabilities, control, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
+from harness import board, board_surface, cli_capabilities, control, cost_center, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
-from harness import workspace_settings
+from harness import story, workspace_settings
 from harness import test_machine
 from harness import platform_support, web_guard
 from harness.project_manager_page import PAGE
@@ -307,6 +307,40 @@ def _waiting_sessions(entry: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
 
+def _project_sessions(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The few session facts the Now card needs (kind, state, an open Claude sign-in or consent card); unreadable storage reads as none."""
+    try:
+        return [
+            {"id": str(item.get("id", "")), "kind": str(item.get("kind", "")), "status": str(item.get("status", "")),
+             "provider": str(item.get("provider", "")), "vendor": str(item.get("vendor", "")), "claude_auth_action": item.get("claude_auth_action")}
+            for item in control.snapshot(registry.context_for_entry(entry)).get("sessions", [])
+            if item.get("status") in control.ACTIVE_STATUSES
+        ]
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+
+
+def _project_cost(entry: dict[str, Any]) -> dict[str, Any]:
+    """What the project's agents cost so far (cost center, read-only); unreadable reads as not measured, never as zero."""
+    try:
+        return cost_center.summarize(Path(entry["data_root"]) / "board")
+    except Exception:   # noqa: BLE001 - one unreadable ledger never hides the project
+        return {"available": False}
+
+
+def _open_cards(state: dict[str, Any]) -> list[dict[str, Any]]:
+    current = datetime.now(timezone.utc)
+    cards = []
+    for card in (state.get("owner_actions") or {}).values():
+        if not isinstance(card, dict) or card.get("status") != "open":
+            continue
+        expires = board.owner_action_expires_at(card)
+        if expires is not None and expires <= current:
+            continue
+        cards.append(card)
+    return cards
+
+
 def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     """Truthful render-time status straight from the project's own board."""
     health = registry.entry_health(entry)
@@ -321,6 +355,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
     board_pause_status = ""
     control_plane_hold = ""
     control_plane_hold_task = ""
+    project_now = story.project_now({}, "")
     state_path = Path(entry["data_root"]) / "board" / "state.json"
     if state_path.is_file():
         try:
@@ -481,6 +516,11 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             event_times = [str(event.get("at", "")) for event in events if event.get("at")]
             if event_times:
                 last_board_activity = max(event_times)
+            # 2026-10-27 Mission Control story: the same pure computation the task page reads, over the full persisted board.
+            project_now = story.project_now(
+                state, str(latest_task), paused=paused, accepted_tasks=accepted_tasks, awaiting_owner=awaiting_owner,
+                awaiting_requirements=awaiting_requirements, tasks_total=counts["total"], owner_cards=_open_cards(state),
+                sessions=_project_sessions(entry), agents=active_agents, cost=_project_cost(entry), redact=board._redact_secrets)
             if paused:
                 running = False
                 resume_available = True
@@ -502,6 +542,7 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
             last_board_activity = ""
             resume_available = False
             paused = False
+            project_now = story.project_now({}, "")
     waiting = _waiting_sessions(entry)
     return {
         "health": health,
@@ -518,6 +559,26 @@ def derive_status(entry: dict[str, Any]) -> dict[str, Any]:
         "latest_task": latest_task,
         "latest_progress": latest_progress,
         "last_board_activity": last_board_activity,
+        "project_now": project_now,
+    }
+
+
+NOT_OPEN_NOW = "Not open. Open or resume it to see its progress."
+
+
+def closed_status(entry: dict[str, Any]) -> dict[str, Any]:
+    """What a project that is not open shows: registry basics only. Its board is never read here (owner 2026-10-28: one project loaded at a time)."""
+    return {
+        "health": registry.entry_health(entry),
+        "waiting_sessions": [], "limit_notices": [],
+        "task_counts": {"total": 0, "passed": 0, "open": 0, "awaiting_owner": 0},
+        "agent_counts": {"total": 0, "delivery": 0, "reviewer": 0, "cto": 0},
+        "running": False, "paused": False, "board_pause_status": "",
+        "control_plane_hold": "", "control_plane_hold_task": "",
+        "resume_available": False, "latest_task": "", "latest_progress": NOT_OPEN_NOW,
+        "last_board_activity": "",
+        "project_now": {**story.project_now({}, ""), "state": "closed", "now": NOT_OPEN_NOW, "next": "", "tell_builder": False},
+        "board_loaded": False,
     }
 
 
@@ -555,15 +616,9 @@ class ProjectManager:
             registered = registry.entries(self.home)
         except (OSError, ValueError, KeyError, TypeError):
             registered = []
-        roots = [Path(entry["data_root"]) for entry in registered]
-        for entry in registered:
-            context = registry.context_for_entry(entry)
-            if context.code_root.is_dir():
-                project_memory.initialize(
-                    context,
-                    project_name=entry["name"],
-                    description=entry.get("description", ""),
-                )
+        # App start touches no project (owner 2026-10-28: projects load when opened or resumed, one at a time, never at a restart).
+        # Only the very first creation of the global settings may look at the projects, to migrate an older per-project copy once.
+        roots = [] if global_settings.exists(self.home) else [Path(entry["data_root"]) for entry in registered]
         global_settings.initialize(self.home, roots)
         self.execution_root = Path.cwd().resolve()
         self.installation_root = Path(__file__).resolve().parents[1]
@@ -596,14 +651,22 @@ class ProjectManager:
         self._machine_jobs: dict[str, dict[str, Any]] = {}
         self._machine_jobs_guard = threading.Lock()
         self._machine_stop_generation: dict[str, int] = {}   # moved by every stop and release; a Connect compares it (works with no descriptor)
-        for entry in registered:
-            try:
-                context = registry.context_for_entry(entry)
-                test_machine.reconcile_on_start(context, self.machine_identity)
-                # no Connect is running at start: a leftover pending reservation (the app died mid-Connect) is dropped
-                test_machine.reconcile_reservation(context, self.home, entry["id"]) if test_machine.descriptor_path(context).exists() else None
-            except (OSError, ValueError, KeyError):
-                pass
+        # A project's test machine is reconciled the first time this manager touches that project (listing it, opening it,
+        # resuming it or using its machine), never for every project at start. Fail closed stays: nothing uses a project's machine
+        # before this has run for it.
+        self._machine_reconciled: set[str] = set()
+
+    def _machine_reconcile_once(self, entry: dict[str, Any]) -> None:
+        if entry["id"] in self._machine_reconciled:
+            return
+        self._machine_reconciled.add(entry["id"])
+        try:
+            context = registry.context_for_entry(entry)
+            test_machine.reconcile_on_start(context, self.machine_identity)
+            # no Connect is running at start: a leftover pending reservation (the app died mid-Connect) is dropped
+            test_machine.reconcile_reservation(context, self.home, entry["id"]) if test_machine.descriptor_path(context).exists() else None
+        except (OSError, ValueError, KeyError):
+            pass
 
     # -- render ------------------------------------------------------------
     def projects_payload(self) -> dict[str, Any]:
@@ -612,12 +675,13 @@ class ProjectManager:
         rows = []
         for entry in registry.entries(self.home):
             row = dict(entry)
-            row.update(derive_status(entry))
             row["active"] = bool(active and active.get("project_id") == entry["id"])
+            # Only the open project's board is read; every other card is built from the registry alone.
+            row.update({**derive_status(entry), "board_loaded": True} if row["active"] else closed_status(entry))
             row["starting"] = self.worker_starting == entry["id"]
             row["starting_seconds"] = int(time.monotonic() - self.worker_starting_since) if row["starting"] else 0
             row["board_url"] = self._browser_board_url() if row["active"] else ""
-            row["test_machine"] = self._machine_summary(entry)
+            row["test_machine"] = self._machine_summary(entry) if row["active"] else {"state": "unknown"}
             row["worker_error"] = (
                 self.worker_failure.get("message", "")
                 if self.worker_failure.get("project_id") == entry["id"] else ""
@@ -625,6 +689,9 @@ class ProjectManager:
             if row["worker_error"]:
                 row["latest_progress"] = row["worker_error"]
                 row["resume_available"] = True
+                # The Now card says the same thing in the same place: the board stopped, and opening the project starts it again.
+                row["project_now"] = {**(row.get("project_now") or story.project_now({}, "")), "state": "attention", "now": f"The project's board stopped: {row['worker_error']}",
+                                      "next": "Next: open the project to start its board again.", "exception": None, "needs_you": None}
             row["reopen_restores"] = bool(
                 not row["active"] and not row.get("paused") and (
                     row.get("resume_available")
@@ -634,11 +701,41 @@ class ProjectManager:
         rows.sort(key=lambda row: row["name"].casefold())
         rows.sort(key=lambda row: row.get("last_board_activity") or row.get("last_active_at") or "", reverse=True)
         rows.sort(key=lambda row: not row["active"])
+        companies = self._role_companies()
+        for row in rows:
+            if row.get("project_now"):
+                row["project_now"] = {**row["project_now"], "companies": companies}
         return {
             "projects": rows, "active": active,
             "native_folder_picker": native_folder_selection_available(),
             "page_version": page_version(),
         }
+
+    def _role_companies(self) -> dict[str, str]:
+        """Which AI company does each role's work now (Settings, read-only): builder, independent reviewer, CTO."""
+        try:
+            chosen = global_settings.load(self.home).get("agent_settings") or {}
+        except (OSError, ValueError, TypeError):
+            chosen = {}
+        pick = lambda role: story.company_of((chosen.get(role) or {}).get("provider", ""))   # noqa: E731
+        return {"builder": pick("delivery"), "reviewer": pick("reviewer"), "cto": pick("cto")}
+
+    def costs_payload(self) -> dict[str, Any]:
+        """The Costs view: what each project and task has cost in agent work, API-equivalent (information only; read from each project's own cost record)."""
+        from harness import cost_center
+        rows, summaries = [], []
+        for entry in registry.entries(self.home):
+            try:
+                view = cost_center.overview(Path(entry["data_root"]) / "board")
+                summaries.append(cost_center.summarize(Path(entry["data_root"]) / "board"))
+            except Exception:   # noqa: BLE001 - one unreadable project never hides the others
+                view = {"available": False}
+            rows.append({"id": entry["id"], "name": entry["name"], **view})
+        try:
+            tiles = cost_center.rollup(summaries)
+        except Exception:   # noqa: BLE001 - the tiles never hide the table
+            tiles = {key: {"value": cost_center.NOT_MEASURED, "note": ""} for key in ("week", "average", "split")}
+        return {"projects": rows, "tiles": tiles, "prices": cost_center.prices_line()}
 
     def settings_payload(self) -> dict[str, Any]:
         # Opening Settings is the one read that still repairs and creates the file (`load` is read-only since
@@ -655,6 +752,20 @@ class ProjectManager:
             "provider_availability": {name: cli_capabilities.provider_availability(self.home, name) for name in control.PROVIDERS},
             "openai": global_settings.openai_status(self.home),
             "chat_model": global_settings.chat_settings(self.home)["model"],
+            "plumbing_view": self._plumbing_view(value),
+        }
+
+    def _plumbing_view(self, value: dict[str, Any]) -> dict[str, Any]:
+        """The limits and stage switches the Settings page shows read-only (nothing here is written)."""
+        plumbing = value.get("plumbing") or {}
+        stages = global_settings.plumbing_status(self.home, settings=value)
+        return {
+            "file": str(global_settings._path(self.home)),
+            "limits": [{"name": name, "value": plumbing.get(name, default), "default": default, "low": low, "high": high}
+                       for name, (default, low, high) in global_settings.PLUMBING_LIMITS.items()],
+            "stages": [{"name": name, "label": name.replace("_", " ").replace("stage", "stage ", 1).replace("  ", " "),
+                        "enabled": bool(item.get("enabled")), "reason": "" if item.get("enabled") else str(item.get("reason") or "")}
+                       for name, item in stages.items()],
         }
 
     # -- OpenAI API key ----------------------------------------------------
@@ -945,6 +1056,9 @@ class ProjectManager:
             # the interrupted remainder, never certified work.
             self.close_project(active["project_id"])
         context = registry.context_for_entry(entry)
+        self._machine_reconcile_once(entry)
+        # This project, and only this one, gets its memory index and the shared legacy cleanup now (not at app start).
+        global_settings.initialize(self.home, [Path(entry["data_root"])])
         # Opening always materializes the external control document used by
         # session lifecycle recovery, but provider/model/effort stay solely in
         # manager-home settings.json.
@@ -953,6 +1067,7 @@ class ProjectManager:
         if pause.get("status") in {"paused", "resuming"}:
             resumed_memory = {"status": "paused_read_only", "pause_id": pause.get("pause_id", "")}
         else:
+            project_memory.initialize(context, project_name=entry["name"], description=entry.get("description", ""))
             try:
                 resumed_memory = project_memory.resume_context(context, board_state=board.snapshot(context))
             except (ValueError, OSError):
@@ -1092,6 +1207,15 @@ class ProjectManager:
         registry.deactivate(self.home, project_id)
         return {"closed": project_id}
 
+    def delete_project(self, project_id: str) -> dict[str, Any]:
+        """Take a project off the list (owner, 2026-10-28: Delete is list-only). An open project is closed the usual way first.
+        Nothing here deletes a file or a folder: the code folder and the work area are left exactly as they are."""
+        registry._find(registry.load(self.home), project_id)  # a wrong id changes nothing, open project included
+        active = registry.active_project(self.home)
+        if self.worker_project == project_id or (active and str(active.get("project_id") or "") == project_id):
+            self.close_project(project_id)
+        return registry.remove(self.home, project_id)
+
     def shutdown(self) -> None:
         """Stop the private worker and release this manager's activation.
 
@@ -1128,9 +1252,12 @@ class ProjectManager:
 
     # -- test machine ------------------------------------------------------------
     def _machine_context(self, project_id: str):
-        return registry.context_for_entry(registry._find(registry.load(self.home), project_id))
+        entry = registry._find(registry.load(self.home), project_id)
+        self._machine_reconcile_once(entry)
+        return registry.context_for_entry(entry)
 
     def _machine_summary(self, entry: dict[str, Any]) -> dict[str, Any]:
+        self._machine_reconcile_once(entry)
         try:
             context = registry.context_for_entry(entry)
             status = test_machine.public_status(context)
@@ -1342,6 +1469,7 @@ class ProjectManager:
         """Reconcile authoritative state and terminals, then reopen one project."""
         entry = registry._find(registry.load(self.home), project_id)
         context = registry.context_for_entry(entry)
+        self._machine_reconcile_once(entry)
         transaction = board.begin_project_resume(context)
         resume_id = str(transaction.get("resume_id") or transaction.get("last_resume", {}).get("resume_id", ""))
         already_complete = transaction.get("status") == "active"
@@ -1669,6 +1797,8 @@ def make_handler(manager: ProjectManager):
                 return self._send(200, manager.projects_payload())
             if request_path == "/api/settings":
                 return self._send(200, manager.settings_payload())
+            if request_path == "/api/costs":
+                return self._send(200, manager.costs_payload())
             if request_path == "/api/version":
                 return self._send(200, {
                     "version": update_check.installed_version(manager.installation_root),
@@ -1846,7 +1976,7 @@ def make_handler(manager: ProjectManager):
                 if urlparse(self.path).path == "/api/settings/openai-key":
                     return self._send(200, manager.remove_openai_api_key())
                 if len(parts) == 3 and parts[:2] == ["api", "projects"]:
-                    return self._send(200, registry.remove(manager.home, parts[2]))
+                    return self._send(200, manager.delete_project(parts[2]))
                 return self._send(404, {"error": "not found"})
             except (OSError, ValueError, KeyError, RuntimeError) as error:
                 return self._send(400, {"error": str(error)})

@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from harness import board, board_viewer, contract_check, control, control_plane, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, runtime_identity, self_heal
+from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -264,6 +264,9 @@ class ProjectWatchdog:
             # Backlog #7: the harness restarts stuck agents itself. It runs
             # here, in the worker, because only the worker may open terminals.
             self.last_report["self_heal"] = self.self_heal()
+        if self.last_report.get("status") == "active":
+            # Cost center: bounded, isolated, information only. It runs after recovery, outside the board lock, and never raises.
+            cost_center.collect_project(self.root)
         for alert in self.last_report.get("owner_alerts", []):
             if self.notify is None:
                 continue
@@ -640,7 +643,10 @@ def serve(
         board.configure_owner_questions(global_settings.load(settings_home).get("owner_questions"))
         contract_check.configure((global_settings.load(settings_home).get("plumbing") or {}).get("contract_check_wait_seconds"))
         review_cost.configure(global_settings.load(settings_home).get("plumbing"))
+        cost_center.configure(global_settings.load(settings_home).get("plumbing"))
         difficulty_note.configure(global_settings.load(settings_home).get("plumbing"))
+        revert_proof.configure(global_settings.load(settings_home).get("plumbing"))
+        cto_wakes.configure(global_settings.load(settings_home).get("plumbing"))
     watchdog = ProjectWatchdog(root)
     preview_supervisor = release_preview.ReleasePreviewSupervisor(root)
     chat_action_token = secrets.token_urlsafe(32)

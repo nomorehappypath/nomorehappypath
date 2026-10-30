@@ -92,7 +92,7 @@ class BoardTests(_Fixture):
             state["agents"][cto["id"]].update({"last_poll_at": old, "spawned_at": old})
             state["agents"][dev["id"]].update({"last_poll_at": board.now()})
         self.at_the_warning(session["id"])
-        with mock.patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-monitoring-lease"}) as enqueue:
+        with mock.patch("harness.control.enqueue_instruction", return_value={"id": "w", "source": "cto-wake"}) as enqueue:
             for _ in range(4):
                 board.mark_stalled(self.root)
             enqueue.assert_not_called()

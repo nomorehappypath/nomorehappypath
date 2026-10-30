@@ -643,6 +643,7 @@ class ManagerTests(unittest.TestCase):
         code = self.base / "alpha"
         code.mkdir()
         self.entry = registry.register(self.home, "alpha", code)
+        registry.activate(self.home, self.entry["id"])   # only the open project's machine is read in the list (owner 2026-10-28)
         self.context = registry.context_for_entry(self.entry)
 
     @contextmanager
@@ -741,6 +742,7 @@ class ManagerTests(unittest.TestCase):
         with FakeMachine(self) as machine2, self.served(machine2) as (base, manager2):
             connected_descriptor(self.context, alive=True)      # as if the previous process had left it authorized
             fresh = project_manager.ProjectManager(self.home, board_port=0)
+            fresh._machine_summary(self.entry)      # the first time the new manager touches the project (the Projects page lists it)
             self.assertEqual(test_machine.usability(self.context)[1], "reauth_required")
             self.assertNotEqual(fresh.machine_identity["instance_id"], manager2.machine_identity["instance_id"])
 
@@ -943,7 +945,8 @@ class ManagerTests(unittest.TestCase):
                 test_machine.reserve_target(manager.home, self.entry["id"], "127.0.0.1", second.port, "pending")   # the app died here
                 self.assertEqual(len(test_machine._load_targets(manager.home)[self.entry["id"]]), 2)
             with patch.dict(os.environ, {"HARNESS_TEST_MACHINE_SSH": str(first.shim)}):
-                project_manager.ProjectManager(self.home, board_port=0)      # the next start
+                started = project_manager.ProjectManager(self.home, board_port=0)      # the next start
+                started._machine_reconcile_once(self.entry)      # the first time it touches the project, never for every project at start
             entries = test_machine._load_targets(self.home)[self.entry["id"]]
             self.assertEqual([(e["kind"], e["port"]) for e in entries], [("connected", first.port)])
 

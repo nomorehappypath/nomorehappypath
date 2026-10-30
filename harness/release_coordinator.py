@@ -33,7 +33,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import board, cto
+from harness import board, cto, cto_wakes
 
 JOURNAL_NAME = "coordinator-journal.jsonl"
 
@@ -161,20 +161,36 @@ def _route_prepared(
         # The control inbox is durable. Repeating the same instruction while
         # the CTO works only adds context churn; terminal recovery owns retry.
         return True
+    text = (
+        f"RELEASE PREPARED by the Python coordinator for {task} at {commit[:12]}. "
+        f"Every mechanical check is recorded at {checks_path}. Poll once, perform "
+        "the remaining semantic claim-scope decision, and record release-ready "
+        f"with the board command `record-release --task {task}` (no --health-command: "
+        "the board mechanically validates and reuses the exact certified full-suite "
+        "success). Do not rerun certified product tests, and do not hold this release "
+        "unless a hold is recorded on the board. USER ACTION: None. Open reference: release"
+    )
+    # one wake path: the judgment item is opened (or merged) and the wake counted under the board lock
+    item_id, send = "", True
     try:
-        from harness import control
-        queued = control.enqueue_instruction(
-            root, session_id,
-            f"RELEASE PREPARED by the Python coordinator for {task} at {commit[:12]}. "
-            f"Every mechanical check is recorded at {checks_path}. Poll once, perform "
-            "the remaining semantic claim-scope decision, and record release-ready "
-            f"with the board command `record-release --task {task}` (no --health-command: "
-            "the board mechanically validates and reuses the exact certified full-suite "
-            "success). Do not rerun certified product tests, and do not hold this release "
-            "unless a hold is recorded on the board. USER ACTION: None. Open reference: release",
-            source="release-coordinator",
-        )
+        with board.locked_state(root) as live:
+            item, send = cto_wakes.claim_direct(
+                live, "release", f"prepared:{task}:{commit[:12]}:{coordination_key[:12]}", task,
+                "the release is prepared; the claim-scope decision and the release record are due", board.now())
+            if item is not None:
+                item_id, text = item["id"], text + cto_wakes.suffix(live, [item], str(cto_agent["id"]))
+            else:
+                cto_wakes.count_wake(live, "release", task)
+    except (OSError, ValueError):
+        pass
+    try:
+        queued = {"id": ""}
+        if send:
+            from harness import control
+            queued = control.enqueue_instruction(root, session_id, text, source="release-coordinator")
     except (ValueError, OSError):
+        if item_id:
+            board._requeue_cto_wake(root, [item_id])
         return False
     _journal(root, {
         "task": task, "commit": commit, "step": "cto_routed",

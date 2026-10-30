@@ -21,3 +21,4 @@ build/
 
 # Per-project runtime board state. It is durable locally but never source code.
 .harness/
+evals/results/

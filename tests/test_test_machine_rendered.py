@@ -38,6 +38,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         code = self.base / "alpha"
         code.mkdir()
         self.entry = registry.register(self.home, "alpha", code)
+        registry.activate(self.home, self.entry["id"])   # only the open project's machine and board are read (owner 2026-10-28)
         self.context = registry.context_for_entry(self.entry)
 
     def serve(self, machine=None):
@@ -70,6 +71,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             url, manager = self.serve(machine)
             run = self.walk(url, [
                 {"expect": "alpha"},
+                {"click": {"text": "Advanced"}},
                 {"click": {"text": "Test machine"}},
                 {"expect": "No machine connected yet."},
                 {"type": {"selector": "#machine-address", "text": "127.0.0.1"}},
@@ -86,10 +88,37 @@ class TestMachineRenderedTests(unittest.TestCase):
             self.assertEqual(value["address"], "127.0.0.1")
             self.assertNotIn(PASSWORD, json.dumps(value))
 
+    def test_a_closed_projects_saved_machine_fills_the_dialog_and_reconnect_works(self):
+        """A project that is not open is listed without machine details (one project loaded at a time). Opening its Test machine
+        window asks for that project's saved target, so the owner types only the password."""
+        with FakeMachine(self) as machine:
+            connected_descriptor(self.context, identity={**test_machine.manager_identity(), "instance_id": "a-previous-manager"},
+                                 address="127.0.0.1", user=machine.user, port=machine.port)
+            test_machine.mark_reauth(self.context, "manager_restarted")
+            registry.deactivate(self.home, self.entry["id"])   # the project is closed
+            url, manager = self.serve(machine)
+            run = self.walk(url, [
+                {"expect": "Not open. Open or resume it to see its progress."},
+                {"click": {"text": "Advanced"}},
+                {"click": {"selector": "button[data-act='machine']"}},
+                {"expect": "Test machine — alpha"},
+                {"expect": "Enter the password again below and press Connect."},
+                {"type": {"selector": "#machine-password", "text": PASSWORD}},
+                {"click": {"selector": "#machine-connect"}},
+                {"expect": "It is my rebuilt VM"},   # the saved identity is a placeholder: the real machine's identity is shown for confirming
+                {"click": {"selector": "#machine-confirm"}},
+                {"expect": f"Connected: {machine.user}@127.0.0.1"},
+            ])
+            self.assert_passed(run)
+            value = test_machine.read(self.context)
+            self.assertTrue(value["connected"] and not value["reauth_required"])
+            self.assertEqual((value["address"], value["user"], value["port"]), ("127.0.0.1", machine.user, machine.port))
+
     def test_a_wrong_password_shows_one_plain_reason_in_the_dialog(self):
         with FakeMachine(self) as machine:
             url, manager = self.serve(machine)
             run = self.walk(url, [
+                {"click": {"text": "Advanced"}},
                 {"click": {"text": "Test machine"}},
                 {"type": {"selector": "#machine-address", "text": "127.0.0.1"}},
                 {"type": {"selector": "#machine-user", "text": machine.user}},
@@ -108,6 +137,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         run = self.walk(url, [
             {"expect": "An agent needs the test machine."},
             {"expect": "run the Windows build on the VM"},
+            {"click": {"text": "Advanced"}},
             {"click": {"selector": "button[data-act='machine']"}},
             {"expect": "No machine connected yet."},
         ])
@@ -120,6 +150,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         run = self.walk(url, [
             {"expect": "needs you."},
             {"expect": "asks for its password again"},
+            {"click": {"text": "Advanced"}},
             {"click": {"selector": "button[data-act='machine']"}},
             {"expect": "Enter the password again below and press Connect."},
         ])
@@ -138,6 +169,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             connected_descriptor(self.context, identity=manager.machine_identity, address="127.0.0.1", user=machine.user, port=machine.port,
                                  host_key={"type": "ssh-ed25519", "fingerprint": "SHA256:somethingelse", "line": "x"})
             run = self.walk(url, [
+                {"click": {"text": "Advanced"}},
                 {"click": {"text": "Manage"}},
                 {"type": {"selector": "#machine-password", "text": PASSWORD}},
                 {"click": {"selector": "#machine-connect"}},
@@ -154,6 +186,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         connected_descriptor(self.context, identity=manager.machine_identity, baseline_state="incomplete")
         run = self.walk(url, [
             {"expect": "tools are being changed"},
+            {"click": {"text": "Advanced"}},
             {"click": {"selector": "button[data-act='machine']"}},
             {"expect": "The agents are changing this machine."},
             {"expect": "nothing for you to do while they work"},
@@ -167,6 +200,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             connected_descriptor(self.context, identity=manager.machine_identity, address="127.0.0.1", user=machine.user, port=machine.port,
                                  host_key={"type": "ssh-ed25519", "fingerprint": "SHA256:somethingelse", "line": "x"})
             run = self.walk(url, [
+                {"click": {"text": "Advanced"}},
                 {"click": {"text": "Manage"}},
                 {"type": {"selector": "#machine-password", "text": PASSWORD}},
                 {"click": {"selector": "#machine-connect"}},
@@ -189,6 +223,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             test_machine.update(self.context, lambda value: value.update({"baseline_state": "incomplete", "ready": {}}), create=False)
         threading.Thread(target=change_later, daemon=True).start()
         run = self.walk(url, [
+            {"click": {"text": "Advanced"}},
             {"click": {"text": "Manage"}},
             {"expect": "Connected: u@127.0.0.1"},
             {"expect": "The agents are changing this machine."},
@@ -200,20 +235,20 @@ class TestMachineRenderedTests(unittest.TestCase):
         from harness import board
         url, manager = self.serve()
         connected_descriptor(self.context, identity=manager.machine_identity, ready={"state": True, "note": "ok"})
-        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "The project’s agents are not running yet."},
+        run = self.walk(url, [{"click": {"text": "Advanced"}}, {"click": {"selector": "button[data-act='machine']"}}, {"expect": "The project’s agents are not running yet."},
                               {"expect": "Delivery will start testing on this machine; nothing else to do here."}])
         self.assert_passed(run)
         board.register(self.context, "engineering", board.AWAITING_OWNER_DIRECTION, "Delivery", "OpenAI", "s-1")
-        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery is running but has not been given anything to build yet."}])
+        run = self.walk(url, [{"click": {"text": "Advanced"}}, {"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery is running but has not been given anything to build yet."}])
         self.assert_passed(run)
         with board.locked_state(self.context) as state:
             state["task_owner_directions"]["t1"] = "build it"
-        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery will start testing on this machine; nothing else to do."}])
+        run = self.walk(url, [{"click": {"text": "Advanced"}}, {"click": {"selector": "button[data-act='machine']"}}, {"expect": "Delivery will start testing on this machine; nothing else to do."}])
         self.assert_passed(run)
         self.assertNotIn("not running yet", run["final_text"])
         board.begin_project_pause(self.context, drain_seconds=0)
         board.finish_project_pause(self.context)
-        run = self.walk(url, [{"click": {"selector": "button[data-act='machine']"}}, {"expect": "This project is paused. When you Resume it, Delivery will start testing on this machine"}])
+        run = self.walk(url, [{"click": {"text": "Advanced"}}, {"click": {"selector": "button[data-act='machine']"}}, {"expect": "This project is paused. When you Resume it, Delivery will start testing on this machine"}])
         self.assert_passed(run)
 
     def _other_project(self):
@@ -228,6 +263,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             connected_descriptor(self._other_project(), identity=manager.machine_identity, address="10.9.9.9", user="WindowsVM",
                                  host_key={"type": seen["type"], "fingerprint": seen["fingerprint"], "line": "x"})
             run = self.walk(url, [
+                {"click": {"selector": f"[data-project-id='{self.entry['id']}'] details.adv > summary"}},   # two projects: this one's Advanced menu
                 {"click": {"selector": f"button[data-act='machine'][data-id='{self.entry['id']}']"}},
                 {"type": {"selector": "#machine-address", "text": "127.0.0.1"}},
                 {"type": {"selector": "#machine-user", "text": machine.user}},
@@ -251,6 +287,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             board.review_execution_start(self.context, agent["id"], "r1", "challenge execution: /tmp/ledger.json")
             revision = test_machine.read(self.context)["revision"]
             run = self.walk(url, [
+                {"click": {"text": "Advanced"}},
                 {"click": {"selector": "button[data-act='machine']"}},
                 {"type": {"selector": "#machine-password", "text": PASSWORD}},
                 {"click": {"selector": "#machine-connect"}},
@@ -260,6 +297,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             self.assert_passed(run)
             self.assertEqual(test_machine.read(self.context)["revision"], revision, "nothing was reconnected before Confirm")
             run = self.walk(url, [
+                {"click": {"text": "Advanced"}},
                 {"click": {"selector": "button[data-act='machine']"}},
                 {"type": {"selector": "#machine-password", "text": PASSWORD}},
                 {"click": {"selector": "#machine-connect"}},
@@ -275,6 +313,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         connected_descriptor(self.context, identity=manager.machine_identity)
         run = self.walk(url, [
             {"expect": "Test machine connected"},
+            {"click": {"text": "Advanced"}},
             {"click": {"text": "Manage"}},
             {"click": {"text": "Release this machine"}},
             {"expect": "Press again to release"},
@@ -286,6 +325,7 @@ class TestMachineRenderedTests(unittest.TestCase):
         url, manager = self.serve()
         test_machine.reserve_target(manager.home, self.entry["id"], "10.9.9.9", 22)
         run = self.walk(url, [
+            {"click": {"text": "Advanced"}},
             {"click": {"text": "Test machine"}},
             {"expect": "No machine connected yet."},
             {"click": {"text": "Release this machine"}},

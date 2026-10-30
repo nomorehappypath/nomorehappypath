@@ -347,16 +347,19 @@ class RenderedProjectsTests(unittest.TestCase):
                         reading["list"]["clientHeight"],
                     )
 
-    def test_all_projects_window_shows_two_vertical_rows_before_scrolling(self):
+    def test_all_projects_window_shows_two_cards_before_scrolling(self):
+        """Mission Control redesign: the Now cards sit two across on a wide window (the approved mockup), so the first two cards are
+        both fully visible without scrolling at laptop and desktop heights; they were two stacked rows before."""
         for height in (622, 900):
             with self.subTest(height=height):
                 reading = self.measure(3, 1370, height)
                 first, second = reading["cardDetails"][:2]
-                self.assertGreater(second["top"], first["bottom"])
-                self.assertAlmostEqual(first["left"], second["left"], delta=1)
+                self.assertAlmostEqual(first["top"], second["top"], delta=1, msg="two across on a wide window")
+                self.assertGreater(second["left"], first["right"] - 1)
                 self.assertAlmostEqual(first["width"], second["width"], delta=1)
+                self.assertLessEqual(first["bottom"], reading["list"]["bottom"] - 1)
                 self.assertLessEqual(second["bottom"], reading["list"]["bottom"] - 1)
-                self.assertEqual(len(reading["list"]["gridTemplateColumns"].split()), 1)
+                self.assertEqual(len(reading["list"]["gridTemplateColumns"].split()), 2)
 
     def test_stopped_board_renders_one_truthful_badge_and_resume_action(self):
         home = self.base / "stopped-home"

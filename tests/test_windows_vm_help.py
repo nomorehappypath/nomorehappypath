@@ -67,6 +67,7 @@ class HelpRenderedTests(rendered.TestMachineRenderedTests):
     def test_the_dialog_link_opens_help_at_the_section(self):
         url, _manager = self.serve()
         run = self.walk(url, [
+            {"click": {"text": "Advanced"}},
             {"click": {"text": "Test machine"}},
             {"expect": "How to create the Windows test machine"},
             {"click": {"selector": "a[data-help-link]"}},

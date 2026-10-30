@@ -57,6 +57,10 @@ OWNER_INPUT_HOLD_SECONDS = 120.0
 # them, and a reviewed contract (tests/test_interactive_supervisor.py) delivers
 # a controller retry within 4 s of the owner's line.
 OWNER_QUIET_SECONDS = 2.5
+# 2026-10-28: a direction typed in the instant a fresh Claude terminal printed its first output was dropped while the CLI took in
+# its launch prompt, and the supervisor had already marked it delivered. A fresh Claude terminal takes controller messages only once
+# its first turn is idle at the prompt (the CLI's own turn signal), or after this long, so a missing signal never holds one for ever.
+FIRST_TURN_HOLD_SECONDS = 45.0
 
 
 # One complete terminal reply. Longer forms come first so a DCS or OSC reply is
@@ -208,6 +212,22 @@ def _controller_delivery_allowed(typed: bytes, last_key_at: float, now_monotonic
     if not _owner_input_pending(typed):
         return True
     return (now_monotonic - last_key_at) >= OWNER_INPUT_HOLD_SECONDS
+
+
+def _first_turn_settled(state: str, state_at: float, launched_at: float, now: float) -> bool:
+    """True once the CLI finished the turn its launch prompt started (idle at the prompt after this launch), or the hold ran out."""
+    if state == "idle_at_prompt" and state_at >= launched_at:
+        return True
+    return (now - launched_at) >= FIRST_TURN_HOLD_SECONDS
+
+
+def _fresh_launch(root: Path, session_id: str) -> bool:
+    """True when the board recorded this terminal's current launch as a fresh start (not a resume), so a launch prompt is its first turn."""
+    try:
+        session = (control._read_state(root).get("sessions") or {}).get(session_id) or {}
+    except (OSError, ValueError):
+        return False
+    return int(session.get("cli_launches") or 0) >= 1 and not session.get("cli_last_launch_resumed")
 
 
 def _write(fd: int, data: bytes) -> None:
@@ -830,6 +850,12 @@ def run(
     watch = attention.PromptWatch(height=_terminal_rows(stdin_fd), provider=provider)
 
     input_held = False
+    first_turn_settled = False
+
+    def _note_first_turn(value: bool) -> bool:
+        nonlocal first_turn_settled
+        first_turn_settled = first_turn_settled or value
+        return value
     controller_queue: list[dict] = []
 
     def note_attention(change: tuple[str, str | None] | None) -> None:
@@ -1170,7 +1196,9 @@ def run(
             stage3_delivers = stage3["mux"] is not None and not stage3["fallback"] and not stage3["typing_meanwhile"]
             if stage3_delivers and stage3["worker"].busy():
                 pass                              # one delivery in flight at a time
-            elif child_output_seen and controller_queue and not input_held and not owner_keys.undecided and _controller_delivery_allowed(
+            elif child_output_seen and controller_queue and not input_held and not owner_keys.undecided and (
+                    provider != "claude" or first_turn_settled or _note_first_turn(
+                        not _fresh_launch(root, session_id) or _first_turn_settled(*_turn_state(root, session_id), launched_at, time.time()))) and _controller_delivery_allowed(
                 bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at,
             ):
                 if stage3_delivers:

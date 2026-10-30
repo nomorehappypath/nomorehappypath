@@ -39,9 +39,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import screen_script as screen_script_runner
 from harness import difficulty_note
+from harness import code_quality, standing_checks
 from harness import test_machine
 from harness import failure_words
-from harness import accepted_bytes, agent_confinement, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, red_proof, reference_chapters
+from harness import accepted_bytes, agent_confinement, analysis_pass, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, cto_wakes, red_proof, revert_proof, reference_chapters, test_env
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -66,32 +67,17 @@ REVIEW_RESERVATION_SECONDS = 600
 # polls, progress records, and exact execution leases count as activity.
 AGENT_STALE_SECONDS = 240
 WATCHDOG_INTERVAL_SECONDS = 15
-# A live project task requires a real CTO board poll at least every five minutes.
-# Terminal output and status posts are deliberately not substitutes for that
-# supervisory poll. Route one watchdog tick before the deadline so scheduler
-# granularity does not make the real poll late.
+# 2026-10-26 (lighter CTO): the CTO is no longer polled on a clock and is never called stalled for not polling. It is woken
+# for a reason (cto_wakes.py), and is stalled only when a wake gets no board write at all. This interval is kept only as the
+# deadline the running worker reports about itself; it no longer schedules anything.
 CTO_MONITOR_INTERVAL_SECONDS = 300
-CTO_MONITOR_ROUTE_SECONDS = CTO_MONITOR_INTERVAL_SECONDS - WATCHDOG_INTERVAL_SECONDS
-# 2026-09-25 defects #13/#20: a CTO status post is a progress event, which
-# cleared the pending-cycle bookkeeping, and the next watchdog tick routed a
-# new cycle at once - one every 15-60 s, scrolling the owner's terminal away.
-# A routine cycle is now never routed sooner than this after the previous one:
-# the busy interval when something material happened on the board since that
-# cycle, the quiet interval when nothing did.
-CTO_MONITOR_BUSY_INTERVAL_SECONDS = 120
-CTO_MONITOR_QUIET_INTERVAL_SECONDS = 300
 # 2026-09-25 defect #15: after this many consecutive failed wake-ups the CTO is
 # reported as not responding (it may need /login) and no longer pinged until it
 # polls again.
 CTO_UNRESPONSIVE_AFTER_STALLS = 3
 CTO_UNRESPONSIVE_NOTE = "CTO is not responding - it may need /login"
-# 2026-09-26: "not responding" is a claim of silence. A CTO that answers a
-# wake-up with a status post but no poll is alive and logged in (the studio
-# CTO did exactly that for 70 minutes while its cycles stayed switched off).
-# Such an answer is never a stall: it is recorded as answered-without-poll,
-# the next cycle is routed on the normal cadence, and the wake names the
-# exact poll command. Only a wake with no board write at all counts as silent.
-CTO_STATUS_WITHOUT_POLL_NOTE = "CTO posted status but has not polled the board; the next cycle names the poll command"
+# 2026-09-26: "not responding" is a claim of silence. 2026-10-26: any board write by the CTO after a wake (a poll, a
+# progress record or a status post) answers that wake in full. Only a wake with no board write at all counts as silent.
 CTO_WAKE_ANSWERED_STATES = {"automatic_requested", "automatic_failed", "unresponsive"}
 # Board events that only say "the monitor ran": for the CTO, the hot event
 # window keeps the latest of each so real task events are not pushed out.
@@ -120,7 +106,7 @@ BOARD_BACKUP_KEEP = 8
 # plain-language plan/update) are the two most common liveness proofs, so a mismatch
 # here silently keeps a reporting agent shown as stalled and feeds stall flapping.
 PROGRESS_EVENTS = {
-    "status_update", "task_brief_updated", "chunks_declared", "subtask_chunks_declared",
+    "cto_disposition_recorded", "status_update", "task_brief_updated", "chunks_declared", "subtask_chunks_declared",
     "independent_review_requested", "qa_claimed", "qa_result", "finding_classified",
     "finding_resolved", "task_begun", "subtask_started", "requirements_confirmed",
     "task_repository_bound", "qa_reserved", "reviewer_intents_recorded",
@@ -731,8 +717,11 @@ def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, paylo
             if not (existing.get("kind") == kind and existing.get("agent_id") == agent["id"])
         ]
     state["events"].append(event)
+    cto_wakes.from_event(state, event, agent)   # the one place an ordinary board event becomes a reason to wake the CTO
     if kind in PROGRESS_EVENTS:
         review_cost.count_turn(state, agent, payload)  # the task's "used so far" line; information only
+        if agent is not None and agent.get("role") == "cto":
+            cto_wakes.count_post(state)  # the CTO's own board writes, counted beside its wakes
     if kind == "qa_result":
         review_cost.settle_review(state, payload.get("request_id"))
     if kind in OWNER_ACTION_TRIGGER_EVENTS and (state.get("owner_actions") or state.get("verification_gaps")):
@@ -2683,8 +2672,8 @@ def stall_settings(environ: dict[str, str] | None = None) -> tuple[int, int]:
 
 def real_heartbeat(agent: dict[str, Any]) -> datetime | None:
     """The agent's last durable board heartbeat: a poll or a progress record
-    (the CTO's heartbeat is its poll alone, as in mark_stalled)."""
-    values = [agent.get("last_poll_at")] if agent.get("role") == "cto" else [agent.get("last_poll_at"), agent.get("last_progress_at")]
+    (a CTO wake is answered by any board write: 2026-10-26)."""
+    values = [agent.get("last_poll_at"), agent.get("last_progress_at")]
     parsed = [item for item in (_parsed_timestamp(value) for value in values) if item is not None]
     return max(parsed) if parsed else None
 
@@ -3005,6 +2994,55 @@ def _task_has_review_history(state: dict[str, Any], task: str) -> bool:
     return any(is_review(r) for r in state.get("delivery_attempt_failures") or [])
 
 
+DOCUMENT_ONLY_REFUSAL = (
+    "the owner did not tick \"This task produces a document only\" for this task, so it runs the full process and cannot be filed with "
+    "--no-program. File the proposal without --no-program: it gets checks written in advance, tests first, and the independent review. "
+    "Only the owner's checkbox on the new-task screen decides this."
+)
+RUNNING_AS_FULL = "full process (tests first, independent review, end-to-end)"
+RUNNING_AS_DOCUMENT = "document only (plain-words contract, text review)"
+
+
+def task_document_only(state: dict[str, Any], task: str) -> bool:
+    """The owner's checkbox on the new-task screen (D-014): True only when he ticked it. A task with no record runs the full process."""
+    return bool((state.get("task_document_only") or {}).get(task))
+
+
+TASK_KINDS = ("development", "analysis", "spec")
+
+
+def normalize_task_kind(value: Any, document_only: bool = False) -> str:
+    """The owner's per-task choice on the new-task screen: development (the full process), analysis (read the code, report, change nothing) or
+    spec (a document). Anything else, or nothing, is development; the older document-only flag means spec."""
+    kind = str(value or "").strip().lower()
+    if kind in TASK_KINDS:
+        return kind
+    return "spec" if document_only else "development"
+
+
+ANALYSIS_START_BRIEF = (
+    "Code analysis `{task}`: the owner accepted the requirements below. Reviewer: run your OWN full pass over ALL the code now, at the same time as the Dev, "
+    "with the app's Code analysis checklist (`reference --name standing-checks`) and these requirements. Do not ask for or read the Dev's list. "
+    "File each issue as you find it: `analysis-list --task {task} --add \"<file:line>|<what is wrong>|<why it matters>\"` (repeat; numbered R1..; add-only). "
+    "When you have read everything, close it: `analysis-list --task {task} --done --examined \"<every part of the code you read>\"` (40+ characters; "
+    "with no issues also `--none \"<what you followed and found sound>\"`). The board then sends you the Dev's list: mark every item once with "
+    "`analysis-crosscheck --task {task} --mark \"D1=confirmed\" --mark \"D2=false alarm|<file:line evidence>\"`. Accepted requirements:\n{text}"
+)
+
+
+def task_kind(state: dict[str, Any], task: str, root: Path | None = None) -> str:
+    """The kind this task runs as. Recorded by the owner's choice; a task begun before the choice existed is read the old way (the
+    document-only flag, or a contract that names only a report and tests when `root` is given)."""
+    recorded = (state.get("task_kinds") or {}).get(task)
+    if recorded in TASK_KINDS:
+        return recorded
+    if task_document_only(state, task) or bool((state.get("requirement_proposals", {}).get(task) or {}).get("no_program")):
+        return "spec"
+    if root is not None and standing_checks.analysis_deliverables_only(_contract_deliverable_names(root, task)):
+        return "analysis"
+    return "development"
+
+
 def task_security_state(state: dict[str, Any], task: str) -> dict[str, Any]:
     """The effective enhanced-security record of a task (Off and unlocked when never set)."""
     entry = (state.get("task_security") or {}).get(task) or {}
@@ -3235,13 +3273,15 @@ def poll(root: Path, agent_id: str) -> dict[str, Any]:
                     "durable_log": str(board_dir(root) / "events.jsonl"),
                     "message": "Earlier board events were moved out of hot state; read the durable event log before acting so failures are not silently skipped",
                 })
-            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered", "answered_without_poll"}
+            recovered = agent.get("liveness") in {"stalled", "recovering"} or agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}
             if agent.pop("stall_exhausted", None):
                 recovered = True  # the stall ladder's owner card clears itself on this event
             agent["poll_counter"] += 1
             agent["last_poll_at"] = now()
+            if agent.get("role") == "cto":
+                cto_wakes.count_poll(state)
             agent.update({"liveness": "healthy", "liveness_note": "board heartbeat is current"})
-            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered", "answered_without_poll"}:
+            if agent.get("recovery_state") in {"reset_requested", "automatic_requested", "automatic_failed", "unresponsive", "blocked_wake_unanswered"}:
                 agent.update({"recovery_state": "resumed", "status": "working", "status_note": "recovery accepted; preserved task and next action resumed", "last_status_at": now()})
                 agent.pop("automatic_recovery_requested_at", None)
             agent.pop("consecutive_stalls", None)
@@ -3359,12 +3399,19 @@ def work_left_outside_stopped_scopes(state: dict[str, Any], task: str) -> bool |
     return False
 
 
+def _reviewer_owes_analysis(state: dict[str, Any], agent_id: str) -> bool:
+    """True while a Code analysis waits on this Reviewer: its list is not closed, or its cross-check is not in (a task with no Reviewer chosen yet waits on any)."""
+    return any("reviewer" in analysis_pass.owing(record) and record.get("reviewer_id") in ("", agent_id) for record in (state.get("analysis_passes") or {}).values())
+
+
 def _agent_has_actionable_work(state: dict[str, Any], agent: dict[str, Any]) -> bool:
     """Return whether silence means this role is failing to advance work."""
     role = agent.get("role")
     if role == "qa":
         if _open_review_blocks(state):
             return True   # a blocked review waits on the Reviewer (e.g. a contract-check correction): silence is a stall
+        if _reviewer_owes_analysis(state, str(agent.get("id") or "")):
+            return True   # owner 2026-10-29: a Reviewer whose analysis list is open, or whose cross-check is owed, is working; silence is a stall
         return any(
             request.get("status") in {"authoring", "open", "reserved", "claimed"}
             and (
@@ -3645,23 +3692,17 @@ def _build_collection_note(state: dict[str, Any] | None) -> str:
     return " " + " ".join(lines)
 
 
-def _automatic_recovery_instruction(agent: dict[str, Any], state: dict[str, Any] | None = None) -> str:
+def _automatic_recovery_instruction(agent: dict[str, Any], state: dict[str, Any] | None = None, wake_items: list[dict[str, Any]] | None = None) -> str:
     role = agent.get("role")
     task = agent.get("task", "current work")
     if role == "cto":
-        poll_command = f"poll --agent {agent.get('id', '')}"
-        preface = (
-            "Your last cycle posted status but never polled, so the board still has no heartbeat from you. "
-            if agent.get("recovery_state") == "answered_without_poll" else ""
-        )
+        merges = [i for i in (wake_items or []) if i.get("reason") == "analysis_merge"] if state is not None else []
+        merge_text = "".join("\n" + _cap_merge_wake(_analysis_merge_text(state, state["analysis_passes"][i["task"]], i["task"], str(agent.get("id", ""))),
+                                                    str(agent.get("id", "")), i["task"])
+                             for i in merges if analysis_pass.stage((state.get("analysis_passes") or {}).get(i["task"])) == "merge")
         return (
-            f"MONITORING CYCLE DUE: {preface}First run the board command `{poll_command}` (your launch board command "
-            f"prefix followed by `{poll_command}`); reading BOARD.md or state.json and posting status are not a poll "
-            "and do not count as the heartbeat. Then process material changes, route the next concrete action, and post "
-            "a short human-readable status. Never wait on the product owner: owner touchpoints are asynchronous board "
-            "surfaces you post and continue past, and an owner rejection is routed to a repair cycle automatically. When "
-            "only an owner decision is outstanding, record 'awaiting owner decision' and stand by healthy — never hold "
-            "the cycle for a reply."
+            cto_wakes.wake_text(state, agent, wake_items if wake_items is not None else cto_wakes.open_items(state or {}))
+            + merge_text
             + _repeated_failure_note(state)
             + _verification_gap_note(state)
             + _review_escalation_note(state)
@@ -3688,32 +3729,84 @@ def _automatic_recovery_instruction(agent: dict[str, Any], state: dict[str, Any]
     return f"TASK ACTION DUE: Poll the board once now and continue {task} from its saved next gate. Preserve the owner direction, requirements, evidence, and task memory. USER ACTION: None."
 
 
-def _routine_cycle_due(state: dict[str, Any], agent: dict[str, Any], current: datetime) -> bool:
-    """Whether enough time passed since the CTO's last routed monitoring cycle.
+def _requeue_cto_wake(root: Path, item_ids: list[str]) -> None:
+    """A direct wake that could not be queued is still owed: the watchdog delivers it on its next tick."""
+    try:
+        with locked_state(root) as state:
+            cto_wakes.requeue(state, item_ids)
+    except (OSError, ValueError):
+        pass
 
-    Applies when the CTO has NOT polled since that cycle (it posted status,
-    which used to clear the bookkeeping and re-route within one tick): busy
-    interval when a material board event (anything but the monitor's own
-    noise and the CTO's own posts) happened since the cycle, quiet interval
-    otherwise. A cycle answered by a real poll is gated by the poll-age rule
-    alone. The first cycle is always due.
+
+def count_cto_wake(root: Path, reason: str, task: str = "") -> None:
+    """Count one wake of the CTO sent outside the board lock. Counting never stops a wake."""
+    try:
+        with locked_state(root) as state:
+            cto_wakes.count_wake(state, reason, task)
+    except (OSError, ValueError):
+        pass
+
+
+def _cto_wake_tick(
+    state: dict[str, Any], agent: dict[str, Any], current: datetime, actionable: bool,
+    routes: list[dict[str, Any]], stalled: list[dict[str, Any]],
+) -> None:
+    """One watchdog tick for the CTO (2026-10-26_lighter-cto). The CTO is woken for a reason, never on a clock.
+
+    A wake is unanswered only when the CTO made no board write at all since it (a poll, a progress record or a status post all
+    answer); then it is called stalled and, after three of those, not responding. A CTO that is quiet because nothing is due is
+    never stalled. Reasons are checked here, ahead of any poll age, so an urgent event wakes within one tick even right after a poll.
     """
-    last_at = _parsed_timestamp(agent.get("last_routine_cycle_at"))
-    if last_at is None:
-        return True
-    if int(agent.get("poll_counter") or 0) > int(agent.get("last_routine_cycle_poll_counter") or 0):
-        # The previous cycle was answered by a real poll: the poll-age rule
-        # (one cycle per CTO_MONITOR_INTERVAL_SECONDS) already gates this one.
-        return True
-    since = int(agent.get("last_routine_cycle_sequence") or 0)
-    material = any(
-        event.get("sequence", 0) > since
-        and event.get("kind") not in ROUTINE_MONITOR_EVENTS | {"status_update", "agent_stalled", "agent_recovered"}
-        and event.get("agent_id") != agent.get("id")
-        for event in state.get("events", [])
-    )
-    interval = CTO_MONITOR_BUSY_INTERVAL_SECONDS if material else CTO_MONITOR_QUIET_INTERVAL_SECONDS
-    return (current - last_at).total_seconds() >= interval
+    requested = _parsed_timestamp(agent.get("automatic_recovery_requested_at"))
+    writes = [_parsed_timestamp(agent.get(key)) for key in ("last_poll_at", "last_progress_at", "last_status_at")]
+    answered_at = max((value for value in writes if value is not None), default=None)
+    unanswered = agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive"} and requested is not None
+    if unanswered and answered_at is not None and answered_at > requested:
+        was_stalled = agent.get("liveness") in {"stalled", "recovering"}
+        agent.update({"liveness": "healthy", "liveness_note": "board heartbeat is current", "recovery_state": "resumed"})
+        agent.pop("automatic_recovery_requested_at", None)
+        agent.pop("consecutive_stalls", None)
+        if was_stalled:
+            _event(state, "agent_recovered", agent, {"task": agent["task"], "message": "board write after the wake-up; the CTO is answering"})
+        unanswered = False
+    if unanswered:
+        waited = (current - requested).total_seconds()
+        if agent.get("recovery_state") == "automatic_requested":
+            if waited >= AUTO_RECOVERY_GRACE_SECONDS:
+                note = f"Automatic wake-up received no board heartbeat for {int(waited)}s"
+                stalls = int(agent.get("consecutive_stalls") or 0) + 1
+                agent.update({"liveness": "stalled", "liveness_note": note, "recovery_state": "automatic_failed", "consecutive_stalls": stalls})
+                cto_wakes.requeue(state, list(agent.pop("wake_item_ids", None) or []))   # what it was woken for is still owed
+                stalled.append(_event(state, "agent_stalled", agent, {"task": agent["task"], "age_seconds": int(waited), "message": note}))
+                if stalls >= CTO_UNRESPONSIVE_AFTER_STALLS:
+                    agent.update({"recovery_state": "unresponsive", "liveness_note": CTO_UNRESPONSIVE_NOTE})
+                    _event(state, "agent_unresponsive", agent, {
+                        "task": agent["task"], "stalls": stalls,
+                        "message": f"{CTO_UNRESPONSIVE_NOTE}; automatic wake-ups are paused until it checks the board again",
+                    })
+            return
+        if agent.get("recovery_state") == "unresponsive" or waited < AUTO_RECOVERY_RETRY_SECONDS:
+            return
+    items = cto_wakes.plan(state, agent, current, actionable)
+    if not items:
+        return
+    requested_at = now()
+    primary = cto_wakes.mark_woken(state, items, requested_at)
+    ids = [item["id"] for item in items]
+    note = "woken for " + ", ".join(cto_wakes.PLAIN[reason] for reason in cto_wakes.REASONS if any(i["reason"] == reason for i in items))
+    instruction = _automatic_recovery_instruction(agent, state, items)
+    agent.update({
+        "liveness": "recovering", "liveness_note": note + "; owner action is not required",
+        "recovery_state": "automatic_requested", "automatic_recovery_requested_at": requested_at, "wake_item_ids": ids,
+    })
+    _event(state, "agent_automatic_recovery_routed", agent, {
+        "task": agent["task"], "cto_wake": primary,
+        "message": f"CTO {note} (not a failure recovery); owner action is not required",
+    })
+    routes.append({
+        "agent_id": agent["id"], "session_id": str(agent.get("session_id", "")), "requested_at": requested_at,
+        "instruction": instruction, "source": "cto-wake", "wake_item_ids": ids,
+    })
 
 
 SIGNED_OUT_LIVENESS = "needs_sign_in"
@@ -3728,6 +3821,11 @@ def sign_in_message(agent: dict[str, Any]) -> str:
     role = ROLE_NAMES.get(str(agent.get("role", "")), "agent")
     provider = next((name for name, entry in control.PROVIDERS.items() if entry["vendor"] == agent.get("vendor")), "claude")
     return f"The {role} needs you to sign in again: open its terminal and {attention.sign_in_how(provider)}."
+
+
+def _terminal_is_working(session: dict[str, Any] | None, current: datetime, silence_seconds: float, woken: bool = False) -> bool:
+    from harness import agent_activity
+    return bool(session) and agent_activity.is_working(session, current, silence_seconds, woken)
 
 
 def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[dict[str, Any]]:
@@ -3755,6 +3853,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             and not attention.is_limit_reason(item.get("attention_reason"))
         }
         signed_out_session_ids = set(signed_out_sessions)
+        sessions_by_id = {item.get("id"): item for item in sessions_snapshot if item.get("status") in control.ACTIVE_STATUSES}
         limit_sessions = {
             item.get("id"): item for item in sessions_snapshot
             if item.get("status") in control.ACTIVE_STATUSES and attention.is_limit_reason(item.get("attention_reason"))
@@ -3771,6 +3870,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         live_session_ids = None
         signed_out_sessions = {}
         signed_out_session_ids = set()
+        sessions_by_id = {}
         limit_sessions = {}
         limit_grace_ids = set()
         menu_session_ids = set()
@@ -3804,7 +3904,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     agent.update({"liveness": USAGE_LIMIT_LIVENESS, "liveness_note": note, "limit_notice_key": key})
                     agent.pop("automatic_recovery_requested_at", None)
                     agent.pop("consecutive_stalls", None)
-                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive", "answered_without_poll", "signed_out"}:
+                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive", "signed_out"}:
                         agent["recovery_state"] = "usage_limit"
                     if first:
                         _event(state, "agent_usage_limit", agent, {"task": agent.get("task", ""), "message": note, "limit_seen_at": key,
@@ -3831,7 +3931,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     agent.update({"liveness": SIGNED_OUT_LIVENESS, "liveness_note": note})
                     agent.pop("automatic_recovery_requested_at", None)
                     agent.pop("consecutive_stalls", None)
-                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive", "answered_without_poll"}:
+                    if agent.get("recovery_state") in {"automatic_requested", "automatic_failed", "unresponsive"}:
                         agent["recovery_state"] = "signed_out"
                     _event(state, "agent_needs_sign_in", agent, {"task": agent.get("task", ""), "message": note})
                 continue
@@ -3862,7 +3962,19 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                         "message": "managed terminal is no longer running; standby would be false health",
                     })
                 continue
-            if not _agent_has_actionable_work(state, agent):
+            actionable = _agent_has_actionable_work(state, agent)
+            if actionable:
+                # an agent the board saw idle gets a fresh clock when work appears: its silence counts from then, not from its last poll
+                # (2026-10-28: a reviewer idle for 44 minutes was called silent 3 seconds after its first review was routed and its terminal
+                # was restarted). An agent never seen idle keeps the ordinary rule.
+                if agent.pop("idle_since", None):
+                    agent["actionable_since"] = now()
+            else:
+                agent.pop("actionable_since", None)
+                agent.setdefault("idle_since", now())
+            if not actionable and not (agent.get("role") == "cto" and cto_wakes.urgent_items(state)):
+                if agent.get("role") == "cto":
+                    cto_wakes.plan(state, agent, current, False)   # a quiet project starts its check-in clock again when work returns
                 if agent.get("liveness") in {"stalled", "recovering"}:
                     agent.update({
                         "liveness": "healthy",
@@ -3874,27 +3986,20 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                         "message": "role is healthy and standing by; no recovery is required",
                     })
                 continue
+            if agent.get("role") == "cto":
+                _cto_wake_tick(state, agent, current, actionable, recovery_routes, stalled)
+                continue
             # Reserving a review, recording intentions, and attaching its ledger
             # are material board heartbeats. A real Reviewer poll also starts the
             # same bounded authoring lease; terminal output and status prose do
             # not. Reservation expiry recovers a genuinely abandoned review.
             if _review_authoring_lease_current(state, agent, current):
                 continue
-            if agent.get("role") == "cto":
-                # Process output proves liveness, not that the global monitor
-                # inspected the board. Only a poll renews this lease.
-                heartbeats = [agent.get("last_poll_at") or agent.get("spawned_at")]
-                effective_stale_seconds = (
-                    CTO_MONITOR_ROUTE_SECONDS
-                    if stale_seconds == AGENT_STALE_SECONDS
-                    else stale_seconds
-                )
-            else:
-                heartbeats = [
-                    agent.get("last_poll_at"), agent.get("last_progress_at"),
-                    agent.get("spawned_at"),
-                ]
-                effective_stale_seconds = stale_seconds
+            heartbeats = [
+                agent.get("last_poll_at"), agent.get("last_progress_at"),
+                agent.get("spawned_at"), agent.get("actionable_since"),
+            ]
+            effective_stale_seconds = stale_seconds
             reattached_at = _parsed_timestamp(agent.get("session_reattached_at"))
             if (
                 reattached_at is not None
@@ -3915,6 +4020,15 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                 (current - heartbeat_at).total_seconds()
                 if heartbeat_at is not None else float(effective_stale_seconds)
             )
+            if age >= effective_stale_seconds and _terminal_is_working(
+                    sessions_by_id.get(agent.get("session_id")), current, age, bool(agent.get("automatic_recovery_requested_at"))):
+                # 2026-10-27: a live terminal that is printing or whose session file is growing is working, not silent. It is not woken
+                # (the wake interrupts it), not called stalled, and the stall ladder is not started behind its back.
+                if agent.get("liveness") in {"stalled", "recovering"}:
+                    agent.update({"liveness": "healthy", "liveness_note": "working: its terminal is active", "recovery_state": "resumed"})
+                    agent.pop("automatic_recovery_requested_at", None)
+                    agent.pop("consecutive_stalls", None)
+                continue
             recovery_requested_at = agent.get("automatic_recovery_requested_at", "")
             if agent.get("recovery_state") == "automatic_requested" and recovery_requested_at:
                 recovery_at = _parsed_timestamp(recovery_requested_at)
@@ -4005,29 +4119,17 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     and (current - held_recovery_at).total_seconds() < AUTO_RECOVERY_RETRY_SECONDS * 4
                 ):
                     continue
-            routine_cycle = agent.get("role") == "cto"
-            if routine_cycle and not _routine_cycle_due(state, agent, current):
-                continue
             requested_at = now()
-            # The CTO's monitoring loop is DRIVEN by these nudges (its cycle is
-            # longer than the stale threshold), so for the CTO this is routine
-            # scheduling, not failure recovery — label it truthfully (row 4).
-            if routine_cycle:
-                agent["last_routine_cycle_at"] = requested_at
-                agent["last_routine_cycle_sequence"] = int(state.get("next_event", 1)) - 1
-                agent["last_routine_cycle_poll_counter"] = int(agent.get("poll_counter") or 0)
-            refused_wake = bool(refusal) and agent.get("role") != "cto"
+            refused_wake = bool(refusal)
             # Built before the state below is overwritten: the text depends on
-            # how the previous wake was answered (status-only, refused, ...).
+            # how the previous wake was answered (refused, ...).
             instruction = _automatic_recovery_instruction(agent, state)
             agent.update({
                 # A refused write is BLOCKED, never a stall: its liveness is
                 # left alone so the card keeps saying refused, not recovering.
                 **({} if refused_wake else {"liveness": "recovering"}),
                 "liveness_note": (
-                    "scheduled monitoring cycle nudge; owner action is not required"
-                    if routine_cycle
-                    else "blocked by a refused Git write; the refusal and its recovery step were routed"
+                    "blocked by a refused Git write; the refusal and its recovery step were routed"
                     if refused_wake
                     else "automatic wake-up routed; owner action is not required"
                 ),
@@ -4037,12 +4139,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             _event(state, "agent_automatic_recovery_routed", agent, {
                 "task": agent["task"],
                 "age_seconds": int(age),
-                "routine_cycle": routine_cycle,
-                "message": (
-                    "scheduled CTO monitoring cycle (not a failure recovery); owner action is not required"
-                    if routine_cycle
-                    else "the controller routed the saved next action automatically; owner action is not required"
-                ),
+                "message": "the controller routed the saved next action automatically; owner action is not required",
             })
             recovery_routes.append({
                 "agent_id": agent["id"],
@@ -4058,11 +4155,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         try:
             queued = control.enqueue_instruction(
                 root, route["session_id"], route["instruction"],
-                source=(
-                    "cto-monitoring-lease"
-                    if route["instruction"].startswith("MONITORING CYCLE DUE")
-                    else "automatic-recovery"
-                ),
+                source=route.get("source") or "automatic-recovery",
             )
             with locked_state(root) as state:
                 agent = state.get("agents", {}).get(route["agent_id"])
@@ -4073,7 +4166,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     "task": agent["task"],
                     "instruction_id": queued["id"],
                     "source": queued["source"],
-                    "message": "scheduled monitoring instruction durably queued",
+                    "message": "wake-up instruction durably queued",
                 })
         except (OSError, ValueError) as error:
             with locked_state(root) as state:
@@ -4082,6 +4175,7 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
                     continue
                 note = f"Automatic wake-up could not reach the managed terminal: {error}"
                 agent.update({"liveness": "stalled", "liveness_note": note, "recovery_state": "automatic_failed"})
+                cto_wakes.requeue(state, list(route.get("wake_item_ids") or []))   # a wake that never arrived is still owed
                 stalled.append(_event(state, "agent_stalled", agent, {
                     "task": agent["task"], "message": note,
                 }))
@@ -4178,7 +4272,7 @@ def _display_storage_path(root: ProjectRoot, path: Path) -> str:
         return str(path.resolve())
 
 
-def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "") -> dict[str, Any]:
     """Record one atomic owner message and route it to a Delivery terminal.
 
     Initial direction messages authorize a waiting Delivery Agent. Clarifications
@@ -4232,6 +4326,7 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         try:
             from harness import control
             control.enqueue_instruction(root, session_id, routed, source="owner-cto-message")
+            count_cto_wake(root, "owner")
         except (ValueError, OSError):
             pass
         return {"message": message, "event": event}
@@ -4261,6 +4356,8 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
             state.setdefault("owner_directions", {})[session_id] = {
                 "session_id": session_id, "text": text, "received_at": created_at,
                 "consumed": False, "message_id": message_id, "attachments": metadata,
+                "task_kind": normalize_task_kind(task_kind, document_only),
+                "document_only": normalize_task_kind(task_kind, document_only) == "spec",
             }
             event = _event(state, "owner_direction_received", agent, {
                 "task": agent["task"], "message": "owner direction recorded from Mission Control",
@@ -4410,7 +4507,22 @@ def _settle_contract_checks(state: dict[str, Any], current: datetime) -> list[tu
     return settled
 
 
-def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False) -> dict[str, Any]:
+_NO_TASK_TO_PROPOSE = ("only an active Delivery Agent with a task may propose requirements; run begin-task --agent <your id> --task "
+                       "<short-plain-name> first, then file the requirements")
+
+
+def _proposal_not_ready(root: Path, agent_id: str) -> str:
+    """The reason this agent cannot propose requirements yet ("" when it can): it has no task or is not an active Delivery Agent."""
+    try:
+        agent = snapshot(root).get("agents", {}).get(agent_id) or {}
+    except (OSError, ValueError):
+        return ""
+    if not agent or agent.get("role") not in DEVELOPER_ROLES or agent.get("task") == AWAITING_OWNER_DIRECTION or not agent.get("active"):
+        return _NO_TASK_TO_PROPOSE if agent else ""
+    return ""
+
+
+def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False) -> dict[str, Any]:
     """File the final agreed requirements as a PROPOSAL awaiting the owner.
 
     The owner's go-ahead is a contract signature; it must be a recorded board
@@ -4428,7 +4540,17 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     if plain_required:
         # every agent's proposal (the agent command passes this) starts with a short block the owner can read; the board's own callers and
         # proposals stored before this rule are not refused
-        contract_check.split_plain_summary(text)
+        try:
+            _, text = contract_check.split_plain_summary(text)
+        except ValueError:
+            # a missing task is the first thing to fix: the format message used to hide it (2026-10-28, three refusals in a row)
+            not_ready = _proposal_not_ready(root, agent_id)
+            if not_ready:
+                raise ValueError(not_ready)
+            raise
+        problem = standing_checks.requirements_problem(text)
+        if problem:
+            raise ValueError(problem)
     try:
         from harness import control
         sessions = control.snapshot(root).get("sessions", [])
@@ -4438,7 +4560,7 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION or not agent.get("active"):
-            raise ValueError("only an active Delivery Agent with a task may propose requirements")
+            raise ValueError(_NO_TASK_TO_PROPOSE)
         task = agent["task"]
         if state.get("requirement_confirmations", {}).get(task):
             raise ValueError("final requirements are already confirmed for this task; start a new owner-directed task for scope changes")
@@ -4462,14 +4584,29 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         if existing and existing.get("status") == "accepted":
             raise ValueError("the owner already accepted a proposal; record it with confirm-requirements")
         version = int(existing.get("version", 0)) + 1 if existing else 1
+        document_only = task_document_only(state, task)
+        kind = (state.get("task_kinds") or {}).get(task) or ("spec" if document_only else "development")
+        if no_program and not document_only:
+            raise ValueError(DOCUMENT_ONLY_REFUSAL)
+        no_program = document_only       # the owner's checkbox decides, never the builder
         proposal = {
             "task": task, "agent_id": agent_id, "text": text,
             "owner_direction": direction, "version": version,
             "proposed_at": now(), "status": "awaiting_owner",
+            "document_only": document_only, "task_kind": kind,
         }
-        reviewer, reason = (None, "this task makes no program, so there is nothing to check in advance") if no_program else _contract_check_reviewer(state, sessions, agent)
-        proposal["contract_check"] = _new_contract_check(version, reviewer, reason)
         carried = (state.get("contract_open_questions") or {}).get(task)
+        if small_change and carried:
+            raise ValueError("the Reviewer already put questions to the owner on this task, so it is no longer a small change; file the proposal without --small-change")
+        if small_change:       # the Small change lane (2026-10-26): Delivery proposes it; nobody is woken and the owner's Go ahead confirms it
+            reviewer, reason = None, contract_check.SMALL_CHANGE_REASON
+            proposal.update({"small_change": True, "small_change_by": "delivery"})
+        elif kind == "analysis":    # owner 2026-10-29: a Code analysis has no early look; Go ahead starts both passes
+            reviewer, reason = None, contract_check.ANALYSIS_REASON
+        else:
+            reviewer, reason = (None, contract_check.no_program_reason(text)) if no_program else _contract_check_reviewer(state, sessions, agent)
+        proposal["no_program"] = bool(no_program)
+        proposal["contract_check"] = _new_contract_check(version, reviewer, reason)
         if carried:
             # The owner's one batch of questions is still unanswered (the wording was revised, or he asked for changes): it stays on the
             # card for the new version, with a fresh card state, and the Reviewer's old checks are not attached to the changed text.
@@ -4497,7 +4634,7 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
 
 
 def record_requirements_decision(
-    root: Path, task: str, decision: str, text: str = "", version: Any = None, answers: Any = None, token: str = "",
+    root: Path, task: str, decision: str, text: str = "", version: Any = None, answers: Any = None, token: str = "", small_change: Any = None,
 ) -> dict[str, Any]:
     """Record the OWNER's decision on a filed requirements proposal.
 
@@ -4524,6 +4661,7 @@ def record_requirements_decision(
     routed = ""
     withdraw: dict[str, Any] = {}
     recheck: dict[str, Any] = {}
+    reviewer_start: tuple[str, str] = ("", "")
     sessions: list[dict[str, Any]] = []
     if decision == "answer":
         try:
@@ -4580,7 +4718,13 @@ def record_requirements_decision(
                 # nobody to update the tests (or none are affected): the criteria the answers changed are simply not checked in advance
                 check.update({"status": "ready", "reason": "" if not stale else "no reviewer was free to update the tests for your answers"})
         elif decision == "go_ahead":
-            if check.get("status") == "reading":
+            if small_change is True and not proposal.get("small_change"):
+                # the owner ticked "Small change": only while the Reviewer has written nothing yet (the card shows the box in no other state)
+                if check.get("status") not in {"reading", "not_checked"}:
+                    raise ValueError("the reviewer has already written tests for this task, so it cannot become a small change now; look at the current card")
+                proposal.update({"small_change": True, "small_change_by": "owner"})
+                check.update({"status": "not_checked", "reason": contract_check.SMALL_CHANGE_REASON, "token": secrets.token_hex(4)})
+            elif check.get("status") == "reading":
                 check.update({"status": "not_checked", "reason": "you went ahead without waiting for the reviewer", "token": secrets.token_hex(4)})
             elif check.get("status") == "rechecking":
                 check.update({"status": "answered", "reason": "you went ahead before the reviewer finished updating the tests for your answers", "token": secrets.token_hex(4)})
@@ -4611,6 +4755,9 @@ def record_requirements_decision(
             if any(item.get("checks") and not item.get("stale") for item in check.get("criteria") or []):
                 routed += " The Reviewer wrote checks from these requirements: after confirming, read them with contract-checks; they are your target and the board runs them on your finished work."
             agent.update({"status": "requirements_accepted", "status_note": "owner accepted the requirements on the board; record the contract and begin", "last_status_at": decided_at})
+            if (state.get("task_kinds") or {}).get(str(task)) == "analysis":     # owner 2026-10-29: Go ahead starts both passes at once
+                reviewer_start = _start_analysis_pass(state, str(task), agent, proposal["text"], decided_at)
+                routed += ANALYSIS_DELIVERY_BRIEF.format(task=task)
         else:
             if check.get("status") in {"reading", "questions", "ready", "rechecking"}:
                 check.update({"status": "superseded", "token": secrets.token_hex(4)})
@@ -4638,6 +4785,8 @@ def record_requirements_decision(
             control.enqueue_instruction(root, session_id, routed, source=f"owner-requirements-{decision}")
         except (OSError, ValueError):
             pass
+    if reviewer_start[0]:
+        _enqueue_analysis(root, [reviewer_start], "analysis-start")      # after the lock is released; the Reviewer's poll also shows the analysis_started event
     return event
 
 
@@ -4706,6 +4855,9 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
         }
         if proposal.get("contract_check"):
             confirmation["contract_check"] = _confirmation_contract_check(proposal)
+            if proposal.get("small_change"):
+                confirmation["small_change"] = True      # the Small change lane: the Reviewer may send it back to the full lane once
+                confirmation["contract_check"]["lane"] = "small"
             if confirmation["contract_check"].get("checks"):
                 confirmation["contract_check"]["red_proof"] = {"status": "pending"}
         state["requirement_confirmations"][task] = confirmation
@@ -4776,8 +4928,11 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             raise ValueError("only the Reviewer can submit the early look at the requirements")
         proposal = (state.get("requirement_proposals") or {}).get(str(task))
         check = (proposal or {}).get("contract_check") or {}
-        if not proposal or proposal.get("status") != "awaiting_owner" or check.get("status") != "reading":
+        late = bool(check.get("late"))       # sent back from the Small change lane: the owner already went ahead and the work exists
+        if not proposal or check.get("status") != "reading" or (proposal.get("status") != "awaiting_owner" and not late):
             raise ValueError("the early look at these requirements is over (the owner decided, it ran out of time, or the requirements changed); nothing was recorded")
+        if late and parsed["questions"]:
+            raise ValueError("this task was sent back to the full lane after the owner went ahead: submit your checks without questions (the owner is not asked)")
         if check.get("reviewer_id") != agent_id:
             raise ValueError("this early look was given to another Reviewer")
         if str(version) != str(proposal.get("version")) or str(version) != str(check.get("version")):
@@ -4800,7 +4955,7 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
                 "n": criterion["n"], "text": criterion["text"], "sharper": criterion["sharper"],
                 "why_not_checked": criterion["why_not_checked"], "plain": criterion["plain"], "stale": False, "checks": stored,
                 "failure_paths": criterion["failure_paths"], "no_failure_paths_because": criterion["no_failure_paths_because"],
-                "mapped": criterion["mapped"], "new": criterion["new"], "also_by": criterion["also_by"], "coverage_line": criterion["coverage_line"],
+                "kind": criterion.get("kind", ""), "mapped": criterion["mapped"], "new": criterion["new"], "also_by": criterion["also_by"], "coverage_line": criterion["coverage_line"],
             })
         check.update({
             "criteria": criteria, "questions": parsed["questions"], "submitted_at": now(), "token": secrets.token_hex(4),
@@ -4810,12 +4965,21 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             state.setdefault("contract_question_batches", {})[str(task)] = True
             state.setdefault("contract_open_questions", {})[str(task)] = json.loads(json.dumps(parsed["questions"]))
         gaps = contract_check.apply_coverage(criteria)
+        if not any(item["checks"] for item in criteria):
+            gaps = []      # a task with no program to test (a report) has no check to map: the labels stay, the Reviewer is not asked to close gaps
+        if late:
+            gaps = []      # no coverage question round on a task sent back late: the labels are shown as computed
+            confirmation = (state.get("requirement_confirmations") or {}).get(str(task)) or {}
+            kept = {key: confirmation.get("contract_check", {}).get(key) for key in ("lane", "lane_sent_back") if key in confirmation.get("contract_check", {})}
+            confirmation["contract_check"] = {**_confirmation_contract_check(proposal), **kept, "lane": "full"}
+            if confirmation["contract_check"].get("checks"):
+                confirmation["contract_check"]["red_proof"] = {"status": "pending"}
         if gaps:       # asked ONCE through the correction path; the owner's Go ahead is never held by it
             check["coverage_requested"] = gaps
             coverage_wake = {"session_id": str(qa.get("session_id") or ""), "text": contract_check.coverage_request(str(task), gaps, criteria)}
         sharper = [f"{item['text']} -> {item['sharper']}" for item in criteria if item["sharper"]]
         developer = (state.get("agents") or {}).get(str(proposal.get("agent_id")), {})
-        if sharper and developer.get("session_id"):
+        if sharper and developer.get("session_id") and not late:
             follow_up = {"session_id": developer["session_id"], "text": (
                 "CONTRACT CHECK: the Reviewer suggests sharper wording for: " + "; ".join(sharper) + ". If you agree, file a revised "
                 "proposal with propose-requirements now (it replaces the waiting one, once); otherwise do nothing. USER ACTION: None.")}
@@ -4824,6 +4988,8 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             "message": "the Reviewer's early look at the requirements was recorded; the owner's Go ahead is not held by it",
         })
         result = {"status": check["status"], "criteria": len(criteria), "questions": len(parsed["questions"])}
+    if late and any(item.get("checks") for item in criteria):
+        run_red_proof(root, str(task))      # the new checks are seen failing on the unbuilt project, as in the full lane (never raises)
     for wake in (follow_up, coverage_wake):
         if wake.get("session_id"):
             try:
@@ -4832,6 +4998,47 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             except (OSError, ValueError):
                 pass
     return result
+
+
+def record_send_to_full_lane(root: Path, agent_id: str, task: str, reason: str) -> dict[str, Any]:
+    """The Reviewer sends a Small change task back to the full lane, ONCE, with a plain reason (2026-10-26_fast-lane).
+
+    The contract-check step restarts for this Reviewer (it writes the checks now, no questions), the board runs them on Delivery's work as in the
+    full lane, and nothing else changes: no owner question, no hold, no second send-back.
+    """
+    reason = " ".join(str(reason or "").split())
+    if not 8 <= len(reason) <= 300:
+        raise ValueError("give the plain reason in 8 to 300 characters (for example: this changes behaviour, not just text)")
+    with locked_state(root) as state:
+        qa = _require_writable_agent(state, agent_id)
+        if qa.get("role") != "qa" or not qa.get("active"):
+            raise ValueError("only the Reviewer can send a Small change task back to the full lane")
+        confirmation = (state.get("requirement_confirmations") or {}).get(str(task)) or {}
+        proposal = (state.get("requirement_proposals") or {}).get(str(task)) or {}
+        if not confirmation.get("small_change"):
+            if (confirmation.get("contract_check") or {}).get("lane_sent_back"):
+                raise ValueError("this task was already sent back to the full lane once; it is not sent back again")
+            raise ValueError("this task is not a Small change, so there is nothing to send back")
+        delivery = (state.get("agents") or {}).get(str(proposal.get("agent_id") or ""), {})
+        if not qa.get("vendor") or qa.get("vendor") == delivery.get("vendor"):
+            raise ValueError("only the independent Reviewer from the other AI company can send this task back")
+        if _task_closed_for_checks(state, str(task)):
+            raise ValueError("the task is finished; it can no longer be sent back")
+        block = confirmation["contract_check"]
+        block["lane_sent_back"] = {"reason": reason, "by": agent_id, "at": now()}
+        block["lane"] = "full"
+        confirmation["small_change"] = False
+        proposal["contract_check"] = {**_new_contract_check(int(proposal.get("version", 1)), qa, ""), "late": True}
+        _event(state, "small_change_sent_back", qa, {
+            "task": str(task), "reason": reason,
+            "message": "the Reviewer sent a Small change task back to the full lane; the contract-check step restarts, the owner is not asked and nothing is held",
+        })
+        wake = {
+            "task": str(task), "version": proposal["contract_check"]["version"], "session_id": str(qa.get("session_id") or ""), "reviewer_id": agent_id,
+            "text": contract_check.full_lane_request(str(task), proposal["contract_check"]["version"], reason, confirmation["text"], contract_check.wait_seconds() // 60),
+        }
+    _send_contract_check_wake(root, wake)
+    return {"task": str(task), "lane": "full", "version": wake["version"]}
 
 
 def record_contract_check_correction(root: Path, agent_id: str, task: str, criterion: Any, reason: str, submission: str) -> dict[str, Any]:
@@ -4846,22 +5053,33 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         raise ValueError("the correction must be a requirement number and a JSON file with a checks list") from error
     new_checks, _size = contract_check.parse_checks((data or {}).get("checks") if isinstance(data, dict) else None, f"requirement {number}")
     paths, none_because, said_paths = contract_check.parse_failure_paths(data if isinstance(data, dict) else {}, f"requirement {number}")
-    if not new_checks and number != 0 and not said_paths:
-        raise ValueError("the correction needs at least one check")
+    keep = isinstance(data, dict) and data.get("keep") is True        # the Reviewer's answer to a builder's deviation: the check is right
+    if keep and (new_checks or said_paths):
+        raise ValueError("keeping a check means no new checks: send {\"keep\": true, \"checks\": []}")
     _validate_contract_check_files([{"n": number, "checks": new_checks}])
     with locked_state(root) as state:
         qa = _require_writable_agent(state, agent_id)
         if qa.get("role") != "qa":
             raise ValueError("only the Reviewer can correct a stored check")
+        if keep:
+            return _keep_checked_deviation(state, qa, str(task), number, reason)
         waiting = (state.get("requirement_proposals") or {}).get(str(task)) or {}
         if (waiting.get("contract_check") or {}).get("status") == "rechecking" and waiting.get("status") == "awaiting_owner":
             return _recheck_update(root, state, qa, waiting, number, new_checks, reason)
         if number in ((waiting.get("contract_check") or {}).get("coverage_requested") or []) and waiting.get("status") == "awaiting_owner" and waiting["contract_check"].get("status") in {"ready", "questions"}:
             return _coverage_update(root, state, qa, waiting, number, new_checks, (paths, none_because), reason)
-        if not new_checks and number != 0:
-            raise ValueError("the correction needs at least one check")
         block = ((state.get("requirement_confirmations") or {}).get(str(task)) or {}).get("contract_check") or {}
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
+        if not new_checks and number != 0 and not old:
+            # Nothing is stored for this requirement (a report has no program to check, or the requirement was declared untestable) and the
+            # answer adds nothing: that is a finished answer, not a refusal. Refusing it let the Reviewer retry until the board put the task
+            # on hold at the owner's Go ahead (2026-10-27, report-only run).
+            _event(state, "contract_check_nothing_to_correct", qa, {
+                "task": str(task), "criterion": number,
+                "message": "the Reviewer answered a correction request with no check; there is nothing stored for that requirement, so nothing changed and nothing is held"})
+            return {"criterion": number, "checks": 0, "unchanged": True}
+        if not new_checks and number != 0:
+            raise ValueError("the correction needs at least one check")
         if not old:
             raise ValueError("that requirement has no stored check to correct")
         if _task_closed_for_checks(state, str(task)):
@@ -4890,6 +5108,7 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         })
         corrected = {"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}
         (block.get("compare") or {}).pop(str(number), None)      # the old label was about the old check
+        _answer_deviations(block, number, "replaced", reason, agent_id)
     run_red_proof(root, str(task), [number], "correction")      # the corrected check is seen once more on the unbuilt project; it is never asked about again
     return corrected
 
@@ -4993,6 +5212,82 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
             "message": "a stored check that could not run was skipped with a recorded reason; it shows as not checked in advance and the independent review is unchanged",
         })
         return {"criterion": number, "checks_sha256": block["checks_sha256"]}
+
+
+def _answer_deviations(block: dict[str, Any], number: int, answer: str, reason: str, reviewer_id: str) -> None:
+    """Close the open builder deviations of one requirement with the Reviewer's one answer (replaced / kept)."""
+    for item in block.get("deviations") or []:
+        if item["criterion_index"] == number and item["status"] == "open":
+            item.update({"status": answer, "answer_reason": reason, "answered_by": reviewer_id, "answered_at": now()})
+
+
+def _keep_checked_deviation(state: dict[str, Any], qa: dict[str, Any], task: str, number: int, reason: str) -> dict[str, Any]:
+    """The Reviewer rejects a builder's deviation once: the check stays locked exactly as it is (inside the board lock)."""
+    block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check") or {}
+    if not any(item["criterion_index"] == number and item["status"] == "open" for item in block.get("deviations") or []):
+        raise ValueError("there is no open builder deviation on that requirement; keeping a check is only the answer to one (and a deviation is answered once)")
+    if _task_closed_for_checks(state, task):
+        raise ValueError("the task is finished; its checks can no longer be corrected")
+    _answer_deviations(block, number, "kept", reason, qa["id"])
+    _event(state, "contract_check_deviation_answered", qa, {
+        "task": task, "criterion": number, "reason": reason,
+        "message": "the Reviewer kept a stored check after the builder said it did not match reality; the check is unchanged and nothing was asked of the owner",
+    })
+    return {"criterion": number, "deviation": "kept", "checks_sha256": block.get("checks_sha256", "")}
+
+
+def record_check_deviation(root: Path, agent_id: str, task: str, criterion: Any, check: str, why: str) -> dict[str, Any]:
+    """Delivery says ONE locked check does not match reality; the Reviewer is woken and answers once. Nothing is held, no owner question.
+
+    Delivery never edits a check: this only records its claim. Only the Reviewer's correction (replace, or keep with a reason) changes anything.
+    """
+    from harness import control
+    why = " ".join(str(why or "").split())
+    if not contract_check.DEVIATION_WHY_MIN <= len(why) <= contract_check.DEVIATION_WHY_MAX:
+        raise ValueError(f"say in {contract_check.DEVIATION_WHY_MIN} to {contract_check.DEVIATION_WHY_MAX} characters what the check assumes, what is real, and the evidence")
+    try:
+        number = int(criterion)
+    except (TypeError, ValueError):
+        raise ValueError("name the requirement number") from None
+    check = str(check or "").strip()
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") not in DEVELOPER_ROLES or agent.get("task") != str(task):
+            raise ValueError("only Delivery can report a check deviation, and only on its own task")
+        block = ((state.get("requirement_confirmations") or {}).get(str(task)) or {}).get("contract_check") or {}
+        entry = next((item for item in block.get("checks") or [] if item["n"] == check and item["criterion_index"] == number), None)
+        if entry is None:
+            raise ValueError("that is not a stored check of this requirement; use the check number that contract-checks shows (for example 3.1) with its requirement number")
+        if _task_closed_for_checks(state, str(task)):
+            raise ValueError("the task is finished; its checks can no longer be questioned")
+        if any((item.get("phase") == "final_acceptance" or item.get("stage") == INDEPENDENT_REVIEW) and item.get("status") != "failed"
+               and item.get("status") != "cancelled" for item in _task_requests(state, str(task))):
+            raise ValueError("the final review has been requested; the check is judged as it stands (report what is wrong in the review summary instead)")
+        if any(item["check"] == check and item["sha256"] == entry["sha256"] for item in block.get("deviations") or []):
+            raise ValueError("this check already has a deviation; the Reviewer answers each one once")
+        proposal_check = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check") or {}
+        agents = state.get("agents") or {}
+        reviewers = [proposal_check.get("reviewer_id")] + sorted(
+            item["id"] for item in agents.values() if item.get("role") == "qa" and item.get("vendor") and item.get("vendor") != agent.get("vendor"))
+        reviewer = next((agents[name] for name in reviewers if name in agents and agents[name].get("active") and agents[name].get("role") == "qa" and agents[name].get("session_id")), {})
+        record = {
+            "id": f"dev-{len(block.get('deviations') or []) + 1}", "criterion_index": number, "check": check, "sha256": entry["sha256"],
+            "criterion": entry["criterion"], "why": why, "by": agent_id, "at": now(), "status": "open", "reviewer_id": reviewer.get("id", ""),
+        }
+        block.setdefault("deviations", []).append(record)
+        _event(state, "contract_check_deviation", agent, {
+            "task": str(task), "criterion": number, "check": check, "reason": why,
+            "message": "Delivery said a stored check does not match reality; the Reviewer answers once, nothing is held and the owner is not asked",
+        })
+        session_id = str(reviewer.get("session_id") or "")
+    woken = False
+    if session_id:
+        try:
+            control.enqueue_instruction(root, session_id, contract_check.deviation_request(str(task), check, number, entry["criterion"], why), source="contract-check")
+            woken = True
+        except (ValueError, OSError):
+            pass
+    return {"task": str(task), "criterion": number, "check": check, "status": "open", "reviewer_woken": woken}
 
 
 def _verified_contract_checks(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
@@ -5160,6 +5455,153 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
             "bundle": _simulation_bundle(root, "contract checks", simulations), "checks_sha256": block["checks_sha256"]}
 
 
+# --- Revert proof: does any stored check notice each changed file? (task 2026-10-26_revert-proof) ---------------------------------------
+# At final review, after the stored checks pass on the finished work, each changed file is put back to its pre-work version in a temporary copy
+# and the same checks rerun there. Information only: shown to the final reviewer and to the owner as one plain line; it never raises, blocks,
+# asks the owner anything or holds a Go ahead. The changed files come from the shared rename rule (accepted_bytes), never a diff of our own.
+
+_REVERT_PROOF_RETRY = "the board's own run of a stored check with one changed file put back"
+
+
+def _revert_one_file(copy: Path, path: str, entry: dict[str, str], workspace: Path) -> str:
+    """Put one file of a temporary copy back to its pre-work version (a new file: removed). Returns "" or the reason it could not be done."""
+    # Containment first: nothing is unlinked, created, written or made executable unless every folder on the way is a real folder inside the copy.
+    inside = copy.resolve()
+    walk = copy
+    for part in PurePosixPath(path).parts[:-1]:
+        walk = walk / part
+        if walk.is_symlink():
+            return "a folder on the way to the file is a link"
+        if not walk.exists():
+            break
+    try:
+        (copy / path).parent.resolve().relative_to(inside)
+    except ValueError:
+        return "the file lies outside the temporary copy"
+    target = copy / path
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.exists():
+        return "the changed path is a folder"
+    if entry.get("state") != "present":
+        return ""
+    if entry.get("type") != "blob" or entry.get("mode") not in {"100644", "100755"}:
+        return "the file is not a plain file"
+    blob = git_process.run(["git", "cat-file", "blob", entry["oid"]], cwd=workspace, capture_output=True)
+    if blob.returncode != 0:
+        return "the pre-work version could not be read"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(blob.stdout)
+    if entry["mode"] == "100755":
+        target.chmod(0o755)
+    return ""
+
+
+def _measure_revert_proof(root: Path, task: str, request: dict[str, Any], certification: dict[str, Any], check_run: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One result per candidate tree: {files: [{path, outcome, check, reason}], line, ...}, or None when there is nothing to measure. Never raises."""
+    try:
+        run = (check_run or {}).get("run") or {}
+        if run.get("status") not in {"passed", "partly"}:
+            return None
+        state = _read_state(root)
+        block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check") or {}
+        checks = _verified_contract_checks(state, task)
+        said = run.get("passed_checks")
+        if isinstance(said, dict):
+            checks = [item for item in checks if said.get(item["n"]) == item["sha256"]]       # only checks that pass on the finished work can notice anything
+        commit = str(request.get("reviewed_commit") or "")
+        base = str(((state.get("task_baselines") or {}).get(task) or {}).get("head") or "")
+        if not checks or not commit or not base:
+            return None
+        tree = revert_proof.tree_of(request)
+        earlier = (state.get("revert_proofs") or {}).get(task) or {}
+        if earlier.get("tree") == tree and earlier.get("checks_sha256") == block.get("checks_sha256") and earlier.get("max_files") == revert_proof.max_files():
+            return earlier                         # this exact tree was measured already: no second run
+        workspace, _commit = _review_checkout_source(root, state, request)
+        paths = accepted_bytes.tree_delta(workspace, base, commit)["paths"]
+        selected, over, skipped = revert_proof.classify(paths)
+        records: dict[str, dict[str, str]] = {}
+        for path in skipped:
+            records[path] = {"path": path, "outcome": revert_proof.SKIPPED, "reason": revert_proof.skip_reason(path)}
+        for path in over:
+            records[path] = {"path": path, "outcome": revert_proof.OVER_LIMIT}
+        deadline = time.monotonic() + revert_proof.budget_seconds()
+        interrupted = False
+        with tempfile.TemporaryDirectory(prefix="harness-revert-proof-") as scratch:
+            probe = Path(scratch) / "revert-proof-probe.md"
+            probe.write_text("probe\n", encoding="utf-8")
+            with _review_candidate_checkout(root, state, request, probe) as (pristine, _unused):
+                folder = pristine / ".contract-checks"
+                placed = True
+                try:
+                    folder.mkdir()
+                except FileExistsError:
+                    placed = False
+                for item in checks if placed else []:
+                    own = folder / ("c" + item["n"].replace(".", "-"))
+                    own.mkdir()
+                    for relative, body in item["files"].items():
+                        (own / relative).parent.mkdir(parents=True, exist_ok=True)
+                        (own / relative).write_text(body, encoding="utf-8")
+                    (own / "ledger.md").write_text(_repair_escaped_pattern(item["ledger"]), encoding="utf-8")
+                for index, path in enumerate(selected):
+                    record = records[path] = {"path": path, "outcome": revert_proof.COULD_NOT_CHECK, "reason": ""}
+                    if not placed:
+                        record["reason"] = "the finished work already has an entry named .contract-checks"
+                        continue
+                    if interrupted or time.monotonic() > deadline:
+                        record["reason"] = "the run was interrupted before it finished" if interrupted else "the time set aside for this check ran out"
+                        continue
+                    entry = accepted_bytes.tree_entry(workspace, base, path)
+                    copy = Path(scratch) / f"copy-{index}"
+                    shutil.copytree(pristine, copy, symlinks=True)
+                    try:
+                        problem = _revert_one_file(copy, path, entry, workspace)
+                        if problem:
+                            record["reason"] = problem
+                            continue
+                        unable = ""
+                        for item in checks:
+                            remaining = deadline - time.monotonic()
+                            if remaining < 1:
+                                unable = "the time set aside for this check ran out"
+                                break
+                            candidate = execution_identity.run_candidate_identity(
+                                commit, tree, {"contract_check": item["sha256"], "revert_proof": f"{path}@{entry.get('oid', 'absent')}"})
+                            try:
+                                _execute_scenario_simulations(copy, copy / ".contract-checks" / ("c" + item["n"].replace(".", "-")) / "ledger.md", live_board_root=root, certification={
+                                    **certification, "candidate": candidate, "gate": f"revert-proof:{item['n']}:{path}", "unable_not_failure": True,
+                                    "retry_reason": _REVERT_PROOF_RETRY, "timeout_seconds": max(1, int(remaining))})
+                            except certified_execution.RetryableInterruption:
+                                interrupted, unable = True, "the run was interrupted before it finished"
+                                break
+                            except certified_execution.CouldNotRun as could_not:
+                                unable = could_not.reason
+                            except ValueError as error:
+                                if red_proof.is_real_failure(str(error)):
+                                    record.update({"outcome": revert_proof.NOTICED, "check": item["n"], "reason": ""})
+                                    break
+                                unable = " ".join(str(error).split())[:200]
+                        else:
+                            if not unable:
+                                record.update({"outcome": revert_proof.NOT_NOTICED, "reason": ""})
+                        if record["outcome"] == revert_proof.COULD_NOT_CHECK and not record["reason"]:
+                            record["reason"] = unable or "the checks could not be run"
+                    finally:
+                        shutil.rmtree(copy, ignore_errors=True)
+        result = {"tree": tree, "commit": commit, "base": base, "checks_sha256": str(block.get("checks_sha256") or ""), "at": now(),
+                  "max_files": revert_proof.max_files(), "files": [records[path] for path in paths if path in records]}
+        result["line"] = revert_proof.line(result)
+        return result
+    except Exception:   # noqa: BLE001 - the revert proof is information; nothing it does may fail, hold or ask anything
+        return None
+
+
+def _store_revert_proof(state: dict[str, Any], task: str, result: dict[str, Any] | None) -> None:
+    if result and task:
+        state.setdefault("revert_proofs", {})[task] = result
+
+
 def _apply_contract_check_run(request: dict[str, Any], run: dict[str, Any] | None) -> None:
     if not run:
         return
@@ -5235,7 +5677,7 @@ def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | Non
                         settle(item, "did_not_run", "the project before the work would have run with today's installed packages, so the comparison would not be fair")
                     return found, base
                 lockfiles = _execution_lockfile_digests(checkout)
-                environment = _environment_identity()["sha256"]
+                environment = _environment_identity(root, checkout)["sha256"]
                 for item in checks:
                     if time.monotonic() > deadline:
                         settle(item, "did_not_run", "the time set aside for this comparison ran out")
@@ -5568,19 +6010,11 @@ def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
         _flag_ready_claim(state, agent, note)
         if wake_pending:
-            # A board write from the CTO refutes "not responding": it is alive
-            # and logged in. It has still not polled, so the poll stays the
-            # only heartbeat and the next cycle is routed on the normal
-            # cadence naming the command; the stall count does not carry over.
-            # (_event above already treats the post as progress for a pending
-            # wake; this also covers the unresponsive mark, which it does not.)
-            agent.update({"recovery_state": "answered_without_poll", "liveness_note": CTO_STATUS_WITHOUT_POLL_NOTE})
+            # A board write from the CTO refutes "not responding": it is alive and logged in, and the wake is answered.
+            # (_event above already treats the post as progress for a pending wake; this also covers the unresponsive mark.)
+            agent.update({"recovery_state": "resumed", "liveness": "healthy", "liveness_note": "board heartbeat is current"})
             agent.pop("consecutive_stalls", None)
             agent.pop("automatic_recovery_requested_at", None)
-            _event(state, "cto_status_without_poll", agent, {
-                "task": agent["task"],
-                "message": CTO_STATUS_WITHOUT_POLL_NOTE + "; automatic cycles continue",
-            })
         if agent.get("role") == "cto" and (note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) or verdict.get("default_action")):
             # Defect #22: the agreed "OWNER ACTION:" note never reached the
             # owner. It becomes a pinned card; the CTO clears it with
@@ -6799,6 +7233,7 @@ def _dispatch_owner_defaults(root: Path, due: list[dict[str, Any]], cto_session_
                 if not cto_session_id:
                     raise ValueError("no active, signed-in CTO session (or its terminal shows a menu the owner must answer)")
                 queued = control.enqueue_instruction(root, cto_session_id, instruction, source="owner-default")
+                count_cto_wake(root, "owner", str(card.get("task") or ""))
         except (ValueError, OSError) as error:
             with locked_state(root) as state:
                 action = state.get("owner_actions", {}).get(card["id"])
@@ -7429,6 +7864,26 @@ def machine_baseline(root: Path, agent_id: str, action: str, note: str = "") -> 
     return {"baseline": "complete", "stamp": stamp, "ready": True, "message": "Recorded. Certification on the machine is allowed again."}
 
 
+def record_cto_disposition(root: Path, agent_id: str, item_id: str, outcome: str, note: str) -> dict[str, Any]:
+    """The CTO says what it decided about a judgment item it was woken for (hold, note, route or nothing). Only this closes the item."""
+    item_id = item_id.strip()
+    if not item_id:
+        raise ValueError("cto-disposition needs --item <item id from the wake message> (or --item all)")
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO records a disposition")
+        closed = cto_wakes.dispose(state, item_id, outcome.strip().lower(), note, now())
+        tasks = {str(item.get("task") or "") for item in closed} - {""}
+        about = next(iter(tasks)) if len(tasks) == 1 else str(agent.get("task", ""))   # the event is about the task it judged, so that task's agents read a route on their next poll
+        _event(state, "cto_disposition_recorded", agent, {
+            "task": about, "items": [item["id"] for item in closed], "outcome": outcome.strip().lower(),
+            "message": f"CTO judged {len(closed)} item{'' if len(closed) == 1 else 's'}: {outcome.strip().lower()} - {' '.join(note.split())[:200]}",
+            "route_note": " ".join(note.split()) if outcome.strip().lower() == "route" else "",   # a route reaches the stuck role complete (a summary above stays short)
+        })
+        return {"closed": [item["id"] for item in closed], "still_open": [item["id"] for item in cto_wakes.open_items(state)]}
+
+
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
     """The CTO records what happened; the card leaves Mission Control."""
     action_id, outcome = action_id.strip(), outcome.strip()
@@ -8029,6 +8484,8 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
                 raise ValueError("managed Delivery Agent cannot begin a task until owner terminal direction is recorded")
         else:
             raise ValueError("Delivery Agents require a managed session so the owner direction is recorded verbatim")
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError(f"a task named {task} was cancelled by the owner and its work copy is kept, so the name cannot be reused; choose another short task name")
         if task in state.get("task_workspaces", {}) or any(value.get("task") == task for value in state.get("agents", {}).values()):
             raise ValueError("task already has an owner or isolated workspace")
         direction_text = direction["text"] if agent.get("session_id") else ""
@@ -8096,13 +8553,18 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         state.setdefault("task_baselines", {})[task] = baseline
         state.setdefault("task_owner_directions", {})[task] = contract.normalize_owner_direction(direction_text)
         state.setdefault("task_security", {}).setdefault(task, {"enhanced": False, "locked": False, "revision": 0, "updated_at": now()})
+        kind = normalize_task_kind(direction.get("task_kind"), bool(direction.get("document_only"))) if agent.get("session_id") else "development"
+        state.setdefault("task_kinds", {})[task] = kind
+        state.setdefault("task_document_only", {})[task] = kind == "spec"
         if workspace:
             state.setdefault("task_workspaces", {})[task] = str(workspace)
         inherited_count = len(baseline.get("dirty_files", []))
         binding = "owner-named Git repository on an isolated broker branch" if owner_repository else "isolated broker task worktree"
         message = f"Product Management defined the internal task in its {binding}; captured {inherited_count} inherited dirty files for internal attribution; owner action is not required"
-        return _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count,
+        begun = _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count,
                                                    "open_reference": reference_chapters.reference_hint("delivery-workflow", *(["inherited-changes"] if inherited_count else [])), "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding})
+    return begun
+
 
 
 def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> dict[str, Any]:
@@ -8858,6 +9320,33 @@ def _ledger_path(root: Path, value: str) -> Path:
     return (path if path.is_absolute() else project_context(root).code_root / path).resolve()
 
 
+LEDGER_FORMAT_HELP = (
+    " Ledger format (a markdown table; copy it): | ID | What was tested | Simulation command | Expected system response | Observed system response | QA result | "
+    "then one row per scenario, for example: | S-001 | The report lists every finding with its place in the code | "
+    "python3 -m pytest tests/test_findings.py -q | every finding is listed | 12 passed | PASS |. "
+    "The command must start with a test runner (python3 -m pytest, python3 -m unittest, npm test, go test, cargo test) and contain no ; & | operators. "
+    "The What was tested column is plain words about what a person can observe, 24 to 500 characters, never a command or a bare id or path."
+)
+
+
+def _hand_in_refusal(root: Path, summary: str, ledger: str) -> str:
+    """Everything wrong with a final hand-in in ONE message, with the ledger format, so the agent fixes it in one go (2026-10-28: the board
+    named one problem per refusal and an agent asked ten times)."""
+    problems: list[str] = []
+    summary_problem = standing_checks.hand_in_problem(summary)
+    if summary_problem:
+        problems.append(summary_problem)
+    try:
+        valid, ledger_problems = contract.scenario_submission_exists(_ledger_path(root, ledger))
+        if not valid:
+            problems.append("the Scenario Ledger must exist and contain concrete scenarios: " + "; ".join(ledger_problems) + LEDGER_FORMAT_HELP)
+    except (OSError, ValueError):
+        pass
+    if len(problems) <= 1:
+        return summary_problem
+    return "the hand-in has " + str(len(problems)) + " things to fix; fix all of them, then ask for review once more. " + " ".join(f"({n}) {text}" for n, text in enumerate(problems, 1))
+
+
 def _require_ledger_scenarios(
     root: Path, value: str, label: str, *, owner_readable: bool = False,
 ) -> Path:
@@ -8865,7 +9354,7 @@ def _require_ledger_scenarios(
     validator = contract.scenario_submission_exists if owner_readable else contract.scenario_ledger_exists
     valid, problems = validator(path)
     if not valid:
-        raise ValueError(f"{label} must exist and contain concrete scenarios: " + "; ".join(problems))
+        raise ValueError(f"{label} must exist and contain concrete scenarios: " + "; ".join(problems) + LEDGER_FORMAT_HELP)
     return path
 
 
@@ -8875,7 +9364,7 @@ def _require_completed_ledger(
     validator = contract.scenario_submission_complete if owner_readable else contract.scenario_ledger_complete
     valid, problems = validator(_ledger_path(root, value))
     if not valid:
-        raise ValueError(f"cannot record PASS: {label} is incomplete: " + "; ".join(problems))
+        raise ValueError(f"cannot record PASS: {label} is incomplete: " + "; ".join(problems) + LEDGER_FORMAT_HELP)
 
 
 # The shape of Claude setup-tokens and API keys (sk-ant-oat01-..., sk-ant-api03-...). Evidence is kept and shared, so a
@@ -8965,22 +9454,33 @@ def _run_internal_qa(
     if not re.search(r"(?:^|\s)(?:python(?:3)?\s+-m\s+(?:unittest|pytest)|pytest\b|npm\s+(?:test|run\s+test)|go\s+test|cargo\s+test|make\s+test|gradle\s+test)\b", command):
         raise ValueError("internal-QA test command must invoke a recognized test runner; shell placeholders are not evidence")
     execution_root = project_context(root).code_root
-    execution_env = child_process.execution_environment()
+    # a declared project test environment (the project's libraries, working folder and variables), resolved once for this run against this
+    # candidate; a refusal is plain words. Nothing declared: exactly the plain governed environment.
+    project_root = certification["board_root"] if certification is not None else (live_board_root if live_board_root is not None else root)
+    test_environment = test_env.resolve(project_root, execution_root)
+    workdir = test_env.workdir_of(test_environment)
+    execution_env = test_env.apply(child_process.execution_environment(), test_environment)
+    if certification is not None and test_environment is not None:
+        current = _environment_identity(project_root, execution_root)["sha256"]
+        if current != str(certification["environment_sha256"]):
+            raise ValueError("the project's test environment, its declaration or its configuration changed after this was requested, so the "
+                             "stored result would not describe what runs now; ask for the review again")
     execution_preflight.validate_commands(
-        execution_root, [command], environment=execution_env,
+        execution_root / workdir, [command], environment=execution_env,
     )
     if certification is not None:
         result = certified_execution.run(
             certification["board_root"], root, command,
             candidate=certification["candidate"],
             environment_sha256=str(certification["environment_sha256"]),
-            environment=execution_env,
+            environment=execution_env, workdir=workdir, scrub=lambda text: test_env.scrub(text, test_environment),
             lockfile_digests=dict(certification.get("lockfile_digests") or {}),
             role=str(certification["role"]), gate=str(certification["gate"]),
             retry_reason=str(certification.get("retry_reason") or ""),
             browser=certification.get("browser"),
             reuse=reuse,
             unable_not_failure=bool(certification.get("unable_not_failure")),
+            **({"timeout_seconds": int(certification["timeout_seconds"])} if certification.get("timeout_seconds") else {}),
         )
         if measurement is not None:
             measurement.update(result["measurement"])
@@ -8990,7 +9490,7 @@ def _run_internal_qa(
         # Security scan finding 2: the agent's command runs inside the agent's own limits.
         completed = subprocess.run(agent_confinement.confine_agent_command(["/bin/sh", "-c", command], root,
                                    claude_config_dir=execution_env.get("CLAUDE_CONFIG_DIR") or None),
-                                   cwd=execution_root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                                   cwd=execution_root / workdir, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                                    env=child_process.with_live_board(execution_env, live_board_root) if live_board_root is not None else execution_env)
     except subprocess.TimeoutExpired as error:
         if measurement is not None:
@@ -9004,14 +9504,14 @@ def _run_internal_qa(
             for value in (error.stdout, error.stderr)
         )
         raise ValueError(browser_acceptance.with_blocked_note(
-            f"internal-QA test command timed out after 300 seconds: {error.cmd}", partial,
+            f"internal-QA test command timed out after 300 seconds: {error.cmd}", test_env.scrub(partial, test_environment),
         )) from error
     if measurement is not None:
         measurement.update(lifecycle.command_measurement(
             command, started_at, lifecycle.now(), exit_code=completed.returncode,
             cache_decision="executed_no_cache_store",
         ))
-    output = (completed.stdout + completed.stderr).strip()
+    output = test_env.scrub((completed.stdout + completed.stderr).strip(), test_environment)
     executed = certified_execution.executed_test_count(output)
 
     # ZERO EXECUTED TESTS IS ITS OWN REFUSAL, checked BEFORE the exit code.
@@ -9037,7 +9537,7 @@ def _run_internal_qa(
         raise ValueError(browser_acceptance.with_blocked_note("internal-QA test command could not run its screen check", output))
     if completed.returncode != 0:
         raise ValueError(browser_acceptance.with_blocked_note(
-            f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}", output,
+            f"internal-QA test command failed with exit code {completed.returncode}: {output[-500:]}" + test_env.missing_library_advice(output), output,
         ))
     if executed is None:
         raise ValueError(browser_acceptance.with_blocked_note(
@@ -9734,8 +10234,24 @@ def _require_fresh_machine_evidence(root: ProjectRoot, request: dict[str, Any]) 
             "the current machine: Delivery resubmits and a fresh review request is made (the Reviewer's rerun on this request cannot clear the old records).")
 
 
-def _environment_identity() -> dict[str, Any]:
-    """Return a stable, non-secret identity for the executable QA environment."""
+def _test_env_changed_since_request(root: Any, request: dict[str, Any]) -> bool:
+    """True when the project declares a test environment and today's identity differs from the one recorded when the review was requested."""
+    try:
+        if not test_env.load(root):
+            return False
+        fresh = _environment_identity(root, project_context(root).code_root)["sha256"]
+    except test_env.TestEnvError:
+        return True
+    recorded = str((request.get("environment_identity") or {}).get("sha256") or "")
+    return bool(recorded) and fresh != recorded
+
+
+def _environment_identity(root: Any = None, candidate_root: Any = None) -> dict[str, Any]:
+    """Return a stable, non-secret identity for the executable QA environment.
+
+    With a project (`root`) and the candidate being run, a declared project test environment joins the identity (the installed files' digest, the
+    declaration and a keyed digest of the resolved values), so no stored pass survives a change to any of them; a refusal is a plain
+    sentence. Nothing declared: the identity is exactly what it always was."""
     uname = os.uname()
     execution_environment = child_process.execution_environment()
     relevant_environment = {
@@ -9757,6 +10273,10 @@ def _environment_identity() -> dict[str, Any]:
         ).hexdigest(),
         "environment_policy": "child_process.execution.v2",
     }
+    if root is not None:
+        declared = test_env.identity_fields(test_env.resolve(root, candidate_root if candidate_root is not None else project_context(root).code_root))
+        if declared:
+            fields["project_test_env"] = declared
     return {
         "fields": fields,
         "sha256": hashlib.sha256(
@@ -10414,6 +10934,31 @@ def record_control_plane_hold(
         return json.loads(json.dumps(hold))
 
 
+def record_refusal_defect(root: ProjectRoot, task: str, operation: str, error: str, count: int, role: str = "") -> dict[str, Any]:
+    """Log the third identical refusal as a harness defect (owner's order 2026-10-28): no hold on the task, the CTO is woken to fix it
+    locally or give the agent the exact workaround, and the owner is told in one plain line by the CTO. One record per task and operation."""
+    task, operation = task.strip(), operation.strip()
+    if not task or not operation:
+        raise ValueError("a refusal defect needs the task and the operation")
+    with locked_state(root) as state:
+        key = f"{task}:{operation}"
+        defects = state.setdefault("friction_defects", {})
+        item = defects.get(key)
+        if item:
+            item.update({"count": int(count), "last_at": now()})
+            return json.loads(json.dumps(item))
+        who = role or "An agent"
+        item = {"task": task, "operation": operation, "message": str(error)[:900], "count": int(count), "role": role,
+                "status": "open", "first_at": now(), "last_at": now()}
+        defects[key] = item
+        _event(state, "repeated_refusal_defect", None, {
+            "task": task, "operation": operation,
+            "message": (f"{who} refused {operation} {count}x, same reason: {' '.join(str(error).split())[:60]}. "
+                        "Defect logged, task not held: fix it locally or hand over the exact workaround."),
+        })
+        return json.loads(json.dumps(item))
+
+
 def hold_clear_command(root: ProjectRoot, task: str, source: str) -> str:
     """The complete Terminal command that clears one hold, with this project's real folders (item 24)."""
     context = project_context(root)
@@ -10705,6 +11250,67 @@ def _close_gaps_for(state: dict[str, Any], task: str, outcome: str, scope_key: s
         card = (state.get("owner_actions") or {}).get(gap.get("card_id", ""))
         if card and card.get("status") == "open":
             _resolve_owner_action(state, card, outcome, "verification_gap")
+
+
+def test_env_set(root: ProjectRoot, declaration: str, who: str = "owner") -> dict[str, Any]:
+    """Declare the project's test environment (the owner or the CTO; never Delivery or the Reviewer). See harness/test_env.py."""
+    try:
+        raw = json.loads(declaration)
+    except (TypeError, ValueError) as error:
+        raise ValueError("the declaration must be a JSON object, for example {\"python\": \"/abs/venv/bin/python3\", "
+                         "\"workdir\": \"backend\", \"env\": {\"POSTGRES_TEST_DATABASE_URL\": {\"file\": \"/abs/.env\", \"key\": \"POSTGRES_TEST_DATABASE_URL\"}}}") from error
+    shown = test_env.save(root, raw)
+    with locked_state(root) as state:
+        _event(state, "test_env_declared", None, {"message": f"the project's test environment was declared by {who}; governed commands now run in it"})
+    return {"declared": shown, "message": "Declared. Governed commands (Delivery's ledger, the Reviewer's ledger, the release check) now run with this interpreter first on PATH, "
+                                          "from the declared working folder, with the declared variables."}
+
+
+def _test_env_candidate(root: ProjectRoot, task: str) -> Path:
+    state = snapshot(root)
+    workspace = str((state.get("task_workspaces") or {}).get(task, "")) if task else ""
+    return Path(workspace) if workspace and Path(workspace).is_dir() else Path(project_context(root).code_root)
+
+
+def test_env_status(root: ProjectRoot, task: str = "") -> dict[str, Any]:
+    """Whether the project declared a test environment and whether it is ready for this task's candidate (digests only, never a value)."""
+    declared = test_env.load(root)
+    if not declared:
+        return {"declared": False, "message": "This project declares no test environment: governed commands run with plain system Python, as before."}
+    shown = test_env.public(declared)
+    try:
+        resolved = test_env.resolve(root, _test_env_candidate(root, task))
+    except test_env.TestEnvError as error:
+        return {"declared": True, "ready": False, "problem": str(error), "declaration": shown}
+    return {"declared": True, "ready": True, "declaration": shown, "identity": test_env.identity_fields(resolved)}
+
+
+def test_env_run(root: ProjectRoot, agent_id: str, task: str, command: str) -> dict[str, Any]:
+    """The Reviewer's (or the CTO's) own capture under the project's test environment: the same interpreter, working folder and variables as the
+    governed runner, inside the agent's own confinement, with the secret values scrubbed from what comes back. Not certified evidence."""
+    with locked_state(root, allow_paused=True, operation="test-env-run") as state:
+        agent = _require_agent(state, agent_id)
+        if agent.get("role") not in {"qa", "cto"}:
+            raise ValueError("only the Reviewer or the CTO may run a command in the project's test environment")
+    command = command.strip()
+    if not command:
+        raise ValueError("a --cmd is required")
+    if contract.SHELL_CONTROL.search(command):
+        raise ValueError("the command must not contain shell control operators (; & | < > or a substitution)")
+    candidate = _test_env_candidate(root, task)
+    resolved = test_env.resolve(root, candidate)
+    if resolved is None:
+        raise ValueError("this project declares no test environment; run the command the ordinary way")
+    environment = test_env.apply(child_process.execution_environment(), resolved)
+    try:
+        completed = subprocess.run(
+            agent_confinement.confine_agent_command(["/bin/sh", "-c", command], candidate, claude_config_dir=environment.get("CLAUDE_CONFIG_DIR") or None),
+            cwd=candidate / test_env.workdir_of(resolved), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+            env=child_process.with_live_board(environment, root))
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("the command timed out after 300 seconds") from error
+    output = test_env.scrub((completed.stdout or "") + (completed.stderr or ""), resolved).strip()
+    return {"exit_code": completed.returncode, "output": output[-20000:], "working_folder": test_env.workdir_of(resolved), "identity": test_env.identity_fields(resolved)}
 
 
 def owner_clear_hold(root: ProjectRoot, task: str, source: str) -> dict[str, Any]:
@@ -11274,6 +11880,18 @@ def close_released_administratively(
         raise ValueError("close-released requires --task and a commit id")
     if len(reason) < 8:
         raise ValueError("close-released requires the owner's plain-language reason")
+    if agent_id:
+        # a spec's attached document must still be what the reviewer passed, exactly as in normal completion (checked before the lock,
+        # because no file is hashed under the board lock); the owner closes his own shipped work without this
+        try:
+            snapshot = _read_state(root)
+        except (OSError, ValueError):
+            snapshot = {}
+        last = _last_final_pass(snapshot, task) if task_kind(snapshot, task) == "spec" else None
+        if last and last.get("no_product_code_task"):
+            problems, _ = _no_product_code_evidence(root, task, last.get("no_product_code_evidence_pins"))
+            if problems:
+                raise ValueError(_no_product_code_message(problems))
     with locked_state(root) as state:
         if agent_id:
             agent = _require_writable_agent(state, agent_id)
@@ -11326,6 +11944,10 @@ def close_released_administratively(
                     f"commit {released[:12]} does not contain the task's own work (task head {head[:12] or 'unknown'}); "
                     "nothing proves this task shipped"
                 )
+            if by["role"] == "cto" and task_kind(state, task) == "spec" and not _final_pass_for(state, task, head):
+                # a spec is always reviewed (owner 2026-10-28): the CTO cannot close it as released unless the NEWEST final review passed, is
+                # still valid and is of the text now on the task branch; only the owner can close it himself
+                raise ValueError(f"{task} is a spec and the reviewer has not passed its current text; only the owner can close it without that review")
             closed_at = now()
             record = {
                 "reason": reason, "by_role": by["role"], "by_agent": by["agent"], "at": closed_at,
@@ -11948,6 +12570,92 @@ def _owner_documents_now(root: Path, task: str) -> list[dict[str, Any]]:
             for d in contract.owner_document_manifest(value)]
 
 
+def _report_only_allowed(documents: list[dict[str, Any]], execution_root: Path, deliverables: list[Any] | None = None) -> list[str]:
+    """Project paths a report-only task may add: the report the owner asked for.
+
+    The stored document path is the board's evidence copy (an upload with a generated name), so the file the owner asked
+    for is taken from the deliverable and document text ("FINDINGS.md: a list of ..."); 2026-10-28 run 4 refused that file.
+    """
+    allowed = [str(entry.get("path") or "") for entry in documents]
+    allowed += [os.path.relpath(path, execution_root) if os.path.isabs(path) else path for path in allowed]
+    for entry in documents:
+        allowed += [name for name in (standing_checks.report_file_name(entry.get("document")),
+                                      standing_checks.report_file_name(entry.get("deliverable"))) if name]
+    # a report committed before its owner copy is attached is still the named deliverable
+    allowed += [name for name in (standing_checks.report_file_name(item) for item in deliverables or []) if name]
+    return allowed
+
+
+def _contract_deliverable_names(root: Path, task: str) -> list[str]:
+    try:
+        value = contract._load(contract._task_path(root, task))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    return [str(item.get("name") or "") for item in value.get("deliverables") or [] if isinstance(item, dict)]
+
+
+def _extra_project_files_problem(root: Path, state: dict[str, Any], task: str, changed_files: list[Any], execution_root: Path) -> str:
+    """Why a review request is refused because the project holds files that are not the deliverable ("" when nothing is wrong).
+
+    A task that only asks for a report adds nothing else to the owner's project (2026-10-27: a checking script was committed). With the
+    owner's document-only box ticked that is every other file; on the full process (D-014) the deliverable is the report plus its proof
+    tests, so a task whose contract names only reports and tests may also add test files, and still nothing unrelated.
+    """
+    kind = task_kind(state, task, root)
+    if kind == "development":
+        return ""
+    document_only = kind == "spec"
+    names = _contract_deliverable_names(root, task)
+    allowed = _report_only_allowed(_owner_documents_now(root, task), execution_root, names)
+    extra = standing_checks.report_only_extra_files(changed_files, allowed)
+    if not document_only:
+        extra = [name for name in extra if not standing_checks.is_test_file(name)]
+        # an analysis only ADDS: a changed or deleted existing file (product code, config, data or an existing test) is refused even when it
+        # looks like a test (owner's order 2026-10-28: the dev must point at issues, never start fixing them)
+        touched = _analysis_touched_existing_files(state, task, execution_root, allowed)
+        extra = sorted(set(extra) | set(touched))
+    return standing_checks.report_only_files_problem(extra)
+
+
+def _analysis_touched_existing_files(state: dict[str, Any], task: str, execution_root: Path, allowed: list[str]) -> list[str]:
+    """Existing files an analysis changed or deleted since the task began (committed or not); added files are not listed."""
+    baseline = str((state.get("task_baselines", {}).get(task) or {}).get("head") or "")
+    if not baseline:
+        return []
+    result = git_process.run(["git", *accepted_bytes.name_only_arguments(baseline)], cwd=execution_root, capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    ok = {os.path.normpath(str(path)) for path in allowed if path} | {os.path.basename(str(path)) for path in allowed if path}
+    touched = []
+    for name in result.stdout.splitlines():
+        if not name or name.startswith(".harness") or os.path.normpath(name) in ok or os.path.basename(name) in ok:
+            continue
+        # a changed or deleted file existed when the task began; an added one did not
+        existed = git_process.run(["git", "cat-file", "-e", f"{baseline}:{name}"], cwd=execution_root, capture_output=True, text=True)
+        if existed.returncode == 0:
+            touched.append(name)
+    return touched
+
+
+def _analysis_proof_problem(root: Path, state: dict[str, Any], task: str, changed_files: list[Any], summary: str) -> str:
+    """The full-process analysis lane (unticked box, a contract of reports and tests only) must hand in proof tests and an examined list."""
+    if task_kind(state, task, root) != "analysis":
+        return ""
+    return standing_checks.analysis_hand_in_problem(summary, changed_files)
+
+
+def _standing_verdict_problem(root: Path, state: dict[str, Any], request: dict[str, Any], task: str, summary: str, quality_given: bool) -> str:
+    """What a final PASS is missing under the standing checks. The kind of task decides the extra lines: a report-only task (Spec or Code
+    analysis) names what it did not examine; only a Code analysis counts its findings (a spec has none, and a clean analysis may say 0 of 0)."""
+    kind = task_kind(state, task, root)
+    record = (state.get("analysis_passes") or {}).get(task)
+    clean = record.get("clean") if kind == "analysis" and record else None
+    return standing_checks.verdict_problem(
+        summary, quality_given, bool(code_quality.notes(state, task)),
+        bool(request.get("no_product_code_task") or kind in {"spec", "analysis"}), kind == "analysis",
+        clean_total=len(clean) if clean is not None else None, hand_in=request.get("summary") or "")
+
+
 def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[str, Any]:
     """Queue a second, independent execution review after development QA passes."""
     if not summary.strip():
@@ -11962,6 +12670,9 @@ def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting review")
         _require_contract_preflight(root, developer["task"])
+        analysis_problem = _analysis_clean_list_problem(state, developer["task"])
+        if analysis_problem:
+            raise ValueError(analysis_problem)
         plan = state.get("delivery_plans", {}).get(developer["task"])
         if not plan:
             raise ValueError("Product Management must define a delivery plan before requesting independent review")
@@ -11974,7 +12685,7 @@ def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[
         baseline_commit = state.get("task_baselines", {}).get(developer["task"], {}).get("head", "")
         review_artifact = _git_review_artifact(review_root, baseline_commit)
         contract_revision = _contract_revision(root, developer["task"])
-        environment_identity = _environment_identity()
+        environment_identity = _environment_identity(root, review_root)
         if review_artifact.get("available") and not review_artifact.get("immutable_clean"):
             raise ValueError("final independent review requires an immutable clean commit/tree")
         prior = _task_requests(state, developer["task"])
@@ -12833,6 +13544,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         raise ValueError(f"a '{test_scope}' scope requires a recorded --scope-reason naming the risk basis")
     if not ledger.strip() or not summary.strip():
         raise ValueError("ledger and summary are required")
+    if phase == "final_acceptance" and standing_checks.hand_in_problem(summary):
+        raise ValueError(_hand_in_refusal(root, summary, ledger))
     ledger_path: Path | None = None
     ledger_sha256 = ""
     review_artifact: dict[str, Any] = {}
@@ -12888,6 +13601,9 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting review")
         _require_contract_preflight(root, developer["task"])
+        analysis_problem = _analysis_clean_list_problem(state, developer["task"])
+        if analysis_problem:
+            raise ValueError(analysis_problem)
         if phase == "final_acceptance" and any(
             request.get("task") == developer["task"]
             and request.get("status") not in TERMINAL_QA
@@ -12955,13 +13671,20 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             if subtask else baseline_commit
         )
         review_artifact = _git_review_artifact(execution_root, scope_baseline_commit)
+        problem = _extra_project_files_problem(root, state, developer["task"], list(review_artifact.get("files") or []), execution_root)
+        if problem:
+            raise ValueError(problem)
+        if phase == "final_acceptance":
+            problem = _analysis_proof_problem(root, state, developer["task"], list(review_artifact.get("files") or []), summary)
+            if problem:
+                raise ValueError(problem)
         if subtask:
             _require_owned_files(
                 item, list(review_artifact.get("files") or []),
                 "reviewed candidate manifest",
             )
         contract_revision = _contract_revision(root, developer["task"])
-        environment_identity = _environment_identity()
+        environment_identity = _environment_identity(root, execution_root)
         task_name = str(developer["task"])
         structure_revision = int(
             state.get("delivery_plans", {}).get(task_name, {}).get("structure_revision", 0)
@@ -13003,10 +13726,11 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     simulation_valid, simulation_problems, planned_scenarios = contract.scenario_simulations(ledger_path)
     if not simulation_valid:
         raise ValueError("Scenario Ledger simulation plan is invalid: " + "; ".join(simulation_problems))
+    review_resolved = test_env.resolve(root, execution_root)
     execution_preflight.validate_commands(
-        execution_root,
+        execution_root / test_env.workdir_of(review_resolved),
         [test_command, *[scenario["command"] for scenario in planned_scenarios]],
-        environment=child_process.execution_environment(),
+        environment=test_env.apply(child_process.execution_environment(), review_resolved),
     )
     cited_screen_checks = _cited_screen_checks(root, developer["task"], ledger_path, candidate_root=execution_root)
     delivery_scope = {
@@ -13086,6 +13810,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "repair_package": selected_repair_package,
             "repair_package_id": (selected_repair_package or {}).get("id", ""),
             "contract_revision": contract_revision, "environment_identity": environment_identity,
+            "owner_documents": _owner_documents_now(root, developer["task"]),
             "changes_summary": changes, "changed_tests": changed_tests, "test_command": test_command, "status": "authoring", "delivery_state": "executing",
             "staged_authoring": True, "requested_at": requested_at,
             "review_wait_started_at": requested_at, "review_wait_stopped_at": None,
@@ -13127,6 +13852,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     execution_id = request_id
     unit_measurement: dict[str, Any] = {}
     contract_check_run: dict[str, Any] | None = None
+    revert_proof_result: dict[str, Any] | None = None
     unit_started_at = lifecycle.now()
     try:
         with review_execution_lease(root, agent_id, execution_id, f"delivery QA: {test_command}"):
@@ -13145,6 +13871,11 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     "reviewed_commit": review_artifact.get("commit", ""), "reviewed_tree_hash": review_artifact.get("tree_hash", ""),
                     "reviewed_worktree_digest": review_artifact.get("working_tree_digest", ""), "contract_revision": contract_revision,
                 }, delivery_certification, "delivery")
+                revert_proof_result = _measure_revert_proof(root, task_name, {
+                    "task": task_name, "subtask": subtask, "stage": INDEPENDENT_REVIEW,
+                    "reviewed_commit": review_artifact.get("commit", ""), "reviewed_tree_hash": review_artifact.get("tree_hash", ""),
+                    "reviewed_worktree_digest": review_artifact.get("working_tree_digest", ""),
+                }, delivery_certification, contract_check_run)
             scenario_finished_at = lifecycle.now()
         if not ledger_path.is_file():
             raise ValueError("Scenario Ledger disappeared while its simulations were executing")
@@ -13301,6 +14032,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             ),
             "contract_revision": contract_revision,
             "environment_identity": environment_identity,
+            "owner_documents": _owner_documents_now(root, developer["task"]),
             "changes_summary": changes, "changed_tests": changed_tests, "test_command": test_command,
             "status": "reserved" if staged_existing.get("status") == "reserved" else "open",
             "delivery_state": "passed", "staged_authoring": True,
@@ -13318,12 +14050,13 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "route_transport_state", "route_instruction_id",
             "reviewer_initial_intents", "reviewer_intents_recorded_at",
             "reviewer_intent_amendments", "reviewer_authoring_overlap_started",
-            "delivery_wait_told", "enhanced_security",
+            "owner_documents", "delivery_wait_told", "enhanced_security",
             "frozen_scope", "challenge_support_files", "challenge_support_sha256",
         ):
             if key in staged_existing:
                 request[key] = json.loads(json.dumps(staged_existing[key]))
         _apply_contract_check_run(request, contract_check_run)
+        _store_revert_proof(state, developer["task"], revert_proof_result)
         request["review_brief"] = review_brief_projection.build(
             root, state, request, delivery_scenarios=planned_scenarios,
             include_delivery_evidence=(
@@ -13542,6 +14275,221 @@ def _reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, An
         return dict(request)
 
 
+
+
+# --- Code analysis as two equal passes (spec 2026-10-29_code-analysis-two-pass) -------------------------------------------------------
+# Record: state["analysis_passes"][task] (see analysis_pass.py). Created by the owner's Go ahead; neither side's list is readable by the other
+# until both are closed; the CTO only groups duplicates; the board builds the clean list and refuses the review request until it exists.
+
+ANALYSIS_DELIVERY_BRIEF = (
+    " This is a Code analysis: in parallel with the independent reviewer (who cannot see your list, and you cannot see theirs), read ALL the code and file "
+    "each issue as you find it with `analysis-list --task {task} --add \"<file:line>|<what is wrong>|<why it matters>\"` (repeat; numbered D1..; add-only). "
+    "When you have read everything run `analysis-list --task {task} --done --examined \"<every part of the code you read>\"` (40+ characters; "
+    "with no issues also `--none \"<what you followed and found sound>\"`). The board then sends you the reviewer's list to mark with `analysis-crosscheck`, "
+    "and later the one clean list to write into FINDINGS.md. Open reference: standing-checks"
+)
+
+
+def _start_analysis_pass(state: dict[str, Any], task: str, developer: dict[str, Any], text: str, at: str) -> tuple[str, str]:
+    """The owner's Go ahead on a Code analysis starts both passes: the record, and the start message for the live other-vendor Reviewer
+    (the idle one that has been waiting longest). Returns (that Reviewer's session id, the message); ("", "") when no Reviewer is live."""
+    waiting = sorted((a for a in state.get("agents", {}).values()
+                      if a.get("active") and a.get("role") == "qa" and a.get("session_id") and a.get("vendor") and a.get("vendor") != developer.get("vendor")
+                      and a.get("task") == "REVIEW_QUEUE"), key=lambda a: (a.get("spawned_at", ""), a.get("id", "")))
+    chosen = waiting[0] if waiting else None
+    state.setdefault("analysis_passes", {})[task] = analysis_pass.new_record(task, at, chosen["id"] if chosen else "")
+    brief = ANALYSIS_START_BRIEF.format(task=task, text=text)
+    _event(state, "analysis_started", developer, {"task": task, "message": brief})
+    return (str(chosen["session_id"]), brief) if chosen else ("", "")
+
+
+def _analysis_context(state: dict[str, Any], agent: dict[str, Any], task: str) -> tuple[dict[str, Any], str]:
+    """(the task's analysis record, which side this agent is). Delivery must own the task; the Reviewer must be from the other vendor."""
+    record = (state.get("analysis_passes") or {}).get(task)
+    if not record:
+        raise ValueError("no Code analysis is running for this task: the owner's Go ahead on the requirements starts it")
+    developer = next((a for a in state.get("agents", {}).values() if a.get("role") in DEVELOPER_ROLES and a.get("task") == task and a.get("active")), None) \
+        or next((a for a in state.get("agents", {}).values() if a.get("role") in DEVELOPER_ROLES and a.get("task") == task), None)
+    if agent.get("role") in DEVELOPER_ROLES:
+        if agent.get("task") != task:
+            raise ValueError("this is not your task")
+        return record, "delivery"
+    if agent.get("role") == "qa" and agent.get("vendor") and developer and agent.get("vendor") != developer.get("vendor"):
+        return record, "reviewer"
+    raise ValueError("only the task's Delivery agent and a Reviewer from the other AI company take part in a Code analysis")
+
+
+def _analysis_session(state: dict[str, Any], record: dict[str, Any], side: str) -> str:
+    if side == "reviewer":
+        return str((state.get("agents", {}).get(record.get("reviewer_id") or "") or {}).get("session_id") or "")
+    task = str(record.get("task") or "")
+    dev = next((a for a in state.get("agents", {}).values() if a.get("role") in DEVELOPER_ROLES and a.get("task") == task and a.get("active")), None)
+    return str((dev or {}).get("session_id") or "")
+
+
+def _enqueue_analysis(root: Path, notes: list[tuple[str, str]], source: str) -> None:
+    from harness import control
+    for session_id, text in notes:
+        if session_id:
+            try:
+                control.enqueue_instruction(root, session_id, text, source=source)
+            except (ValueError, OSError):
+                pass  # the board still holds the state; `analysis-list` with no flags shows what is available to this side
+
+
+def analysis_list(root: Path, agent_id: str, task: str, add: list[str] | None = None, done: bool = False, examined: str = "", none_reason: str = "") -> dict[str, Any]:
+    """Either side's own list for a Code analysis: `--add` issues (add-only, numbered D1.. or R1..), `--done --examined` to close it. With neither,
+    show what this side may read: its own list always, the other side's only once both are closed."""
+    task, notes = str(task or "").strip(), []
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        record, side = _analysis_context(state, agent, task)
+        at = now()
+        if not add and not done:
+            return analysis_pass.visible_items(record, side)
+        if side == "reviewer":
+            record["reviewer_id"] = agent["id"]
+        added = analysis_pass.add_items(record, side, list(add or []), at) if add else []
+        if added:
+            _event(state, "analysis_list_added", agent, {"task": task, "message": f"the {analysis_pass.SIDE_WORD[side]} added {len(added)} issue(s) to its own list"})
+        if done:
+            analysis_pass.close_list(record, side, examined, none_reason, at)
+            _event(state, "analysis_list_closed", agent, {"task": task, "message": f"the {analysis_pass.SIDE_WORD[side]} closed its list with {len(record['sides'][side]['items'])} issue(s)"})
+            if analysis_pass.both_closed(record):
+                _event(state, "analysis_lists_exchanged", agent, {"task": task, "message": "both lists are closed; each side now checks the other's list"})
+                for mine in analysis_pass.SIDES:
+                    theirs = analysis_pass.other(mine)
+                    notes.append((_analysis_session(state, record, mine), (
+                        f"Code analysis `{task}`: both lists are closed. Here is the {analysis_pass.SIDE_WORD[theirs]}'s list. Check EVERY item against the code, once: "
+                        f"`analysis-crosscheck --task {task} --mark \"{analysis_pass.PREFIX[theirs]}1=confirmed\" --mark \"{analysis_pass.PREFIX[theirs]}2=false alarm|<file:line evidence>\"` "
+                        f"(`confirmed`, `false alarm` or `wrong`; the last two need your file:line evidence). The submission must mark every item and cannot be repeated. "
+                        "If you notice a real problem that neither list has, add it in the same call with `--add \"<file:line>|<what is wrong>|<why it matters>\"` (repeat); the other side does not mark it.\n"
+                        + analysis_pass.list_text(record, theirs))))
+        result = {"task": task, "side": side, "added": [i["id"] for i in added], "issues": len(record["sides"][side]["items"]),
+                  "closed": bool(record["sides"][side]["closed_at"])}
+    _enqueue_analysis(root, notes, "analysis-lists")
+    return result
+
+
+def analysis_crosscheck(root: Path, agent_id: str, task: str, marks: list[str] | None = None, add: list[str] | None = None) -> dict[str, Any]:
+    """Mark every item of the OTHER side's list exactly once (and, optionally, add problems neither list has: `--add`, same single submission); when both cross-checks are in, the CTO is woken for the merge."""
+    task, wake = str(task or "").strip(), None
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        record, side = _analysis_context(state, agent, task)
+        if side == "reviewer":
+            record["reviewer_id"] = agent["id"]
+        if not analysis_pass.both_closed(record):
+            raise ValueError("the other side's list is not available until both lists are closed (`analysis-list --done`)")
+        mine = record["sides"][side]
+        if mine["checked_at"]:
+            raise ValueError("your cross-check is already submitted; each side checks the other's list once")
+        parsed_marks = analysis_pass.parse_marks(list(marks or []), record["sides"][analysis_pass.other(side)]["items"])
+        at = now()
+        found = analysis_pass.add_items(record, side, list(add or []), at, found=True) if add else []    # all or none, before anything is stored
+        mine["marks"] = parsed_marks
+        mine["checked_at"] = mine["last_at"] = at
+        _event(state, "analysis_crosschecked", agent, {"task": task, "message": f"the {analysis_pass.SIDE_WORD[side]} checked the other side's list" + (f" and added {len(found)} issue(s) found while checking" if found else "")})
+        if analysis_pass.stage(record) == "merge":
+            wake = _wake_cto_for_merge(state, record, task)
+        result = {"task": task, "side": side, "marked": len(mine["marks"]), "added": [i["id"] for i in found], "next": analysis_pass.stage(record)}
+    if wake:
+        session_id, text, item_id = wake
+        try:
+            from harness import control
+            control.enqueue_instruction(root, session_id, text, source="analysis-merge")
+        except (ValueError, OSError):
+            _requeue_cto_wake(root, [item_id])
+    return result
+
+
+def _analysis_merge_text(state: dict[str, Any], record: dict[str, Any], task: str, cto_id: str) -> str:
+    """The merge instruction: both lists, every mark and the found-while-checking items. The immediate wake and the watchdog's wake carry the same text."""
+    sides = record["sides"]
+
+    def block(side: str) -> str:
+        checker = analysis_pass.other(side)
+        rows = [f"{i['id']} {i['location']}: {i['wrong']} -- "
+                + ("found while checking, not marked" if i.get("found_while_checking") else sides[checker]['marks'][i['id']]['mark']
+                   + (f" ({sides[checker]['marks'][i['id']]['evidence']})" if sides[checker]["marks"][i["id"]]["evidence"] else "")) for i in sides[side]["items"]]
+        return f"{analysis_pass.SIDE_WORD[side].capitalize()}'s list, as marked by the {analysis_pass.SIDE_WORD[checker]}:\n" + ("\n".join(rows) or "(no issues)")
+    return (f"CTO WAKE (analysis merge) for `{task}`: the builder's and the reviewer's lists are both checked. Group ONLY the items that describe the same problem, "
+            f"between the two lists and also within one list (you judge no item true or false): `analysis-merge --agent {cto_id} --task {task} --group \"D2,R4\" --group \"D5,D6,R1\"` "
+            f"(no `--group` when there are none; an item is in at most one group). Open reference: analysis-merge\n{block('delivery')}\n{block('reviewer')}")
+
+
+def _cap_merge_wake(text: str, cto_id: str, task: str) -> str:
+    """The wake is capped at 12000 characters; when the lists are longer the CTO is told so and how to read all of them."""
+    if len(text) <= 12000:
+        return text
+    note = f"\n[CUT: the lists above are not complete. Run `analysis-merge --agent {cto_id} --task {task} --show` to read both whole, then group.]"
+    return text[:12000 - len(note)] + note
+
+
+def _wake_cto_for_merge(state: dict[str, Any], record: dict[str, Any], task: str) -> tuple[str, str, str] | None:
+    """Both cross-checks are in: wake the CTO once (reason analysis_merge) now. None when there is no CTO or it was told.
+    With no CTO the job is not lost: the stored record stays at the merge stage and the CTO's watchdog plan opens the item when a CTO exists."""
+    cto = next((a for a in state.get("agents", {}).values() if a.get("role") == "cto" and a.get("active") and a.get("session_id")), None)
+    if not cto:
+        return None
+    item, send = cto_wakes.claim_direct(state, "analysis_merge", f"analysis_merge:{task}", task, "both analysis lists are checked: group the duplicates", now())
+    if item is None or not send:
+        return None
+    text = _analysis_merge_text(state, record, task, str(cto["id"])) + cto_wakes.suffix(state, [item], str(cto["id"]))
+    return str(cto["session_id"]), _cap_merge_wake(text, str(cto["id"]), task), item["id"]
+
+
+def analysis_merge(root: Path, agent_id: str, task: str, groups: list[str] | None = None, show: bool = False) -> dict[str, Any]:
+    """The CTO groups duplicates (it judges nothing true or false); the board builds the one clean list and sends it to Delivery.
+
+    `show` returns both lists whole and changes nothing: a wake message is capped, and two long lists do not fit in it.
+    """
+    task, notes = str(task or "").strip(), []
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") != "cto" or not agent.get("active"):
+            raise ValueError("only the active CTO merges the analysis lists")
+        record = (state.get("analysis_passes") or {}).get(task)
+        if not record:
+            raise ValueError("no Code analysis is running for this task")
+        if show:
+            if analysis_pass.stage(record) != "merge":
+                raise ValueError("the lists can be shown for a merge once both lists are closed and both cross-checks are in")
+            return {"task": task, "lists": _analysis_merge_text(state, record, task, str(agent["id"]))}
+        phase = analysis_pass.stage(record)
+        if phase == "clean":
+            raise ValueError("the lists are already merged; the clean list exists")
+        if phase != "merge":
+            raise ValueError("the merge waits until both lists are closed and both cross-checks are in")
+        parsed = analysis_pass.parse_groups(list(groups or []), record)
+        record["merge"] = {"groups": parsed, "at": now(), "by": agent["id"]}
+        record["clean"] = analysis_pass.build_clean(record, parsed)
+        record["clean_at"] = now()
+        for item in cto_wakes.open_items(state):
+            if item["reason"] == "analysis_merge" and item.get("subject") == f"analysis_merge:{task}":
+                cto_wakes.dispose(state, item["id"], "route", f"merged {len(parsed)} group(s)", record["clean_at"])
+        counts = analysis_pass.counts(record["clean"])
+        _event(state, "analysis_clean_list_ready", agent, {"task": task, "message": f"the clean list is ready: {counts['items']} item(s), {counts['disputed']} disputed", **counts})
+        notes.append((_analysis_session(state, record, "delivery"), (
+            f"Code analysis `{task}`: the CTO merged the lists. This is the ONE clean list: {counts['items']} item(s), {counts['disputed']} disputed. Write EVERY item into FINDINGS.md "
+            "in the app's finding format (severity, category, location, evidence, failure scenario, impact, recommended action, confidence), mark the disputed ones "
+            "Disputed with both sides' words and evidence, keep every source id (D2, R4), add proof tests, then request the review as usual. You may withdraw only "
+            "your own disputed item, in the report; drop and change nothing else. Open reference: standing-checks\n" + analysis_pass.clean_text(record["clean"]))))
+        result = {"task": task, "clean": counts, "groups": parsed}
+    _enqueue_analysis(root, notes, "analysis-clean-list")
+    return result
+
+
+def _analysis_clean_list_problem(state: dict[str, Any], task: str) -> str:
+    """Why a Code analysis cannot ask for its review yet ("" when it can, or when the task has no two-pass record)."""
+    record = (state.get("analysis_passes") or {}).get(task)
+    if not record or record.get("clean") is not None:
+        return ""
+    where = {"lists": "both lists must be closed first (`analysis-list --done`)", "crosscheck": "both cross-checks must be in first (`analysis-crosscheck`)",
+             "merge": "the CTO has to merge the lists first (`analysis-merge`)"}[analysis_pass.stage(record)]
+    return f"this Code analysis cannot go to review before the clean list exists: {where}. The clean list is what you write into FINDINGS.md."
+
+
 def record_review_intents(
     root: ProjectRoot, agent_id: str, request_id: str,
     intents: list[str], *, amendment: bool = False,
@@ -13686,7 +14634,7 @@ def _frozen_scope_brief(state: dict[str, Any], scope: dict[str, Any]) -> dict[st
     plan = (state.get("retained_plans") or {}).get(review_rounds.lineage_key(scope))
     number = review_rounds.round_number(prior, base)
     return {
-        "round": number, "round_limit": review_rounds.round_limit(), "frozen": bool(base),
+        "round": number, "round_limit": review_rounds.limit_for(task_kind(state, str(scope["task"]))), "frozen": bool(base),
         "round_1_findings": [{key: found.get(key, "") for key in ("id", "summary", "harm", "regression_check")} for found in (base or {}).get("findings", {}).values()],
         "still_open_ids": [str(f.get("id")) for f in (last or {}).get("structured_findings") or []],
         "retained_plan": {"commands": plan["commands"], "support_files": sorted(plan["support_files"]), "read_with": "retained-plan"} if plan else None,
@@ -14011,6 +14959,8 @@ def _execute_challenge_locked(
             _evidence_text(_certified_evidence_path(root, existing_execution.get("bundle") or {}))
         ):
             existing_execution = {}   # stored evidence that says a final check did not pass is never reused as a certified success
+        if existing_execution.get("ledger_sha256") == simulation_digest and _test_env_changed_since_request(root, request):
+            existing_execution = {}   # the project's test environment, its declaration or a value changed after the review was requested: never reuse the old pass
         if existing_execution.get("ledger_sha256") == simulation_digest:
             bundle = existing_execution.get("bundle") or {}
             return {
@@ -14027,6 +14977,7 @@ def _execute_challenge_locked(
         retry_reason = _challenge_retry_reason(prior_attempts, retry_reason)
     simulations: list[dict[str, Any]] = []
     contract_check_run: dict[str, Any] | None = None
+    revert_proof_result: dict[str, Any] | None = None
     candidate: dict[str, Any] = {}
     lockfile_digests: dict[str, str] = {}
     environment_sha256 = str(
@@ -14087,12 +15038,15 @@ def _execute_challenge_locked(
                     raise ValueError("reviewer Scenario Ledger changed while its simulations were executing; rerun execute-challenge")
             bundle = _simulation_bundle(root, "reviewer Challenge Ledger", simulations)
             # The same stored early checks run again, unchanged; the Reviewer's own scenarios above are on top of them.
-            contract_check_run = None if review_request.get("phase") != "final_acceptance" else _run_contract_checks(root, str(review_request.get("task") or ""), review_request, {
+            reviewer_certification = {
                 "board_root": root, "candidate": candidate, "environment_sha256": environment_sha256,
                 "lockfile_digests": lockfile_digests, "role": "reviewer", "retry_reason": retry_reason.strip(),
                 "gate": "contract-check", "task": str(review_request.get("task") or ""),
                 "rerun_source": dict(zip(("workspace", "commit"), map(str, _review_checkout_source(root, review_state, review_request)))),
-            }, "reviewer")
+            }
+            contract_check_run = None if review_request.get("phase") != "final_acceptance" else _run_contract_checks(
+                root, str(review_request.get("task") or ""), review_request, reviewer_certification, "reviewer")
+            revert_proof_result = _measure_revert_proof(root, str(review_request.get("task") or ""), review_request, reviewer_certification, contract_check_run)
     except certified_execution.RetryableInterruption:
         raise   # waiting behind a run or owner-machine activity is not a failed attempt and needs no repair reason
     except Exception as error:
@@ -14160,6 +15114,7 @@ def _execute_challenge_locked(
             "contract_check_partial": bool(((contract_check_run or {}).get("run") or {}).get("did_not_run")),
         }
         _apply_contract_check_run(request, contract_check_run)
+        _store_revert_proof(state, request["task"], revert_proof_result)
         request.setdefault("challenge_execution_attempts", []).append({
             "status": "passed", "recorded_at": now(),
             "ledger_sha256": simulation_digest,
@@ -14375,10 +15330,21 @@ def _keep_difficulty_note(root: Path, args: argparse.Namespace, out: Any) -> Non
         pass
 
 
+def _keep_code_quality(root: Path, args: argparse.Namespace) -> None:
+    """Store the optional code-quality notes after the verdict was recorded. Notes only: any problem here is dropped silently."""
+    try:
+        with locked_state(root, operation="code quality notes") as state:
+            request = (state.get("qa_requests") or {}).get(str(args.request)) or {}
+            code_quality.record(state, str(request.get("task") or ""), str(args.request), args.code_quality)
+    except Exception:  # noqa: BLE001 - a note is information only
+        pass
+
+
 def qa_result(
     root: Path, agent_id: str, request_id: str, result: str, summary: str,
     evidence: str, finalization_classification: str = "",
     failure_members: list[dict[str, Any]] | None = None,
+    code_quality_notes: Any = None,
 ) -> dict[str, Any]:
     if result not in {"passed", "failed"}:
         raise ValueError("QA result must be passed or failed")
@@ -14416,6 +15382,16 @@ def qa_result(
                 raise ValueError("a rejected finalization classification cannot receive a PASS verdict")
         elif classification:
             raise ValueError("finalization classification is valid only for a computed application finalization diff")
+        if result == "passed" and request and request.get("phase") == "final_acceptance":
+            task_name_here = str(request.get("task") or "")
+            problem = _standing_verdict_problem(root, state, request, task_name_here, summary, bool(code_quality.clean(code_quality_notes)))
+            if problem:
+                raise ValueError(problem)
+        if (result == "failed" and request and request.get("phase") == "final_acceptance" and standing_checks.enabled()
+                and task_kind(state, str(request.get("task") or ""), root) == "analysis"):
+            dispute = standing_checks.disputes_problem(request.get("summary") or "", summary)
+            if dispute:
+                raise ValueError("the review cannot be recorded yet: it needs " + dispute + ". Open `standing-checks`.")
         unnamed = red_proof.unnamed_in_verdict(request.get("changed_tests") or [], summary)
         if unnamed:
             raise ValueError(red_proof.verdict_refusal(request["changed_tests"], unnamed))
@@ -14615,7 +15591,9 @@ def qa_result(
             if judgment["structured"] and judgment["effective_result"] == "failed" and not judgment["baseline_request"]:
                 _retain_plan(root, state, request, completed)
             for escalation_event in review_rounds.record_judgment(state.setdefault("review_escalations", {}), request, judgment, summary, resolutions, completed,
-                                                                  reviewer_id=qa["id"], reviewer_session=str(qa.get("session_id") or "")):
+                                                                  reviewer_id=qa["id"], reviewer_session=str(qa.get("session_id") or ""),
+                                                                  limit=review_rounds.limit_for(task_kind(state, str(request.get("task") or ""), root)),
+                                                                  analysis=task_kind(state, str(request.get("task") or ""), root) == "analysis"):
                 _event(state, escalation_event["kind"], qa, {"task": request["task"], "request_id": request_id, "message": escalation_event["message"]})
         qa.update({"status": "qa_complete", "status_note": f"{request_id}: {result}", "last_status_at": completed})
         developer = _require_agent(state, request["developer_id"])
@@ -14650,6 +15628,8 @@ def qa_result(
         _event(state, "qa_result", qa, {"task": request["task"], "request_id": request_id, "stage": request.get("stage", DEVELOPMENT_QA), "cycle": request["cycle"], "result": result, "ledger": request["ledger"], "challenge_ledger": request.get("challenge_ledger"), "evidence": evidence, "scenario_count": len(simulation_bundle["scenario_ids"]) if simulation_bundle else 0, "repair_package_id": request.get("created_repair_package_id", ""), "lifecycle": request_lifecycle, "command_execution_count": len([item for item in request.get("command_executions", []) if item.get("cache_decision") != "same_request_deduplicated"]), "board_decision": judgment["message"], "message": summary})
         if result == "failed":
             request["verdict_summary"] = summary[:2000]
+            if request.get("stage") == INDEPENDENT_REVIEW:
+                cto_wakes.review_failed(state, request, (state.get("review_escalations") or {}).get(review_rounds.lineage_key(request)) or {})
             _note_verification_gap(root, state, request, qa, summary)
         elif result == "passed" and str(request.get("test_scope") or "full") == "full":
             _close_gaps_for(state, str(request.get("task") or ""), "Resolved: the scope passed review", _gap_scope_key(request))
@@ -14664,6 +15644,9 @@ def qa_result(
             if escalation.get("status") == "recovery" and escalation.get("who") == "reviewer":
                 routed_text = (f"Independent review {request_id} could not be completed. The harness is starting one fresh Reviewer on a stronger model; no code change is needed. "
                                "Request review again for the same scope with a changes summary that says so, and wait. Nobody asks the owner anything.")
+            elif escalation.get("status") == "needs_environment":
+                routed_text = (f"Independent review {request_id} could not run one check because the reviewer's environment lacks the project's libraries or test database. "
+                               "That is not a finding about your work: do not repair anything. The CTO prepares the project's test environment; request review again for the same scope when it is ready.")
             elif escalation.get("status") == "recovery":
                 routed_text = (f"Independent review {request_id} FAILED for the {escalation.get('failed_judgments')}th time. The harness is starting one fresh Delivery attempt "
                                "for this part with a precise brief; do not start another repair of it. Nobody asks the owner anything.")
@@ -14687,7 +15670,7 @@ def qa_result(
                     "next subtask/chunk, integrated final acceptance, or the Completion Contract and completion. "
                     "Do not wait for a monitoring cycle. USER ACTION: None."
                 )
-        cto_session, cto_text = "", ""
+        cto_session, cto_text, cto_item = "", "", ""
         if result == "passed" and request.get("phase") == "final_acceptance":
             release_lifecycle = state.setdefault("release_lifecycle", {}).setdefault(
                 request["task"], {"phases": {}},
@@ -14709,6 +15692,14 @@ def qa_result(
                     "prepared release action; do not ask Delivery or Reviewer to "
                     "repeat certified work. USER ACTION: None. " + reference_chapters.reference_hint("release")
                 )
+                item, send = cto_wakes.claim_direct(
+                    state, "release", f"final-pass:{request['task']}:{str(request.get('reviewed_commit') or '')[:12]}",
+                    request["task"], "final pass recorded; the release is being prepared", completed)
+                if item is not None:
+                    cto_item = item["id"]
+                    cto_text = cto_text + cto_wakes.suffix(state, [item], str(cto_agent["id"]))
+                if not send:
+                    cto_session = ""   # the CTO was already told about this final pass
             _event(state, "release_routing_requested", cto_agent, {
                 "task": request["task"], "request_id": request_id,
                 "message": "final PASS immediately routed to the Python release coordinator and CTO",
@@ -14718,6 +15709,7 @@ def qa_result(
         (route_session, routed_text, "independent-review"),
         (cto_session, cto_text, "final-acceptance-pass"),
     ):
+        # the CTO's wake was counted and its judgment item opened under the lock above (one wake path)
         if not wake_session:
             continue
         instruction_id = ""
@@ -14729,6 +15721,8 @@ def qa_result(
             )["id"]
         except (ValueError, OSError) as error:
             route_error = str(error)
+            if wake_source == "final-acceptance-pass" and cto_item:
+                _requeue_cto_wake(root, [cto_item])
         with locked_state(root) as state:
             routed_agent = next((
                 agent for agent in state.get("agents", {}).values()
@@ -14800,8 +15794,15 @@ def complete(root: Path, agent_id: str, note: str) -> dict[str, Any]:
         event = _event(state, "development_complete", agent, {"task": task, "lifecycle": completion_phase, "message": note})
         cto = next((value for value in state.get("agents", {}).values()
                     if value.get("role") == "cto" and value.get("active") and value.get("session_id")), None)
+        cto_item, cto_suffix = "", ""
         if cto:
             cto_session = str(cto["session_id"])
+            item, send = cto_wakes.claim_direct(state, "release", f"completion:{task}", task,
+                                                "development is complete; the claim-scope decision and the release record are due", completed_at)
+            if item is not None:
+                cto_item, cto_suffix = item["id"], cto_wakes.suffix(state, [item], str(cto["id"]))
+            if not send:
+                cto_session = ""
     if cto_session:
         try:
             from harness import control
@@ -14809,11 +15810,12 @@ def complete(root: Path, agent_id: str, note: str) -> dict[str, Any]:
                 root, cto_session,
                 f"DEVELOPMENT COMPLETE for {task}. Run one bounded board poll now. The deterministic "
                 "coordinator is executing mechanical release checks; perform only the remaining semantic "
-                "claim-scope audit or handle its recorded incident. USER ACTION: None.",
+                "claim-scope audit or handle its recorded incident. USER ACTION: None." + cto_suffix,
                 source="development-complete",
             )
         except (ValueError, OSError):
-            pass
+            if cto_item:
+                _requeue_cto_wake(root, [cto_item])
     # Development completion is the material event that makes the deterministic
     # release tail eligible. Execute it here, outside the board lock, rather
     # than from a browser refresh. Startup recovery repeats it idempotently.
@@ -15730,16 +16732,20 @@ def accept_owner_release(root: ProjectRoot, task: str) -> dict[str, Any]:
         if isinstance(release, dict):
             release.update({"status": RELEASE_ACCEPTED, "accepted_at": now()})
             _resolve_accepted_follow_ups(state, task, release.get("head_commit", ""), now())
+        advanced = result["commit"] != acceptance_base
         _event(state, "git_acceptance_completed", None, {
             "task": task, "commit": result["commit"], "tree": result["tree"],
-            "mirror_ref": result["mirror_ref"],
-            "message": "Owner Accept advanced local main by verified FF-only broker transaction; no remote push occurred",
+            "mirror_ref": result["mirror_ref"], "advanced": advanced,
+            "message": (
+                "Owner Accept advanced local main by verified FF-only broker transaction; no remote push occurred" if advanced else
+                f"Owner Accept: nothing new was delivered into the project. Its main version ({result['commit'][:12]}) is unchanged "
+                "because this task changed no project files; the owner's documents are attached to the task instead. No remote push occurred"),
         })
         returned_reviewers = _return_reviewers_to_queue(state, task, "accepted")
         accepted = dict(state["git_acceptances"][task])
         # Defect #17: every other open task on this repository whose branch
         # no longer contains main is told NOW, not after its final review.
-        stale = _stale_task_bases(state, str(state["task_repositories"][task]), task)
+        stale = _stale_task_bases(state, str(state["task_repositories"][task]), task) if advanced else []
     for other in stale:
         route_reintegration(
             root, other, f"main advanced to {result['commit'][:12]} when {task} was accepted",
@@ -16096,6 +17102,11 @@ def snapshot(root: Path) -> dict[str, Any]:
             request.update({"status": "failed", "result": "failed", "integrity_invalidated": True, "result_summary": "PASS invalidated by certified evidence integrity: " + "; ".join(problems)})
             _set_review_scope_status(projected, request, "open")
     projected["critical_path_summaries"] = lifecycle.summaries(projected)
+    for record in (projected.get("analysis_passes") or {}).values():
+        if analysis_pass.stage(record) in {"lists", "crosscheck"}:    # neither side may read the other's list (or marks) early: only the counts leave the board
+            for side in record["sides"].values():
+                side["items"] = [{"id": item["id"]} for item in side["items"]]
+                side["marks"] = {}
     return projected
 
 
@@ -16310,7 +17321,8 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
     if not task or task == AWAITING_OWNER_DIRECTION:
         raise ValueError("name the task to cancel")
     related_session_ids: set[str] = set()
-    with locked_state(root) as state:
+    # the owner's Cancel stays usable on a paused project (2026-10-28: "no way anymore to cancel the task")
+    with locked_state(root, allow_paused=True, operation="cancel task") as state:
         known = {
             str(agent.get("task")) for agent in state.get("agents", {}).values()
             if agent.get("role") in DEVELOPER_ROLES
@@ -16342,9 +17354,11 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
         for key in (
             "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
             "task_workspaces", "subtask_workspaces", "subtask_branches",
-            "task_owner_directions", "task_lineage", "task_security",
+            "task_owner_directions", "task_lineage", "task_security", "task_document_only", "task_kinds",
             "owner_clarifications", "requirement_confirmations", "releases",
             "release_decisions", "release_repairs",
+            # 2026-10-28: a cancelled task's waiting proposal still showed a decision card, and its repository binding stayed
+            "requirement_proposals", "task_repositories", "contract_check_revisions", "analysis_passes",
         ):
             state.setdefault(key, {}).pop(task, None)
         state["owner_messages"] = [message for message in state.get("owner_messages", []) if message.get("task") != task]
@@ -16352,6 +17366,7 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
             if finding.get("task") == task or finding.get("follow_up_task") == task:
                 state["deferred_findings"].pop(finding_id, None)
         on_task = [agent for agent in state.get("agents", {}).values() if agent.get("task") == task]
+        conversation_sessions = sorted({str(agent["session_id"]) for agent in on_task if agent.get("session_id")})
         for agent in on_task:
             if agent.get("session_id") and agent.get("active"):
                 related_session_ids.add(str(agent["session_id"]))
@@ -16367,6 +17382,14 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
             if agent.get("session_id"):
                 state.get("owner_directions", {}).pop(agent["session_id"], None)
                 state.get("pending_owner_clarifications", {}).pop(agent["session_id"], None)
+        # a paused project saved pointers to this task's agents and review owners; a later resume must not bring them back
+        paused = state.get("project_pause") or {}
+        for agent_id, saved in list((paused.get("agents") or {}).items()):
+            if saved.get("task") == task:
+                paused["agents"].pop(agent_id, None)
+        for request_id in list((paused.get("reviews") or {})):
+            if request_id not in (state.get("qa_requests") or {}):
+                paused["reviews"].pop(request_id, None)
         state.setdefault("cancelled_tasks", {})[task] = {
             "cancelled_at": now(),
             "reason": "owner cancelled the unfinished task; its runtime work was removed",
@@ -16378,6 +17401,14 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
         _reopen_stopped_reviews(state, {agent.get("id") for agent in on_task})
     _rewrite_cold(root, "qa_requests", [value for value in _read_cold(root, "qa_requests") if value.get("task") != task])
     _rewrite_cold(root, "agents", [value for value in _read_cold(root, "agents") if value.get("task") != task])
+    # The next Delivery agent must start a fresh conversation, not resume the cancelled task's (2026-10-28: it did, and carried the
+    # abandoned plan into the owner's restart). The old session keeps its transcript; only its resumable conversation id is dropped.
+    from harness import control
+    for session_id in conversation_sessions:
+        try:
+            control.clear_cli_session(root, session_id, "the owner cancelled this task; the next Delivery agent starts a fresh conversation")
+        except ValueError:
+            pass
     return {
         "task": task,
         "cancelled_tasks": [task],
@@ -16652,13 +17683,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reconcile-baseline"); p.add_argument("--agent", required=True)
     p = sub.add_parser("reconcile-unmerged-accept"); p.add_argument("--task", required=True)
     p = sub.add_parser("clear-hold"); p.add_argument("--task", required=True); p.add_argument("--source", required=True)
+    p = sub.add_parser("test-env-set"); p.description = "Declare the project's test environment (owner or CTO): the prepared interpreter, the working folder and the variables governed commands need."; p.add_argument("--declaration", required=True, help="a JSON object"); p.add_argument("--agent", default="")
+    p = sub.add_parser("test-env-status"); p.description = "Say whether the project declared a test environment and whether it is ready for a task's code."; p.add_argument("--task", default=""); p.add_argument("--agent", default="")
+    p = sub.add_parser("test-env-run"); p.description = "Run one command under the project's test environment (the Reviewer's or the CTO's own capture; not certified evidence)."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--cmd", required=True, help="the command to run (no shell operators)")
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
-    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--no-program", action="store_true", help="this task makes documents only, no program: the Reviewer does not write checks in advance")
+    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
     p = sub.add_parser("contract-checks"); p.add_argument("--agent", required=True); p.add_argument("--task", default="")
     p = sub.add_parser("contract-check-skip"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True, help="why this stored check could not run and is set aside (at least 8 characters)")
+    p = sub.add_parser("send-to-full-lane"); p.description = "Reviewer only: a Small change task is not small; send it back to the full lane once, with a plain reason"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True, help="one plain sentence, for example: this changes behaviour, not just text")
+    p = sub.add_parser("check-deviation"); p.description = "Say that ONE stored check does not match reality (what it assumes vs what is real, with evidence); the Reviewer answers once"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--check", required=True, help="the check number contract-checks shows, for example 3.1"); p.add_argument("--why", required=True, help="one paragraph: what the check assumes, what is real, and the evidence")
     p = sub.add_parser("ask-owner"); p.add_argument("--agent", required=True); p.add_argument("--question", required=True); p.add_argument("--option", action="append", default=[], help="an answer the owner can pick (2 to 4); omit for a free answer")
     p = sub.add_parser("confirm-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True)
     p = sub.add_parser("record-finding"); p.add_argument("--task", required=True); p.add_argument("--title", required=True); p.add_argument("--description", required=True); p.add_argument("--evidence", default=""); p.add_argument("--affects-current-task", action="store_true")
@@ -16686,12 +17722,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reserve-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default="")
     p = sub.add_parser("review-brief"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
     p = sub.add_parser("relinquish-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("analysis-list"); p.description = "Code analysis: file your OWN list of issues (add-only), then close it. With neither --add nor --done it shows what you may read."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--add", action="append", default=[], help="`<file:line>|<what is wrong>|<why it matters>`; repeat"); p.add_argument("--done", action="store_true", help="close your list (needs --examined)"); p.add_argument("--examined", default="", help="every part of the code you read (40+ characters)"); p.add_argument("--none", default="", help="no issues found: what you followed and found sound (20+ characters)")
+    p = sub.add_parser("analysis-crosscheck"); p.description = "Code analysis: mark EVERY item of the other side's list, once."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--mark", action="append", default=[], help="`R3=confirmed`, `R5=false alarm|<file:line evidence>` or `R7=wrong|<file:line evidence>`; repeat"); p.add_argument("--add", action="append", default=[], help="a problem neither list has: `<file:line>|<what is wrong>|<why it matters>`; repeat")
+    p = sub.add_parser("analysis-merge"); p.description = "Code analysis (CTO): group the items of both lists that describe the same problem; the board then builds the clean list."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--group", action="append", default=[], help="`D2,R4`: items that describe the same problem; repeat; none when there are no duplicates"); p.add_argument("--show", action="store_true", help="print both lists whole (read only); the wake message holds only the start of a long list")
     p = sub.add_parser("review-intents"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--intent", action="append", required=True); p.add_argument("--amend", action="store_true")
     p = sub.add_parser("review-support"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--submission", required=True, help="a JSON file {\"files\": {\"name.py\": \"text\"}}: supporting test files of your Challenge Ledger")
     p = sub.add_parser("retained-plan"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True)
     p = sub.add_parser("reference"); p.description = "Read one named chapter of your role's reference directive (the card names it, or a board message says: Open reference: <chapter>)."; p.add_argument("--agent", required=True); p.add_argument("--name", required=True, help="the chapter name, for example enhanced-security")
     p = sub.add_parser("attach-challenge-ledger"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--challenge-ledger", required=True); p.add_argument("--correction-reason", default="")
-    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--difficulty", default="", help="optional: one line on what slowed you down (vague requirement, broken build, missing tool); never required"); p.add_argument("--failure", action="append", default=[], metavar="JSON finding, or ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK")
+    p = sub.add_parser("qa-result"); p.add_argument("--agent", required=True); p.add_argument("--request", required=True); p.add_argument("--result", required=True, choices=["passed", "failed"]); p.add_argument("--summary", required=True); p.add_argument("--evidence", default=""); p.add_argument("--finalization-classification", default="", choices=["", "accepted", "rejected"]); p.add_argument("--difficulty", default="", help="optional: one line on what slowed you down (vague requirement, broken build, missing tool); never required"); p.add_argument("--failure", action="append", default=[], metavar="JSON finding, or ID|CATEGORY|SUMMARY|PATHS|SURFACE|REGRESSION_CHECK"); p.add_argument("--code-quality", action="append", default=[], help="optional, round 1: one plain line per observation on how the code is built, with a file reference (duplication, oversized file, hard-coded value, missing seam); kept as a note, never a blocker")
     p = sub.add_parser("resolve-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--resolution", action="append", required=True, metavar="MEMBER_ID|RESOLUTION|REGRESSION_CHECK")
     p = sub.add_parser("split-repair-package"); p.add_argument("--agent", required=True); p.add_argument("--package", required=True); p.add_argument("--group", action="append", required=True, metavar="MEMBER_ID,MEMBER_ID"); p.add_argument("--reason", required=True)
     p = sub.add_parser("complete"); p.add_argument("--agent", required=True); p.add_argument("--note", required=True)
@@ -16712,6 +17751,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("owner-action"); p.add_argument("--agent", required=True); p.add_argument("--title", required=True); p.add_argument("--command", dest="owner_command", default=""); p.add_argument("--why", default=""); p.add_argument("--task", default=""); p.add_argument("--kind", default="", choices=["", *OWNER_ACTION_KINDS]); p.add_argument("--for-agent", default="")
     p.add_argument("--default", dest="owner_default", default="", help="what the CTO does if the owner does not answer in time (a question to the owner must carry one)"); p.add_argument("--default-minutes", type=int, default=0, help="minutes before the default applies (1 to the owner_questions setting; default: the setting)"); p.add_argument("--location-verified", default="", help="how you know the URL the card names is the owner's instance (only when the board says it cannot verify)")
     p = sub.add_parser("owner-action-done"); p.add_argument("--agent", required=True); p.add_argument("--id", required=True); p.add_argument("--outcome", required=True)
+    p = sub.add_parser("cto-disposition"); p.add_argument("--agent", required=True); p.add_argument("--item", required=True); p.add_argument("--outcome", required=True); p.add_argument("--note", required=True)
     p = sub.add_parser("need-test-machine"); p.add_argument("--agent", required=True); p.add_argument("--reason", required=True); p.add_argument("--task", default="")
     p = sub.add_parser("machine-status"); p.add_argument("--agent", required=True); p.add_argument("--expect-revision", type=int, default=None)
     p = sub.add_parser("machine-baseline"); p.add_argument("--agent", required=True); p.add_argument("--note", default="")
@@ -16773,13 +17813,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reconcile-baseline": out = reconcile_inherited_baseline(root, args.agent)
         elif args.command == "reconcile-unmerged-accept": out = reconcile_unmerged_accept(root, args.task)
         elif args.command == "clear-hold": out = owner_clear_hold(root, args.task, args.source)
+        elif args.command == "test-env-set": out = test_env_set(root, args.declaration, who=(args.agent or "the owner"))
+        elif args.command == "test-env-status": out = test_env_status(root, args.task)
+        elif args.command == "test-env-run": out = test_env_run(root, args.agent, args.task, args.cmd)
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
-        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True)
+        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
         elif args.command == "contract-checks": out = show_contract_checks(root, args.agent, args.task)
         elif args.command == "contract-check-skip": out = record_contract_check_skip(root, args.agent, args.task, args.criterion, args.reason)
+        elif args.command == "send-to-full-lane": out = record_send_to_full_lane(root, args.agent, args.task, args.reason)
+        elif args.command == "check-deviation": out = record_check_deviation(root, args.agent, args.task, args.criterion, args.check, args.why)
         elif args.command == "ask-owner": out = record_agent_question(root, args.agent, args.question, args.option)
         elif args.command == "confirm-requirements": out = record_requirement_confirmation(root, args.agent, args.text)
         elif args.command == "record-finding": out = record_finding(root, args.task, args.title, args.description, args.affects_current_task, args.evidence)
@@ -16823,6 +17868,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reserve-qa": out = reserve_qa(root, args.agent, args.request)
         elif args.command == "review-brief": out = review_brief(root, args.request, args.agent)
         elif args.command == "relinquish-qa": out = relinquish_review_reservation(root, args.agent, args.request, args.reason)
+        elif args.command == "analysis-list": out = analysis_list(root, args.agent, args.task, args.add, args.done, args.examined, args.none)
+        elif args.command == "analysis-crosscheck": out = analysis_crosscheck(root, args.agent, args.task, args.mark, args.add)
+        elif args.command == "analysis-merge": out = analysis_merge(root, args.agent, args.task, args.group, show=args.show)
         elif args.command == "review-intents": out = record_review_intents(root, args.agent, args.request, args.intent, amendment=args.amend)
         elif args.command == "review-support": out = record_review_support(root, args.agent, args.request, args.submission)
         elif args.command == "retained-plan": out = show_retained_plan(root, args.agent, args.request)
@@ -16848,7 +17896,7 @@ def main(argv: list[str] | None = None) -> int:
                     "affected_paths": [path for path in parts[3].split(",") if path],
                     "surface": parts[4], "regression_check": parts[5],
                 })
-            out = qa_result(root, args.agent, args.request, args.result, args.summary, args.evidence, args.finalization_classification, failure_members or None)
+            out = qa_result(root, args.agent, args.request, args.result, args.summary, args.evidence, args.finalization_classification, failure_members or None, code_quality_notes=getattr(args, "code_quality", None))
         elif args.command == "resolve-repair-package":
             resolutions = []
             for raw in args.resolution:
@@ -16875,12 +17923,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "amend-exclusions": out = amend_exclusions(root, args.agent, args.task, args.action, args.exclusion, args.text, args.reason, args.owner_message, args.owner_words)
         elif args.command == "owner-action": out = record_owner_action(root, args.agent, args.title, args.owner_command, args.why, args.task, args.kind, args.for_agent, args.owner_default, args.default_minutes, args.location_verified)
         elif args.command == "owner-action-done": out = clear_owner_action(root, args.agent, args.id, args.outcome)
+        elif args.command == "cto-disposition": out = record_cto_disposition(root, args.agent, args.item, args.outcome, args.note)
         elif args.command == "need-test-machine": out = request_test_machine(root, args.agent, args.reason, args.task)
         elif args.command == "machine-status": out = test_machine_status(root, args.agent, args.expect_revision)
         elif args.command == "machine-baseline": out = machine_baseline(root, args.agent, "begin" if args.begin and not args.done else "done" if args.done and not args.begin else "", args.note)
         elif args.command == "reopen-integrity": out = reopen_integrity_requests(root, args.request, args.reason)
         elif args.command == "reevaluate-finalization": out = reevaluate_finalization(root, args.task, args.finding, args.reason)
         else: out = watch(root, args.status_interval, args.stale_after)
+        if args.command == "qa-result" and getattr(args, "code_quality", None):
+            _keep_code_quality(root, args)
         if args.command in {"request-review", "qa-result"} and str(getattr(args, "difficulty", "") or "").strip():
             _keep_difficulty_note(root, args, out)
     except ValueError as error:

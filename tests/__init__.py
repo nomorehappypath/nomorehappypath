@@ -105,6 +105,8 @@ def _pin_run_root() -> Path:
     # OS keyring and `$HOME/.gemini`, which no test home can isolate. Gemini is "not installed"
     # unless a test names a stub through HARNESS_AGY_BIN itself.
     os.environ["HARNESS_AGY_BIN"] = str(run_root / "no-agy-in-tests" / "agy")
+    # Standing checks (security and code-quality sections) are gated for real runs; fixtures about other things do not carry them.
+    os.environ["HARNESS_STANDING_CHECKS"] = "off"
     atexit.register(shutil.rmtree, run_root, True)
     return run_root
 

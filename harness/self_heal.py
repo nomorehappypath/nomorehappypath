@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from harness import attention, claude_auth, board, control, review_rounds
+from harness import agent_activity, attention, claude_auth, board, control, review_rounds
 
 FROZEN_AFTER_SECONDS = 15 * 60
 REVIEWER_WAIT_SECONDS = 5 * 60
@@ -53,7 +53,15 @@ STALL_ROLES = set(board.DEVELOPER_ROLES) | {"qa", "cto"}
 # not that the command advances.
 STALL_LEASE_MAX_SECONDS = 30 * 60
 RECOVERY_CREATE_GRACE_SECONDS = 120
-EVENT_KINDS = ("agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_failed", "self_heal_gave_up")
+# A live terminal that printed something this recently is busy, not silent (2026-10-27: three false "has not checked the
+# board" warnings while the Delivery Agent read a large codebase). The same answer (agent_activity) is used by the board
+# watchdog's first wake-up, so by the time this ladder looks, a busy agent has not been woken at all. The exemption holds
+# whether or not an earlier wake-up went unanswered when the agent's own session file is growing (the 2026-10-27 re-run:
+# the watchdog's wake came first and switched the exemption off). Terminal output alone stops counting once a wake-up went
+# unanswered, and every exemption ends after STALL_BUSY_MAX_SECONDS of board silence, so a spinner can never hide a stall.
+STALL_BUSY_OUTPUT_SECONDS = agent_activity.OUTPUT_SECONDS
+STALL_BUSY_MAX_SECONDS = agent_activity.BUSY_MAX_SECONDS
+EVENT_KINDS = ("agent_restart_requested", "agent_restarted_by_harness", "reviewer_started_by_harness", "self_heal_retired_reviewer", "self_heal_failed", "self_heal_gave_up")
 ROLE_BY_KIND = {"codex_delivery": "the Delivery Agent", "claude_reviewer": "the Reviewer", "claude_cto": "the CTO"}
 
 
@@ -284,8 +292,28 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
         and (not reviewer_provider or not session.get("provider") or session.get("provider") == reviewer_provider)
         and _limit_held(session, current)
         for session in live)
+    # A Reviewer that gave a review back keeps its terminal, and with the Reviewer limit full that idle terminal blocks the
+    # replacement forever (Acremuse audit 2026-10-27). While a review is waiting, such an idle terminal is closed to free its slot.
+    retiring = []
+    if needed:
+        live_ids = {str(session.get("id")) for session in live}
+        held_by = {who for held in (state.get("qa_requests") or {}).values() if held.get("status") in {"reserved", "claimed"}
+                   for who in (held.get("reserved_by"), held.get("claimed_by"))}
+        for request in (state.get("qa_requests") or {}).values():
+            if request.get("status") not in {"authoring", "open"}:
+                continue
+            for agent_id in request.get("relinquished_by") or []:
+                agent = (state.get("agents") or {}).get(agent_id) or {}
+                if (agent.get("active") and agent.get("role") == "qa" and str(agent.get("session_id")) in live_ids
+                        and agent_id not in held_by and not any(a.get("session_id") == agent.get("session_id") for a in retiring)):
+                    retiring.append(_limited(state, f"retire:{agent_id}", current, {
+                        "action": "retire_relinquished_reviewer", "kind": "claude_reviewer", "agent_id": agent_id,
+                        "session_id": str(agent.get("session_id")),
+                        "reason": "it gave the review back and is idle, so its slot is needed for a replacement Reviewer",
+                    }))
+        actions.extend(a for a in retiring if a)
     if needed and waited is not None and waited >= REVIEWER_WAIT_SECONDS and not reviewer_starting and not claude_signed_out \
-            and not reviewer_limit_held and not retry_starting:
+            and not reviewer_limit_held and not retry_starting and not any(a.get("action") == "retire_relinquished_reviewer" for a in retiring):
         actions.append(_limited(state, "role:reviewer", current, {
             "action": "start_reviewer", "kind": "claude_reviewer",
             "reason": f"a review has waited {int(waited // 60)} minutes with no reviewer available",
@@ -490,6 +518,8 @@ def _work_remains(state: dict[str, Any], role: str, task: str, agent_id: str) ->
     if role == "qa":
         if board._open_review_blocks(state):
             return True   # a blocked review waits on the Reviewer; the request is gone but the work is not
+        if board._reviewer_owes_analysis(state, agent_id):
+            return True   # a Code analysis waits on this Reviewer's list or cross-check
         return any(request.get("status") in {"authoring", "open", "reserved", "claimed"} for request in (state.get("qa_requests") or {}).values())
     return board._agent_has_actionable_work(state, {"role": role, "id": agent_id, "task": task})
 
@@ -529,16 +559,28 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
             if _stall_blocked(state, agent, session, current) or not board._agent_has_actionable_work(state, agent):
                 continue
             real = board.real_heartbeat(agent)
+            work_since = _parsed(agent.get("actionable_since"))   # set only for an agent the board saw idle; silence counts from the work (2026-10-28)
             beats = [real, _parsed(agent.get("spawned_at")), _parsed(agent.get("session_reattached_at")), resumed,
-                     _parsed((session or {}).get("limit_cleared_at"))]
+                     _parsed((session or {}).get("limit_cleared_at")), work_since]
             beat = max((item for item in beats if item is not None), default=None)
-            threshold = window + (board.CTO_MONITOR_INTERVAL_SECONDS if role == "cto" else 0)
-            if beat is None or (current - beat).total_seconds() < threshold:
-                continue
             woken = _parsed(agent.get("automatic_recovery_requested_at"))
+            if role == "cto":
+                # 2026-10-26: a quiet CTO is not a silent one. It is only called silent when a wake went unanswered with no board
+                # write at all; the silence is counted from that wake. A dead terminal never reaches here (no live session) and is
+                # recovered by the terminal-exit routes as before.
+                if woken is None or agent.get("recovery_state") not in {"automatic_requested", "automatic_failed", "unresponsive"}:
+                    continue
+                writes = [_parsed(agent.get(key)) for key in ("last_poll_at", "last_progress_at", "last_status_at")]
+                if any(write is not None and write > woken for write in writes):
+                    continue   # it wrote to the board after the wake
+                beat = max(beat, woken) if beat is not None else woken
+            if beat is None or (current - beat).total_seconds() < window:
+                continue
+            if role != "cto" and agent_activity.is_working(session, current, (current - beat).total_seconds(), woken=woken is not None):
+                continue   # the terminal is working (recent output or a growing session file): busy, not silent
             actions.append({**base, "action": "stall_wake", "silence": int((current - beat).total_seconds()),
                             "since": real.isoformat() if real else "",
-                            "already_woken_at": woken.isoformat() if woken and woken > beat else ""})
+                            "already_woken_at": woken.isoformat() if woken and (role == "cto" or woken > beat) else ""})
             continue
         # ---- a ladder is in progress ----
         since = _parsed(entry.get("since"))
@@ -554,6 +596,9 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
             continue
         if agent is not None and _stall_blocked(state, agent, session, current):
             continue
+        if role != "cto" and session is not None and session.get("status") in control.ACTIVE_STATUSES \
+                and agent_activity.is_working(session, current, (current - (_parsed(entry.get("since")) or _parsed(entry.get("started_at")) or current)).total_seconds(), woken=True):
+            continue   # a live terminal that is visibly working is never restarted or replaced (bounded by the same 30 minutes)
         if session is not None and (session.get("pause_requested_at") or (
                 session.get("stop_requested_at") and session.get("stop_requested_at") not in (entry.get("stop_marks") or []))):
             continue   # a stop the ladder did not issue is the owner's
@@ -702,7 +747,7 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
         return _execute_recovery(root, action, launch, create)
     if str(action["action"]).startswith("stall_"):
         return _execute_stall(root, action, launch, create)
-    if action["action"] in {"restart", "relaunch_ended", "start_reviewer"}:
+    if action["action"] in {"restart", "relaunch_ended", "start_reviewer", "retire_relinquished_reviewer"}:
         _note_attempt(root, key)
     try:
         if action["action"] == "restart":
@@ -718,6 +763,12 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
             except Exception:
                 _note_attempt(root, key)
                 raise
+        if action["action"] == "retire_relinquished_reviewer":
+            control.stop(root, action["session_id"])
+            _record(root, "self_heal_retired_reviewer", key,
+                    f"The harness closed an idle Reviewer terminal that had given its review back, because {action['reason']}.",
+                    agent_id=action.get("agent_id", ""), session_id=action["session_id"])
+            return {"action": "retire_relinquished_reviewer", "session_id": action["session_id"]}
         if action["action"] == "start_reviewer":
             session = (create or (lambda value: control.create(root, value)))("claude_reviewer")
             launch(session)
@@ -817,12 +868,14 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
         if not delivered:
             with board.locked_state(root) as state:
                 woken_agent = dict((state.get("agents") or {}).get(action["agent_id"]) or {})
-            text = (board._automatic_recovery_instruction(woken_agent) if woken_agent.get("role") == "cto" else
+            text = (board._automatic_recovery_instruction(woken_agent, board.snapshot(root)) if woken_agent.get("role") == "cto" else
                     f"STALL RECOVERY: you have not checked the board for {_minutes(silence)}. Stop what you are doing, run your "
                     f"board poll command now, then continue {task} from its saved next gate. Do not wait for the owner. "
                     "USER ACTION: None.")
             try:
                 control.enqueue_instruction(root, action["session_id"], text, source="stall-ladder")
+                if woken_agent.get("role") == "cto":
+                    board.count_cto_wake(root, "recovery", task)
             except (OSError, ValueError) as error:
                 tried = f"the wake-up could not be delivered ({str(error)[:120]})"
         _ladder_event(root, action, "wake",

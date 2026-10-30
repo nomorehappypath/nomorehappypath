@@ -35,6 +35,24 @@ BACKGROUND_HELPERS = re.compile(r"(?:^|[\s;&|(])(?:nohup|disown|caffeinate|setsi
 # '&>', not '|&' - searched after quoted text is removed (a URL's '&' is data).
 BACKGROUND_JOB = re.compile(r"(?<![&>|])&(?![&>])")
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+# The text a file-writing heredoc carries ("cat > report.md << 'EOF' ... EOF") is data, not commands (2026-10-28: a report titled
+# "Concurrency & Maintainability" was refused as a background job and the audit that wrote it lost its output). Only heredocs fed to
+# cat or tee that only write to a file are set aside; one fed to a shell or interpreter ("bash << EOF", "python3 - << EOF", "cat << EOF | bash") is code and stays checked.
+HEREDOC_TO_FILE = re.compile(r"(?m)^([ \t]*(?:cat|tee)\b[^\n|;&<>`$()]*(?:>>?[ \t]*[^\s|;&<>`$()]+[^\n|;&<>`$()]*)?<<-?[ \t]*(['\"]?)(\w+)\2[ \t]*(?:>>?[ \t]*[^\s|;&<>`$()]+)?[ \t]*)\n[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$)")
+
+
+def _set_aside(match: "re.Match[str]") -> str:
+    """Keep the heredoc text checked when the shell would still run something in it: an unquoted delimiter expands $(...) and backticks."""
+    body = match.group(0)[len(match.group(1)):]
+    if not match.group(2) and ("$(" in body or "`" in body):
+        return match.group(0)
+    return match.group(1)
+
+
+def _without_file_heredocs(command: str) -> str:
+    return HEREDOC_TO_FILE.sub(_set_aside, command)
+
+
 BOARD_POLL_LOOP = re.compile(r"\b(?:while|until|for)\b[\s\S]*\bboard\.py\b[\s\S]*\bpoll\b|\bwatch\b[\s\S]*\bboard\.py\b")
 CREDENTIAL_FILES = (".codex/auth.json", ".claude/.credentials.json", "/.credentials.json",
                     # Antigravity CLI: its sign-in file (read in place when the OS keyring is unreachable) and the owner's
@@ -62,6 +80,7 @@ def evaluate(role: str, tool_name: str, tool_input: dict[str, Any], *, project_r
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     command = _text(tool_input.get("command"))
     if tool_name in SHELL_TOOLS:
+        raw_command, command = command, _without_file_heredocs(command)
         if WHOLE_TREE_STAGING.search(command):
             return "R-2", ("Whole-tree staging (git add . / -A / --all) is not allowed in a shared checkout. "
                            "Stage the exact paths you changed, or commit through the board's git-commit.")
@@ -71,7 +90,7 @@ def evaluate(role: str, tool_name: str, tool_input: dict[str, Any], *, project_r
         if BOARD_POLL_LOOP.search(command):
             return "R-3", ("Polling the board in a loop is not allowed. Poll once, do the work, and return to the "
                            "prompt; the harness wakes you when there is more.")
-        if any(marker in command for marker in CREDENTIAL_FILES):
+        if any(marker in raw_command for marker in CREDENTIAL_FILES):
             return "R-4", "The owner's login files are never yours to read or copy."
     if tool_name in FILE_READ_TOOLS or tool_name in FILE_WRITE_TOOLS:
         target = _text(tool_input.get("file_path") or tool_input.get("notebook_path") or tool_input.get("path"))

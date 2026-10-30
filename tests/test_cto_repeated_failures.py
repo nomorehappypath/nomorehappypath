@@ -133,10 +133,9 @@ class MonitoringInstructionTests(unittest.TestCase):
     def test_only_the_cto_gets_it_and_the_instruction_keeps_its_shape(self):
         state = state_with(attempts("heartbeat expired", "heartbeat expired", "heartbeat expired"))
         cto = board._automatic_recovery_instruction({"role": "cto", "task": "GLOBAL_MONITOR"}, state)
-        self.assertTrue(cto.startswith("MONITORING CYCLE DUE"))
+        self.assertTrue(cto.startswith("CTO WAKE"))
         self.assertTrue(cto.rstrip().endswith("USER ACTION: None."))
         self.assertIn("REPEATED FAILURE: request review-x-01", cto)
-        self.assertIn("Never wait on the product owner", cto)
         for role in ("qa", "engineering"):
             self.assertNotIn("REPEATED FAILURE", board._automatic_recovery_instruction({"role": role, "task": "T"}, state))
         calm = board._automatic_recovery_instruction({"role": "cto", "task": "GLOBAL_MONITOR"}, state_with(attempts("a", "b", "c")))
@@ -148,18 +147,20 @@ class ControllerRouteTests(channel.MonitoringCadenceTests):
 
     def test_the_queued_monitoring_instruction_names_the_repeated_failure_and_only_when_it_exists(self):
         self.prime()
-        with patch("harness.control.enqueue_instruction", return_value={"id": "w-1", "source": "cto-monitoring-lease"}) as calm:
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w-1", "source": "cto-wake"}) as calm:
             board.mark_stalled(self.root)
         self.assertNotIn("REPEATED FAILURE", calm.call_args.args[2])
-        self.prime(last_routine_cycle_at=channel._ago(10 ** 5), last_routine_cycle_sequence=0)
+        board.poll(self.root, self.cto["id"])   # the CTO answered the first wake
+        with board.locked_state(self.root) as state:   # the next wake is for a new reason (the slow check-in)
+            state["cto_wakes"]["last_heartbeat_at"] = channel._ago(10 ** 5)
         with board.locked_state(self.root) as state:
             state["qa_requests"]["review-x-01"] = {"status": "claimed", "task": "WORK", "id": "review-x-01", "requested_at": board.now(),
                                                    "phase": "", "subtask": "", "chunk": "", "cycle": 1, "developer_id": "", "claimed_by": "", "review_wait_started_at": "",
                                                    "challenge_execution_attempts": attempts("scp failed 1", "scp failed 2", "scp failed 3")}
-        with patch("harness.control.enqueue_instruction", return_value={"id": "w-2", "source": "cto-monitoring-lease"}) as loud:
+        with patch("harness.control.enqueue_instruction", return_value={"id": "w-2", "source": "cto-wake"}) as loud:
             board.mark_stalled(self.root)
         text = loud.call_args.args[2]
-        self.assertTrue(text.startswith("MONITORING CYCLE DUE"))
+        self.assertTrue(text.startswith("CTO WAKE"))
         self.assertIn("REPEATED FAILURE: request review-x-01 of task WORK has had 3 challenge execution attempts in a row", text)
         self.assertTrue(text.rstrip().endswith("USER ACTION: None."))
 

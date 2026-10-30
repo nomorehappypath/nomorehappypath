@@ -21,6 +21,7 @@ from tests.test_branding_rendered import probe_proxy
 PROBE = r"""
 <script>
 (async () => {
+  document.getElementById('tab-advanced-btn')?.click();   // the agent terminals live in the Advanced tab since the Mission Control redesign
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   for (let i = 0; i < 150 && !document.querySelector('#agents .agent-row .attempts'); i++) await wait(100);
   await wait(400);

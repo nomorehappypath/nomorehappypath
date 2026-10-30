@@ -305,7 +305,7 @@ process.stdout.write(JSON.stringify({prompt,notice:nodes.notice.textContent,call
         result = self.run_page({"cancelled_tasks": ["PLANNER"]}, """
 (async()=>{const done=await confirmCancelTask('PLANNER');process.stdout.write(JSON.stringify({done,prompt,notice:nodes.notice.textContent,calls}));})();""")
         self.assertTrue(result["done"])
-        self.assertIn("This abandons the task for good. Its board records and its workspace will be removed", result["prompt"])
+        self.assertIn("This abandons the task for good. Its board records will be removed (its work copy is kept for recovery)", result["prompt"])
         self.assertIn("use Stop instead", result["prompt"])
         self.assertEqual(result["calls"], ["/api/tasks/PLANNER/cancel"])
         self.assertIn("Task cancelled", result["notice"])

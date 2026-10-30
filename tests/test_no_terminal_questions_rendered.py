@@ -36,9 +36,12 @@ PROBE = r"""
   const text = reading.textContent.replace(/\s+/g, ' ');
   reading.querySelector('[data-req-wait]').click();
   await new Promise(resolve => setTimeout(resolve, 300));
-  const waitNote = document.getElementById('req-decision-note-TASK-READING').textContent;
+  const after = card('TASK-READING');
+  const noteEl = after && after.querySelector('[data-waiting-note]');
+  const waitNote = noteEl ? noteEl.textContent : '';
+  const buttonsAfter = after ? [...after.querySelectorAll('button')].map(button => [button.textContent.trim(), button.disabled]) : [];
   await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({heading: banner.querySelector('h2').textContent, rows, targetsExist, buttons, text, waitNote,
+    body: JSON.stringify({heading: banner.querySelector('h2').textContent, rows, targetsExist, buttons, text, waitNote, buttonsAfter,
                           stillThere: Boolean(card('TASK-READING')), pageText: document.body.innerText})});
 })();
 </script>
@@ -170,7 +173,11 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
             self.assertIn("The reviewer is reviewing the contract", result["text"])
             self.assertIn("Do you want to go ahead without waiting, or wait?", result["text"])
-            self.assertIn("nothing was changed", result["waitNote"])
+            # Wait shows a visible note inside the card (the owner saw nothing happen on 2026-10-28) and the button reads as chosen.
+            self.assertIn("You chose to wait", result["waitNote"])
+            self.assertIn("nothing else to do", result["waitNote"])
+            self.assertIn(["Waiting for the review…", True], result["buttonsAfter"])
+            self.assertNotIn("Wait for the review", [name for name, _ in result["buttonsAfter"]])
             self.assertTrue(result["stillThere"])
             self.assertEqual(board.snapshot(root)["requirement_proposals"]["TASK-READING"]["status"], "awaiting_owner", "Wait writes nothing")
 

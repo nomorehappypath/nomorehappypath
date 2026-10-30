@@ -52,28 +52,29 @@ ALL_BOARD_OPERATIONS = {
     "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
     "owner-direction", "clear-hold", "reconcile-unmerged-accept", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
-    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip",
+    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "review-support", "retained-plan",
+    "review-brief", "review-intents", "analysis-list", "analysis-crosscheck", "analysis-merge", "relinquish-qa", "attach-challenge-ledger", "qa-result", "review-support", "retained-plan",
     "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair",
     "repin-final-review", "push-instruction", "push-confirm", "snapshot", "view",
     "cleanup", "migrate-review-ledgers", "migrate-integrity", "recover-git",
     "reopen-integrity", "watch", "reopen-candidate-scope", "reevaluate-finalization",
     "reintegrate-main",
-    "owner-action", "owner-action-done",
+    "owner-action", "owner-action-done", "cto-disposition",
     "screen-check", "screen-script", "amend-exclusions",
     "supersede-subtask",
     "close-released",
     "need-test-machine", "machine-status", "machine-baseline", "reference",
+    "test-env-set", "test-env-status", "test-env-run",
 }
 # hook-event: every agent's own CLI reports its lifecycle and asks for tool
 # decisions (plumbing Stage 1); identity is the session's, never the caller's.
 # reference: every role opens one named chapter of its reference directive (2026-10-25 directive diet); read-only.
 # machine-status: every role reads the test machine's current connection, authorization and rule (2026-10-20).
-COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline", "hook-event", "machine-status", "reference"}
+COMMON_AGENT_OPERATIONS = {"register", "poll", "recover", "status", "offline", "hook-event", "machine-status", "reference", "test-env-status"}
 # Delivery and the Reviewer ask for the owner's test machine and mark tool changes themselves; no CTO is needed.
 MACHINE_OPERATIONS = {"need-test-machine", "machine-baseline"}
 DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
@@ -85,6 +86,10 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
     "contract-checks", "ask-owner", "contract-check-skip",
+    # 2026-10-26: Delivery says a locked check does not match reality; the Reviewer answers once.
+    "check-deviation",
+    # 2026-10-29: Code analysis, two equal passes: Delivery files its own list and checks the Reviewer's.
+    "analysis-list", "analysis-crosscheck",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
     "declare-chunks", "request-review", "resolve-repair-package", "complete", "claim-release-repair",
@@ -104,12 +109,17 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # 2026-10-23: the Reviewer's one early look at the requirements, and the correction of a stored check.
     "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
-    "execute-challenge", "findings", "claim-qa", "reserve-qa",
-    "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package", "review-support", "retained-plan",
+    # 2026-10-26: the Reviewer may send a Small change task back to the full lane once.
+    "send-to-full-lane",
+    "execute-challenge", "findings", "claim-qa", "reserve-qa", "test-env-run",
+    "review-brief", "review-intents", "analysis-list", "analysis-crosscheck", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package", "review-support", "retained-plan",
     "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
+    # 2026-10-28: only the CTO (and the owner at the terminal) declares the project's test environment; the Reviewer may run a capture in it.
+    "test-env-set", "test-env-run",
     "contract-checks", "ask-owner", "contract-check-skip",   # contract-checks is read-only: the CTO can see what a failing early check says
+    "analysis-merge",   # 2026-10-29: the CTO only groups the duplicates of a Code analysis; the board builds the clean list
     "record-finding", "finding-triage", "finding-resolved", "findings",
     # Owner 2026-10-14: the CTO sets an in-scope finding aside as not material,
     # and records the owner's waiver of a contract deliverable.
@@ -128,6 +138,8 @@ CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     # Defects #9/#22: what the owner must do is pinned in Mission Control, not
     # typed into a scrolling terminal.
     "owner-action", "owner-action-done",
+    # 2026-10-26: the CTO closes a judgment item it was woken for; a poll or a status post never does.
+    "cto-disposition",
     # Backlog #17: the CTO retires an obsolete subtask, reason recorded.
     "supersede-subtask",
     # Batch 2 A2: the CTO records a task the owner shipped by hand.
@@ -170,13 +182,13 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks",
-    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "review-support", "retained-plan",
+    "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "analysis-list", "analysis-crosscheck", "analysis-merge", "review-support", "retained-plan",
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
-    "reopen-candidate-scope", "owner-action", "owner-action-done", "screen-check",
+    "reopen-candidate-scope", "owner-action", "owner-action-done", "cto-disposition", "screen-check",
     "supersede-subtask", "close-released", "deliverable-waived", "deliverable-file", "screen-script", "amend-exclusions",
     "need-test-machine", "machine-status", "machine-baseline", "reference",
 }
@@ -702,7 +714,9 @@ def _names_its_own_fix(error: str) -> bool:
 class CommandGateway:
     """Authenticate, authorize, serialize, and execute board CLI commands."""
 
-    REFUSAL_HOLD_THRESHOLD = 5
+    # Owner's order 2026-10-28: the third identical refusal is a harness defect, never a reason to stop the work (it used to be a
+    # fifth refusal and froze the task behind a red hold).
+    REFUSAL_HOLD_THRESHOLD = 3
     REFUSAL_WINDOW_SECONDS = 45 * 60.0
 
     def __init__(self, root: ProjectRoot, authority: SessionTokenAuthority):
@@ -716,45 +730,54 @@ class CommandGateway:
         # Ports this worker itself serves; a screen check may never render them.
         self.served_ports: set[int] = set()
         self.nonce_thread_lock = _project_nonce_lock(authority.project_id)
-        self._refusals: dict[tuple[str, str], list[float]] = {}
-        self._refusal_holds: set[tuple[str, str]] = set()
+        self._refusals: dict[tuple[str, str, str], list[float]] = {}
+        self._refusal_holds: set[tuple[str, str, str]] = set()
 
-    def _track_refusal(self, identity, operation: str, error: str, arguments: Sequence[str] = ()) -> None:
-        """Repeated identical refusals are a wedge, not agent noise.
+    def _track_refusal(self, identity, operation: str, error: str, arguments: Sequence[str] = ()) -> str:
+        """A repeated identical refusal is a harness defect, not a reason to stop the work (owner's order 2026-10-28).
 
-        The 2026-08-21 run repeated one refusal for four hours while the
-        watchdog spammed recoveries. After the threshold, record a
-        control-plane hold so Mission Control shows the diagnosis in red.
+        The 2026-08-21 run repeated one refusal for four hours; the 2026-10-28 run asked for a review ten times behind a hidden ledger
+        rule. From the third identical refusal the board records a defect (no hold on the task), wakes the CTO to fix it locally or hand
+        the agent the exact workaround, and tells the agent to stop retrying. Returns the sentence to add to the refusal ("" before).
         """
         import time as _time
         if _is_cosmetic_refusal(operation, error) or _names_its_own_fix(error):
             # A formatting slip (a task brief or a status/offline note over its stated length, or an empty note): the refusal already
-            # names the fix, so it is not a wedge and must never freeze a task. Only these exact messages on these operations.
-            return
-        key = (operation, error[:160])
-        stamp = _time.monotonic()
-        window = [t for t in self._refusals.get(key, []) if stamp - t < self.REFUSAL_WINDOW_SECONDS]
-        window.append(stamp)
-        self._refusals[key] = window
-        if len(window) < self.REFUSAL_HOLD_THRESHOLD or key in self._refusal_holds:
-            return
-        self._refusal_holds.add(key)
+            # names the fix, so it is not a defect. Only these exact messages on these operations.
+            return ""
+        # The count and the "already reported" memory belong to one task: a later task refused for the same reason must escalate too.
+        agent: dict[str, Any] = {}
+        task = ""
         try:
             from harness import board
             state = board.snapshot(self.context)
             agent = next((
                 value for value in (state.get("agents") or {}).values()
                 if value.get("session_id") == identity.session_id
-            ), None)
-            task = _refusal_task(state, agent or {}, operation, arguments)
-            if not task:
-                return
-            board.record_control_plane_hold(
-                self.context, task, f"repeated_refusal:{operation}",
-                f"The same operation was refused {len(window)} times: {error[:900]}",
-            )
+            ), None) or {}
+            task = _refusal_task(state, agent, operation, arguments)
         except (OSError, ValueError):
-            return
+            pass
+        key = (task, operation, error[:160])
+        stamp = _time.monotonic()
+        window = [t for t in self._refusals.get(key, []) if stamp - t < self.REFUSAL_WINDOW_SECONDS]
+        window.append(stamp)
+        self._refusals[key] = window
+        if len(window) < self.REFUSAL_HOLD_THRESHOLD:
+            return ""
+        told = (f" [This has been refused {len(window)} times for the same reason. It is logged as a harness defect and sent to the CTO, "
+                "who will fix it or give you the exact workaround. Do not retry it. Post a status saying what you tried, then continue "
+                "with other work or wait for the CTO.]")
+        if key in self._refusal_holds:
+            return told
+        self._refusal_holds.add(key)
+        if task:
+            try:
+                from harness import board
+                board.record_refusal_defect(self.context, task, operation, error, len(window), str(agent.get("role") or ""))
+            except (OSError, ValueError):
+                pass
+        return told
 
     def _consume_nonce(self, session_id: str, nonce: int) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -1062,7 +1085,9 @@ class CommandGateway:
                             finally:
                                 fcntl.flock(execution_lock.fileno(), fcntl.LOCK_UN)
             except SurfaceProtocolError as refusal:
-                self._track_refusal(identity, operation, str(refusal), arguments)
+                told = self._track_refusal(identity, operation, str(refusal), arguments)
+                if told:
+                    raise SurfaceProtocolError(str(refusal) + told) from refusal
                 raise
             board_succeeded = True
             return {
