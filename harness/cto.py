@@ -547,6 +547,22 @@ def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
     return text.upper().startswith("TASK DONE: YES")
 
 
+def _committed_report_sha(state: dict[str, Any], task: str, latest_review: dict[str, Any] | None, link: dict[str, Any]) -> str:
+    """SHA-256 of the report file as committed in the commit the final review passed ("FINDINGS.md: ..." names the file), else ""."""
+    from harness import standing_checks
+    review = latest_review or {}
+    commit = str(review.get("reviewed_commit") or "")
+    name = standing_checks.report_file_name(link.get("document")) or standing_checks.report_file_name(link.get("deliverable"))
+    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
+    if review.get("status") != "passed" or not commit or not name or not workspace:
+        return ""
+    try:
+        shown = git_process.run(["git", "show", f"{commit}:{name}"], cwd=workspace, capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return hashlib.sha256(shown.stdout).hexdigest() if shown.returncode == 0 else ""
+
+
 def owner_artifacts_readable(root: Path, state: dict[str, Any], task: str, latest_review: dict[str, Any] | None) -> tuple[bool, list[str], list[dict[str, Any]]]:
     """Every deliverable's CURRENT owner document is readable and, when the final review recorded the manifest, reviewed."""
     links = board.document_deliverable_links(root, task, state)
@@ -563,11 +579,21 @@ def owner_artifacts_readable(root: Path, state: dict[str, Any], task: str, lates
         if not link.get("latest"):
             continue  # earlier versions are history; they never block
         name = Path(str(link.get("path") or "")).name
+        committed = _committed_report_sha(state, task, latest_review, link) if link.get("available") else ""
+        is_reviewed_report = bool(committed) and committed == str(link.get("sha256") or "")   # the exact bytes of the file in the commit the review passed
         if not link.get("available"):
             problems.append(f"the owner's document for '{link.get('deliverable')}' ({name}) cannot be shown: {link.get('reason')}; {board.DOCUMENT_RECOVERY}")
-        elif review_has_manifest and (str(link.get("deliverable")), str(link.get("sha256"))) not in reviewed \
+        elif review_has_manifest and not is_reviewed_report and (str(link.get("deliverable")), str(link.get("sha256"))) not in reviewed \
                 and not (str(link.get("attached_at") or "") and review_requested_at and str(link.get("attached_at")) <= review_requested_at):
             problems.append(f"the owner's document for '{link.get('deliverable')}' ({name}) was attached after the final review was requested and is not what the reviewer saw; request a new final review (on a new commit), mark the reviewed file again with deliverable-file, or retire a mistaken document name with deliverable-file --retire")
+    for link in links:
+        # The owner's copy is a board upload with its own bytes. After a repair the passed report is the committed file; an upload still
+        # holding the draft the review rejected must never be the one "Open report" serves (found by the whole-app review 2026-11-02).
+        committed = _committed_report_sha(state, task, latest_review, link) if link.get("latest") and link.get("available") else ""
+        if committed and committed != str(link.get("sha256") or ""):
+            name = Path(str(link.get("path") or "")).name
+            problems.append(f"the owner's document for '{link.get('deliverable')}' ({name}) is an earlier copy: it differs from the report the independent review passed; "
+                            "attach the committed report again with contract-evidence --for-owner so the owner opens the reviewed version")
     manifest = [{"deliverable": l.get("deliverable"), "path": l.get("path"), "sha256": l.get("sha256"), "title": l.get("title"), "marked_at": l.get("marked_at"), "latest": l.get("latest")} for l in links]
     return not problems, problems, manifest
 

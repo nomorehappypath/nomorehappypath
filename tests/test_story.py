@@ -329,7 +329,9 @@ class CostWordingTests(unittest.TestCase):
 
     def test_a_measured_task_shows_dollars_and_the_codex_window_only_when_it_moved(self):
         line = story.money_line(SUMMARY, TASK)
-        self.assertEqual((line["text"], line["window"]), ("$2.80 so far", "Codex +14% of window"))
+        self.assertEqual((line["text"], line["window"]), ("$2.80 so far · whole project $2.90 (adds the CTO and work on no task)", "Codex +14% of window"))
+        alone = {**SUMMARY, "total": {**SUMMARY["total"], "usd": 2.8}}
+        self.assertEqual(story.money_line(alone, TASK)["text"], "$2.80 so far", "no extra words when the project total is the task's own")
         flat = {**SUMMARY, "tasks": {TASK: {**SUMMARY["tasks"][TASK], "codex_limit": {"reset": False, "minutes": 300, "increase": 0.0}}}}
         self.assertEqual(story.money_line(flat, TASK)["window"], "", "0% is never shown")
         reset = {**SUMMARY, "tasks": {TASK: {**SUMMARY["tasks"][TASK], "codex_limit": {"reset": True, "minutes": 300, "increase": 0.0}}}}

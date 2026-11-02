@@ -228,6 +228,21 @@ class RoutedMessageTests(unittest.TestCase):
             self.assertIn("Open reference: contract-first", text)
             self.assertNotIn("Independent Reviewer workflow", text)
 
+    def test_the_reviewer_is_told_to_read_the_projects_existing_code_and_only_when_there_is_some(self):
+        repo = "/work/the-project"
+        for text in (contract_check.reviewer_instruction("T", 1, "reqs", "dir", 10, repo),
+                     contract_check.recheck_instruction("T", 1, [{"text": "q", "answer": "a"}], [1], [{"n": 1, "text": "c"}], 10, repo),
+                     contract_check.full_lane_request("T", 1, "why", "reqs", 10, repo)):
+            self.assertIn("The project already has code, at " + repo, text)
+            self.assertIn("A check for a defect must fail on that code today", text)
+            self.assertIn("Open reference: contract-first", text)
+        for text in (contract_check.reviewer_instruction("T", 1, "reqs", "dir", 10),
+                     contract_check.recheck_instruction("T", 1, [{"text": "q", "answer": "a"}], [1], [{"n": 1, "text": "c"}], 10),
+                     contract_check.full_lane_request("T", 1, "why", "reqs", 10)):
+            self.assertNotIn("already has code", text)
+        directive = (ROOT / "directives" / "AGENT.md").read_text(encoding="utf-8")
+        self.assertIn("read that code first (read only)", directive)
+
     def test_the_machine_note_and_the_owner_rejection_name_their_chapters(self):
         source = (ROOT / "harness" / "board.py").read_text(encoding="utf-8")
         self.assertIn('reference_chapters.reference_hint("owner-rejection-repair")', source)

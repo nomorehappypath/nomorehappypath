@@ -127,7 +127,7 @@ class RenderedContractCheckTests(unittest.TestCase):
 
             reading = before["TASK-READING"]
             self.assertIn("The reviewer is reviewing the contract", reading["text"])
-            self.assertEqual([b["text"] for b in reading["buttons"]], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual([b["text"] for b in reading["buttons"]], ["Copy", "Go ahead without waiting", "Wait for the review, then start", "Modify…"])
             self.assertTrue(all(b["visible"] for b in reading["buttons"]), "the Go ahead button is not hidden or held")
 
             card = before["TASK-QUESTIONS"]

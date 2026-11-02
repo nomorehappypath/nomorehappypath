@@ -817,7 +817,7 @@ function proposalCardHtml(name,proposal){
   const smallBox=canSmall?`<label class="small-change-choice" data-small-change-choice><input type="checkbox" data-small-change> Small change: skip the question round and the advance test checks</label>`:'';
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
-    :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. This card updates by itself when it is done, so there is nothing else to do. You can still go ahead without waiting.</p>`:''}`;
+    :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review, then start</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. When it is done the work starts by itself, so keep this page open. If the reviewer has questions for you, it asks them first and nothing starts. You can still go ahead without waiting.</p>`:''}`;
   return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
@@ -2398,6 +2398,20 @@ async function advanceDirectionStart(){
   }finally{directionAdvancing=false;renderDirectionNote(readPendingDirection());}
 }
 
+const startedAfterWait=new Set();   // 'task:version' already started for an owner who chose to wait
+function startAfterWait(){
+  // The owner chose "Wait for the review, then start": once the reviewer's check is ready (no questions asked) the Go ahead is pressed for him, once.
+  for(const box of document.querySelectorAll('.requirements-proposal')){
+    const go=box.querySelector('[data-req-go]');
+    if(!go)continue;
+    const key=go.dataset.reqGo+':'+(box.dataset.version||1);
+    if(!waitingForReview.has(key)||startedAfterWait.has(key)||!box.querySelector('[data-contract-check="ready"]'))continue;
+    if(go.disabled)continue;   // paused (or already sending): not pressed and not counted as started, so it is pressed when the button works again
+    startedAfterWait.add(key);
+    go.dataset.auto='1';
+    go.click();
+  }
+}
 async function refresh(){
   if(refreshing)return;
   refreshing=true;
@@ -2419,6 +2433,7 @@ async function refresh(){
     // the page position as it is right now (after the network wait): a render may not move it
     const pinX=window.scrollX,pinY=window.scrollY;
     render(dashboard,managed);
+    startAfterWait();
     if((window.scrollX!==pinX||window.scrollY!==pinY)&&typeof window.scrollTo==='function')window.scrollTo(pinX,pinY);
     renderClaudeAuthActions(managed);
     boardFailures=0;
@@ -2568,7 +2583,7 @@ document.addEventListener('click',async event=>{
   if(!go&&!mod)return;
   const task=(go||mod).dataset.reqGo||(go||mod).dataset.reqModify;
   if(go){
-    if(!confirm('Accept these requirements as the task contract? Delivery will record them and begin work.'))return;
+    if(go.dataset.auto!=='1'&&!confirm('Accept these requirements as the task contract? Delivery will record them and begin work.'))return;   // not asked again when the owner already chose to wait and then start
     go.disabled=true;
     const note=el(`#req-decision-note-${CSS.escape(task)}`);
     const box=go.closest('.requirements-proposal');
@@ -2576,7 +2591,7 @@ document.addEventListener('click',async event=>{
       await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||'',small_change:Boolean(box?.querySelector('[data-small-change]')?.checked)});
       if(note)note.textContent='Recorded. Delivery has been told to record the contract and begin.';
       await refresh();
-    }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;}
+    }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;startedAfterWait.delete(task+':'+((box&&box.dataset.version)||1));}   // a failed press may be tried again
     return;
   }
   openRequirementsModify(task);
@@ -3822,6 +3837,7 @@ def dispatch_approved_findings(
         session = control.create(
             root, "codex_delivery", settings_override=settings_override,
             availability=_delivery_availability(settings_home),
+            finished_predecessor=_finished_delivery_predecessor(root),
         )
         surface = launch_terminal(root, session, manager_home=settings_home)
         started = {"status": "terminal_started", "session_id": session["id"]}
@@ -3941,6 +3957,18 @@ def dashboard_payload(
         result["story"] = {"error": f"The summary could not be computed ({type(error).__name__}).", "empty": False, "agents": [], "tasks": {}, "order": []}
     result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids, root=root)
     return result
+
+
+def _finished_delivery_predecessor(root: Path) -> str:
+    """The ended Delivery session a new agent would continue, when the whole project's work is finished ("" otherwise).
+
+    Decided before control.create, holding no lock: control.create must not read the board while it holds the control lock.
+    """
+    try:
+        predecessor = control.inheritable_predecessor(root, "codex_delivery")
+        return predecessor if predecessor and board.delivery_work_is_all_finished(board.snapshot(root)) else ""
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
 
 
 def serve_owner_document(root: Path, path: str) -> tuple[int, bytes, str]:
@@ -4179,6 +4207,7 @@ def create_session_request(root: Path, data: dict[str, Any], settings_home: Path
         root, str(data.get("kind", "")), str(data.get("task", "")), str(data.get("color", "black") or "black"),
         settings_override=settings_override, launch_choice=launch_choice,
         availability=_delivery_availability(settings_home),
+        finished_predecessor=_finished_delivery_predecessor(root) if str(data.get("kind", "")) == "codex_delivery" else "",
     )
 
 

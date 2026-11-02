@@ -10,7 +10,7 @@ import unittest
 from harness import reference_chapters
 
 PIECES = ("What a Code analysis report contains", "work out the languages, frameworks, data stores", "FINDINGS.md",
-          "Severity (Critical, High, Medium or Low)", "Failure scenario", "Confidence (Confirmed, or Needs verification",
+          "LEVEL, never a severity word", "customer data is exposed, a security leak (a secret, a key, a password or another person's access or data can be seen or taken by someone who should not have it), or money is wrongly taken", "Ideas (Level 4)", "summary table", "must point at the code it names", "Failure scenario", "Confidence (Confirmed, or Needs verification",
           "areas that could not be assessed", "release-risk assessment", "Skip style preferences and speculation")
 
 

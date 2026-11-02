@@ -54,6 +54,14 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertNotIn("Start the whole app", stage["end_to_end"])
         self.assertTrue(stage["verdict_first_line"].startswith("TASK DONE: YES|NO"))
 
+    def test_a_code_analysis_reviewer_checks_levels_and_locations(self):
+        """Owner 2026-10-29: levels 1 to 4 replace severity; every cited location must point at the code it names."""
+        self.state["task_kinds"] = {"TASK-A": "analysis"}
+        rule = review_brief.build(self.root, self.state, self.request)["process"]["rule"]
+        for piece in ("Level 1 to 3", "points at the code it names", "summary table", "level 4 ideas apart"):
+            self.assertIn(piece, rule)
+        self.assertNotIn("severity", rule.lower())
+
     def test_authoring_brief_withholds_delivery_evidence(self):
         result = review_brief.build(
             self.root, self.state, self.request,

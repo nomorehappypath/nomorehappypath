@@ -35,6 +35,7 @@ def _process_rule(kind: str) -> str:
         return ("Code analysis (the owner chose it): the deliverable is FINDINGS.md, a report of issues and refactoring ideas, and the code is never changed. The builder and you each "
                 "read ALL the code on your own, checked each other's list once, and the CTO grouped duplicates: the board's CLEAN LIST (in this brief) is what the report must hold. "
                 "PASS only if EVERY clean-list item is in FINDINGS.md (by its ids, none dropped or silently changed; a disputed item is marked Disputed with both sides' evidence; "
+                "each finding has a Level 1 to 3 as the report defines them and its location points at the code it names (open each one: a wrong location or a level the evidence does not support is a finding); the report opens with a summary table and keeps level 4 ideas apart; "
                 "a builder may withdraw only its own disputed item in the report and you only yours here). Then verify EVERY finding "
                 "of the report against the code yourself (the builder's suite is no proof) and say how many you confirmed, contradict a finding that is wrong, add any issue "
                 "nobody listed, and never ask Delivery to fix code. Delivery may dispute a finding of yours with code evidence: re-check each "

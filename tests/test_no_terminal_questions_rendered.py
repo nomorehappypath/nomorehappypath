@@ -133,6 +133,46 @@ def run_page(self, root, probe, width=1300, height=1500, wait=90):
         process.close()
 
 
+START_AFTER_WAIT_PROBE = r"""
+<script>
+(async () => {
+  const card = name => document.getElementById('req-decision-' + name);
+  for (let attempt = 0; attempt < 120 && !(card('TASK-WAITED') && card('TASK-WAITED').querySelector('[data-contract-check="ready"]')); attempt++)
+    await new Promise(resolve => setTimeout(resolve, 150));
+  waitingForReview.add('TASK-WAITED:1');   // the owner chose "Wait for the review, then start" on this one only
+  refresh();   // an ordinary page refresh follows within seconds either way
+  for (let attempt = 0; attempt < 120 && card('TASK-WAITED'); attempt++)
+    await new Promise(resolve => setTimeout(resolve, 250));
+  await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({waitedCard: Boolean(card('TASK-WAITED')), otherCard: Boolean(card('TASK-OTHER'))})});
+})();
+</script>
+"""
+
+
+PAUSED_WAIT_PROBE = r"""
+<script>
+(async () => {
+  const card = name => document.getElementById('req-decision-' + name);
+  for (let attempt = 0; attempt < 120 && !(card('TASK-WAITED') && card('TASK-WAITED').querySelector('[data-contract-check="ready"]')); attempt++)
+    await new Promise(resolve => setTimeout(resolve, 150));
+  const key = 'TASK-WAITED:1';
+  waitingForReview.add(key);
+  const go = card('TASK-WAITED').querySelector('[data-req-go]');
+  go.disabled = true;               // what a paused project does to the button
+  startAfterWait();
+  const countedWhilePaused = startedAfterWait.has(key);
+  go.disabled = false;              // Resume
+  startAfterWait();
+  for (let attempt = 0; attempt < 120 && card('TASK-WAITED'); attempt++)
+    await new Promise(resolve => setTimeout(resolve, 250));
+  await fetch('/__probe__', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({countedWhilePaused, countedAfterResume: startedAfterWait.has(key)})});
+})();
+</script>
+"""
+
+
 class RenderedQuestionBannerTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -170,16 +210,53 @@ class RenderedQuestionBannerTests(unittest.TestCase):
                           "Delivery asks", "Your Go ahead on the requirements"):
                 self.assertIn(piece, joined)
             self.assertTrue(result["targetsExist"], "every Show me button points at a card on the page")
-            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review, then start", "Modify…"])
             self.assertIn("The reviewer is reviewing the contract", result["text"])
             self.assertIn("Do you want to go ahead without waiting, or wait?", result["text"])
             # Wait shows a visible note inside the card (the owner saw nothing happen on 2026-10-28) and the button reads as chosen.
             self.assertIn("You chose to wait", result["waitNote"])
-            self.assertIn("nothing else to do", result["waitNote"])
+            self.assertIn("the work starts by itself", result["waitNote"])
             self.assertIn(["Waiting for the review…", True], result["buttonsAfter"])
             self.assertNotIn("Wait for the review", [name for name, _ in result["buttonsAfter"]])
             self.assertTrue(result["stillThere"])
             self.assertEqual(board.snapshot(root)["requirement_proposals"]["TASK-READING"]["status"], "awaiting_owner", "Wait writes nothing")
+
+    def test_waiting_starts_the_work_by_itself_once_the_review_is_ready_and_only_for_the_task_waited_on(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = context(base)
+            session = control.create(root, "claude_reviewer")
+            reviewer = board.register(root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=session["id"])
+            control.take_instructions(root, session["id"])
+            value = {"criteria": [{"text": "Prints a greeting", "checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}]}], "questions": []}
+            (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
+            for task in ("TASK-WAITED", "TASK-OTHER"):
+                agent = delivery_with_direction(root, task)
+                board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
+                board.record_contract_check_submission(root, reviewer["id"], task, 1, str(base / "s.json"))
+            result = run_page(self, root, START_AFTER_WAIT_PROBE, wait=60)
+            self.assertTrue(result, "Chrome reported nothing")
+            proposals = board.snapshot(root)["requirement_proposals"]
+            self.assertEqual(proposals["TASK-WAITED"]["status"], "accepted", "the Go ahead was pressed for the task the owner waited on ")
+            self.assertEqual(proposals["TASK-OTHER"]["status"], "awaiting_owner", "a task the owner did not wait on is never started for him")
+
+    def test_a_wait_pressed_while_the_project_is_paused_is_started_after_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = context(base)
+            session = control.create(root, "claude_reviewer")
+            reviewer = board.register(root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=session["id"])
+            control.take_instructions(root, session["id"])
+            value = {"criteria": [{"text": "Prints a greeting", "checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}]}], "questions": []}
+            (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
+            agent = delivery_with_direction(root, "TASK-WAITED")
+            board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
+            board.record_contract_check_submission(root, reviewer["id"], "TASK-WAITED", 1, str(base / "s.json"))
+            result = run_page(self, root, PAUSED_WAIT_PROBE, wait=60)
+            self.assertTrue(result, "Chrome reported nothing")
+            self.assertFalse(result["countedWhilePaused"], "a disabled Go ahead is not pressed and not counted as started")
+            self.assertTrue(result["countedAfterResume"])
+            self.assertEqual(board.snapshot(root)["requirement_proposals"]["TASK-WAITED"]["status"], "accepted", "it was pressed once the button worked again")
 
     def test_what_will_be_tested_shows_on_the_proposal_and_on_the_confirmed_contract_with_the_boards_results(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -232,7 +309,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             self.assertTrue(result, "Chrome reported nothing")
             self.assertIn("The reviewer is reviewing the contract based on your answers", result["text"])
             self.assertIn("Do you want to go ahead without waiting, or wait?", result["text"])
-            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review", "Modify…"])
+            self.assertEqual(result["buttons"], ["Copy", "Go ahead without waiting", "Wait for the review, then start", "Modify…"])
             self.assertEqual(result["list"], 2, "What will be tested is listed")
 
     def test_delivery_alone_asks_the_owner_in_mission_control_and_the_answer_comes_back(self):

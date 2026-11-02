@@ -4626,7 +4626,7 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         if reviewer:
             wake = {
                 "task": task, "version": version, "session_id": str(reviewer.get("session_id") or ""), "reviewer_id": reviewer["id"],
-                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60),
+                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or "")),
             }
     if wake:
         _send_contract_check_wake(root, wake)
@@ -4713,7 +4713,7 @@ def record_requirements_decision(
                 check.update({"status": "rechecking", "reviewer_id": reviewer["id"], "started_at": started, "reason": "",
                               "deadline_at": (datetime.fromisoformat(started) + timedelta(seconds=contract_check.wait_seconds())).isoformat()})
                 recheck = {"task": str(task), "version": proposal["version"], "session_id": str(reviewer.get("session_id") or ""), "reviewer_id": reviewer["id"],
-                           "text": contract_check.recheck_instruction(str(task), proposal["version"], resolved, stale, check["criteria"], contract_check.wait_seconds() // 60)}
+                           "text": contract_check.recheck_instruction(str(task), proposal["version"], resolved, stale, check["criteria"], contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(str(task)) or ""))}
             else:
                 # nobody to update the tests (or none are affected): the criteria the answers changed are simply not checked in advance
                 check.update({"status": "ready", "reason": "" if not stale else "no reviewer was free to update the tests for your answers"})
@@ -5035,7 +5035,7 @@ def record_send_to_full_lane(root: Path, agent_id: str, task: str, reason: str) 
         })
         wake = {
             "task": str(task), "version": proposal["contract_check"]["version"], "session_id": str(qa.get("session_id") or ""), "reviewer_id": agent_id,
-            "text": contract_check.full_lane_request(str(task), proposal["contract_check"]["version"], reason, confirmation["text"], contract_check.wait_seconds() // 60),
+            "text": contract_check.full_lane_request(str(task), proposal["contract_check"]["version"], reason, confirmation["text"], contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(str(task)) or "")),
         }
     _send_contract_check_wake(root, wake)
     return {"task": str(task), "lane": "full", "version": wake["version"]}
@@ -14472,7 +14472,7 @@ def analysis_merge(root: Path, agent_id: str, task: str, groups: list[str] | Non
         _event(state, "analysis_clean_list_ready", agent, {"task": task, "message": f"the clean list is ready: {counts['items']} item(s), {counts['disputed']} disputed", **counts})
         notes.append((_analysis_session(state, record, "delivery"), (
             f"Code analysis `{task}`: the CTO merged the lists. This is the ONE clean list: {counts['items']} item(s), {counts['disputed']} disputed. Write EVERY item into FINDINGS.md "
-            "in the app's finding format (severity, category, location, evidence, failure scenario, impact, recommended action, confidence), mark the disputed ones "
+            "in the app's finding format (level 1 to 3, category, location, evidence, failure scenario, impact, recommended action, confidence; level 4 ideas in their own section; a summary table first), mark the disputed ones "
             "Disputed with both sides' words and evidence, keep every source id (D2, R4), add proof tests, then request the review as usual. You may withdraw only "
             "your own disputed item, in the report; drop and change nothing else. Open reference: standing-checks\n" + analysis_pass.clean_text(record["clean"]))))
         result = {"task": task, "clean": counts, "groups": parsed}
@@ -17180,6 +17180,31 @@ def owner_accept_is_real(state: dict[str, Any], task: str, decision: Any = None)
         )
     )
     return not governed
+
+
+def delivery_work_is_all_finished(state: dict[str, Any]) -> bool:
+    """Is nothing unfinished in this project? (2026-11-02, cost: a new Delivery agent then starts a fresh conversation.)
+
+    True only when every task the board knows is really accepted or cancelled, the board has no stopped task to carry on, no live
+    Delivery agent holds a task, and no owner direction is waiting to be read. Anything else keeps today's carry-over of the
+    previous conversation.
+    """
+    accepted = _accepted_task_ids(state)
+    cancelled = set((state.get("cancelled_tasks") or {}).keys())
+    known: set[str] = set()
+    for key in ("task_briefs", "delivery_plans", "requirement_proposals", "requirement_confirmations", "task_repositories", "task_chunks"):
+        known |= {str(task) for task in (state.get(key) or {}) if str(task)}
+    if known - accepted - cancelled:
+        return False
+    if _stopped_task_to_resume(state, "") != ("", ""):
+        return False
+    for agent in (state.get("agents") or {}).values():
+        if agent.get("active") and agent.get("role") in DEVELOPER_ROLES and str(agent.get("task") or "") not in {"", AWAITING_OWNER_DIRECTION}:
+            return False
+    for direction in (state.get("owner_directions") or {}).values():
+        if isinstance(direction, dict) and direction.get("text") and not direction.get("consumed") and not direction.get("transferred_to_session_id"):
+            return False
+    return True
 
 
 def accept_is_owed(state: dict[str, Any], task: str) -> bool:
