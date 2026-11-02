@@ -762,9 +762,13 @@ def reviewer_retry_settings(settings: dict[str, dict[str, str]], reviewer_retry_
 def create(root: Path, kind: str, task: str = "", color: str = "black",
            settings_override: dict[str, dict[str, str]] | None = None, continues: str = "",
            launch_choice: dict[str, Any] | None = None,
-           availability: "Callable[[str], dict[str, Any]] | None" = None, fresh: bool = False) -> dict[str, Any]:
+           availability: "Callable[[str], dict[str, Any]] | None" = None, fresh: bool = False,
+           finished_predecessor: str = "") -> dict[str, Any]:
     """`fresh=True` (the one review-recovery attempt, 2026-10-25): a blank conversation. The newest ended session's CLI conversation and its undelivered
-    messages are NOT inherited; the task is bound by the caller (`board.bind_replacement`) and the brief arrives through the board."""
+    messages are NOT inherited; the task is bound by the caller (`board.bind_replacement`) and the brief arrives through the board.
+    `finished_predecessor` (2026-11-02, cost): the id of the ended session whose work the caller found entirely finished; the new
+    terminal starts a fresh conversation instead of re-reading that old one on every reply, but only if it is exactly the session the
+    inheritance would pick and that session has no undelivered message."""
     if kind not in KINDS:
         raise ValueError("unknown session kind")
     task = task.strip()
@@ -869,12 +873,47 @@ def create(root: Path, kind: str, task: str = "", color: str = "black",
             "cli_launch_reason": None,
         }
         if not fresh:
-            _inherit_cli_memory(state, session, continues)
+            _inherit_cli_memory(state, session, continues, finished_predecessor)
         state["sessions"][session_id] = session
         return dict(session)
 
 
-def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any], only: str = "") -> None:
+FINISHED_WORK_REASON = "Started a new conversation: the previous Delivery agent's task is finished."
+
+
+def _predecessor_candidate(state: dict[str, Any], kind: Any, own_id: Any, only: str = "") -> dict[str, Any] | None:
+    """The newest ended session of this kind whose CLI conversation a new session would continue (None when there is none)."""
+    live_ids = {
+        str(item.get("cli_session_id"))
+        for item in state.get("sessions", {}).values()
+        if item.get("kind") == kind and item.get("status") in ACTIVE_STATUSES and item.get("cli_session_id")
+    }
+    candidates = [
+        item for item in state.get("sessions", {}).values()
+        if item.get("kind") == kind and item.get("id") != own_id
+        and item.get("status") not in ACTIVE_STATUSES
+        and item.get("cli_session_id") and str(item.get("cli_session_id")) not in live_ids
+        and (not only or item.get("id") == only)
+    ]
+    return max(candidates, key=lambda item: str(item.get("ended_at") or item.get("created_at") or "")) if candidates else None
+
+
+def inheritable_predecessor(root: Path, kind: str) -> str:
+    """The id of the session a new session of this kind would continue, or "". Read-only; the caller judges whether its work is finished."""
+    with locked_state(root) as state:
+        _reconcile(state)
+        found = _predecessor_candidate(state, kind, "")
+        return str(found["id"]) if found else ""
+
+
+def _has_undelivered(state: dict[str, Any], session_id: str) -> bool:
+    if state.get("inbox", {}).get(session_id):
+        return True
+    return any(receipt.get("session_id") == session_id and receipt.get("status") in {"queued", "taken", "posted"}
+               for receipt in state.get("instruction_receipts", {}).values())
+
+
+def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any], only: str = "", finished_predecessor: str = "") -> None:
     """A new session of a role continues the last conversation of that role.
 
     Conversation memory used to follow the terminal session only, so stopping
@@ -886,22 +925,12 @@ def _inherit_cli_memory(state: dict[str, Any], session: dict[str, Any], only: st
     to a second live terminal: two Delivery agents may run at once, and each
     must own its own CLI session.
     """
-    kind = session.get("kind")
-    live_ids = {
-        str(item.get("cli_session_id"))
-        for item in state.get("sessions", {}).values()
-        if item.get("kind") == kind and item.get("status") in ACTIVE_STATUSES and item.get("cli_session_id")
-    }
-    candidates = [
-        item for item in state.get("sessions", {}).values()
-        if item.get("kind") == kind and item.get("id") != session.get("id")
-        and item.get("status") not in ACTIVE_STATUSES
-        and item.get("cli_session_id") and str(item.get("cli_session_id")) not in live_ids
-        and (not only or item.get("id") == only)
-    ]
-    if not candidates:
+    predecessor = _predecessor_candidate(state, session.get("kind"), session.get("id"), only)
+    if not predecessor:
         return
-    predecessor = max(candidates, key=lambda item: str(item.get("ended_at") or item.get("created_at") or ""))
+    if finished_predecessor and predecessor["id"] == finished_predecessor and not _has_undelivered(state, predecessor["id"]):
+        session["cli_fresh_reason"] = FINISHED_WORK_REASON   # a fresh conversation: the old one is not re-read on every reply
+        return
     session["cli_session_id"] = predecessor["cli_session_id"]
     session["cli_session_provider"] = predecessor.get("cli_session_provider")
     session["cli_session_store"] = predecessor.get("cli_session_store")
@@ -1158,6 +1187,8 @@ def note_cli_launch(root: Path, session_id: str, resumed: bool, reason: str = ""
         # The plan's own words (continue / fresh and why), for the agent card. It is the PLAN, written before the CLI
         # has started; the card's liveness says whether the CLI runs (2026-10-17).
         session["cli_launch_reason"] = " ".join(str(reason or "").split())[:200] or None
+        if session.get("cli_fresh_reason") and not resumed:
+            session["cli_launch_reason"] = session["cli_fresh_reason"]   # the runner's "first launch" wording must not hide why it is fresh
         # The launch that follows a pause has now been planned with the pause
         # in its prompt; a later relaunch (a crash, say) is an ordinary one.
         # (Not cleared on attach: the runner attaches BEFORE it plans.)

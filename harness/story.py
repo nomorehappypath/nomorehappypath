@@ -572,6 +572,9 @@ def money_line(cost: dict[str, Any] | None, task: str) -> dict[str, Any]:
         gemini = bool(row.get("gemini"))
         return {"text": "Cost: Gemini is not measured yet" if gemini else "Cost: not counted yet", "usd": None, "window": ""}
     text = f"{cost_center.money(row['usd'])} so far" + (" (estimated)" if row.get("estimated") else "")
+    whole = _dict(cost.get("total")).get("usd")
+    if isinstance(whole, (int, float)) and whole - float(row["usd"] or 0) >= 0.005:
+        text += f" · whole project {cost_center.money(whole)} (adds the CTO and work on no task)"
     limit = _dict(row.get("codex_limit"))
     window = ""
     if limit:

@@ -77,7 +77,7 @@ acceptance requirement of the task.
 An agent is live only
 while its board heartbeat is current. When the watchdog marks an agent
 `STALLED`, verify the controller routed its next action into the visible
-terminal; never describe it as working. If it does not recover, keep the
+terminal; never describe it as working on the board's evidence alone. The one exception is your own check below ("Look at the agent itself"): if it shows the agent waiting on its own running command, say exactly that and not "working" or "stuck". If it does not recover, keep the
 task blocked. For every managed Delivery task, require a recorded
 `owner_direction_received` event and use its preserved text for the final
 claim-scope audit.
@@ -87,8 +87,18 @@ its next concrete action in that cycle; the harness ladder (wake, restart,
 replace) recovers a silent role: wait for it, never do the stalled Delivery or
 Reviewer deliverable yourself. Only the harness raises
 the one owner card when the ladder is exhausted. "Watching one more cycle" is
-a defect. Terminal silence alone is not a stall: respect an executing review's
+a defect, except when your own check shows the agent waiting on its own running command: then route the wake as usual and look again when that command should be done. Terminal silence alone is not a stall: respect an executing review's
 heartbeat, a review-authoring lease and a paused project.
+
+**Look at the agent itself before you say it is stuck.** The board only shows signs of life it can count (heartbeats, commits,
+requests). An agent that started a long command of its own, such as a full test run that takes tens of minutes, does not check
+the board while it waits, so the board shows silence for that whole time. Before you tell the owner or anyone that an agent is
+stuck, check what it is really doing: (1) its process is still alive (`ps -p <pid>` with the pid from the session list); (2) the
+last lines of its session transcript (the file named after its session id in the project's `control/transcripts` folder): does
+it say it is waiting for a command, and is there still output or CPU use from that command; (3) whether the command it waits
+for has since ended. An agent that is waiting on its own running command is working: say what it waits on, and look again when
+that command should be done. Treat it as stuck only when its process is gone, or its transcript shows no new output and no
+running command for longer than the wake ladder allows. Say in one line what you checked and what you found.
 
 ## delivery-gate
 

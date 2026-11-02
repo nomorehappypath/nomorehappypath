@@ -458,6 +458,34 @@ class ReleaseAndHistoryTests(_Project):
         legacy = {"status": "passed", "requested_at": "2000-01-01T00:00:00+00:00"}
         self.assertTrue(cto_module.owner_artifacts_readable(self.root, board.snapshot(self.root), "TASK-DOC", legacy)[0])
 
+    def test_the_owner_never_gets_the_draft_the_review_rejected_after_a_repair_passed(self):
+        import hashlib, subprocess
+        draft, repaired = "# Report\n\nthe normal command passes 7 tests\n", "# Report\n\nthe normal command runs 1 test and the proof command runs 6\n"
+        repo = Path(tempfile.mkdtemp(dir=self.base)) if hasattr(self, "base") else Path(tempfile.mkdtemp())
+        git = lambda *args: subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args], capture_output=True, text=True, check=True).stdout.strip()
+        git("init", "-q"); (repo / "FINDINGS.md").write_text(draft); git("add", "FINDINGS.md"); git("commit", "-q", "-m", "draft")
+        (repo / "FINDINGS.md").write_text(repaired); git("commit", "-q", "-am", "repair"); commit = git("rev-parse", "HEAD")
+        document = "FINDINGS.md: the report"
+        old = self.attach("1-upload-draft.md", draft, for_owner=True, document=document)
+        with board.locked_state(self.root) as state:
+            state.setdefault("task_workspaces", {})["TASK-DOC"] = str(repo)
+        draft_sha = hashlib.sha256(draft.encode()).hexdigest()
+        review = {"status": "passed", "requested_at": board.now(), "reviewed_commit": commit, "owner_documents": [{"deliverable": REPORT, "sha256": draft_sha}]}
+        ok, problems, _ = cto_module.owner_artifacts_readable(self.root, board.snapshot(self.root), "TASK-DOC", review)
+        self.assertFalse(ok, "the upload still holds the rejected draft, so the release check is not green")
+        self.assertIn("earlier copy", problems[0]); self.assertIn("contract-evidence --for-owner", problems[0])
+        self.attach("2-upload-repaired.md", repaired, for_owner=True, document=document)
+        # the completed review's manifest is left exactly as it was: the repaired report is accepted because it equals the committed file the review passed
+        ok, problems, _ = cto_module.owner_artifacts_readable(self.root, board.snapshot(self.root), "TASK-DOC", review)
+        self.assertTrue(ok, problems)
+        self.assertEqual([d["sha256"] for d in review["owner_documents"]], [draft_sha], "the passed review's manifest is untouched")
+        latest = [l for l in self.links() if l["latest"]][0]
+        self.assertEqual(latest["sha256"], hashlib.sha256(repaired.encode()).hexdigest(), "Open report now points at the repaired, reviewed bytes")
+        self.assertTrue(old.exists())
+        other = self.attach("3-upload-other.md", "# Report\n\nsomething nobody reviewed\n", for_owner=True, document=document)
+        ok, problems, _ = cto_module.owner_artifacts_readable(self.root, board.snapshot(self.root), "TASK-DOC", review)
+        self.assertFalse(ok, "different, unreviewed bytes are still refused"); self.assertTrue(other.exists())
+
     def test_the_final_review_request_and_its_brief_carry_the_document_manifest(self):
         self.attach("1-evidence-a.txt", REPORT_TEXT, for_owner=True)
         self.assertEqual(board._owner_documents_now(self.root, "TASK-DOC")[0]["deliverable"], REPORT)

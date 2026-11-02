@@ -401,12 +401,21 @@ def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
              "coverage": coverage_line(item, counts.get(item["n"], 0))} for item in criteria]
 
 
-def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int) -> str:
+def existing_code_note(repository: str) -> str:
+    """When the project already has code, the Reviewer reads it to find what the requirements are about instead of guessing an interface."""
+    if not str(repository or "").strip():
+        return ""
+    return (f" The project already has code, at {repository}. Read it (read only; change nothing there) to find the real commands, functions, files and pages "
+            "each requirement is about, and write each check so that it calls them. A check for a defect must fail on that code today. Never guess an interface "
+            "you can find by reading. Leave a requirement unchecked only when, after reading the code, no test can show it, and say in why_not_checked what you read.")
+
+
+def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "") -> str:
     return (
         f"CONTRACT CHECK ROUTED: task {task}, requirements version {version}. This is advisory preparation, not a review round: "
-        "do not reserve, claim or review anything for it, and no code exists yet. Read the owner's original direction and the "
-        "requirements below and write your checks from them only (black box: commands and their printed output, HTTP calls, or visible text "
-        "on a page, each as a test file that asserts the result). Then submit ONCE with "
+        "do not reserve, claim or review anything for it, and the work for this task is not built yet. Read the owner's original direction and the "
+        "requirements below and write your checks from them (black box: commands and their printed output, HTTP calls, or visible text "
+        "on a page, each as a test file that asserts the result)." + existing_code_note(repository) + " Then submit ONCE with "
         f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter "
         "`contract-first` (the board command reference --agent <your id> --name contract-first). Ask the owner at most 4 product questions, only where you cannot write "
         "a check without guessing, each with 2 to 4 options and one recommended. The owner may go ahead without waiting and a submission after "
@@ -415,7 +424,7 @@ def reviewer_instruction(task: str, version: int, requirements: str, direction: 
     )
 
 
-def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], changed: list[int], criteria: list[dict[str, Any]], minutes: int) -> str:
+def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], changed: list[int], criteria: list[dict[str, Any]], minutes: int, repository: str = "") -> str:
     said = "; ".join(f"{item['text']} -> {item['answer']}" for item in answers)
     names = "; ".join(f"{item['n']}. {item['text']}" for item in criteria if item["n"] in changed)
     return (
@@ -424,7 +433,7 @@ def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], 
         f"For each, write the new checks from the answers and submit them with contract-check-correct --task {task} --criterion <n> "
         "--reason \"updated for the owner's answers\" --submission <JSON file with {\"checks\": [...]}>. When nothing more needs changing, finish with "
         f"contract-check-correct --task {task} --criterion 0 --reason \"nothing more to change\" --submission <JSON file with {{\"checks\": []}}>. "
-        f"The owner may go ahead without waiting and a submission after that, or after about {max(1, minutes)} minutes, is refused. "
+        + existing_code_note(repository) + f" The owner may go ahead without waiting and a submission after that, or after about {max(1, minutes)} minutes, is refused. "
         "Do not start any polling or background helper. Never ask the owner anything in your terminal. USER ACTION: None. Open reference: contract-first"
     )
 
@@ -451,11 +460,11 @@ SMALL_CHANGE_REASON = "Small change: tests are not written in advance"
 ANALYSIS_REASON = "Code analysis: nothing is tested in advance; after Go ahead the builder and the reviewer each read all the code"
 
 
-def full_lane_request(task: str, version: int, why: str, requirements: str, minutes: int) -> str:
+def full_lane_request(task: str, version: int, why: str, requirements: str, minutes: int, repository: str = "") -> str:
     """The one message that restarts the contract-check step for a Reviewer who sent a Small change task back to the full lane."""
     return (
         f"FULL LANE: you sent task {task} back from the Small change lane ({why}). Advisory preparation again, not a review round: write your checks from the "
-        "confirmed requirements below only (black box), then submit ONCE with "
+        "confirmed requirements below (black box)." + existing_code_note(repository) + " Then submit ONCE with "
         f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter `contract-first`. "
         "Submit no questions (the owner is not asked; a submission with questions is refused). The board runs the checks on Delivery's work as in the full lane; "
         "nothing is held and the task is not sent back a second time. "

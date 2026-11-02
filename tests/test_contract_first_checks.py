@@ -123,6 +123,16 @@ class EarlyLookTests(_Fixture):
         self.assertIn(TEXT, wake[0]["text"])
         self.assertFalse([r for r in board.snapshot(self.root)["qa_requests"].values()], "the early look is never a QA request")
 
+    def test_the_wake_tells_the_reviewer_where_the_projects_existing_code_is(self):
+        agent = self.delivery()
+        session, reviewer = self.reviewer()
+        with board.locked_state(self.root) as state:
+            state.setdefault("task_repositories", {})[TASK] = "/work/the-project"
+        board.record_requirement_proposal(self.root, agent["id"], TEXT)
+        wake = [item for item in control.take_instructions(self.root, session["id"]) if item.get("source") == "contract-check"]
+        self.assertEqual(len(wake), 1)
+        self.assertIn("The project already has code, at /work/the-project", wake[0]["text"])
+
     def test_no_reviewer_or_no_program_means_go_ahead_at_once_not_checked(self):
         agent = self.delivery()
         board.record_requirement_proposal(self.root, agent["id"], TEXT)
