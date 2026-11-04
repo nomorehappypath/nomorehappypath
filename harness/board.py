@@ -42,7 +42,7 @@ from harness import difficulty_note
 from harness import code_quality, standing_checks
 from harness import test_machine
 from harness import failure_words
-from harness import accepted_bytes, agent_confinement, analysis_pass, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, cto_wakes, red_proof, revert_proof, reference_chapters, test_env
+from harness import accepted_bytes, agent_confinement, analysis_pass, browser_acceptance, certified_execution, child_process, contract, contract_check, execution_identity, execution_preflight, git_broker, owner_location, git_process, lifecycle, project_memory, redaction, repair_package as repair_package_model, review_brief as review_brief_projection, review_cost, review_rounds, cto_wakes, red_proof, revert_proof, reference_chapters, test_env
 from harness.project_context import ProjectContext, ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -106,7 +106,7 @@ BOARD_BACKUP_KEEP = 8
 # plain-language plan/update) are the two most common liveness proofs, so a mismatch
 # here silently keeps a reporting agent shown as stalled and feeds stall flapping.
 PROGRESS_EVENTS = {
-    "cto_disposition_recorded", "status_update", "task_brief_updated", "chunks_declared", "subtask_chunks_declared",
+    "cto_disposition_recorded", "status_update", "task_brief_updated", "chunks_declared", "chunk_retired", "subtask_chunks_declared",
     "independent_review_requested", "qa_claimed", "qa_result", "finding_classified",
     "finding_resolved", "task_begun", "subtask_started", "requirements_confirmed",
     "task_repository_bound", "qa_reserved", "reviewer_intents_recorded",
@@ -512,7 +512,9 @@ def _render_board(state: dict[str, Any]) -> str:
             lines.append(f"| {task} | {plan.get('mode', '')} | {name}: {subtask.get('title', '')} | {subtask.get('status', '')} | {subtask.get('pipeline_status', 'pending')} | {', '.join(subtask.get('dependencies', [])) or '—'} | {ownership} |")
     lines += ["", "## Owner messages", "", "| Type | Task | Agent | Attachments | Time | Text |", "|---|---|---|---:|---|---|"]
     for message in state.get("owner_messages", []):
-        message_text = str(message.get("text", "")).replace("|", "\\|").replace("\n", " ")
+        # P6 (B4): the saved page is a broadly readable copy, so an owner message's text is redacted here
+        # the same way its event copy is; state["owner_messages"] and the routed instruction stay byte-exact.
+        message_text = redaction.redact(message.get("text", "")).replace("|", "\\|").replace("\n", " ")
         lines.append(f"| {message.get('type', '')} | {message.get('task', '') or 'new direction'} | {message.get('agent_id', '')} | {len(message.get('attachments', []))} | {message.get('created_at', '')} | {message_text} |")
     lines += ["", "## Review queue", "", "| Request | Task | Phase | Subtask | Chunk | Cycle | Status | Developer | Reviewer | Wait started |", "|---|---|---|---|---|---:|---|---|---|---|"]
     requests = list(state.get("qa_requests", {}).values())
@@ -3372,6 +3374,37 @@ def request_recovery(root: Path, agent_id: str) -> dict[str, Any]:
     return event
 
 
+RETIRED_CHUNK = "retired"
+
+
+def live_chunks(chunks: dict[str, Any]) -> dict[str, Any]:
+    """The root chunks that still count as work: every one except a chunk Delivery retired (retire-chunk)."""
+    return {name: value for name, value in (chunks or {}).items() if value.get("status") != RETIRED_CHUNK}
+
+
+def retired_chunk_text(value: dict[str, Any]) -> str:
+    """How a retired chunk is shown to the owner: merged into its replacement, or removed by Delivery with its reason."""
+    record = value.get("retired") or {}
+    if record.get("merged_into"):
+        return f"Merged into {record['merged_into']}"
+    return f"Removed by Delivery: {record.get('reason', '')}"
+
+
+def unfinished_merge_targets(chunks: dict[str, Any]) -> list[str]:
+    """Chunks that retired chunks were merged into but that Delivery has not declared yet (a half-done merge)."""
+    return sorted({
+        str((value.get("retired") or {}).get("merged_into") or "") for value in (chunks or {}).values()
+        if value.get("status") == RETIRED_CHUNK
+    } - {""} - set(chunks or {}))
+
+
+def merge_next_action(targets: list[str]) -> str:
+    return (
+        "the merge is not finished: declare the combined chunk " + ", ".join(targets)
+        + " with declare-chunks --chunk NAME:DESCRIPTION --reason \"<why>\""
+    ) if targets else ""
+
+
 def stopped_scopes(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
     """Scopes of this task the harness stopped repairing ("could not finish") in its CURRENT structure revision. A new revision is new work."""
     revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0) or 0)
@@ -3388,7 +3421,7 @@ def work_left_outside_stopped_scopes(state: dict[str, Any], task: str) -> bool |
     gone_chunks = {(e["scope"].get("subtask", ""), e["scope"].get("chunk", "")) for e in stopped if e["scope"].get("chunk")}
     gone_subtasks = {e["scope"].get("subtask", "") for e in stopped if e["scope"].get("subtask") and not e["scope"].get("chunk")}
     for name, value in ((state.get("task_chunks") or {}).get(task) or {}).items():
-        if value.get("status") != "passed" and ("", name) not in gone_chunks:
+        if value.get("status") not in {"passed", RETIRED_CHUNK} and ("", name) not in gone_chunks:
             return True
     for name, item in (((state.get("delivery_plans") or {}).get(task) or {}).get("subtasks") or {}).items():
         if item.get("status") in {"passed", "superseded"} or name in gone_subtasks:
@@ -3552,22 +3585,13 @@ def _repeated_failure_threshold() -> int:
         return 3
 
 
-_SECRET_SHAPES = re.compile(
-    r"sk-ant-[A-Za-z0-9]{2,6}\d{2}-[A-Za-z0-9_-]{20,}"                       # Claude setup tokens and API keys
-    r"|\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{16,}"                                  # other provider keys
-    r"|\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{16,}|\bgithub_pat_[A-Za-z0-9_]{16,}"   # GitHub tokens, fine-grained included
-    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{12,}|\bAIza[0-9A-Za-z_-]{20,}"  # Slack, AWS, Google
-    r"|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"           # JSON web tokens
-    r"|(?i:\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}"                                 # a bearer credential, any case
-    r"|(?i:\b(?:authorization|api[-_ ]?key|access[-_ ]?token|secret|password|passwd|token)\b\s*[:=]\s*)(?i:(?:bearer|basic|token)\s+)?\S+"   # a labelled secret
-    r"|\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}\b",   # any long opaque letters-and-digits run
-)
-
-
 def _redact_secrets(text: Any) -> str:
     """Before anything is normalized or quoted: a credential shape in a recorded failure never reaches a CTO instruction or poll.
-    Deliberately broad: a diagnostic that loses an opaque token is cheaper than one that leaks it."""
-    return _SECRET_SHAPES.sub("[secret removed]", str(text or ""))
+    Deliberately broad: a diagnostic that loses an opaque token is cheaper than one that leaks it.
+
+    RF1: this is now a thin alias for the one shared redaction function (`harness.redaction.redact`),
+    used everywhere free text is written to the board, the event log, and transcripts."""
+    return redaction.redact(text)
 
 
 def _failure_class(reason: Any) -> str:
@@ -4316,7 +4340,9 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
             state.setdefault("owner_messages", []).append(message)
             event = _event(state, "owner_cto_message_received", agent, {
                 "task": agent["task"], "message": "owner message to the CTO recorded from Mission Control",
-                "owner_message": text, "owner_message_id": message_id, "attachments": metadata,
+                # P6: the event log's own copy is redacted; the authoritative `message["text"]` above
+                # (routed to the CTO as the real instruction) is untouched and stays byte-exact.
+                "owner_message": redaction.redact(text), "owner_message_id": message_id, "attachments": metadata,
             })
     if message_type == "cto_message":
         attachment_lines = "".join(f"\n- {item['display_name']} ({item['stored_path']})" for item in message["attachments"])
@@ -4359,18 +4385,22 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
                 "task_kind": normalize_task_kind(task_kind, document_only),
                 "document_only": normalize_task_kind(task_kind, document_only) == "spec",
             }
+            # P6: the event log's own copy is redacted; state["owner_directions"][session_id]["text"]
+            # above (what begin_task later copies into task_begun's "owner_direction" and what is
+            # routed to the agent below) is untouched and stays byte-exact.
             event = _event(state, "owner_direction_received", agent, {
                 "task": agent["task"], "message": "owner direction recorded from Mission Control",
-                "owner_direction": text, "owner_message_id": message_id, "attachments": metadata,
+                "owner_direction": redaction.redact(text), "owner_message_id": message_id, "attachments": metadata,
             })
         else:
             if task == AWAITING_OWNER_DIRECTION:
                 state.setdefault("pending_owner_clarifications", {}).setdefault(session_id, []).append(message)
             else:
                 state.setdefault("owner_clarifications", {}).setdefault(task, []).append(message)
+            # P6: same as above -- only the event's own copy is redacted.
             event = _event(state, "owner_clarification_received", agent, {
                 "task": task, "message": "owner clarification recorded from Mission Control",
-                "clarification": text, "owner_message_id": message_id, "attachments": metadata,
+                "clarification": redaction.redact(text), "owner_message_id": message_id, "attachments": metadata,
             })
     attachment_lines = "".join(f"\n- {item['display_name']} ({item['stored_path']})" for item in message["attachments"])
     label = "OWNER DIRECTION" if message_type == "direction" else f"OWNER CLARIFICATION for {message['task']}"
@@ -5986,7 +6016,7 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
                 # the report after a handed-back question: the owner sees that
                 # the CTO acted instead of asking (its own report, labelled so)
                 agent.pop("handed_back_question", None)
-                _event(state, "cto_acted", agent, {"task": agent["task"], "message": f"CTO acted: {note} (its own report after the board handed back a question)"})
+                _event(state, "cto_acted", agent, {"task": agent["task"], "message": f"CTO acted: {redaction.redact(note)} (its own report after the board handed back a question)"})
         if verdict["refusal"]:
             event = None
         else:
@@ -6003,11 +6033,17 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
 
 def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state_name: str, verdict: dict[str, Any],
                   card_links: list[dict[str, Any]] | None = None, card_location: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Store an accepted status note (same transaction as its checks, so no failure slips between them)."""
+    """Store an accepted status note (same transaction as its checks, so no failure slips between them).
+
+    The note is redacted before it is kept: an agent that pastes a failing command's own output into
+    a status note must never write a live credential into BOARD.md or events.jsonl (P6). The check
+    that decides whether the agent is reporting progress still runs on the agent's original words.
+    """
     if True:
-        agent.update({"status": state_name, "status_note": note, "last_status_at": now()})
+        stored_note = redaction.redact(note)
+        agent.update({"status": state_name, "status_note": stored_note, "last_status_at": now()})
         wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
-        event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": note})
+        event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": stored_note})
         _flag_ready_claim(state, agent, note)
         if wake_pending:
             # A board write from the CTO refutes "not responding": it is alive and logged in, and the wake is answered.
@@ -6390,8 +6426,9 @@ def _flag_ready_claim(state: dict[str, Any], agent: dict[str, Any], text: str) -
         return
     _event(state, "ready_claim_without_review", agent, {
         "task": task,
+        # P6: the matching above reads the agent's original words; only this stored snippet is redacted.
         "message": "Delivery says the work is ready or complete, but no final independent review has passed on its current version: "
-                   + " ".join(str(text).split())[:160]
+                   + " ".join(redaction.redact(text).split())[:160]
                    + " - the owner must not be asked to test or accept it; route the review (relaunch the Reviewer or correct the blocking check).",
     })
 
@@ -10446,7 +10483,28 @@ def _evidence_reuse_checks(
     workspace = Path(workspace_value) if workspace_value and Path(workspace_value).is_dir() else code_root
     current_git = _git_review_artifact(workspace)
     candidate = identity.get("candidate", {})
-    if request.get("integrated_commit") and isinstance(request.get("accepted_byte_manifest"), dict):
+    # 2026-11-02 (final whole-app reviews F1-1, F2-1): a root CHUNK's PASS was compared with the whole task tree, which moves with
+    # every later chunk, so a normal Resume threw away correct approvals and forced paid repeat reviews. A root chunk request carries no
+    # accepted-byte manifest (only a subtask's does), so the rule is the approval chain: an earlier chunk's PASS stands while its reviewed
+    # commit is an ancestor of a later PASSED root chunk whose reviewed tree is exactly the task head. Anything else compares as before.
+    chunk_commit = str(request.get("reviewed_commit") or "") if request.get("phase") == "chunk" and not request.get("subtask") else ""
+    head_now = str(current_git.get("base_commit", ""))
+    covering = None
+    if chunk_commit and head_now and str(current_git.get("tree_hash", "")) != str(candidate.get("tree_hash", "")):
+        for later in state.get("qa_requests", {}).values():
+            if (later.get("task") == task and later.get("phase") == "chunk" and not later.get("subtask") and later.get("status") == "passed"
+                    and later.get("id") != request.get("id") and later.get("reviewed_commit")
+                    and str(later.get("reviewed_tree_hash", "")) == str(current_git.get("tree_hash", ""))
+                    and git_process.run(["git", "merge-base", "--is-ancestor", chunk_commit, str(later["reviewed_commit"])],
+                                        cwd=workspace, capture_output=True, text=True).returncode == 0):
+                covering = later
+                break
+    if covering is not None:
+        checks = [
+            _reuse_check("reviewed commit inside a later approved chunk", chunk_commit, chunk_commit),
+            _reuse_check("later approved chunk is the task head", str(covering.get("reviewed_tree_hash", "")), str(current_git.get("tree_hash", ""))),
+        ]
+    elif request.get("integrated_commit") and isinstance(request.get("accepted_byte_manifest"), dict):
         # 2026-09-28: a subtask PASS already folded into the task branch was
         # compared with the task head, which never equals the subtask's own
         # candidate, so every Resume threw the PASS away and the owner's
@@ -12511,6 +12569,81 @@ def declare_chunks(
         return json.loads(json.dumps(existing))
 
 
+def retire_chunk(
+    root: Path, agent_id: str, chunk: str, reason: str, into: str = "",
+) -> dict[str, Any]:
+    """Remove a planned root chunk that was never sent to review (the owner dropped it or merged it into another).
+
+    Only the task's active Delivery agent may do this. Like retiring a subtask it is not a new structure revision, so the
+    review history and stops of every other scope keep their lineage. It never waives a Completion Contract deliverable.
+    """
+    chunk, reason, into = str(chunk or "").strip(), str(reason or "").strip(), str(into or "").strip()
+    if not chunk:
+        raise ValueError("retire-chunk requires --chunk")
+    if not reason:
+        raise ValueError("retire-chunk requires a plain-language --reason (what the owner removed or merged)")
+    if into == chunk:
+        raise ValueError("a chunk cannot be merged into itself")
+    with locked_state(root) as state:
+        developer = _require_writable_agent(state, agent_id)
+        if developer["role"] not in DEVELOPER_ROLES:
+            raise ValueError("only the task's Delivery Agent may retire a delivery chunk")
+        if not developer.get("active"):
+            raise ValueError("inactive Delivery Agent cannot change the delivery structure")
+        task = developer["task"]
+        if task == AWAITING_OWNER_DIRECTION:
+            raise ValueError("delivery agent must await owner direction before changing work")
+        _require_contract_preflight(root, task)
+        plan = state.get("delivery_plans", {}).get(task)
+        if not plan or plan.get("mode") != "chunked":
+            raise ValueError("retire-chunk is valid only for the root chunks of a chunked delivery plan")
+        chunks = state.get("task_chunks", {}).get(task, {})
+        item = chunks.get(chunk)
+        if not item:
+            raise ValueError(f"{task} has no declared chunk {chunk}; declared chunks: " + (", ".join(sorted(chunks)) or "none"))
+        if item.get("status") == RETIRED_CHUNK:
+            record = item.get("retired") or {}
+            if record.get("reason") == reason and record.get("merged_into", "") == into:
+                return json.loads(json.dumps(item))
+            raise ValueError(
+                f"chunk {chunk} is already retired ({retired_chunk_text(item)}); the first record stays — "
+                "retry with the same --reason (and --into) or leave it"
+            )
+        reviewed = next((
+            request for request in sorted(_task_requests(state, task), key=lambda r: (str(r.get("requested_at", "")), int(r.get("cycle", 0))))
+            if request.get("phase") == "chunk" and not request.get("subtask") and request.get("chunk") == chunk
+        ), None)
+        if reviewed:
+            raise ValueError(
+                f"chunk {chunk} was already sent to review ({reviewed.get('id', '')}, {reviewed.get('status', '')}); reviewed work is not retired — "
+                "finish or repair that review, or ask the CTO if the owner dropped it"
+            )
+        if item.get("status") == "passed":
+            raise ValueError(f"chunk {chunk} already passed review; a passed chunk is not retired")
+        if into:
+            target = chunks.get(into)
+            if target and target.get("status") == RETIRED_CHUNK:
+                raise ValueError(f"chunk {into} is itself retired; merge into a live chunk or declare the combined chunk")
+        changed_at = now()
+        record = {"reason": reason, "at": changed_at, "by_agent": developer["id"], "merged_into": into}
+        item.update({"status": RETIRED_CHUNK, "retired": record})
+        plan["updated_at"] = changed_at
+        # Not a new structure revision (as for a retired subtask): other scopes keep their review history and stops.
+        plan.setdefault("structure_changes", []).append({
+            "revision": int(plan.get("structure_revision", 1)), "kind": "delivery work removed",
+            "removed": [chunk], "merged_into": into, "reason": reason, "at": changed_at,
+        })
+        next_action = merge_next_action(unfinished_merge_targets(chunks))
+        _event(state, "chunk_retired", developer, {
+            "task": task, "chunk": chunk, "reason": reason, "merged_into": into,
+            "message": f"retired chunk {chunk} ({retired_chunk_text(item)})" + (f"; {next_action}" if next_action else ""),
+        })
+        result = json.loads(json.dumps(item))
+        if next_action:
+            result["next_action"] = next_action
+        return result
+
+
 def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: str = "") -> dict[str, Any]:
     if not ledger.strip() or not summary.strip():
         raise ValueError("ledger and summary are required")
@@ -12758,6 +12891,11 @@ def _validate_review_scope(state: dict[str, Any], task: str, phase: str, subtask
                 raise ValueError("chunk review requires a declared --chunk")
             if root_chunks[chunk].get("status") == "passed":
                 raise ValueError("chunk already passed; review the next chunk or request final acceptance")
+            if root_chunks[chunk].get("status") == RETIRED_CHUNK:
+                raise ValueError(
+                    f"chunk {chunk} was retired ({retired_chunk_text(root_chunks[chunk])}); a retired chunk is not reviewed — "
+                    "review a live chunk or request final acceptance"
+                )
         else:
             raise ValueError("an atomic task has no chunk review; request final acceptance directly")
     elif phase == "subtask_acceptance":
@@ -12780,9 +12918,18 @@ def _validate_review_scope(state: dict[str, Any], task: str, phase: str, subtask
         if mode == "chunked":
             if not root_chunks:
                 raise ValueError("chunked final acceptance requires declared delivery chunks")
-            pending = [name for name, value in root_chunks.items() if value.get("status") != "passed"]
+            live = live_chunks(root_chunks)
+            if not live:
+                raise ValueError(
+                    "final acceptance needs at least one live chunk that passed, and every declared chunk was retired"
+                    + ("; " + merge_next_action(unfinished_merge_targets(root_chunks)) if unfinished_merge_targets(root_chunks) else "")
+                )
+            pending = [name for name, value in live.items() if value.get("status") != "passed"]
             if pending:
                 raise ValueError("final acceptance requires every chunk to pass first: " + ", ".join(pending))
+            unfinished = unfinished_merge_targets(root_chunks)
+            if unfinished:   # work merged into a chunk that was never declared is not done (Codex review 2026-11-02, R1-1)
+                raise ValueError("final acceptance requires the merged work to be declared and passed first; " + merge_next_action(unfinished))
         elif mode == "application":
             subtasks = plan.get("subtasks", {})
             if not subtasks:
@@ -16332,6 +16479,15 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
     return result
 
 
+def record_preview_tick_failure(root: Path, message: str) -> dict[str, Any]:
+    """A pass of the candidate-preview supervisor crashed; keep a durable, secret-free trace for the owner and the CTO."""
+    with locked_state(root) as state:
+        return _event(state, "release_preview_tick_failed", None, {
+            "task": "",
+            "message": "The app preview could not run its latest check, so a preview may not start: " + redaction.redact(message)[:300],
+        })
+
+
 PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle", "skipped"}
 
 
@@ -16410,8 +16566,38 @@ def _resolve_accepted_follow_ups(state: dict[str, Any], task: str, head_commit: 
             break
 
 
-def record_release_decision(root: Path, task: str, decision: str, reason: str = "") -> dict[str, Any]:
-    """Persist the owner's response against an already released task."""
+def _normalized_upload_destination(value: Any) -> dict[str, str] | None:
+    """Re-check a destination handed to `record_release_decision`: returns {"url", "branch"} or None; raises ValueError if malformed."""
+    from harness import project_registry
+    return project_registry.normalize_upload_destination(value)
+
+
+def _new_upload(state: dict[str, Any], task: str, release: dict[str, Any], destination: dict[str, str] | None) -> dict[str, Any] | None:
+    """The pending upload saved with the owner's Accept, or None when this Accept uploads nothing.
+
+    Takes the board state (inside its lock), the task, its release record and the destination the project had at this
+    Accept ({"url", "branch"} or None). Returns the record harness/upload_on_accept.py later runs, or None for a project with
+    no destination and for a task outside the governed Git path (no repository, so there is no commit to find). Written with
+    the decision, before any Git change, so the destination and the reviewed head are fixed even if the app stops at once.
+    """
+    head = str(release.get("head_commit") or "")
+    if not destination or not head or not (state.get("task_repositories") or {}).get(task):
+        return None
+    return {
+        "id": secrets.token_hex(8), "url": destination["url"], "branch": destination["branch"],
+        "release_head": head, "created_at": now(), "status": "pending", "attempts": [],
+    }
+
+
+def record_release_decision(root: Path, task: str, decision: str, reason: str = "",
+                            upload_destination: dict[str, str] | None = None) -> dict[str, Any]:
+    """Persist the owner's response against an already released task.
+
+    `upload_destination` is the project's {"url", "branch"} as the trusted manager registry holds it right now (None when
+    the project has none); an Accept saves it on the decision as `upload` (see `_new_upload`). Only this owner function
+    ever creates an upload: administrative closure and the acceptance writers never do.
+    """
+    upload_destination = _normalized_upload_destination(upload_destination)
     task = task.strip()
     decision = decision.strip().lower()
     reason = reason.strip()
@@ -16473,6 +16659,8 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
                 "attachments": [],
                 "recorded_at": now(),
             }
+            if decision == "accepted":
+                response["upload"] = _new_upload(state, task, release, upload_destination)
             state["release_decisions"][task] = response
             governed_acceptance = bool(
                 decision == "accepted"
@@ -17742,6 +17930,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("git-commit"); p.add_argument("--agent", required=True); p.add_argument("--path", action="append", required=True); p.add_argument("--message", required=True); p.add_argument("--subtask", default="")
     p = sub.add_parser("reopen-candidate-scope"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("declare-chunks"); p.add_argument("--agent", required=True); p.add_argument("--chunk", action="append", required=True, metavar="NAME:DESCRIPTION"); p.add_argument("--reason", default="")
+    p = sub.add_parser("retire-chunk"); p.add_argument("--agent", required=True); p.add_argument("--chunk", required=True); p.add_argument("--reason", required=True); p.add_argument("--into", default="")
     p = sub.add_parser("request-review"); p.add_argument("--agent", required=True); p.add_argument("--ledger", required=True); p.add_argument("--summary", required=True); p.add_argument("--unit-test-command", "--test-command", dest="test_command", required=True, help="unit-test command executed before acceptance scenarios and captured by the board; --test-command remains a compatibility alias"); p.add_argument("--phase", choices=["chunk", "subtask_acceptance", "final_acceptance"], default="chunk"); p.add_argument("--subtask", default=""); p.add_argument("--chunk", default=""); p.add_argument("--changes", default=""); p.add_argument("--test-scope", default="full", choices=sorted(TEST_SCOPES)); p.add_argument("--scope-reason", default=""); p.add_argument("--repair-package", default=""); p.add_argument("--difficulty", default="", help="optional: one line on what slowed you down (vague requirement, broken build, missing tool); never required")
     p = sub.add_parser("claim-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default=""); p.add_argument("--challenge-ledger", default="")
     p = sub.add_parser("reserve-qa"); p.add_argument("--agent", required=True); p.add_argument("--request", default="")
@@ -17888,6 +18077,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "declare-chunks":
             chunks = [tuple(raw.split(":", 1)) if ":" in raw else ("", "") for raw in args.chunk]
             out = declare_chunks(root, args.agent, chunks, args.reason)
+        elif args.command == "retire-chunk": out = retire_chunk(root, args.agent, args.chunk, args.reason, args.into)
         elif args.command == "request-review": out = request_review(root, args.agent, args.ledger, args.summary, args.phase, args.chunk, args.changes, test_command=args.test_command, subtask=args.subtask, test_scope=args.test_scope, scope_reason=args.scope_reason, repair_package_id=args.repair_package)
         elif args.command == "claim-qa": out = claim_qa(root, args.agent, args.request, args.challenge_ledger)
         elif args.command == "reserve-qa": out = reserve_qa(root, args.agent, args.request)

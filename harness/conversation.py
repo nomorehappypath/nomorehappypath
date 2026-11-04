@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness import control
+from harness import control, redaction
 from harness.project_context import ProjectRoot
 
 # Terminal escape sequences a transcript reader should not see: CSI, OSC and
@@ -129,6 +129,7 @@ class Transcript:
         token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
         if token:
             line = line.replace(token, "[REDACTED CLAUDE TOKEN]")
+        line = redaction.redact(line)
         try:
             self._handle.write(f"{_now()} {marker} {line}\n")
             self._handle.flush()

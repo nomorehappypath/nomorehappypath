@@ -34,7 +34,10 @@ class PreviewEnvironmentTests(unittest.TestCase):
         self.assertIn(self.tools.name, parts)
         self.assertNotIn("/does/not/exist", parts)
         self.assertEqual(len(parts), len(set(parts)), "no repeats")
-        self.assertEqual(values["HOME"], "/h")
+        # P1 (repair): the accepted Stage 1 requirement is PATH and the preview's own declared
+        # variables only; HOME is a worker variable, not declared by this preview, and must not
+        # pass through just because the worker's own environment happened to carry it.
+        self.assertNotIn("HOME", values)
 
     def test_port_and_browser_are_added_only_when_asked(self):
         self.assertNotIn("PORT", self.widened("/usr/bin"))
@@ -43,6 +46,23 @@ class PreviewEnvironmentTests(unittest.TestCase):
 
     def test_an_empty_path_still_gets_the_tool_folders(self):
         self.assertIn(self.tools.name, self.widened("")["PATH"].split(os.pathsep))
+
+    def test_a_worker_only_credential_never_reaches_the_candidate_preview(self):
+        # P1: preview_environment used to copy the whole worker environment, so the Claude
+        # sign-in token and the manager's own proxy token reached every candidate preview.
+        with mock.patch.object(self.discovery, "owner_tool_directories", return_value=()):
+            values = release_preview.preview_environment({
+                "PATH": "/usr/bin", "HOME": "/h",
+                "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-" + "x" * 30,
+                "HARNESS_MANAGER_PROXY_TOKEN": "y" * 40,
+            })
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", values)
+        self.assertNotIn("HARNESS_MANAGER_PROXY_TOKEN", values)
+        # Nothing from the worker's own environment reaches the preview except PATH: not even an
+        # ordinary variable like HOME, since the accepted requirement is PATH and the preview's own
+        # declared variables only.
+        self.assertNotIn("HOME", values)
+        self.assertEqual(set(values) - {"PATH"}, set())
 
 
 class OwnerCommandFindsItsToolsTests(PreviewFixture):

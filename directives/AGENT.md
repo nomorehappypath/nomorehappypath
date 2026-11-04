@@ -262,6 +262,13 @@ tests on a clean copy of main: a test that fails there too was already failing b
 it alone unless the owner's direction says to fix it. A failure that appears only with your work is yours to fix. Failures that
 come only from your own sandbox (it cannot start a process, a browser or a git worktree) are reported as not tested, never chased.
 
+**Code you write documents itself (owner 2026-11-03).** This is for whoever maintains the code after you. In every file you
+create or change: the file opens with a short note saying what it does; every function or method you add or change says what it
+takes and what it returns (and what it raises or changes, if anything); and a comment explains why wherever the reason is not
+obvious from the code (a workaround, a limit, an order that matters, a choice between two ways). Use the language's own form
+(docstrings in Python, JSDoc in JavaScript, doc comments elsewhere). Do not comment what the code plainly says, and do not go back
+and document files the task does not touch.
+
 6. Record unit-test output (`--unit-test-command`) and Delivery acceptance simulations as distinct
    evidence, then queue the proportional review and start its wait clock:
    - atomic task: `final_acceptance`;
@@ -329,6 +336,7 @@ come only from your own sandbox (it cannot start a process, a browser or a git w
      retired, and every live subtask must still pass. Owning source under
      `<app>/src` also owns its rebuilt `<app>/dist`; commit both together. A
      tracked file under an ignored folder is committed by naming it explicitly.
+   When the owner removes or merges planned chunks of a chunked task, retire each chunk that was never reviewed with `retire-chunk --chunk <name> --reason "<owner's words>" [--into <chunk>]` (for a merge, add `--into <a remaining open chunk>`, which then carries the merged work; declare a new combined chunk with `declare-chunks --reason` only when no open chunk fits, because a declaration restarts the review-stop counting), and ask the CTO for the owner waiver if the removed work is a Completion Contract deliverable.
    Record the classification and a concise rationale with `define-plan`. Never
    create a chunk merely to satisfy process.
 
@@ -477,7 +485,9 @@ and mark the verdict `TASK DONE: NOT TESTED`.
   regressing; an applicable item of the Minimum security baseline (chapter `security-baseline`)
   missing or broken (the owner never sees security, but always receives it);
   the Central error sink (chapter `error-sink`) missing or broken; an Enhanced security
-  deliverable missing while the task's checkbox is on.
+  deliverable missing while the task's checkbox is on; the in-code
+  documentation of chapter `delivery-workflow` missing from a file or function
+  the task created or changed.
   Procedural, and never admitted unless the owner asked for it by
   name: git-tree and commit-identity bookkeeping; chunk-boundary and
   delivery-plan challenges; source-structure assertions (is this helper
@@ -749,6 +759,12 @@ the cap; running out of time means you are writing procedural rows.
   it returned in the ledger row's observed column. The board checks every cited
   id (a real, unmodified capture of this task), and the Reviewer's ledger must
   cite the Reviewer's own capture, not only Delivery's.
+  Your app must be listening while the capture runs, and no process may be left
+  running in the background. Start it and capture it in one foreground command
+  with the helper beside `board.py`: `python3 .../serve_for_check.py --start
+  "<the command that starts your app>" --port <port> -- <the screen-check or
+  screen-script command>`. It starts the app, waits until the port answers, runs
+  the check and always stops the app afterwards.
   A screen-check shows one page at one moment from a loopback server; it does
   not prove clicking, typing or a sequence of steps. The board records which
   folder the server runs from and fingerprints your work folder at capture, and
@@ -1130,6 +1146,12 @@ done from here, or the review is not yours to do; never because a screen capture
 back to the queue for another reviewer, no test is counted as failed, and you
 are not offered that request again. It is not a verdict; if you found a real
 failure, record the FAIL instead.
+
+**Check the in-code documentation (owner 2026-11-03).** In every file the task created or changed, check the three things
+chapter `delivery-workflow` requires: the file's opening note on what it does; for each function or method added or changed,
+what it takes and what it returns; a why-comment wherever the reason is not obvious. Any of them missing is material: FAIL and
+name each gap by file:line so the repair is exact. Files the task did not touch, and the wording of a note that is there, are
+never a reason to fail.
 
 If you hold the reservation (Delivery's evidence has passed) but cannot attach a
 valid Challenge Ledger because the code moved on, and you already have evidence

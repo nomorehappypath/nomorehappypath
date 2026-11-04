@@ -41,7 +41,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, cli_capabilities, control, cost_center, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
 from harness.project_context import context_cli_arguments
-from harness import story, workspace_settings
+from harness import story, upload_on_accept, workspace_settings
 from harness import test_machine
 from harness import platform_support, web_guard
 from harness.project_manager_page import PAGE
@@ -1622,6 +1622,10 @@ class ProjectManager:
         # Every Resume press ends by telling the live sessions the board is open: also a repeated press after a crash between the
         # finish and the wake (a duplicate wake only asks for a poll, so nothing needs bookkeeping).
         woken = self._wake_after_resume(context)
+        # An upload interrupted by the Pause (its outcome cannot be saved while paused, so it stays "running") or refused meanwhile
+        # finishes now. The worker's own start-up wake does not run again for a worker the Pause kept, so Resume wakes the queue
+        # itself; uploads stay one at a time (the per-project lock) and re-running one never pushes twice (review 2026-11-03 R1-1).
+        upload_on_accept.wake(context, include_stopped=True)
         self._machine_handoff_if_pending(project_id, context)
 
         return {
@@ -1955,7 +1959,7 @@ def make_handler(manager: ProjectManager):
                         return self._send(200, manager.resume_project(project_id))
                     if action == "repair":
                         fields = {k: v for k, v in self._body().items()
-                                  if k in ("name", "description", "code_root", "data_root", "workspace_root")}
+                                  if k in ("name", "description", "code_root", "data_root", "workspace_root", "upload_destination")}
                         current = registry._find(registry.load(manager.home), project_id)
                         if fields.get("code_root") and current.get("kind") == "scaffold":
                             old_code = Path(current["code_root"])

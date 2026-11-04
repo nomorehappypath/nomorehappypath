@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from harness import redaction
 from harness.project_context import ProjectRoot, add_context_arguments, context_from_args, project_context
 
 
@@ -534,12 +535,50 @@ def _reconcile(state: dict[str, Any]) -> None:
                 _end_limit_hold(session, session.get("ended_at"))
 
 
+FORCE_KILL_WAIT_SECONDS = 1.0
+
+
+def _force_kill(pid: int, expected_start_token: str) -> bool:
+    """SIGKILL one overdue-to-stop process and say whether it is still there afterwards.
+
+    Signals the single pid, never a group addressed by that number, and only when the process still has the
+    start time recorded when the session attached: a number reused by another program after the agent exited
+    is not the agent. With no recorded start time nothing is killed and the process is reported as still
+    there, which is the honest answer. An already-gone process is the outcome the caller wanted.
+    """
+    if not expected_start_token:
+        return _pid_is_alive(pid)
+    from harness import platform_support
+    try:
+        current = platform_support.process_identity().start_token(pid)
+    except OSError:
+        return _pid_is_alive(pid)
+    if current != expected_start_token:
+        return False                      # the number now belongs to something else; the agent itself is gone
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    deadline = time.monotonic() + FORCE_KILL_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if not _pid_is_alive(pid):
+            return False
+        time.sleep(0.05)
+    return _pid_is_alive(pid)
+
+
 def _reconcile_sessions(state: dict[str, Any]) -> None:
     for session in state["sessions"].values():
         if session["status"] not in ACTIVE_STATUSES:
             continue
         if session["pid"]:
             alive = _pid_is_alive(session["pid"])
+            if alive and _stop_overdue(session):
+                # P13: the first SIGTERM was ignored. Force the process down before the card says it stopped;
+                # only a process that survives even SIGKILL is reported as "did not finish exiting".
+                alive = _force_kill(int(session["pid"]), str(session.get("pid_start_token") or ""))
             if alive and _stop_overdue(session):
                 paused = bool(session.get("pause_requested_at"))
                 session.update({
@@ -591,16 +630,19 @@ def _reconcile_sessions(state: dict[str, Any]) -> None:
 
 LAUNCH_STEP_PLAIN = "starting up"
 MAX_LAUNCH_DIAGNOSTIC = 300
-_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_\-.]{32,}")
+_LONG_OPAQUE_RUN = re.compile(r"[A-Za-z0-9_\-.]{32,}")
 
 
 def sanitize_launch_diagnostic(text: Any) -> str:
-    """The runner's last words, made safe to keep and show: no control characters, no token-like strings, bounded."""
+    """The runner's last words, made safe to keep and show: no control characters, no token-like strings, bounded.
+
+    RF1: the labelled/shaped-credential removal is now the one shared `harness.redaction.redact`, also
+    used by the board's status/event/transcript free text. A launch diagnostic additionally redacts any
+    long opaque run regardless of character mix (not just letters-and-digits), since a CLI's own failure
+    output can quote a token made of one repeated character or letters only."""
     cleaned = "".join(character if character.isprintable() else " " for character in str(text or ""))
-    cleaned = re.sub(r"HARNESS_[A-Z_]*TOKEN\S*", "[redacted]", cleaned)
-    cleaned = re.sub(r"(?i)(bearer|authorization:?|token|secret|password|passwd|api[_-]?key|key)([=:\s]+)\S+", r"\1\2[redacted]", cleaned)
-    cleaned = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1[redacted]@", cleaned)
-    cleaned = _TOKEN_SHAPE.sub("[redacted]", cleaned)
+    cleaned = redaction.redact(cleaned)
+    cleaned = _LONG_OPAQUE_RUN.sub(redaction.MARKER, cleaned)
     cleaned = " ".join(cleaned.split())
     return cleaned[-MAX_LAUNCH_DIAGNOSTIC:]
 
@@ -1248,8 +1290,13 @@ def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
             history = list(session.get("launch_failures") or [])
             history.append(earlier)
             session["launch_failures"] = history[-5:]
+        try:
+            from harness import platform_support
+            pid_start_token = platform_support.process_identity().start_token(pid)
+        except OSError:
+            pid_start_token = ""
         session.update({
-            "status": "running", "pid": pid, "terminal_tty": terminal_tty, "attached_at": now(),
+            "status": "running", "pid": pid, "pid_start_token": pid_start_token, "terminal_tty": terminal_tty, "attached_at": now(),
             "reason": "interactive CLI session is running",
             # A new attempt: the CLI is not launched yet, and no failure is current.
             "launch_tracked": True, "launch_noted_at": None, "launch_exec_at": None, "launch_failure": None,
@@ -1769,8 +1816,13 @@ def stop(root: Path, session_id: str) -> dict[str, Any]:
         session["stop_requested_at"] = now()
         session["reason"] = "stop requested from control panel"
         if session["pid"] and _pid_is_alive(session["pid"]):
-            os.kill(session["pid"], signal.SIGTERM)
-            session["status"] = "stopping"
+            try:
+                os.kill(session["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                # P20: it exited between the check and the signal, the same race pause() handles below.
+                session.update({"status": "stopped", "ended_at": now(), "reason": "terminal exited while the stop signal was sent"})
+            else:
+                session["status"] = "stopping"
         else:
             session.update({"status": "stopped", "ended_at": now(), "reason": "stopped before terminal session attached"})
         return dict(session)

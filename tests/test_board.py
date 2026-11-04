@@ -77,6 +77,58 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(first["poll_counter"], 1)
         self.assertEqual(second["poll_counter"], 2)
 
+    def test_a_credential_pasted_into_a_status_note_is_redacted_before_it_is_stored(self):
+        # P6: status() wrote the agent's free text verbatim into BOARD.md and events.jsonl, with no
+        # redaction, so a captured command's own output (an Authorization header, say) landed in a
+        # durable, widely-read file in cleartext.
+        dev = self.delivery("TASK-REDACT")
+        secret = "sk-ant-api03-" + "x" * 30
+        board.status(self.root, dev["id"], f"build failed: Authorization: Bearer {secret}")
+        snapshot = board.snapshot(self.root)
+        self.assertNotIn(secret, snapshot["agents"][dev["id"]]["status_note"])
+        self.assertNotIn(secret, json.dumps(snapshot["events"]))
+
+    def test_a_credential_pasted_into_an_owner_direction_is_redacted_from_the_event_but_the_routed_text_stays_exact(self):
+        # P6 repair, cycle 2: owner_direction_received/owner_clarification_received wrote the owner's
+        # free text into their own events verbatim. The routed instruction and state["owner_directions"]
+        # (what begin_task later copies into task_begun, and what confirm-requirements must match
+        # byte-exact) stay untouched; only the event's own copy, the thing other agents and an export
+        # can read, is redacted.
+        session = control.create(self.root, "codex_delivery")
+        agent = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        secret = "sk-ant-api03-" + "x" * 30
+        with patch("harness.control.enqueue_instruction", return_value={"id": "m-1"}) as enqueue:
+            result = board.record_owner_message(self.root, agent["id"], f"Build the thing. Key: {secret}", "direction")
+        self.assertNotIn(secret, result["event"]["owner_direction"])
+        self.assertIn(secret, board.snapshot(self.root)["owner_directions"][session["id"]]["text"])
+        self.assertIn(secret, enqueue.call_args.args[2])
+
+    def test_a_credential_pasted_into_an_owner_direction_or_clarification_never_reaches_the_saved_board_page(self):
+        # P6 repair, cycle 3 (B4): BOARD.md's "Owner messages" table copied each owner message's text
+        # verbatim, so a credential pasted into a direction or clarification landed in the saved,
+        # broadly readable project page even though the event copy was already redacted. The routed
+        # instruction and state["owner_directions"] stay byte-exact; only what is written to the
+        # page is redacted.
+        session = control.create(self.root, "codex_delivery")
+        agent = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        direction_secret = "sk-ant-api03-" + "x" * 30
+        clarification_secret = "ghp_" + "y" * 36
+        with patch("harness.control.enqueue_instruction", return_value={"id": "m-1"}) as enqueue:
+            board.record_owner_message(self.root, agent["id"], f"Build the thing. Key: {direction_secret}", "direction")
+            board.record_owner_message(self.root, agent["id"], f"Use this token: {clarification_secret}", "clarification")
+        routed = [call.args[2] for call in enqueue.call_args_list]
+        self.assertIn(direction_secret, routed[0])
+        self.assertIn(clarification_secret, routed[1])
+        self.assertIn(direction_secret, board.snapshot(self.root)["owner_directions"][session["id"]]["text"])
+        page = (board.board_dir(self.root) / "BOARD.md").read_text()
+        self.assertIn("Build the thing.", page)
+        self.assertIn("Use this", page)  # the labelled-secret shape swallows "token: ..." too, by design
+        self.assertNotIn(direction_secret, page)
+        self.assertNotIn(clarification_secret, page)
+        events = (board.board_dir(self.root) / "events.jsonl").read_text()
+        self.assertNotIn(direction_secret, events)
+        self.assertNotIn(clarification_secret, events)
+
     def test_viewer_owner_direction_and_working_task_clarification_are_atomic_with_attachments(self):
         session = control.create(self.root, "codex_delivery")
         dev = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])

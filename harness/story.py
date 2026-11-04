@@ -145,9 +145,10 @@ def review_scope(review: dict[str, Any] | None) -> str:
 
 
 def task_facts(state: dict[str, Any], task: str, agents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    chunks = list(_dict(_dict(state.get("task_chunks")).get(task)).values())
+    all_chunks = list(_dict(_dict(state.get("task_chunks")).get(task)).values())
+    chunks = [c for c in all_chunks if _dict(c).get("status") != "retired"]   # work Delivery removed is not unfinished work
     plan = _dict(_dict(state.get("delivery_plans")).get(task))
-    mode = plan.get("mode") or ("chunked" if chunks else "atomic")
+    mode = plan.get("mode") or ("chunked" if all_chunks else "atomic")
     subtasks = [s for s in _dict(plan.get("subtasks")).values() if isinstance(s, dict) and s.get("status") != "superseded"]
     reviews = [r for r in _dict(state.get("qa_requests")).values() if isinstance(r, dict) and r.get("task") == task]
     pool = agents if agents is not None else visible_agents(state)
@@ -1198,7 +1199,7 @@ def _areas(c: dict[str, Any]) -> list[dict[str, Any]]:
         if items:
             return [{"id": name, "title": _title_case(name), "done": sub.get("status") == "passed", "kind": "work area",
                      "reviews": [r for r in plain if r.get("subtask") == name]} for name, sub in items]
-    chunks = [(name, ch) for name, ch in _dict(_dict(state.get("task_chunks")).get(c["task"])).items() if isinstance(ch, dict)]
+    chunks = [(name, ch) for name, ch in _dict(_dict(state.get("task_chunks")).get(c["task"])).items() if isinstance(ch, dict) and ch.get("status") != "retired"]
     if mode == "chunked" and len(chunks) > 1:
         return [{"id": name, "title": _title_case(name), "done": ch.get("status") == "passed", "kind": "part",
                  "reviews": [r for r in plain if r.get("chunk") == name or r.get("subtask") == name]} for name, ch in chunks]

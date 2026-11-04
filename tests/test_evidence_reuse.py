@@ -172,6 +172,55 @@ class EvidenceReuseTests(unittest.TestCase):
         # task 2026-10-26_no-paperwork-reruns: the commit hash and the machine's environment are not compared any more.
         self.assertFalse({"commit hash", "environment identity"} & identities)
 
+    def _chunk_case(self):
+        """Two root chunks approved one after the other, with the request shape the app records (no accepted-byte manifest for a
+        root chunk; 2026-11-02 final whole-app reviews F1-1 and F2-1)."""
+        case = self._case()
+        code = case["code"]
+        git = lambda *args: subprocess.run(["git", *args], cwd=code, check=True, capture_output=True, text=True).stdout.strip()
+        requests = {}
+        for name in ("a", "b"):
+            (code / f"chunk_{name}.txt").write_text(f"chunk {name} reviewed bytes\n", encoding="utf-8")
+            git("add", f"chunk_{name}.txt"); git("commit", "-qm", f"chunk {name}")
+            identity = board._git_review_artifact(code)
+            request = dict(case["request"], phase="chunk", subtask="", chunk=name, id=f"review-T-REUSE-{name}-01",
+                           reviewed_commit=identity["commit"], reviewed_tree_hash=identity["tree_hash"],
+                           reviewed_worktree_digest=identity["working_tree_digest"], accepted_byte_manifest={})
+            request["evidence_reuse_identity"] = board._pass_reuse_identity(request)
+            requests[name] = request
+        with board.locked_state(case["root"]) as state:
+            state["qa_requests"].pop(case["request"]["id"], None)
+            state["qa_requests"].update({request["id"]: request for request in requests.values()})
+            state["delivery_plans"]["T-REUSE"] = {"task": "T-REUSE", "mode": "chunked", "structure_revision": 1, "rationale": "two parts"}
+            state.setdefault("task_chunks", {})["T-REUSE"] = {"a": {"description": "part a", "status": "passed"},
+                                                             "b": {"description": "part b", "status": "passed"}}
+        case.update(requests=requests, git=git)
+        return case
+
+    def _resume(self, case):
+        manager = project_manager.ProjectManager(case["home"], board_port=0, terminal_launcher=lambda *_: None)
+        manager.pause_project(case["entry"]["id"], drain_seconds=0, stop_timeout=0)
+        manager.worker = _Worker()
+        manager.worker_project = case["entry"]["id"]
+        return manager.resume_project(case["entry"]["id"])
+
+    def test_earlier_chunk_passes_survive_resume_when_a_later_approved_chunk_is_the_head(self):
+        case = self._chunk_case()
+        result = self._resume(case)["evidence_reuse"]
+        self.assertEqual(result["invalidated"], [], "chunk b's approval covers chunk a's reviewed commit and is exactly the head")
+        state = board.snapshot(case["root"])
+        self.assertEqual({name: state["task_chunks"]["T-REUSE"][name]["status"] for name in ("a", "b")}, {"a": "passed", "b": "passed"})
+        self.assertEqual({state["qa_requests"][r["id"]]["status"] for r in case["requests"].values()}, {"passed"})
+
+    def test_an_unreviewed_change_after_the_last_approval_still_voids_the_passes(self):
+        case = self._chunk_case()
+        (case["code"] / "chunk_a.txt").write_text("changed after the review\n", encoding="utf-8")
+        case["git"]("commit", "-qam", "unreviewed change")
+        result = self._resume(case)["evidence_reuse"]
+        self.assertEqual(len(result["invalidated"]), 2)
+        state = board.snapshot(case["root"])
+        self.assertEqual(state["task_chunks"]["T-REUSE"]["a"]["status"], "open")
+
     def test_tree_hash_change_invalidates_saved_pass(self):
         case = self._case()
         changed = dict(case["git_identity"], tree_hash="different-tree")

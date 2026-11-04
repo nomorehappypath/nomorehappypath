@@ -332,6 +332,8 @@ PAGE = r'''<!doctype html>
     .tell-builder { margin-top: 12px; min-height: 46px; font-size: 15px; }
     details.adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
     details.adv > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; color: var(--mc-muted); font-size: 13px; font-weight: 700; }
+    details.adv > summary::before { content: "\25B8"; margin-right: 6px; }   /* an arrow, so it reads as something that opens */
+    details.adv[open] > summary::before { content: "\25BE"; }
     details.adv > summary:focus-visible { outline: 3px solid rgba(54, 92, 245, .35); outline-offset: 2px; border-radius: 6px; }
     .adv-body { margin-top: 6px; }
     .adv-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -560,6 +562,17 @@ PAGE = r'''<!doctype html>
             </ul>
           </section>
 
+          <section class="help-section" data-help-item aria-labelledby="help-tabs-title">
+            <h2 id="help-tabs-title">The Project Page: Story, Proof And Advanced</h2>
+            <p>When you open a project, three tabs sit at the top of the page.</p>
+            <ul class="help-list">
+              <li><strong>Story</strong> is where you normally stay. It shows the current task as its 26 steps (finished steps turn green), what is happening now and when you are needed, the cost so far, the work in progress with <strong>Accepted</strong> and <strong>Not accepted</strong> when it is ready for your test, the task history, and the box to ask about the project.</li>
+              <li><strong>Proof</strong> answers "how do we know it works" for the current task. The tiles at the top count the requirements covered by a test, the tests that failed before the work (so they can really catch the problem), the tests passing now, and the changed files a test notices. The table below lists each requirement with the same three answers. Under it: any test the builder questioned, and the reviewer's code-quality notes, which need nothing from you.</li>
+              <li><strong>Advanced</strong> is for running the agents by hand, and nothing in it is needed for a normal task. It starts Delivery, the Reviewer and the CTO, gives direction, stops or relaunches all agents, shows each agent's terminal (<strong>View agent</strong>) and the review queue, and shows where this project's AI access permissions live.</li>
+            </ul>
+            <p class="help-callout">The <strong>Advanced</strong> at the bottom of a project card on the Projects page is a different menu: it holds <strong>Test machine</strong>, <strong>Folder and GitHub upload</strong> and <strong>Delete</strong>.</p>
+          </section>
+
           <section class="help-section" data-help-item aria-labelledby="help-accept-title">
             <h2 id="help-accept-title">Accept Or Reject Completed Work</h2>
             <ol class="help-steps">
@@ -567,8 +580,15 @@ PAGE = r'''<!doctype html>
               <li>Open the app from the release panel (View app) when one is provided.</li>
               <li>Run the visible checklist shown under <strong>What to test before accepting</strong>. Add your own checks when the task needs them.</li>
               <li>Click <strong>Accepted</strong> only when the reviewed version works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
-              <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation.</li>
+              <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation, unless you turned on upload on accept (below).</li>
             </ol>
+            <p><strong>Upload to GitHub when you accept (optional).</strong> On the Projects page, open the project's <strong>Advanced</strong> and click <strong>Folder and GitHub upload</strong>. Under <strong>GitHub (or other Git) repository to upload to</strong>, enter the repository address (for example <code>https://github.com/you/your-app.git</code> or <code>git@github.com:you/your-app.git</code>) and the <strong>Branch</strong>, then save. Leave both empty to turn it off.</p>
+            <ul class="help-list">
+              <li>From then on, each time you click <strong>Accepted</strong>, the approved version is uploaded to that branch with this computer's own git sign-in. Sign in to GitHub with git on this computer first; never put a password or token in the address.</li>
+              <li>The card says <strong>Uploading</strong>, then <strong>Accepted and uploaded</strong>. Each Accept uploads once; if the branch already has that version, nothing is sent twice.</li>
+              <li>Nothing is ever forced. If the branch already holds work this project does not have, nothing is uploaded and nothing there is changed.</li>
+              <li>If the upload fails (no sign-in, no internet, wrong address), your approval still stands. The card says why in plain words; fix it and press <strong>Upload again</strong>. An upload cut off by a pause or restart finishes on its own when the project runs again.</li>
+            </ul>
           </section>
 
           <section class="help-section" data-help-item aria-labelledby="help-history-title">
@@ -874,12 +894,15 @@ PAGE = r'''<!doctype html>
 
   <dialog id="repair-dialog" aria-labelledby="repair-title">
     <form class="modal" id="repair-form" novalidate>
-      <h2 id="repair-title">Repair project folder</h2>
-      <p class="modal-copy">Choose the folder where this project lives now. Saved harness data and project history will be preserved.</p>
+      <h2 id="repair-title">Project folder and GitHub upload</h2>
+      <p class="modal-copy">If the project moved, choose the folder where it lives now. Saved harness data and project history will be preserved.</p>
       <div class="field"><label>Current folder</label><div class="selected-path" id="repair-current-path"></div></div>
       <div class="field"><label for="repair-folder-typed">New folder</label><div class="folder-control"><button class="button secondary" type="button" id="repair-folder-browse">Choose folder</button><input class="typed-path" type="text" id="repair-folder-typed" placeholder="/home/you/projects/thing" spellcheck="false" hidden><output class="selected-path empty" id="repair-folder-path">No folder selected</output></div></div>
+      <p class="modal-copy">Upload on accept (optional): when you accept a task, the approved version is also uploaded to the repository and branch below, using this computer's own git sign-in. Leave both empty to turn it off.</p>
+      <div class="field"><label for="repair-upload-url">GitHub (or other Git) repository to upload to</label><input type="text" id="repair-upload-url" placeholder="git@github.com:you/project.git" spellcheck="false" autocomplete="off"></div>
+      <div class="field"><label for="repair-upload-branch">Branch</label><input type="text" id="repair-upload-branch" placeholder="main" spellcheck="false" autocomplete="off"></div>
       <p class="form-error" id="repair-error" role="alert" aria-live="polite"></p>
-      <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save folder</button></div>
+      <div class="dialog-actions"><button class="button secondary" type="button" id="repair-cancel">Cancel</button><button class="button" type="submit" id="repair-save">Save</button></div>
     </form>
   </dialog>
 
@@ -1035,8 +1058,8 @@ PAGE = r'''<!doctype html>
       const reopen = project.reopen_restores
         ? '<p class="description" data-reopen-restores="1">Open it and your agents come back with their saved work.</p>' : '';
       const machine = machineParts(project);
-      const machineBtn = machine.html ? '' : `<button class="button ghost" data-act="machine" data-id="${esc(project.id)}">Test machine</button>`;
-      const remove = `<button class="button ghost" data-act="remove" data-id="${esc(project.id)}">Delete</button>`;
+      const machineBtn = machine.html ? '' : `<button class="button secondary" data-act="machine" data-id="${esc(project.id)}">Test machine</button>`;
+      const remove = `<button class="button danger" data-act="remove" data-id="${esc(project.id)}">Delete</button>`;
       // Where each link goes: an open, running project goes straight to its board; any other opens (or resumes) it first.
       const goAct = project.active && !project.paused ? 'view' : 'open';
       const link = (label, hash) => starting ? '' : `<button type="button" data-act="${goAct}" data-id="${esc(project.id)}" data-go="${hash}">${label}</button>`;
@@ -1066,7 +1089,7 @@ PAGE = r'''<!doctype html>
             ${machine.needs ? '' : machine.html}
             <div class="path" title="${esc(project.code_root)}"><span aria-hidden="true">⌁</span><span>${esc(project.code_root)}</span></div>
             <div class="last-active">Last activity <strong>${when(project.last_board_activity || project.last_active_at)}</strong></div>
-            <div class="adv-actions">${machineBtn}${remove}</div>
+            <div class="adv-actions">${machineBtn}<button class="button secondary" data-act="repair" data-id="${esc(project.id)}">Folder and GitHub upload</button>${remove}</div>
           </div></details>
         </div>
         <div class="project-side">
@@ -1885,6 +1908,8 @@ PAGE = r'''<!doctype html>
       q('#repair-current-path').textContent = project.code_root;
       q('#repair-current-path').title = project.code_root;
       setPath('#repair-folder-path', '');
+      q('#repair-upload-url').value = (project.upload_destination || {}).url || '';
+      q('#repair-upload-branch').value = (project.upload_destination || {}).branch || '';
       repairDialog.showModal();
       q('#repair-folder-browse').focus();
     }
@@ -1898,12 +1923,14 @@ PAGE = r'''<!doctype html>
     q('#repair-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const error = q('#repair-error');
-      if (!repairFolder) { error.textContent = 'Choose the project folder.'; return; }
+      // The folder is sent only when a new one was chosen; the upload fields are always sent (both empty clears them).
+      const payload = {upload_destination: {url: q('#repair-upload-url').value, branch: q('#repair-upload-branch').value}};
+      if (repairFolder) payload.code_root = repairFolder;
       q('#repair-save').disabled = true;
       try {
-        await api(`/api/projects/${repairProject.id}/repair`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code_root: repairFolder})});
+        await api(`/api/projects/${repairProject.id}/repair`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
         repairDialog.close();
-        status('Project folder repaired. Saved work is still connected.');
+        status(repairFolder ? 'Project settings saved. Saved work is still connected.' : 'Project settings saved.');
         await refresh();
       } catch (problem) {
         error.textContent = problem.message;

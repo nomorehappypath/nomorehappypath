@@ -82,7 +82,7 @@ class GitBrokerTests(unittest.TestCase):
             self.fail(result.stderr or result.stdout)
         return result.stdout
 
-    def isolated_fixture(self, name: str):
+    def isolated_fixture(self, name: str, use_os_sandbox: bool = True, new_file: str = ""):
         repository = self.base / name / "code"
         repository.mkdir(parents=True)
         self._git(repository, "init", "-b", "main")
@@ -99,12 +99,16 @@ class GitBrokerTests(unittest.TestCase):
             "remote_push_instructions": {}, "approved_remotes": {},
         }
         context = ProjectContext(repository, self.base / name / "data", self.base / name / "workspaces")
-        broker = GitBroker(context, state_loader=lambda: state)
+        broker = GitBroker(context, state_loader=lambda: state, use_os_sandbox=use_os_sandbox)
         created = broker.branch_create("delivery", 1)
         state["task_workspaces"]["TASK"] = created["workspace"]
         workspace = Path(created["workspace"])
         (workspace / "product.txt").write_text("candidate\n", encoding="utf-8")
-        committed = broker.stage_commit("delivery", 2, ["product.txt"], "candidate")
+        added = [new_file] if new_file else []
+        if new_file:
+            (workspace / new_file).parent.mkdir(parents=True, exist_ok=True)
+            (workspace / new_file).write_text("from the candidate\n", encoding="utf-8")
+        committed = broker.stage_commit("delivery", 2, ["product.txt", *added], "candidate")
         request = {"id": f"review-{name}", "task": "TASK", "reviewed_commit": committed["commit"], "reviewed_tree_hash": committed["tree"]}
         state["qa_requests"][request["id"]] = request
         pinned = broker.create_review_ref(request, review_number=1, board_mutation=lambda record: request.update(record))
@@ -476,6 +480,80 @@ class GitBrokerTests(unittest.TestCase):
                 self.assertEqual(outcomes[-1]["status"], "CTO_RECOVERY_HOLD")
                 self.assertEqual(outcomes[-1]["observed_main"], external)
                 self.assertEqual(self._git(repository, "rev-parse", "main").strip(), external)
+
+    def test_accept_merge_recovery_holds_instead_of_discarding_an_owner_edit_on_main(self):
+        # P9: after an acceptance crash the owner edited a tracked file in the real main worktree;
+        # recovery ran `git reset --hard` with no dirty check and erased that edit silently.
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("dirty-main-recovery", use_os_sandbox=False)  # recovery logic only; keeps this runnable inside another sandbox
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "product.txt").write_text("owner edit after the crash\n", encoding="utf-8")
+        outcomes = broker.recover()
+        self.assertEqual(outcomes[-1]["status"], "CTO_RECOVERY_HOLD")
+        self.assertIn("uncommitted", outcomes[-1]["reason"])
+        self.assertEqual((repository / "product.txt").read_text(encoding="utf-8"), "owner edit after the crash\n")
+        self.assertEqual(self._git(repository, "rev-parse", "main").strip(), committed["commit"])
+
+    def test_accept_merge_recovery_holds_instead_of_overwriting_an_untracked_owner_file(self):
+        # B1 (review of Stage 3): `git reset --hard` also overwrites an UNTRACKED file sitting where the
+        # target commit adds a file, and a tracked-only check never saw it.
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("untracked-draft", use_os_sandbox=False, new_file="notes.txt")
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "notes.txt").write_text("my own draft\n", encoding="utf-8")
+        outcomes = broker.recover()
+        self.assertEqual(outcomes[-1]["status"], "CTO_RECOVERY_HOLD")
+        self.assertIn("notes.txt", outcomes[-1]["reason"])
+        self.assertEqual((repository / "notes.txt").read_text(encoding="utf-8"), "my own draft\n")
+
+    def test_accept_merge_recovery_holds_for_an_untracked_folder_where_the_target_adds_a_file(self):
+        # B1 again (second review of Stage 3): the target adds a FILE named docs; the owner's draft is docs/notes.txt.
+        # The reset removes the folder to make room, so a match on exact paths alone missed it.
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("untracked-folder", use_os_sandbox=False, new_file="docs")
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "docs").mkdir()
+        (repository / "docs" / "notes.txt").write_text("my own draft\n", encoding="utf-8")
+        outcomes = broker.recover()
+        self.assertEqual(outcomes[-1]["status"], "CTO_RECOVERY_HOLD")
+        self.assertEqual((repository / "docs" / "notes.txt").read_text(encoding="utf-8"), "my own draft\n")
+
+    def test_accept_merge_recovery_holds_for_an_untracked_file_where_the_target_adds_a_folder(self):
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("untracked-file-for-folder", use_os_sandbox=False, new_file="docs/notes.txt")
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "docs").write_text("my own draft\n", encoding="utf-8")
+        outcomes = broker.recover()
+        self.assertEqual(outcomes[-1]["status"], "CTO_RECOVERY_HOLD")
+        self.assertEqual((repository / "docs").read_text(encoding="utf-8"), "my own draft\n")
+
+    def test_accept_merge_recovery_ignores_an_untracked_file_in_an_unrelated_folder(self):
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("untracked-unrelated", use_os_sandbox=False, new_file="notes.txt")
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "elsewhere").mkdir()
+        (repository / "elsewhere" / "scratch.txt").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(broker.recover()[-1]["status"], "completed_idempotently")
+        self.assertEqual((repository / "elsewhere" / "scratch.txt").read_text(encoding="utf-8"), "unrelated\n")
+
+    def test_accept_merge_recovery_ignores_an_untracked_file_that_is_already_the_target_content(self):
+        repository, _, broker, _, committed, candidate = self.isolated_fixture("untracked-same", use_os_sandbox=False, new_file="notes.txt")
+        with self.assertRaises(InjectedCrash):
+            broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after="git_mutation")
+        (repository / "notes.txt").write_text("from the candidate\n", encoding="utf-8")
+        self.assertEqual(broker.recover()[-1]["status"], "completed_idempotently")
+
+    def test_accept_merge_recovery_still_completes_when_main_is_untouched(self):
+        # The guard must not hold on the recovery's own unmaterialized state: a worktree still at the
+        # previous commit (crash before reset) and one already at the target (crash after) both finish.
+        for crash_point in ("git_mutation", "board_mutation"):
+            with self.subTest(crash_point=crash_point):
+                repository, _, broker, _, committed, candidate = self.isolated_fixture("clean-main-" + crash_point, use_os_sandbox=False)
+                with self.assertRaises(InjectedCrash):
+                    broker.accept_merge("TASK", candidate, board_mutation=lambda record: None, crash_after=crash_point)
+                outcomes = broker.recover()
+                self.assertEqual(outcomes[-1]["status"], "completed_idempotently")
+                self.assertEqual((repository / "product.txt").read_text(encoding="utf-8"), "candidate\n")
 
     def test_guarded_push_uses_exact_accepted_commit_and_aborts_on_drift(self):
         _, _, committed = self.create_candidate()

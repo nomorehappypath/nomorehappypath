@@ -112,6 +112,15 @@ class ReadyClaimTests(_Fixture):
         with self.assertRaisesRegex(ValueError, "route the next action"):
             board.status(self.root, self.cto["id"], "reviewing", "waiting")
 
+    def test_a_credential_in_the_ready_claim_note_is_redacted_from_the_event(self):
+        # P6 repair: the stored event snippet embedded the agent's free text verbatim.
+        self.review("failed")
+        secret = "sk-ant-api03-" + "z" * 30
+        board.status(self.root, self.delivery["id"], f"Feature complete and tested; key is {secret}", "working")
+        events = [event for event in board.snapshot(self.root)["events"] if event["kind"] == "ready_claim_without_review"]
+        self.assertEqual(len(events), 1)
+        self.assertNotIn(secret, events[0]["message"])
+
     def test_the_task_brief_is_checked_too_and_a_real_pass_silences_it(self):
         self.review("failed")
         board.task_brief(self.root, self.delivery["id"], "Build the deck", "Ready for you to test now.")

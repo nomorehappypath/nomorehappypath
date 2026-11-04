@@ -86,6 +86,19 @@ class TranscriptTests(unittest.TestCase):
         for line in text.splitlines():
             self.assertRegex(line, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00 ")
 
+    def test_a_secret_shaped_other_token_printed_by_a_command_is_redacted(self):
+        # P11: only the active CLAUDE_CODE_OAUTH_TOKEN was ever redacted; any other
+        # credential a misconfigured command prints (an OPENAI_API_KEY, say) was kept
+        # in the transcript verbatim.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "control" / "transcripts" / "s.log"
+            transcript = conversation.Transcript(path)
+            transcript.agent_bytes(b"OPENAI_API_KEY=sk-test1234567890ABCDEFghijklmnop\n")
+            transcript.close()
+            text = path.read_text(encoding="utf-8")
+        self.assertNotIn("sk-test1234567890ABCDEFghijklmnop", text)
+        self.assertIn("[redacted]", text)
+
     def test_transcript_path_refuses_anything_but_a_plain_identifier(self):
         with tempfile.TemporaryDirectory() as tmp:
             context = ProjectContext(Path(tmp) / "code", Path(tmp) / "data", Path(tmp) / "ws")

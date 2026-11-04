@@ -105,6 +105,18 @@ class CtoMessageTests(_CtoFixture):
         self.assertTrue(routed.startswith("OWNER MESSAGE TO THE CTO:\nPlease pause the film work until tomorrow."))
         self.assertEqual(enqueue.call_args.kwargs["source"], "owner-cto-message")
 
+    def test_a_credential_in_an_owner_message_is_redacted_from_the_event_but_the_cto_still_gets_the_real_words(self):
+        # P6 repair: owner_cto_message_received wrote the owner's free text into the event log
+        # unchanged. The routed instruction to the CTO (the one thing that must stay byte-exact, since
+        # it is the owner's own actual words to the agent) is untouched; only the event's own copy,
+        # the thing other agents and a later export can read, is redacted.
+        secret = "sk-ant-api03-" + "x" * 30
+        with patch("harness.control.enqueue_instruction", return_value={"id": "m-2"}) as enqueue:
+            result = board.record_owner_message(self.root, self.cto["id"], f"use this key: {secret}", "cto_message")
+        self.assertNotIn(secret, result["event"]["owner_message"])
+        routed = enqueue.call_args.args[2]
+        self.assertIn(secret, routed)
+
     def test_the_cto_kind_is_refused_for_delivery_and_directions_are_refused_for_the_cto(self):
         with self.assertRaisesRegex(ValueError, "only the active CTO"):
             board.record_owner_message(self.root, self.delivery["id"], "hello", "cto_message")

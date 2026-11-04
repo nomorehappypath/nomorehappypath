@@ -9,7 +9,7 @@
 #   bash agent_coord.sh note --to <reviewer> --from <impl> --message "…"
 #   bash agent_coord.sh merge --agent <impl> --task <task-id>
 #   bash agent_coord.sh verify-merge --task <task-id>
-#   bash agent_coord.sh unlock --agent <impl>
+#   bash agent_coord.sh unlock --agent <impl> --task <task-id>
 # ─────────────────────────────────────────────────────────────────
 set -euo pipefail
 

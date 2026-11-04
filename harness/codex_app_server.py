@@ -120,16 +120,36 @@ def end_process_group(process: subprocess.Popen | None, grace: float = 2.0) -> N
     if process is None:
         return
     group = process.pid
+    from harness import platform_support
+    identity = platform_support.process_identity()
+    # Who is in the group is recorded while the leader is still ours to prove; once it is gone, a process
+    # carrying its number could belong to anyone and is not touched.
+    leader_token = identity.start_token(group) if process.poll() is None else ""
+    known: dict[int, str] = {}
+    if leader_token:
+        try:
+            known = {pid: str(row.get("start_token") or "") for pid, row in identity.process_table().items() if row.get("pgid") == group}
+        except OSError:
+            known = {}
     try:
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
-    from harness import platform_support
     try:
-        members = [pid for pid, row in platform_support.process_identity().process_table().items()
-                   if row.get("pgid") == group]
+        table = identity.process_table()
+        if leader_token and table.get(group, {}).get("start_token") == leader_token:
+            members = [pid for pid, row in table.items() if row.get("pgid") == group]     # the leader still lives: all of it is ours
+        else:
+            members = [pid for pid, token in known.items() if pid in table and token and table[pid].get("start_token") == token]
+            grown = True
+            while grown:                                   # children started by a member we already recognise
+                grown = False
+                for pid, row in table.items():
+                    if pid not in members and row.get("pgid") == group and row.get("ppid") in members:
+                        members.append(pid)
+                        grown = True
     except OSError:
         members = []
     for pid in members:

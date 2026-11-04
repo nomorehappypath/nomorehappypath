@@ -23,7 +23,7 @@ import shutil
 import subprocess
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-from harness import accepted_bytes, child_process
+from harness import accepted_bytes, child_process, redaction
 from harness import platform_support
 from harness.project_context import ProjectContext, ProjectRoot, project_context
 
@@ -259,6 +259,48 @@ class GitBroker:
             "at": _now(),
             **fields,
         })
+
+    def _uncommitted_edits(self, worktree: Path, repository: Path, *commits: str) -> list[str]:
+        """Work in `worktree` that a `git reset --hard` to the LAST given commit would destroy.
+
+        Two kinds, both made by hand after the crash: a tracked file whose content differs from EVERY
+        given commit's tree (the recovery's own not-yet-materialized state matches one of them, so it is
+        not an edit), and an UNTRACKED file (ignored ones too) sitting at a path the target commit
+        tracks, which the reset would silently replace. An untracked file that already holds the
+        target's exact bytes loses nothing. Unreadable status counts as dirty: the hold is the safe answer.
+        """
+        edited: set[str] | None = None
+        for commit in commits:
+            if not commit:
+                continue
+            diff = self._run_git(
+                accepted_bytes.name_only_arguments(commit),
+                cwd=worktree, writable=[worktree, repository],
+            )
+            if diff.returncode != 0:
+                return ["(worktree status could not be read)"]
+            names = {line for line in diff.stdout.splitlines() if line}
+            edited = names if edited is None else edited & names
+        found = set(edited or [])
+        target = next((commit for commit in reversed(commits) if commit), "")
+        if target:
+            untracked = self._run_git(["ls-files", "--others", "-z"], cwd=worktree, writable=[worktree, repository])
+            tracked_by_target = self._run_git(["ls-tree", "-r", "--name-only", "-z", target], cwd=worktree, writable=[worktree, repository])
+            if untracked.returncode != 0 or tracked_by_target.returncode != 0:
+                return ["(worktree status could not be read)"]
+            wanted = {item for item in tracked_by_target.stdout.split("\0") if item}
+            folders = {"/".join(parts[:count]) for name in wanted for parts in [name.split("/")] for count in range(1, len(parts))}
+            for name in sorted(item for item in untracked.stdout.split("\0") if item):
+                parents = ["/".join(name.split("/")[:count]) for count in range(1, len(name.split("/")))]
+                if name in wanted:
+                    have = self._run_git(["hash-object", "--", name], cwd=worktree, writable=[worktree, repository])
+                    want = self._run_git(["rev-parse", f"{target}:{name}"], cwd=worktree, writable=[worktree, repository])
+                    if have.returncode != 0 or want.returncode != 0 or have.stdout.strip() != want.stdout.strip():
+                        found.add(name)
+                elif name in folders or any(parent in wanted for parent in parents):
+                    # The reset would remove a folder to make room for a file, or a file to make room for a folder.
+                    found.add(name)
+        return sorted(found)
 
     def _hold(self, transaction_id: str, operation: str, reason: str, **fields: Any) -> dict[str, Any]:
         record = {
@@ -998,6 +1040,7 @@ class GitBroker:
                     "tree": intent.get("tree", ""),
                     "candidate_commit": candidate_commit,
                     "manifest": intent.get("manifest", []),
+                    "previous_head": intent.get("previous_head", ""),
                 }, any(row.get("step") == "done" for row in rows))
         return None
 
@@ -1094,6 +1137,13 @@ class GitBroker:
                 target_identity = self._identity(repository, str(outcome["commit"]))
                 if target_identity.tree != outcome["tree"]:
                     raise RecoveryHoldError("previous subtask fold tree differs from its journal")
+                edits = self._uncommitted_edits(task_workspace, repository, str(outcome.get("previous_head") or ""), current.commit)
+                if edits:
+                    # P10: never reset over work done in the worktree after the crash.
+                    raise RecoveryHoldError(
+                        "the task worktree has uncommitted changes made after the crash; holding for the owner "
+                        "instead of discarding them: " + ", ".join(edits)
+                    )
                 materialized = self._run_git(
                     ["reset", "--hard", current.commit], cwd=task_workspace,
                     writable=[task_workspace, repository],
@@ -1504,7 +1554,11 @@ class GitBroker:
                 "task": task, "commit": commit, "tree": local.tree, "remote": remote,
                 "branch": remote_ref, "expected_remote_tip": expected,
                 "outcome": "pushed" if pushed.returncode == 0 else "failed",
-                "output": (pushed.stdout + pushed.stderr)[-2000:], "at": _now(),
+                # P3: a push failure's own stderr often echoes the destination URL (and therefore a
+                # credential embedded in it) back. Redact the FULL captured output first, then bound
+                # its length: truncating first could cut a credential shape in half, leaving a
+                # fragment neither pattern recognizes as a secret to remove.
+                "output": redaction.redact(pushed.stdout + pushed.stderr)[-2000:], "at": _now(),
             }
             board_mutation(record)
             if pushed.returncode != 0:
@@ -1559,7 +1613,11 @@ class GitBroker:
             short_branch = remote_ref.removeprefix("refs/heads/")
             tracking_ref = f"refs/remotes/{remote}/{short_branch}"
             expected = self._read_ref(repository, tracking_ref) or ZERO_OID
-        return {"url": url, "remote_ref": remote_ref, "expected_remote_tip": expected}
+        # P3: any push/push-fetch actually performed later uses `remote` (its short configured
+        # name), never this URL string — git resolves the real credential itself from its own
+        # config. This string is only ever compared for drift and shown/stored for the owner, so a
+        # token embedded in it (https://user:TOKEN@host/...) is stripped before it leaves here.
+        return {"url": redaction.redact(url), "remote_ref": remote_ref, "expected_remote_tip": expected}
 
     def transaction_records(self) -> list[dict[str, Any]]:
         if not self.transactions_path.is_file():
@@ -1689,6 +1747,16 @@ class GitBroker:
                                 task=task, current=current, target=target,
                             ))
                             continue
+                        edits = self._uncommitted_edits(workspace, repository, previous, current)
+                        if edits:
+                            # P10: never reset over work done in the worktree after the crash.
+                            outcomes.append(self._hold(
+                                transaction, operation,
+                                "recovery found uncommitted changes in the task worktree made after the crash; "
+                                "holding for the owner instead of discarding them: " + ", ".join(edits),
+                                task=task, current=current, target=target,
+                            ))
+                            continue
                         materialized = self._run_git(
                             ["reset", "--hard", current], cwd=workspace,
                             writable=[workspace, repository],
@@ -1765,6 +1833,16 @@ class GitBroker:
                             outcomes.append(self._hold(
                                 transaction, operation,
                                 "recovery refused attribute-driven filter materialization",
+                                current=current, target=target,
+                            ))
+                            continue
+                        edits = self._uncommitted_edits(repository, repository, previous, target)
+                        if edits:
+                            # P9: never reset the owner's real main worktree over an edit made after the crash.
+                            outcomes.append(self._hold(
+                                transaction, operation,
+                                "recovery found uncommitted changes in the main worktree made after the crash; "
+                                "holding for the owner instead of discarding them: " + ", ".join(edits),
                                 current=current, target=target,
                             ))
                             continue

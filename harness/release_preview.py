@@ -75,14 +75,16 @@ def _start_token(pid: int) -> str:
 
 
 def preview_environment(source, extra=None):
-    """The environment a candidate preview is started with.
+    """The environment a candidate preview is started with: PATH and whatever this preview launch
+    itself declares in `extra` (PORT, BROWSER) — nothing else from the worker's own environment, so
+    a worker-only credential (the Claude sign-in token, the manager's own proxy token) never reaches
+    a candidate preview (P1).
 
     The worker's PATH comes first and loses nothing; the folders the harness already
     searches for the owner's tools (Homebrew, ~/.local/bin, /usr/local/bin ...) follow,
     only where they exist, without repeats."""
-    values = dict(source)
-    values.update(extra or {})
-    folders = [item for item in str(values.get("PATH", "")).split(os.pathsep) if item]
+    values = dict(extra or {})
+    folders = [item for item in str(source.get("PATH", "")).split(os.pathsep) if item]
     tools = (*platform_support.discovery().owner_tool_directories(), *platform_support.discovery().GOVERNED_PATH_SUFFIX)
     folders += [item for item in tools if item not in folders and os.path.isdir(item)]
     values["PATH"] = os.pathsep.join(dict.fromkeys(folders))
@@ -199,6 +201,8 @@ def request_view(root: Any, task: str) -> dict[str, Any]:
     release = (state.get("releases") or {}).get(str(task or "")) or {}
     if release.get("status") != "VISUAL_TEST_REQUIRED" or (state.get("release_decisions") or {}).get(task):
         raise ValueError("this release is no longer waiting for your test")
+    if (state.get("task_kinds") or {}).get(str(task or "")) == "analysis":
+        raise ValueError("this task was an analysis, so there is no app to run. Use View FINDINGS.md on the card to read the report.")
     if program_only(release):
         raise ValueError("this release is a program built on a test machine: there is nothing to open in the browser. Use Get the build on the card.")
     preview = release.get("preview") or {}
@@ -271,6 +275,8 @@ class Preview:
         self.url = ""
         self.command = ""
         self.requested = ""
+        # Identity of the processes this preview started: pid -> start time, recorded while they can be proven ours.
+        self.members: dict[int, str] = {}
 
     @property
     def source(self) -> Path:
@@ -287,18 +293,87 @@ class Preview:
     def alive(self) -> bool:
         return bool(self.process and self.process.poll() is None)
 
+    SAMPLE_SECONDS = 3.0         # sampled this fast right after launch...
+    SAMPLE_INTERVAL = 0.01
+    STEADY_INTERVAL = 0.5        # ...and at this pace for as long as the leader lives
+
+    def remember_group(self) -> None:
+        """Record who is in this preview's process group, but ONLY while the group's leader is alive.
+
+        A group number cannot pass to another program while one of its members lives, so what is seen while the
+        leader lives is ours. After the leader has exited, a process carrying its number could belong to anyone,
+        so nothing more is recorded: the members seen earlier are all that can be proven.
+        """
+        process = self.process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            table = platform_support.process_identity().process_table()
+        except OSError:
+            return
+        if process.poll() is not None:
+            return                      # it left while the table was being read; this reading proves nothing
+        leader = process.pid
+        for pid, row in table.items():
+            if row.get("pgid") == leader:
+                self.members[pid] = str(row.get("start_token") or "")
+
+    def watch_group(self) -> None:
+        """Sample the group many times a second right after launch (a start script that daemonizes and exits at once), then twice a second while the leader lives."""
+        def sample() -> None:
+            started = time.monotonic()
+            while True:
+                process = self.process
+                if process is None or process.poll() is not None:
+                    return
+                self.remember_group()
+                time.sleep(self.SAMPLE_INTERVAL if time.monotonic() - started < self.SAMPLE_SECONDS else self.STEADY_INTERVAL)
+        threading.Thread(target=sample, name="harness-preview-group", daemon=True).start()
+
     def stop(self) -> None:
         process = self.process
         self.process = None
-        if not process or process.poll() is not None:
+        if process is None:
             return
-        platform_support.process_identity().terminate_group(process, signal.SIGTERM)
-        deadline = time.monotonic() + STOP_GRACE_SECONDS
-        while process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.1)
+        identity = platform_support.process_identity()
         if process.poll() is None:
-            platform_support.process_identity().terminate_group(process, signal.SIGKILL)
-            process.wait(timeout=5)
+            self.process = process
+            self.remember_group()
+            self.process = None
+            identity.terminate_group(process, signal.SIGTERM)
+            deadline = time.monotonic() + STOP_GRACE_SECONDS
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if process.poll() is None:
+                identity.terminate_group(process, signal.SIGKILL)
+                process.wait(timeout=5)
+        # P18: the wrapping shell may already be gone (a start script that daemonizes) while the real server
+        # lives on. Signal each remembered member that still has the same start time, one pid at a time.
+        self._stop_remembered_members()
+
+    def _stop_remembered_members(self) -> None:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            members = self._live_remembered_members()
+            if not members:
+                return
+            for pid in members:
+                try:
+                    os.kill(pid, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if sig == signal.SIGTERM:
+                deadline = time.monotonic() + min(STOP_GRACE_SECONDS, 2.0)
+                while self._live_remembered_members() and time.monotonic() < deadline:
+                    time.sleep(0.1)
+
+    def _live_remembered_members(self) -> list[int]:
+        if not self.members:
+            return []
+        try:
+            table = platform_support.process_identity().process_table()
+        except OSError:
+            return []
+        return [pid for pid, token in self.members.items() if pid in table and token and table[pid].get("start_token") == token]
 
 
 class ReleasePreviewSupervisor:
@@ -311,6 +386,8 @@ class ReleasePreviewSupervisor:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self._last_failure = ""
+        self._last_failure_at = 0.0
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -331,6 +408,19 @@ class ReleasePreviewSupervisor:
                 self.tick()
             except Exception as error:  # noqa: BLE001 — a tick failure must never kill the worker
                 print(f"HARNESS RELEASE PREVIEW | tick failed: {str(error)[:300]}", flush=True)
+                self._record_tick_failure(error)
+
+    def _record_tick_failure(self, error: BaseException) -> None:
+        """P21: a crashed pass leaves a durable board event, not only a console line. A repeating failure is recorded again only after a minute."""
+        message = f"{type(error).__name__}: {str(error)}"[:300]
+        now = time.monotonic()
+        if message == self._last_failure and now - self._last_failure_at < 60:
+            return
+        self._last_failure, self._last_failure_at = message, now
+        try:
+            board.record_preview_tick_failure(self.root, message)
+        except (OSError, ValueError) as recording_error:
+            print(f"HARNESS RELEASE PREVIEW | could not record the failure on the board: {str(recording_error)[:200]}", flush=True)
 
     def shutdown(self) -> None:
         self.stop_event.set()
@@ -378,6 +468,8 @@ class ReleasePreviewSupervisor:
         settings = workspace_settings.load(self.root).get("preview") or {}
         for task, release in pending.items():
             report["pending"].append(task)
+            if (state.get("task_kinds") or {}).get(task) == "analysis":
+                continue        # an analysis has no app: no preview is started, checked or recorded for it
             self._ensure(task, release, settings, state)
         return report
 
@@ -584,6 +676,7 @@ class ReleasePreviewSupervisor:
                     rendered, shell=True, cwd=preview.source, env=environment,
                     stdout=log, stderr=log, start_new_session=True,
                 )
+                preview.watch_group()
             failure = self._await_health(preview, settings, find_listener=detected)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             failure = str(error)[:300]
@@ -626,6 +719,7 @@ class ReleasePreviewSupervisor:
         timeout = float(settings.get("startup_timeout_seconds") or 45)
         deadline = time.monotonic() + max(5.0, min(300.0, timeout))
         while time.monotonic() < deadline:
+            preview.remember_group()
             if not preview.alive():
                 return PORT_IN_USE if _port_in_use(preview.log_path) else \
                     "the preview command exited before serving its URL"
