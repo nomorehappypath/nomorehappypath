@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from harness import upload_on_accept
 from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal
 from harness import platform_support
 from harness.board_surface import (
@@ -222,6 +223,8 @@ class StartupMaintenance:
                 )
             board.recover_git_transactions(self.root)
             release_coordinator.coordinate(self.root)
+            # Start, open and Resume all end here: every saved Accept whose upload is not "uploaded" runs once more, in the background.
+            upload_on_accept.wake(self.root, include_stopped=True)
             self.complete = True
 
 
@@ -740,22 +743,47 @@ def serve(
     except KeyboardInterrupt:
         pass
     finally:
-        preview_supervisor.shutdown()
-        watchdog.shutdown()
-        chat.shutdown()
+        _run_cleanup(_shutdown_steps(
+            preview_supervisor=preview_supervisor, watchdog=watchdog, chat=chat, previous_term=previous_term,
+            server=server, bootstrap_server=bootstrap_server, bootstrap_thread=bootstrap_thread,
+            bootstrap_path=bootstrap_path, bootstrap_directory=bootstrap_directory,
+        ))
+
+
+def _shutdown_steps(*, preview_supervisor, watchdog, chat, previous_term, server, bootstrap_server, bootstrap_thread,
+                    bootstrap_path, bootstrap_directory) -> list:
+    def restore_term():
         if previous_term is not None:
             signal.signal(signal.SIGTERM, previous_term)
-        if server is not None:
-            server.server_close()
-        if bootstrap_server is not None:
-            bootstrap_server.shutdown()
-        if bootstrap_thread is not None:
-            bootstrap_thread.join(timeout=3)
-        if bootstrap_server is not None:
-            bootstrap_server.server_close()
+
+    def remove_bootstrap_file():
         if bootstrap_path.exists():
             bootstrap_path.unlink()
-        bootstrap_directory.rmdir()
+
+    steps = [("preview supervisor", preview_supervisor.shutdown), ("watchdog", watchdog.shutdown), ("chat", chat.shutdown),
+             ("signal handler", restore_term)]
+    if server is not None:
+        steps.append(("web server", server.server_close))
+    if bootstrap_server is not None:
+        steps.append(("bootstrap server", bootstrap_server.shutdown))
+    if bootstrap_thread is not None:
+        steps.append(("bootstrap thread", lambda: bootstrap_thread.join(timeout=3)))
+    if bootstrap_server is not None:
+        steps.append(("bootstrap socket", bootstrap_server.server_close))
+    steps += [("bootstrap file", remove_bootstrap_file), ("bootstrap folder", bootstrap_directory.rmdir)]
+    return steps
+
+
+def _run_cleanup(steps) -> list:
+    """P19: run every shutdown step even if an earlier one raises; return (name, error) for each that failed."""
+    failures = []
+    for name, step in steps:
+        try:
+            step()
+        except Exception as error:  # noqa: BLE001 - one failed step must not strand the rest
+            failures.append((name, error))
+            print(f"HARNESS WORKER | shutdown step '{name}' failed: {str(error)[:200]}", flush=True)
+    return failures
 
 
 def main(argv=None) -> int:

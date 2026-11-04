@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness import board, review_brief, review_rounds, standing_checks
+from harness import board, reference_chapters, review_brief, review_rounds, standing_checks
 from tests import test_frozen_review_scope as frozen
 
 ISSUE = "app/services/ocr.py:120|a restarted upload job runs the paid scan again|the customer is billed twice for one document"
@@ -187,7 +187,7 @@ class WordingTests(unittest.TestCase):
             card = (self.ROOT / "directives" / "cards" / name).read_text(encoding="utf-8")
             self.assertIn(needle, card)
             self.assertNotIn("analysis-discovery", card)
-            self.assertLess(len(card.encode("utf-8")), 10000)
+            self.assertLess(len(card.encode("utf-8")), reference_chapters.MAX_CARD_BYTES)
 
     def test_the_commands_belong_to_their_roles(self):
         from harness import board_surface

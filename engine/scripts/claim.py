@@ -10,8 +10,10 @@ item forbids the implementer's own vendor) so a same-vendor agent cannot claim i
   bash claim.sh post --task T1 --role reviewer --forbid-vendor "Claude (Anthropic)"
   bash claim.sh claim --item <item-id> --signature <sig>
   bash claim.sh list
-  bash claim.sh complete --item <item-id>
-  bash claim.sh release  --item <item-id>
+  bash claim.sh complete --item <item-id> --signature <sig>
+  bash claim.sh release  --item <item-id> --signature <sig>
+
+`complete` and `release` are accepted only from the agent that holds the claim (P7).
 """
 from __future__ import annotations
 
@@ -132,18 +134,31 @@ def claim(item_id: str, signature: str) -> dict:
     return _write(item)
 
 
-def complete(item_id: str) -> dict:
+def _require_holder(item: dict, signature: str, action: str) -> None:
+    """P7: only the agent whose claim is recorded on the item may finish or release it."""
+    holder = item.get("claimed_by")
+    if not holder:
+        raise ClaimError(f"item {item['item_id']} is not claimed, so nobody can {action} it")
+    if not signature or signature != holder:
+        raise ClaimError(
+            f"item {item['item_id']} is held by {holder}; only that agent may {action} it"
+        )
+
+
+def complete(item_id: str, signature: str) -> dict:
     item = _load(item_id)
     if not item:
         raise ClaimError(f"no such work item: {item_id}")
+    _require_holder(item, signature, "complete")
     item["status"] = "done"
     return _write(item)
 
 
-def release(item_id: str) -> dict:
+def release(item_id: str, signature: str) -> dict:
     item = _load(item_id)
     if not item:
         raise ClaimError(f"no such work item: {item_id}")
+    _require_holder(item, signature, "release")
     lp = _lock_path(item_id)
     if lp.exists():
         lp.unlink()
@@ -181,7 +196,7 @@ def _cmd_claim(a) -> int:
 
 def _cmd_complete(a) -> int:
     try:
-        print(f"{complete(a.item)['item_id']} done")
+        print(f"{complete(a.item, a.signature)['item_id']} done")
     except ClaimError as e:
         print(str(e), file=sys.stderr)
         return 1
@@ -190,7 +205,7 @@ def _cmd_complete(a) -> int:
 
 def _cmd_release(a) -> int:
     try:
-        print(f"{release(a.item)['item_id']} released (open)")
+        print(f"{release(a.item, a.signature)['item_id']} released (open)")
     except ClaimError as e:
         print(str(e), file=sys.stderr)
         return 1
@@ -225,12 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--signature", required=True)
     cl.set_defaults(func=_cmd_claim)
 
-    co = sub.add_parser("complete", help="Mark a claimed item done.")
+    co = sub.add_parser("complete", help="Mark a claimed item done (only the agent that holds the claim).")
     co.add_argument("--item", required=True)
+    co.add_argument("--signature", required=True, help="the signature the claim was made with")
     co.set_defaults(func=_cmd_complete)
 
-    rl = sub.add_parser("release", help="Release a claim (item back to open).")
+    rl = sub.add_parser("release", help="Release a claim back to open (only the agent that holds the claim).")
     rl.add_argument("--item", required=True)
+    rl.add_argument("--signature", required=True, help="the signature the claim was made with")
     rl.set_defaults(func=_cmd_release)
 
     li = sub.add_parser("list", help="List work items and their status.")

@@ -178,6 +178,18 @@ class _ProcProcessIdentity(_ProcessIdentity):
                 found.append(int(item.name))
         return found
 
+    def environment_value(self, pid: int, name: str) -> str | None:
+        """One variable of a process's launch environment: its value, "" when it is not set, None when it cannot be read."""
+        try:
+            environ = (self.PROC / str(int(pid)) / "environ").read_bytes()
+        except OSError:
+            return None
+        prefix = name.encode("utf-8") + b"="
+        for item in environ.split(b"\0"):
+            if item.startswith(prefix):
+                return item[len(prefix):].decode("utf-8", "replace")
+        return ""
+
     def start_token(self, pid: int) -> str:
         """An empty token means the pid is gone — an ANSWER, not a failure."""
         stat = self._read_stat(self.PROC / str(int(pid)))

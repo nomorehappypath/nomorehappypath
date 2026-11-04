@@ -286,6 +286,64 @@ class GoldenEvalTests(unittest.TestCase):
         for marker in run_eval.run_markers(Path(run)):
             self.assertTrue(marker.startswith("/private/var/") or marker.startswith("/var/"))
 
+    def test_start_time_collapses_the_padding_ps_adds_to_a_single_digit_day(self):
+        # Stage 5: ps writes "Nov  2" on the first nine days of a month while the process list is parsed with the
+        # padding collapsed, so the same process looked replaced and the two tests below failed only on those days.
+        # This pins the spelling for any date.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(self.run_eval.subprocess, "run", return_value=SimpleNamespace(stdout="Mon Nov  2 17:12:04 2026\n")):
+            self.assertEqual(self.run_eval.start_time(1), "Mon Nov 2 17:12:04 2026")
+        with patch.object(self.run_eval.subprocess, "run", return_value=SimpleNamespace(stdout="Tue Nov 17 08:01:09 2026\n")):
+            self.assertEqual(self.run_eval.start_time(1), "Tue Nov 17 08:01:09 2026")
+
+    def test_a_sandbox_that_refuses_the_ps_program_still_gives_start_times_and_the_process_list(self):
+        # Stage 5 (review of Stage 5): ps is a setuid program that every confined sandbox refuses to run, so the golden
+        # tests could not finish there. The runner now falls back to the harness's own reader of the same table.
+        from unittest.mock import patch
+        with patch.object(self.run_eval.subprocess, "run", side_effect=PermissionError(1, "Operation not permitted", "ps")):
+            started = self.run_eval.start_time(os.getpid())
+            rows = self.run_eval.process_rows()
+            homes, unchecked = self.run_eval.codex_homes_of_run([{"pid": os.getpid()}])
+        self.assertTrue(started, "no start time was found for this process")
+        mine = [row for row in rows if row["pid"] == os.getpid()]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["started"], started, "both spellings must agree, whichever way they were read")
+        self.assertEqual(unchecked, [], "this process's environment is readable in-process, so it is checked even without ps")
+
+    def test_the_codex_home_of_a_process_is_read_without_ps(self):
+        # Stage 5 (second review): the owner-CODEX_HOME check must really run where ps is refused, not be skipped.
+        import subprocess
+        import sys
+        import time
+        from unittest.mock import patch
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], env={"PATH": os.environ.get("PATH", ""), "CODEX_HOME": str(self.scratch / "isolated")})
+        try:
+            time.sleep(0.4)
+            with patch.object(self.run_eval.subprocess, "run", side_effect=PermissionError(1, "Operation not permitted", "ps")):
+                homes, unchecked = self.run_eval.codex_homes_of_run([{"pid": child.pid}])
+            self.assertEqual((homes, unchecked), ({child.pid: str(self.scratch / "isolated")}, []))
+        finally:
+            child.kill()
+            child.wait(timeout=5)
+
+    def test_stop_does_not_claim_verification_when_a_process_environment_cannot_be_read(self):
+        # Stage 5 (second review): an empty answer for "could not check" and for "checked, clean" hid the difference,
+        # so stop printed Verified for a run whose isolation check never ran.
+        from unittest.mock import patch
+        run = self.scratch / "nmhp-golden-unverified"
+        run.mkdir()
+        (run / "run.json").write_text(json.dumps({"port": 0, "board_port": 0, "label": "x", "scored_to": "done"}), encoding="utf-8")
+        fake = {"pid": 987654, "ppid": 1, "started": "Mon Jan 1 00:00:00 2001", "command": "fake agent"}
+        with patch.object(self.run_eval, "process_rows", return_value=[]), patch.object(self.run_eval, "select_run_processes", return_value=[fake]), \
+                patch.object(self.run_eval, "codex_homes_of_run", return_value=({}, [987654])), patch.object(self.run_eval, "_alive_same", return_value=False):
+            message, code = self.run_eval.stop(run, results_root=self.scratch / "results", term_wait=0.1)
+        self.assertNotEqual(code, 0, message)
+        self.assertNotIn("Verified", message)
+        self.assertIn("987654", message)
+        self.assertIn("could not", message.lower())
+        self.assertTrue(run.exists(), "a run that could not be fully verified keeps its folder")
+
     def test_ps_rows_are_parsed_with_their_start_time(self):
         rows = self.run_eval.process_rows()
         mine = [r for r in rows if r["pid"] == os.getpid()]
@@ -316,6 +374,8 @@ class GoldenEvalTests(unittest.TestCase):
 
     def test_plain_arm_runs_two_passes_in_an_answer_free_copy_scores_and_costs_it(self):
         home, env, calls = self._plain_setup(FAKE_LEAK="1")
+        # Judged against this run's own folder: a stale folder another aborted run left in the system temp dir is not this test's subject.
+        before = set(Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*"))
         folder, code = self._plain_run(home, env)
         self.assertEqual(code, 0)
         rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
@@ -351,7 +411,7 @@ class GoldenEvalTests(unittest.TestCase):
         for leaked in folder.rglob("*"):
             if leaked.is_file():
                 self.assertNotIn(self.PLAIN_TOKEN, leaked.read_text(encoding="utf-8"), str(leaked))
-        self.assertEqual([p for p in Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*")], [], "the run folder is deleted")
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*")), before, "the run folder is deleted")
 
     def test_plain_arm_refuses_without_the_isolated_sign_in_and_starts_nothing(self):
         home, env, calls = self._plain_setup()
@@ -374,12 +434,13 @@ class GoldenEvalTests(unittest.TestCase):
 
     def test_plain_arm_stops_a_pass_that_runs_too_long_scores_what_is_there_and_leaves_nothing_running(self):
         home, env, calls = self._plain_setup(FAKE_SLEEP="60")
+        before = set(Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*"))
         folder, code = self._plain_run(home, env, settings={"step_timeout_seconds": 1, "stop_wait_seconds": 2})
         self.assertEqual(code, 0)
         project = json.loads((folder / "score.json").read_text(encoding="utf-8"))["projects"][0]
         self.assertEqual(project["fixed"], 0)
         self.assertIn("timed out", project["outcome"])
-        self.assertEqual([p for p in Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*")], [])
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("nmhp-golden-plain-03_json_api-*")), before, "the run folder is deleted")
 
     def test_plain_settings_come_from_the_settings_file_and_bad_values_are_refused(self):
         settings = self.run_eval.load_plain_settings()

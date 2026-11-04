@@ -104,6 +104,16 @@ What it does not do: it never creates, resets or deletes the machine, one machin
 
 Existing projects keep their old acceptance card: *Get the build* appears only for a new task whose Delivery declared the build, so `why.exe` itself would need a new task to be downloadable this way. A task that declares a build and also a web app keeps *View app*.
 
+## Upload to GitHub when you accept
+
+Each project can have its own GitHub repository (or any git server) where the approved version goes when you click *Accepted*. It is optional and off until you set it.
+
+- **Turn it on:** on the Projects page, open the project's *Advanced*, click *Folder and GitHub upload*, enter the GitHub (or other Git) repository address (`https://github.com/you/your-app.git` or `git@github.com:you/your-app.git`) and the branch, and save. Leave both empty to turn it off.
+- **Sign-in:** the upload uses this computer's own git sign-in, the same one `git push` uses. Never put a password or token in the address; the app refuses one.
+- **What happens on Accept:** the card shows *Uploading*, then *Accepted and uploaded*. Each Accept uploads once, and a version the branch already has is never sent twice.
+- **Nothing is forced:** if the branch already holds work the project does not have, nothing is uploaded and nothing there is changed.
+- **When it fails** (no sign-in, no internet, wrong address), your approval still stands and the card says why in plain words; fix it and press *Upload again*. An upload cut off by a pause or a restart finishes on its own when the project runs again.
+
 ## What's new in v0.15.0
 
 - **Mission Control has a new look.** The task page tells the story of a task as a step-by-step timeline, each task has a *Proof* tab, the cards on top say what is happening now and when you are needed, the agent terminals moved into an *Advanced* menu, Settings are grouped, and Help is rewritten around "How a task works".

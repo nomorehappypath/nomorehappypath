@@ -17,12 +17,13 @@ import hashlib
 import json
 import re
 import os
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness import project_memory
+from harness import git_process, project_memory
 from harness.project_context import ProjectContext, context_from_roots, project_context
 
 REGISTRY_VERSION = 1
@@ -220,12 +221,76 @@ def register(
     return dict(entry)
 
 
+_UPLOAD_URL_REFUSAL = (
+    "Enter the repository as https://host/path, ssh://git@host/path, git@host:path, or a folder on this computer. "
+    "Do not put a user name, password or token inside an https address: your computer's own git sign-in is used."
+)
+_SCP_STYLE = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:(?!//)[^\s]+")
+_SSH_URL = re.compile(r"ssh://(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9._-]+(?::\d{1,5})?/[^\s]+")
+_WEB_URL = re.compile(r"https?://[A-Za-z0-9._-]+(?::\d{1,5})?/[^\s@]+")
+
+
+def normalize_upload_destination(value: Any) -> dict[str, str] | None:
+    """Check a project's upload destination by form and return it cleaned, or None when it is empty (which clears it).
+
+    Takes {"url", "branch"} (a dict, or None / an empty dict / both fields blank to clear). Returns {"url", "branch"} with
+    surrounding spaces removed. Raises ValueError with a plain sentence for an https/http address that carries a user name,
+    password or token, an unsupported form, or a branch name git itself refuses. Checks the form only: the first upload
+    proves the connection.
+    """
+    if value in (None, "", {}):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("the upload destination must be a repository and a branch")
+    url = str(value.get("url") or "").strip()
+    branch = str(value.get("branch") or "").strip()
+    if not url and not branch:
+        return None
+    if not url:
+        raise ValueError("Enter the repository to upload to, or clear the branch too.")
+    if not branch:
+        raise ValueError("Enter the branch to upload to.")
+    if len(url) > 500 or any(ord(char) < 32 or char == "\x7f" for char in url):
+        raise ValueError(_UPLOAD_URL_REFUSAL)
+    lowered = url.lower()
+    if lowered.startswith(("https://", "http://")):
+        # Userinfo anywhere in the authority (before the first "/") is refused; a "@" later in the path is not a credential
+        # but the pattern above refuses it too, which is the safe side.
+        if not _WEB_URL.fullmatch(url):
+            raise ValueError(_UPLOAD_URL_REFUSAL)
+    elif lowered.startswith("ssh://"):
+        if not _SSH_URL.fullmatch(url):
+            raise ValueError(_UPLOAD_URL_REFUSAL)
+    elif url.startswith("/"):
+        if ".." in Path(url).parts:
+            raise ValueError(_UPLOAD_URL_REFUSAL)
+    elif not _SCP_STYLE.fullmatch(url):
+        raise ValueError(_UPLOAD_URL_REFUSAL)
+    # Git itself is the judge of a branch name (it also refuses a leading "-", so it can never be read as an option).
+    if branch.startswith("-") or branch == "@" or len(branch) > 200:
+        raise ValueError(f"'{branch}' is not a branch name git accepts.")
+    try:
+        checked = git_process.run(["git", "check-ref-format", "--branch", branch], cwd="/", capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"git could not check the branch name: {error}") from None
+    if checked.returncode != 0 or checked.stdout.strip() != branch:
+        raise ValueError(f"'{branch}' is not a branch name git accepts.")
+    return {"url": url, "branch": branch}
+
+
 def update_entry(home: Path, project_id: str, **fields: Any) -> dict[str, Any]:
-    """Repair/re-point an entry; path changes revalidate identity and overlap."""
-    allowed = {"name", "description", "code_root", "data_root", "workspace_root", "last_active_at"}
+    """Repair/re-point an entry; path changes revalidate identity and overlap.
+
+    `upload_destination` is the one structured field: pass {"url", "branch"} to set it, or None / {} to clear it. It is
+    checked by `normalize_upload_destination` (raises ValueError) and stored as a dict, never as text.
+    """
+    allowed = {"name", "description", "code_root", "data_root", "workspace_root", "last_active_at", "upload_destination"}
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"unknown registry fields: {sorted(unknown)}")
+    fields = dict(fields)
+    destination_given = "upload_destination" in fields
+    destination = normalize_upload_destination(fields.pop("upload_destination")) if destination_given else None
     registry = load(home)
     entry = _find(registry, project_id)
     candidate = dict(entry)
@@ -241,12 +306,18 @@ def update_entry(home: Path, project_id: str, **fields: Any) -> dict[str, Any]:
         "workspace_root": str(context.workspace_root),
     })
     entry.update(candidate)
+    if destination_given:
+        if destination:
+            entry["upload_destination"] = destination
+        else:
+            entry.pop("upload_destination", None)
     if context.code_root.is_dir():
         project_memory.initialize(
             context, project_name=entry["name"], description=entry["description"],
         )
     save(home, registry)
-    _audit(home, f"updated project {project_id}: {sorted(fields)}")
+    # The audit names the field, never its value (a repository address does not belong in a log).
+    _audit(home, f"updated project {project_id}: {sorted(fields) + (['upload_destination'] if destination_given else [])}")
     return dict(entry)
 
 
@@ -393,6 +464,29 @@ def activate(home: Path, project_id: str, pid: int | None = None) -> dict[str, A
     """
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
+    # P14: the whole read-check-replace of a stale lock runs under one single-writer lock, so two
+    # concurrent activations cannot both judge the same dead lock stale and both replace it.
+    with _activation_guard(home):
+        return _activate_locked(home, project_id, pid)
+
+
+def _activation_guard(home: Path):
+    import contextlib
+    import fcntl
+
+    @contextlib.contextmanager
+    def held():
+        descriptor = os.open(str(home / ".activation.guard"), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+    return held()
+
+
+def _activate_locked(home: Path, project_id: str, pid: int | None) -> dict[str, Any]:
     registry = load(home)
     entry = _find(registry, project_id)
     record = {"pid": int(pid if pid is not None else os.getpid()), "project_id": project_id,

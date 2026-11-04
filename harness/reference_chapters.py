@@ -24,7 +24,7 @@ ROLE_FILES = {
 CHAPTER_HEADING = re.compile(r"^## ([a-z][a-z0-9-]*)[ \t]*$")
 CARD_RULE = re.compile(r"^(\d+)\. (.+?)(?: → ([a-z][a-z0-9-]*(?:, [a-z][a-z0-9-]*)*))?$")
 MAX_CARD_RULES = 40
-MAX_CARD_BYTES = 10_000
+MAX_CARD_BYTES = 10_400   # owner 2026-11-03: room for the in-code documentation rule
 
 
 def reference_hint(*names: str) -> str:

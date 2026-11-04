@@ -59,13 +59,15 @@ class FinalPassWithoutTaskDoneLineTests(unittest.TestCase):
 
 
 class FlowFixture(unittest.TestCase):
-    """The real final-review flow of tests.test_contract_first_checks, built here without re-running its tests."""
+    """The real final-review flow of tests.test_contract_first_checks, built here without re-running its tests.
+
+    A helper the tests below construct by hand, never a test of its own: it deliberately has no `runTest`, because
+    unittest collects a TestCase that has one even when a `-k` filter names other tests, and this one's setUp starts
+    the git broker, which cannot run inside another sandbox.
+    """
     setUp = first.FinalReviewFlowTests.setUp
     confirm_with_checks = first.FinalReviewFlowTests.confirm_with_checks
     request = first.FinalReviewFlowTests.request
-
-    def runTest(self):
-        pass
 
 
 class SelfExplainingRefusalTests(unittest.TestCase):

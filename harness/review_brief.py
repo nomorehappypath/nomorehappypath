@@ -249,6 +249,12 @@ def build(
                 "status": _text(value.get("status")),
             } for name, value in (plan.get("subtasks") or {}).items()]),
             "scope_changes": _bounded(list(plan.get("structure_changes") or [])),
+            # Delivery retired these planned chunks (never reviewed); they are not unfinished work and not required for this review.
+            "removed_chunks": _bounded([{
+                "id": _text(name),
+                "status": ("Merged into " + _text((value.get("retired") or {}).get("merged_into"))) if (value.get("retired") or {}).get("merged_into")
+                else "Removed by Delivery: " + _text((value.get("retired") or {}).get("reason")),
+            } for name, value in ((state.get("task_chunks") or {}).get(task) or {}).items() if value.get("status") == "retired"]),
         },
         "candidate": {
             "commit": _text(request.get("reviewed_commit")),

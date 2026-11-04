@@ -38,7 +38,13 @@ DEFAULT_PREVIEW = {
     # 2026-09-28 backlog #12: the owner's own local settings a candidate needs
     # to start like the owner's copy does. Copied (never linked) from the
     # project folder into the clean checkout when the candidate lacks them.
-    "owner_files": [".env", "settings.json", ".workspace"],
+    # P2: `.env` is deliberately absent here. Candidate code being previewed
+    # for the first time is not yet reviewed code, and `.env` is where a
+    # project's real secrets live; copying it in by default let an unreviewed
+    # candidate read (and transmit) the owner's own credentials. An owner who
+    # wants a specific project's candidate to have it can still add it back
+    # explicitly in this project's own preview settings.
+    "owner_files": ["settings.json", ".workspace"],
 }
 
 
@@ -220,6 +226,55 @@ def apply_provider_files(settings: dict[str, Any], provider: str) -> dict[str, s
         # configuration: the entry would outlive the folder (2026-10-15).
         return {"provider": provider, "path": str(path), "skipped": "temporary project; the owner's Codex configuration is not changed"}
     path.parent.mkdir(parents=True, exist_ok=True)
+    # P15: this file is the owner's own, shared by every project on the machine. The whole
+    # read-modify-write runs under one lock (a concurrent project cannot lose its entry) and
+    # the result lands by rename (a kill mid-write cannot leave the file truncated).
+    with _exclusive_lock(path):
+        return _apply_codex_trust(path, workspace, provider)
+
+
+def _exclusive_lock(path: Path):
+    """An advisory lock held for the duration of one read-modify-write of `path`."""
+    import contextlib
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - platforms without flock run unserialized, as before
+        return contextlib.nullcontext()
+
+    @contextlib.contextmanager
+    def held():
+        descriptor = os.open(str(path.with_name(path.name + ".lock")), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+    return held()
+
+
+def _replace_text(path: Path, text: str) -> None:
+    """Write `text` beside `path` and rename it into place: the old content stays whole until the new one is complete."""
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # The replacement keeps the owner's file mode (a private 0600 config must not become world-readable
+    # through the rename); a file that does not exist yet starts owner-only, because it may hold secrets.
+    mode = (path.stat().st_mode & 0o777) if path.exists() else 0o600
+    try:
+        descriptor = os.open(str(temp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _apply_codex_trust(path: Path, workspace: Path, provider: str) -> dict[str, str]:
     original = path.read_text(encoding="utf-8") if path.is_file() else ""
     lines = original.splitlines()
     first_table = next((index for index, line in enumerate(lines) if line.strip().startswith("[")), len(lines))
@@ -247,7 +302,7 @@ def apply_provider_files(settings: dict[str, Any], provider: str) -> dict[str, s
             section_body.append('trust_level = "trusted"')
         tables[section_index + 1:next_section] = section_body
     lines = top_level + tables
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    _replace_text(path, "\n".join(lines).rstrip() + "\n")
     return {
         "provider": provider, "path": str(path), "trust_level": "trusted",
         "scope": "project", "approval_policy": "per-launch", "sandbox_mode": "per-launch",

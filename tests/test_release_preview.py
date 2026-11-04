@@ -299,7 +299,10 @@ class ViewAppTests(PreviewFixture):
             served = json.loads(response.read())
         self.assertEqual(served["version"], "candidate-studio")
         self.assertEqual(served["settings"], '{"owner": "gerard"}')
-        self.assertEqual(served["env"], "RELAY_TOKEN=owner-secret\n")
+        # P2: .env is never copied into a candidate checkout by default, so an
+        # unreviewed candidate cannot read the project's real secrets just by
+        # being previewed.
+        self.assertIsNone(served["env"])
         self.assertEqual(served["workspace"], ["client-a"])
         self.assertEqual(served["port"], preview["url"].rsplit(":", 1)[1].strip("/"))
         self.assertEqual(served["browser"], "true", "the app must not open a second tab of its own")
@@ -311,14 +314,20 @@ class ViewAppTests(PreviewFixture):
         preview = self.start()
         self.assertEqual(preview["status"], "ready", preview)
         source = release_preview.preview_root(self.root) / "TASK" / "source"
-        for name in ("settings.json", ".env", ".workspace"):
+        for name in ("settings.json", ".workspace"):
             self.assertFalse((source / name).is_symlink(), name)
         (source / "settings.json").unlink()
-        (source / ".env").write_text("changed by the candidate")
         __import__("shutil").rmtree(source / ".workspace")
         self.assertEqual((self.root / "settings.json").read_text(), '{"owner": "gerard"}')
-        self.assertEqual((self.root / ".env").read_text(), "RELAY_TOKEN=owner-secret\n")
         self.assertTrue((self.root / ".workspace" / "client-a").is_dir())
+
+    def test_env_is_never_copied_into_the_candidate_checkout_by_default(self):
+        # P2: .env held the project's real secrets; an unreviewed candidate preview
+        # must never receive it just because the owner clicked View app.
+        preview = self.start()
+        self.assertEqual(preview["status"], "ready", preview)
+        source = release_preview.preview_root(self.root) / "TASK" / "source"
+        self.assertFalse((source / ".env").exists())
 
     def test_a_tracked_file_in_the_candidate_is_never_overwritten(self):
         (self.workspace / "settings.json").write_text('{"candidate": true}')
@@ -405,9 +414,12 @@ class ViewAppTests(PreviewFixture):
 
 
 # The owner's real failing app (2026-10-02, project temp, zip-temperature-web)
-# read its port from its own variable with a fixed default and ignored PORT.
-OWN_PORT_APP = """import http.server, os
-port = int(os.environ.get("OWN_APP_PORT", "8765"))
+# read its port from its own fixed value and ignored PORT. P1 stopped the worker's
+# full environment (OWN_APP_PORT included) from reaching a candidate preview, so this
+# fixture now bakes the fixed port into the committed app's own source instead of
+# relying on an injected environment variable: that is what a real app like this did.
+OWN_PORT_APP = """import http.server
+port = {port}
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -442,9 +454,6 @@ class ViewAppOwnPortTests(PreviewFixture):
         require_loopback()
         super().setUp()
         self.own_port = _free_loopback_port()
-        patcher = mock.patch.dict(os.environ, {"OWN_APP_PORT": str(self.own_port)})
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def commit_app(self, source: str) -> None:
         (self.workspace / "app.py").write_text(source)
@@ -459,7 +468,7 @@ class ViewAppOwnPortTests(PreviewFixture):
         return self.release()["preview"]
 
     def test_an_app_that_ignores_port_is_found_where_it_really_listens(self):
-        self.commit_app(OWN_PORT_APP)
+        self.commit_app(OWN_PORT_APP.format(port=self.own_port))
         started = time.monotonic()
         preview = self.start()
         self.assertEqual(preview["status"], "ready", preview)
@@ -469,7 +478,7 @@ class ViewAppOwnPortTests(PreviewFixture):
             self.assertEqual(response.read(), b"zip temperature")
 
     def test_a_port_held_by_another_program_says_so_plainly(self):
-        self.commit_app(OWN_PORT_APP)
+        self.commit_app(OWN_PORT_APP.format(port=self.own_port))
         import socket
         holder = socket.socket()
         self.addCleanup(holder.close)

@@ -179,17 +179,17 @@ class RenderedViewAppTests(unittest.TestCase):
     def test_an_app_that_ignores_port_opens_where_it_really_listens(self):
         # The owner's failing app (project temp, zip-temperature-web) read its own
         # port variable with a fixed default; the click showed a blank tab that vanished.
-        import os
-        from unittest import mock
+        # P1 (repair): the fixed port is baked into the committed app's own source, not injected
+        # through an environment variable, since a candidate preview no longer inherits the
+        # worker's environment at all (see tests.test_release_preview.OWN_PORT_APP).
         from tests.test_release_preview import OWN_PORT_APP, _free_loopback_port
         own_port = _free_loopback_port()
-        (self.workspace / "app.py").write_text(OWN_PORT_APP)
+        (self.workspace / "app.py").write_text(OWN_PORT_APP.format(port=own_port))
         _git(self.workspace, "commit", "-qam", "app with its own port")
         self.commit = _git(self.workspace, "rev-parse", "HEAD")
         with board.locked_state(self.root) as state:
             state["releases"]["TASK"]["head_commit"] = self.commit
-        with mock.patch.dict(os.environ, {"OWN_APP_PORT": str(own_port)}):
-            after = self.click_view_app()["after"]
+        after = self.click_view_app()["after"]
         self.assertEqual(after["sentTo"], f"http://127.0.0.1:{own_port}/", after)
         with urlopen(after["sentTo"], timeout=5) as response:
             self.assertEqual(response.read(), b"zip temperature")

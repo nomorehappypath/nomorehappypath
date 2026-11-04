@@ -244,7 +244,7 @@ Before ending an implementation session:
 9. Leave inbox notes for affected agents if needed.
 10. Clear your lock only after the task record contains current state and next step:
     ```bash
-    bash scripts/agent_coord.sh unlock --agent <agent>
+    bash scripts/agent_coord.sh unlock --agent <agent> --task <task-id>
     ```
 
 ## After an independent reviewer returns `REVIEW_PASSED`

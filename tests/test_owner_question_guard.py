@@ -126,6 +126,15 @@ class HandBackTests(_Fixture):
         self.note("Delivery filed the amendment; Reviewer re-running.")
         self.assertEqual(len(self.events("cto_acted")), 1)
 
+    def test_a_credential_in_a_cto_acted_report_is_redacted(self):
+        # P6 repair: this event embedded the CTO's free-text report verbatim.
+        with self.assertRaises(ValueError):
+            self.note(AUTHORITY_QUESTION, "waiting")
+        secret = "sk-ant-api03-" + "y" * 30
+        self.note(f"Routed Delivery after rotating the key {secret}.")
+        acted = self.events("cto_acted")
+        self.assertNotIn(secret, acted[0]["message"])
+
     def test_a_question_naming_an_owner_only_step_is_never_handed_back(self):
         # "stalled" is in the CTO's authority, but installing a security tool is the owner's (directive): a real question
         with self.assertRaisesRegex(ValueError, "state the default"):

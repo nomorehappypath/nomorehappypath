@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
+from harness import upload_on_accept
 from harness import platform_support, web_guard, agent_view, test_machine, failure_words, review_rounds, review_cost, difficulty_note, revert_proof, code_quality, cost_center, story
 from harness.project_context import ProjectRoot, add_context_arguments, context_cli_arguments, context_from_args, project_context
 
@@ -66,6 +67,7 @@ PAGE = r"""<!doctype html>
 .harness-actions{border:1px solid #b8c9e8;background:#f7faff}.harness-actions h2{margin:0 0 6px;font-size:16px}.harness-actions ul{margin:0;padding-left:20px}.harness-actions li{margin:4px 0}.harness-actions li.gave-up{color:#8a2c1f;font-weight:700}.harness-actions small{color:var(--muted)}.owner-actions{border:2px solid #d58b82;background:#fff6f4}.owner-actions h2{margin:0 0 6px}.owner-action{margin:10px 0;padding:12px 14px;border:1px solid #e3b7b0;border-radius:9px;background:#fff}.owner-action strong{display:block;font-size:15px;margin-bottom:4px}.owner-action p{margin:4px 0 8px}.owner-action pre{margin:6px 0;padding:10px 12px;background:#f4f4f4;border-radius:7px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.owner-action .actions{display:flex;gap:8px;align-items:center}.owner-action small{color:#5b4a46}.release-response{margin-top:14px;padding:14px;border:1px solid #b8c9e8;border-radius:9px;background:#f7faff}.release-response h4{margin:0 0 4px;font-size:14px}.release-response p{margin:4px 0 10px;color:var(--muted)}.release-response .actions{margin-top:8px}.release-response.recorded{border-color:#b6dfc8;background:var(--green-soft)}.release-response.recorded strong{color:var(--green)}.owner-test-plan{margin:10px 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:#fff}.owner-test-plan strong{color:#174ea6}.owner-test-plan ol{margin:7px 0 0;padding-left:22px}.owner-test-plan li{margin:5px 0;color:var(--ink)}.release-reason{max-height:180px;margin:10px 0;padding-left:11px;overflow:auto;border-left:3px solid #d58b82;scrollbar-gutter:stable}.release-reason span{display:block;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}.release-reason p{margin:3px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
 .delivered-documents{margin:0 0 12px;padding:12px 14px;border:1px solid #b6dfc8;border-radius:9px;background:var(--green-soft)}.delivered-documents strong{display:block;font-size:14px;color:var(--green);margin-bottom:6px}.delivered-documents ul{margin:0;padding-left:20px}.delivered-documents li{margin:5px 0;font-size:14px}.delivered-documents a{font-weight:700;color:#174ea6}.delivered-documents small{display:block;color:var(--muted);margin-top:6px}.delivered-documents .unavailable{color:#8a2c1f}.owner-action .card-links{margin:6px 0 8px}.owner-action .card-links a{font-weight:700;color:#174ea6;margin-right:12px}.owner-action .card-links small{display:block;color:#5b4a46;margin-top:4px}.release-build{margin:0 0 12px;padding:12px 14px;border:1px solid #8fbfa4;border-radius:9px;background:var(--green-soft)}.release-nodownload{margin:0 0 12px;padding:12px 14px;border:1px solid #d9b45a;border-radius:9px;background:#fff8e1;color:#1d1d1f}.release-nodownload strong{display:block;margin-bottom:6px}.release-build strong{color:var(--green)}.release-build.failed{border-color:#d58b82;background:var(--red-soft)}.release-build.failed strong{color:var(--red)}.release-build .build-files{margin:6px 0;padding-left:20px}.release-build .build-files li{margin:6px 0;overflow-wrap:anywhere}.release-build .build-download{display:inline-block;margin-left:8px;padding:6px 12px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-build .build-how p{margin:5px 0}.release-build .build-how ol{margin:4px 0 8px;padding-left:22px}.release-build .build-problem{color:var(--red)}
 .release-preview{margin:0 0 12px;padding:12px 14px;border:1px solid #b8c9e8;border-radius:9px;background:#fff}.release-preview strong{color:#174ea6}.release-preview.ready{border-color:#8fbfa4;background:var(--green-soft)}.release-preview.ready strong{color:var(--green)}
+.upload-card .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@media (prefers-reduced-motion: reduce){.upload-card .spin{animation-duration:2.4s}}
 .release-preview .view-app .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@keyframes view-app-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.release-preview .view-app .spin{animation-duration:2.4s}}.release-preview .preview-log-details{margin-top:6px}.release-preview .preview-log-details summary{cursor:pointer}
 .release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
 .modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}
@@ -484,9 +486,11 @@ function taskProgress(state,name,facts,gate,confirmation={}){
 }
 
 function taskFacts(state,contracts,name){
-  const chunks=Object.values((state.task_chunks||{})[name]||{});
+  const allChunks=Object.entries((state.task_chunks||{})[name]||{});
+  // A chunk Delivery retired (removed or merged) is shown but never counted: progress is live work only.
+  const chunks=allChunks.map(entry=>entry[1]).filter(item=>item.status!=='retired');
   const plan=(state.delivery_plans||{})[name]||{};
-  const mode=plan.mode||(chunks.length?'chunked':'atomic');
+  const mode=plan.mode||(allChunks.length?'chunked':'atomic');
   // A retired (superseded) subtask is shown but never counted: progress is live work only.
   const allSubtasks=Object.values(plan.subtasks||{});
   const subtasks=allSubtasks.filter(item=>item.status!=='superseded');
@@ -504,7 +508,7 @@ function taskFacts(state,contracts,name){
   const total=mode==='application'?subtasks.length:chunks.length;
   const nestedChunks=subtasks.flatMap(item=>Object.values(item.chunks||{}));
   const progressText=mode==='application'?`${passedSubtasks} product ${passedSubtasks===1?'subtask':'subtasks'} checked by the independent reviewer · ${Math.max(0,total-passedSubtasks)} remaining`:mode==='atomic'?'One piece of work · an independent reviewer must check it before you try it':`${done} ${done===1?'change':'changes'} checked and passed · ${Math.max(0,total-done)} remaining`;
-  return{mode,plan,subtasks,allSubtasks,chunks,reviews,agent,done,total,nestedChunks,progressText,contract:(contracts||{})[name]||{}};
+  return{mode,plan,subtasks,allSubtasks,chunks,allChunks,reviews,agent,done,total,nestedChunks,progressText,contract:(contracts||{})[name]||{}};
 }
 
 // 2026-09-28 backlog #12: one View app button per release card. No command or
@@ -653,21 +657,50 @@ function noDownloadNoticeHtml(state,name){
 function noDownloadHtml(name){
   return `<div class="release-nodownload" role="note"><strong>No download is available for this release</strong><p>Mission Control found no web page to open and no downloadable file was kept. If this is a program (for example a Windows program), it was made before downloads were kept. To get it, resume the project if it is paused, then give Delivery this direction: "Build ${esc(name)} again and publish it for download."</p></div>`;
 }
+// Stage 6b: an Analyze code task has no app. The card opens the report from the delivered work instead.
+function analysisReportHtml(name){
+  const task=esc(JSON.stringify(name));
+  return `<div class="release-preview"><strong>Read the report</strong><p>This task was an analysis, so there is no app to run. View FINDINGS.md opens the report from the delivered work in a new tab.</p><div class="actions"><button type="button" class="preview-link view-findings" onclick="viewFindings(${task})">View FINDINGS.md</button></div></div>`;
+}
+function viewFindings(task){window.open(apiPath('/api/releases/'+encodeURIComponent(task)+'/findings'),'_blank','noopener');}
 function releaseResponseHtml(state,name){
   const inner=releaseResponseCore(state,name);
   return inner?noDownloadNoticeHtml(state,name)+buildBlockHtml(releaseBuildCard(state,name))+inner:'';
 }
+// The card for an Accept that uploads by itself (the project has an upload destination). Plain words only; the saved git
+// output stays on the board for the CTO and is never shown. "Upload again" is the owner's only control.
+function uploadCardHtml(name,upload){
+  const where=`${esc(upload.url)} (${esc(upload.branch)})`,task=esc(JSON.stringify(name));
+  const last=(upload.attempts||[]).slice(-1)[0]||{};
+  if(upload.status==='uploaded')return `<div class="release-response recorded upload-card uploaded" aria-live="polite"><strong>Accepted and uploaded to ${where}</strong><p>The approved version is now on that branch. Nothing more to do.</p></div>`;
+  if(upload.status==='failed'||upload.status==='diverged'){
+    const why=upload.status==='diverged'?'The repository already has work this project does not have, so nothing was uploaded and nothing there was changed.':(last.reason||'The upload did not go through.');
+    return `<div class="release-response recorded upload-card upload-stopped" aria-live="polite"><strong>Accepted, but not uploaded to ${where}</strong><div class="release-reason"><span>Why</span><p>${esc(why)}</p></div><p>Your approval is saved and the approved version is in this project. Nothing was sent to the repository.</p><div class="actions"><button type="button" onclick="retryUpload(${task})">Upload again</button></div></div>`;
+  }
+  const started=last.started_at?` <small>(started ${esc(String(last.started_at).slice(11,19))} UTC)</small>`:'';
+  return `<div class="release-response recorded upload-card uploading" aria-live="polite"><strong><span class="spin" aria-hidden="true"></span>Accepted. Uploading to ${where}…</strong>${started}<p>This can take a minute. You can keep working.</p></div>`;
+}
+async function retryUpload(task){
+  try{await call('/api/uploads/'+encodeURIComponent(task)+'/retry',{});el('#notice').textContent='Uploading again.';await refresh();}
+  catch(error){el('#notice').textContent='We could not start the upload. '+(error?.message||'Please try again.');await refresh();}
+}
 function releaseResponseCore(state,name){
   const release=(state.releases||{})[name];
+  // Once the merge is done the release reads ACCEPTED: a project that uploads on Accept keeps showing its upload until it ends.
+  const savedAccept=(state.release_decisions||{})[name];
+  if(release?.status==='ACCEPTED'&&savedAccept?.decision==='accepted'&&savedAccept.upload?.url)return uploadCardHtml(name,savedAccept.upload);
   if(release?.status!=='VISUAL_TEST_REQUIRED')return'';
   const acceptRuntimeGated=Boolean(release?.checks?.deployed_runtime_verified||release?.checks?.deployed_chat_verified);
   if(loadedRuntimeManaged&&acceptRuntimeGated&&release?.runtime_verification_deferred_to_target_acceptance!==true&&(!loadedRuntimeCommit||release?.head_commit!==loadedRuntimeCommit))return `<div class="release-response recorded" aria-live="polite"><strong>Acceptance unavailable</strong><p>Mission Control is running a different version from the one that was reviewed, so Accept is switched off for now. The CTO is loading the reviewed version; nothing for you to do.</p></div>`;
   const response=(state.release_decisions||{})[name];
+  if(!response&&acceptedByOwner.has(name))return acceptedThanksHtml(name);
+  if(!response&&((state.accepted_tasks||[]).includes(name)||(state.git_acceptances||{})[name]))return acceptedThanksHtml(name);   // never offer Accepted again
   if(response){
     if(response.decision==='accepted'){
       const acceptance=(state.git_acceptances||{})[name],instruction=(state.remote_push_instructions||{})[name],outcome=(state.remote_push_outcomes||{})[name],task=esc(JSON.stringify(name));
       const failed=response.git_acceptance;
       if(!acceptance&&failed?.status==='failed')return `<div class="release-response recorded acceptance-failed" aria-live="polite"><strong>Accepted, but the app was not updated yet</strong><div class="release-reason"><span>Why</span><p>${esc(failed.reason||'The approved work could not be added to the project.')}</p></div><p>Your approval is saved. Ask the CTO to fix the reason above, then press the button to add the approved work to the project.</p><div class="actions"><button type="button" onclick="submitAccepted(${task})">Try Accept again</button></div></div>`;
+      if(response.upload&&response.upload.url&&(acceptance||response.upload.commit))return uploadCardHtml(name,response.upload);   // a project with a destination: Accept uploads by itself
       if(!acceptance)return `<div class="release-response recorded" aria-live="polite"><strong>Your response: Accepted</strong><p>Your approval is saved, but the approved work has not been added to the project yet. Nothing was sent to online storage. The agents are finishing this; nothing for you to do.</p></div>`;
       if(outcome?.outcome==='pushed')return `<div class="release-response recorded" aria-live="polite"><strong>Accepted and uploaded</strong><p>The approved version was uploaded to ${esc(outcome.remote)} (${esc(outcome.branch)}) after your confirmation. Nothing more to do for this upload.</p></div>`;
       if(instruction&&!instruction.used_at)return `<div class="release-response recorded" aria-live="polite"><strong>Accepted on this computer</strong><p>Your upload request is saved. Press the button to upload the approved version. The upload stops by itself if the destination changed since it was checked.</p><div class="actions"><button type="button" onclick="confirmPush(${task},${esc(JSON.stringify(instruction.id))})">Confirm upload now</button></div></div>`;
@@ -681,7 +714,7 @@ function releaseResponseCore(state,name){
     return `<div class="release-response recorded" aria-live="polite"><strong>OWNER REJECTED / REPAIR REQUIRED</strong><div class="release-reason"><span>Reason</span><p>${reasonText}</p></div><p>Your explanation and ${files} are saved. Delivery will use them in a new repair, review, and release cycle.</p></div>`;
   }
   const task=esc(JSON.stringify(name));
-  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${releasePreviewHtml(release)}${checkedInAdvanceHtml((state.requirement_confirmations||{})[name])}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
+  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${(state.task_kinds||{})[name]==='analysis'?analysisReportHtml(name):releasePreviewHtml(release)}${checkedInAdvanceHtml((state.requirement_confirmations||{})[name])}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}<p>Tell us whether you accept this release.</p><div class="actions"><button type="button" class="secondary" onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
 }
 
 function taskLatestTimestamp(state,name){
@@ -840,9 +873,9 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const routedNotice=routed.length?`<div class="next routed-around" data-routed-around="${esc(name)}"><strong>Set aside by the CTO as not material to your objective:</strong> ${routed.map(finding=>`${esc(finding.title)} — ${esc(finding.routed_around_reason||'no reason recorded')}`).join('; ')}. Delivery is not held on this.</div>`:'';
   const structureLabel=facts.mode==='application'?'Full application with product subtasks':facts.mode==='chunked'?'One task split into logical chunks':'One cohesive task with no artificial chunks';
   const structureChanges=Array.isArray(facts.plan.structure_changes)?facts.plan.structure_changes.slice(-3):[];
-  const changeHistory=structureChanges.map(change=>{const retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}</small></div>`;}).join('');
+  const changeHistory=structureChanges.map(change=>{const removed=change.kind==='delivery work removed',retired=change.kind==='product subtask superseded';return`<div class="scope-change"><strong>${removed?'Work removed':retired?'Work retired':'Work added after planning'}</strong><p>${esc(change.reason||'Reason unavailable.')}</p><small>${esc(change.at||'Time unavailable')} · ${esc(((removed?change.removed:retired?change.superseded:change.added)||[]).join(', '))}${retired&&change.replaced_by?.length?` · replaced by ${esc(change.replaced_by.join(', '))}`:''}${removed&&change.merged_into?` · merged into ${esc(change.merged_into)}`:''}</small></div>`;}).join('');
   const technicalStructure=`<p>${esc(structureLabel)}${facts.plan.rationale?` — ${esc(facts.plan.rationale)}`:''}</p>`;
-  const structureBody=`${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${changeHistory}`;
+  const structureBody=`${facts.mode==='application'?`<strong>Product subtasks</strong>${(facts.allSubtasks||facts.subtasks).map(item=>item.status==='superseded'?`<p class="subtask-retired">– <s>${esc(item.title)}</s> · retired: ${esc(item.superseded?.reason||'no longer needed')}</p>`:`<p>${item.status==='passed'?'✓':'○'} ${esc(item.title)}${item.dependencies?.length?` · after ${esc(item.dependencies.join(', '))}`:''}</p>`).join('')}`:''}${facts.mode==='chunked'?(()=>{const declared=new Set((facts.allChunks||[]).map(entry=>entry[0])),targets=[...new Set((facts.allChunks||[]).filter(entry=>entry[1].status==='retired'&&entry[1].retired?.merged_into).map(entry=>entry[1].retired.merged_into))].filter(target=>!declared.has(target));return(facts.allChunks||[]).filter(entry=>entry[1].status==='retired').map(entry=>`<p class="subtask-retired">– <s>${esc(entry[0])}</s> · ${entry[1].retired?.merged_into?`Merged into ${esc(entry[1].retired.merged_into)}`:`Removed by Delivery: ${esc(entry[1].retired?.reason||'no longer needed')}`}</p>`).join('')+(targets.length?`<p class="subtask-retired">Merge not finished: Delivery still has to declare ${targets.map(esc).join(', ')} with declare-chunks --reason.</p>`:'');})():''}${changeHistory}`;
   const structurePlan=structureBody?`<div class="delivery-brief">${structureBody}</div>`:'';
   const proposal=(state.requirement_proposals||{})[name]||{};
   const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?proposalCardHtml(name,proposal)
@@ -1052,7 +1085,7 @@ function tasks(state,contracts,directions,liveTasks,inScopeFindings,requirements
   const out=el('#tasks');
   const previousScrollTop=out.scrollTop;
   const existing=new Map((typeof out.querySelectorAll==='function'?[...out.querySelectorAll('.task')]:[]).map(node=>[node.dataset.task,node]));
-  const names=taskNames(state,contracts,directions,liveTasks);
+  const names=taskNames(state,contracts,directions,liveTasks).filter(name=>!hiddenAccepted.has(name)||((state.release_decisions||{})[name]?.git_acceptance?.status==='failed')||['pending','running','failed','diverged'].includes((state.release_decisions||{})[name]?.upload?.status));
   if(!names.length){
     const waiting=Object.values(state.agents||{}).some(agent=>agent.active&&agent.task==='AWAITING_OWNER_DIRECTION');
     if(!ownerHolds(out)){
@@ -1177,7 +1210,7 @@ function requirementsHistoryHtml(item){
   return`<div class="history-requirements"><div class="history-requirements-title">Final agreed requirements</div><div class="history-requirements-body">${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'history',copyButtonHtml('history-requirements',item.task||item.title||'',confirmation.text))}</div>${confirmation.contract_check?testedListHtml(confirmation.contract_check.labels,confirmation.contract_check.results,'',confirmation.contract_check.compare):''}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Historical status wording describes that confirmation moment.</small></div>`;
 }
 
-function usageLineHtml(item){return (item.usage_line?`<p class="task-usage" data-task-usage-history>${esc(item.usage_line)}</p>`:'')+(item.cost_line?`<p class="task-usage" data-task-cost-history>${esc(item.cost_line)}</p>`:'')+(item.difficulty_line?`<p class="task-usage" data-task-difficulty-history>${esc(item.difficulty_line)}</p>`:'')+(item.revert_proof_line?`<p class="task-usage" data-task-revert-proof-history>${esc(item.revert_proof_line)}</p>`:'');}
+function usageLineHtml(item){return (item.usage_line?`<p class="task-usage" data-task-usage-history>${esc(item.usage_line)}</p>`:'')+(item.cost_line?`<p class="task-usage" data-task-cost-history>${esc(item.cost_line)}</p>`:'')+(item.difficulty_line?`<p class="task-usage" data-task-difficulty-history>${esc(item.difficulty_line)}</p>`:'')+(item.upload_line?`<p class="task-usage" data-task-upload-history>${esc(item.upload_line)}</p>`:'')+(item.revert_proof_line?`<p class="task-usage" data-task-revert-proof-history>${esc(item.revert_proof_line)}</p>`:'');}
 
 function reviewNotesHtml(item){
   // Information only (2026-10-25): what the checks judged minor and left as notes, and, if the harness stopped repairing a part, the plain outcome. Nothing here asks the owner to act.
@@ -1396,6 +1429,24 @@ function agentStatusSummaryCore(agent,state,contracts){
 
 let decisionTask='';
 let pushTask='';
+// Stage 6a: what this page itself has done with Accepted. The decision request runs the merge before it answers, so
+// for a few seconds the board still says "waiting". These sets keep the card honest meanwhile and stop a second press.
+const acceptedByOwner=new Set(),acceptingNow=new Set(),hiddenAccepted=new Set();
+function acceptedThanksHtml(name){
+  const line=acceptingNow.has(name)?'Saving your answer and adding the approved work to the project. Nothing more to do.':'Your answer is saved. This card closes by itself.';
+  return `<div class="release-response recorded accepted-thanks" data-accepted-task="${esc(name)}" role="status" aria-live="polite"><strong>Accepted, thank you</strong><p>${line}</p></div>`;
+}
+function showAcceptedNow(task){
+  const needle='submitAccepted('+JSON.stringify(task)+')';
+  for(const button of [...document.querySelectorAll('button[onclick]')]){
+    if(button.getAttribute('onclick')!==needle)continue;
+    const card=button.closest('.release-response');
+    if(card)card.outerHTML=acceptedThanksHtml(task);
+  }
+}
+function removeTaskCard(task){
+  for(const node of [...document.querySelectorAll('.task')])if(node.dataset.task===task)node.remove();
+}
 
 // Batch 2 item F (owner, 2026-10-01): accepting closes the release, and the
 // preview supervisor then stops its test copy (View app), along with any task
@@ -1406,12 +1457,35 @@ function testCopyRunning(state,task){
 }
 
 async function submitAccepted(task){
+  const saved=((lastBoard?.state||{}).release_decisions||{})[task];
+  const retry=saved?.decision==='accepted'&&saved?.git_acceptance?.status==='failed';     // "Try Accept again": the saved Accept is retried exactly as before
+  if(!retry&&(acceptedByOwner.has(task)||saved?.decision==='accepted')){el('#notice').textContent='This task is already accepted.';return;}
   if(testCopyRunning(lastBoard?.state||{},task)&&!window.confirm('The test copy of this release is still running on this computer (View app).\n\nIf a task is still running in the test copy, Accept will stop it: accepting closes the test copy.\n\nAccept anyway?'))return;
+  if(retry){
+    try{await call('/api/releases/'+encodeURIComponent(task)+'/decision',{decision:'accepted'});el('#notice').textContent='Your response was saved with this release.';await refresh();}
+    catch(error){el('#notice').textContent='We could not save your response. '+(error?.message||'Please try again.');}
+    return;
+  }
+  acceptedByOwner.add(task);acceptingNow.add(task);
+  showAcceptedNow(task);                                  // at once: the buttons are gone and the card says it worked
+  el('#notice').textContent='Accepted, thank you.';
   try{
-    await call('/api/releases/'+encodeURIComponent(task)+'/decision',{decision:'accepted'});
-    el('#notice').textContent='Your response was saved with this release.';
+    const result=await call('/api/releases/'+encodeURIComponent(task)+'/decision',{decision:'accepted'});
+    acceptingNow.delete(task);
+    const merged=result?.decision?.git_acceptance?.status;
+    if(merged==='failed'||merged==='reintegration_required'){
+      acceptedByOwner.delete(task);                       // saved, but the work is not in the project yet: the card explains and offers the retry
+      el('#notice').textContent='Your Accept was saved, but the approved work is not in the project yet. The card explains why.';
+      await refresh();return;
+    }
+    if(result?.decision?.upload){el('#notice').textContent='Accepted. The upload has started.';await refresh();return;}   // this project uploads on Accept: the card now shows the upload, so it is not closed
+    showAcceptedNow(task);
+    setTimeout(()=>{hiddenAccepted.add(task);removeTaskCard(task);refresh();},2500);
+  }catch(error){
+    acceptedByOwner.delete(task);acceptingNow.delete(task);
+    el('#notice').textContent='We could not save your response. '+(error?.message||'Please try again.');
     await refresh();
-  }catch(error){el('#notice').textContent='We could not save your response. '+(error?.message||'Please try again.');}
+  }
 }
 
 function openDecisionDialog(task){
@@ -1612,7 +1686,7 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
     if(agent.role==='engineering'||agent.role==='development'){
       const waiting=agent.task==='AWAITING_OWNER_DIRECTION', directionSent=Boolean((state.owner_directions||{})[agent.session_id]?.text);
       const releaseReady=(state.releases||{})[agent.task]?.status==='VISUAL_TEST_REQUIRED',decision=(state.release_decisions||{})[agent.task];
-      if(decision?.decision!=='accepted'&&!deliveryTaskAccepted(agent,state)){
+      if(decision?.decision!=='accepted'&&!deliveryTaskAccepted(agent,state)&&!acceptedByOwner.has(agent.task)){
         const ownerButton=document.createElement('button');ownerButton.className='secondary';ownerButton.type='button';ownerButton.disabled=false;
         if(releaseReady&&!decision){
           ownerButton.textContent='Send feedback';ownerButton.title='Tell Delivery what must change before you accept this task.';ownerButton.onclick=()=>openDecisionDialog(agent.task);
@@ -2412,8 +2486,9 @@ function startAfterWait(){
     go.click();
   }
 }
+let refreshQueued=false;
 async function refresh(){
-  if(refreshing)return;
+  if(refreshing){refreshQueued=true;return;}   // never drop it: a state change made meanwhile must still be drawn
   refreshing=true;
   try{
     const [dashboard,managed]=await Promise.all(['/api/dashboard','/api/control'].map(async path=>{
@@ -2458,7 +2533,7 @@ async function refresh(){
       }
     }
   }
-  finally{refreshing=false;}
+  finally{refreshing=false;if(refreshQueued){refreshQueued=false;refresh();}}
 }
 
 async function loadHistory(force=false){
@@ -2875,6 +2950,7 @@ def _compact_dashboard_state(
         compact["project_cost"] = {"line": cost_center.project_line(cost)}
     # 2026-10-26: the latest difficulty note per role, one plain line per task (information only)
     compact["task_difficulty"] = {task: {"line": difficulty_note.line(state, task)} for task in live}
+    compact["task_kinds"] = {task: (state.get("task_kinds") or {}).get(task, "development") for task in live}
     # 2026-10-26: which changed files no test notices, one plain line per task (information only)
     compact["task_revert_proof"] = {task: {"line": revert_proof.line((state.get("revert_proofs") or {}).get(task))} for task in live}
     # 2026-09-27: an accepted task is no longer live, so its decision is not in
@@ -3490,6 +3566,19 @@ def _stopped_tasks(state: dict) -> dict[str, dict]:
     return stopped
 
 
+# How long a task whose upload has just finished stays in the live area (then it is in Task history, with the same plain line).
+UPLOADED_CARD_STAYS_SECONDS = 600
+
+
+def _seconds_since(stamp: object) -> float:
+    """Seconds since an ISO timestamp the board wrote; a missing or unreadable one counts as long ago (infinity)."""
+    try:
+        moment = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return float("inf")
+    return max(0.0, ((datetime.now(moment.tzinfo) if moment.tzinfo else datetime.now()) - moment).total_seconds())
+
+
 def _live_task_names(state: dict, contracts: dict) -> list[str]:
     """Return only work that still belongs in the live Delivery progress area.
 
@@ -3509,6 +3598,14 @@ def _live_task_names(state: dict, contracts: dict) -> list[str]:
     }
     for task, decision in (state.get("release_decisions") or {}).items():
         if decision.get("decision") == "accepted" and (decision.get("git_acceptance") or {}).get("status") == "failed" and task in names:
+            live.add(str(task))
+    # An accepted task whose upload is not finished stays live too: its card says "Uploading…" or offers "Upload again". A task
+    # whose upload just ended "uploaded" stays a few minutes so the owner sees "Accepted and uploaded" before it moves to history.
+    for task, decision in (state.get("release_decisions") or {}).items():
+        upload = decision.get("upload") if decision.get("decision") == "accepted" else None
+        if isinstance(upload, dict) and task in names and (
+            upload.get("status", "pending") != "uploaded" or _seconds_since(upload.get("uploaded_at")) < UPLOADED_CARD_STAYS_SECONDS
+        ):
             live.add(str(task))
     for agent in (state.get("agents") or {}).values():
         if (agent.get("active") or agent.get("status") == "paused") and agent.get("role") in board.DEVELOPER_ROLES and agent.get("task") in names and agent.get("task") not in accepted:
@@ -3571,6 +3668,27 @@ def _review_notes(requests: list[dict]) -> list[str]:
     return notes[:20]
 
 
+def _upload_kwargs(settings_home: Path | None, project_id: str) -> dict:
+    """Extra arguments for board.record_release_decision: the project's upload destination, read from the manager registry now.
+
+    Returns {"upload_destination": {...}} when the project has one, else {} (so a project without a destination calls the
+    board exactly as before). Raises ValueError if the registry cannot be read, which refuses the Accept before anything is saved.
+    """
+    destination = upload_on_accept.destination_for(settings_home, project_id)
+    return {"upload_destination": destination} if destination else {}
+
+
+def _upload_line(decision: dict) -> str:
+    """The plain history line for a finished upload ("" when the Accept uploaded nothing or it is not finished).
+
+    Takes the owner's saved decision; returns "Accepted and uploaded to <repository> (<branch>)" once the upload ended "uploaded".
+    """
+    upload = decision.get("upload") if isinstance(decision, dict) and decision.get("decision") == "accepted" else None
+    if isinstance(upload, dict) and upload.get("status") == "uploaded":
+        return f"Accepted and uploaded to {upload.get('url', '')} ({upload.get('branch', '')})"
+    return ""
+
+
 def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledgers: dict[str, dict] | None = None, test_ledgers_all: dict[str, list] | None = None) -> list[dict]:
     """Build an unbounded, restart-safe history view from persisted board data."""
     live = set(live_tasks)
@@ -3625,7 +3743,7 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
             "completed_at": completed_at or started_at,
             "result": result,
             "chunks_passed": sum(value.get("status") == "passed" for value in chunks.values()),
-            "chunks_total": len(chunks),
+            "chunks_total": sum(value.get("status") != "retired" for value in chunks.values()),
             "delivery_mode": plan.get("mode") or ("chunked" if chunks else "atomic"),
             "subtasks_passed": sum(value.get("status") == "passed" for value in subtasks.values()),
             "subtasks_total": sum(value.get("status") != "superseded" for value in subtasks.values()),
@@ -3634,6 +3752,7 @@ def _task_history(state: dict, contracts: dict, live_tasks: list[str], test_ledg
             "code_quality": code_quality.notes(state, task),
             "usage_line": review_cost.usage(state, task)["line"],
             "difficulty_line": difficulty_note.line(state, task),
+            "upload_line": _upload_line(decision),
             "revert_proof_line": revert_proof.line((state.get("revert_proofs") or {}).get(task)),
             "review_outcome": next((e.get("outcome", "") for e in review_rounds.terminal_for(state.get("review_escalations") or {}, task)), ""),
             "release_status": release.get("status", ""),
@@ -3969,6 +4088,30 @@ def _finished_delivery_predecessor(root: Path) -> str:
         return predecessor if predecessor and board.delivery_work_is_all_finished(board.snapshot(root)) else ""
     except (OSError, ValueError, KeyError, TypeError):
         return ""
+FINDINGS_REPORT = "FINDINGS.md"
+FINDINGS_REPORT_MAX_BYTES = 2 * 1024 * 1024
+
+
+def serve_findings_report(root: Path, path: str) -> tuple[int, bytes, str]:
+    """GET /api/releases/<task>/findings -> the FINDINGS.md of the delivered work, read from the release's own commit.
+
+    Only a release awaiting the owner, for an Analyze code task, and only that one file: the report is read with `git show`
+    from the commit the release names, so nothing in the working folder and no other path can be reached.
+    """
+    def refuse(status: int, reason: str) -> tuple[int, bytes, str]:
+        return status, reason.encode("utf-8"), "text/plain; charset=utf-8"
+    task = unquote(path[len("/api/releases/"):-len("/findings")])
+    state = board.snapshot(root)
+    release = (state.get("releases") or {}).get(task) or {}
+    if (state.get("task_kinds") or {}).get(task) != "analysis" or not release:
+        return refuse(404, "There is no analysis report for this task.")
+    workspace, commit = str((state.get("task_workspaces") or {}).get(task) or ""), str(release.get("head_commit") or "")
+    if not workspace or not Path(workspace).is_dir() or not re.fullmatch(r"[0-9a-f]{7,64}", commit):
+        return refuse(404, "The delivered work for this analysis is not available on this computer.")
+    shown = git_process.run(["git", "show", f"{commit}:{FINDINGS_REPORT}"], cwd=workspace, capture_output=True)
+    if shown.returncode != 0:
+        return refuse(404, f"The delivered work has no {FINDINGS_REPORT}.")
+    return 200, shown.stdout[:FINDINGS_REPORT_MAX_BYTES], "text/plain; charset=utf-8"
 
 
 def serve_owner_document(root: Path, path: str) -> tuple[int, bytes, str]:
@@ -4478,6 +4621,17 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if path.startswith("/api/releases/") and path.endswith("/findings"):
+                # Stage 6b: the FINDINGS.md of an Analyze code task, read from the release's own commit.
+                status, body, media = serve_findings_report(root, path)
+                self.send_response(status)
+                self.send_header("Content-Type", media)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if path.startswith("/api/builds/"):
                 status, body, opened = open_build_download(root, path)
                 if opened is None:
@@ -4623,6 +4777,12 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(self.rfile.read(length) or b"{}")
                     response = board.confirm_remote_push(root, task, str(data.get("instruction_id", "")))
                     self.send_json(201, response); return
+                upload_prefix = "/api/uploads/"
+                if path.startswith(upload_prefix) and path.endswith("/retry"):
+                    # The owner's "Upload again": same checks as Accept (refused() above, paused projects refused). It appends an
+                    # attempt to the same upload; it never creates a second one and has no command-line twin.
+                    task = unquote(path[len(upload_prefix):-len("/retry")])
+                    self.send_json(200, {"upload": upload_on_accept.retry(root, task)}); return
                 if path.startswith(release_prefix) and path.endswith("/decision"):
                     task = unquote(path[len(release_prefix):-len("/decision")])
                     length = int(self.headers.get("Content-Length", "0"))
@@ -4632,7 +4792,10 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     raw = self.rfile.read(length)
                     if content_type.lower().startswith("multipart/form-data"):
                         fields, attachments = parse_release_multipart(raw, content_type)
-                        response = board.record_release_decision(root, task, fields.get("decision", ""), fields.get("reason", ""))
+                        response = board.record_release_decision(
+                            root, task, fields.get("decision", ""), fields.get("reason", ""),
+                            **_upload_kwargs(settings_home, project_id))
+                        upload_on_accept.wake(root)    # after the response is saved; a no-op when this Accept saved no upload
                         try:
                             response = board.add_release_attachments(root, task, attachments)
                         except ValueError as error:
@@ -4649,7 +4812,10 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     if length > 128 * 1024:
                         raise ValueError("response is too large")
                     data = json.loads(raw or b"{}")
-                    response = board.record_release_decision(root, task, str(data.get("decision", "")), str(data.get("reason", "")))
+                    response = board.record_release_decision(
+                        root, task, str(data.get("decision", "")), str(data.get("reason", "")),
+                        **_upload_kwargs(settings_home, project_id))
+                    upload_on_accept.wake(root)        # after the response is saved; a no-op when this Accept saved no upload
                     self.send_json(201, {"decision": response}); return
                 security_prefix, security_suffix = "/api/tasks/", "/security"
                 if path.startswith(security_prefix) and path.endswith(security_suffix):
@@ -4833,6 +4999,7 @@ def serve(root: Path, host: str = "127.0.0.1", port: int = 8742,
     board.recover_git_transactions(root)
     board.certify_legacy_review_ledgers(root)
     release_coordinator.coordinate(root)
+    upload_on_accept.wake(root, include_stopped=True)    # every saved Accept whose upload is not "uploaded" runs once more
     server = ThreadingHTTPServer(
         (host, port), make_handler(
             root, project_name, project_description, manager_url, settings_home, ready_token, project_id,

@@ -209,6 +209,32 @@ class _Libproc:
         info = self._info(pid)
         return self._token(info) if info is not None and int(info.pid) == int(pid) else ""
 
+    def environment(self, pid: int) -> dict[str, str] | None:
+        """The launch environment of a same-user process, read in-process (no ps), or None when it cannot be read.
+
+        Like `ps -E`, nothing is shown for Apple platform programs (/bin/sh, /bin/sleep): their answer is an empty
+        mapping. The programs a managed agent leaves behind (claude, codex, node, python) are shown.
+        """
+        ctypes, _libproc, libc, _BsdInfo = self._load()
+        argmax, width = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+        mib = (ctypes.c_int * 2)(self.CTL_KERN, self.KERN_ARGMAX)
+        if libc.sysctl(mib, 2, ctypes.byref(argmax), ctypes.byref(width), None, 0) != 0 or argmax.value <= 0:
+            return None
+        buffer, size = ctypes.create_string_buffer(argmax.value), ctypes.c_size_t(argmax.value)
+        mib = (ctypes.c_int * 3)(self.CTL_KERN, self.KERN_PROCARGS2, int(pid))
+        if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0 or size.value <= 4:
+            return None
+        raw = buffer.raw[:size.value]
+        argc = struct.unpack("i", raw[:4])[0]
+        _executable, _, rest = raw[4:].partition(b"\0")
+        found: dict[str, str] = {}
+        for item in rest.lstrip(b"\0").split(b"\0")[max(argc, 0):]:
+            if not item:
+                break
+            name, _, value = item.partition(b"=")
+            found[name.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+        return found
+
     def process_table(self) -> dict[int, dict[str, Any]]:
         ctypes, libproc, _libc, _BsdInfo = self._load()
         count = libproc.proc_listallpids(None, 0)
@@ -266,6 +292,14 @@ class _ProcessIdentity:
             return read()
         except (ProcessTableUnavailable, OSError) as fallback:
             raise ProcessTableUnavailable(f"{refusal}; {fallback}") from refusal
+
+    def environment_value(self, pid: int, name: str) -> str | None:
+        """One variable of a process's launch environment: its value, "" when it is not set, None when it cannot be read."""
+        try:
+            found = LIBPROC.environment(pid)
+        except (ProcessTableUnavailable, OSError):
+            return None
+        return None if found is None else found.get(name, "")
 
     def start_token(self, pid: int) -> str:
         # A non-zero exit means that pid is gone, which is an ANSWER, not a

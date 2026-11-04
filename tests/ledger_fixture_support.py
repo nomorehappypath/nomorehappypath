@@ -12,24 +12,26 @@ NOW = datetime(2026, 10, 27, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def write_ledger(board: Path, *, buckets: dict[tuple[str, str], list[int]], active: dict[str, float] | None = None, gemini: dict[str, float] | None = None,
-                 limits: dict[str, tuple[float, float]] | None = None, partial: dict[str, str] | None = None) -> None:
+                 limits: dict[str, tuple[float, float]] | None = None, partial: dict[str, str] | None = None,
+                 anchor: datetime = NOW) -> None:
     """buckets: (role, task) -> [input, output, cache read, cache write]; active: task -> days ago it last ran; gemini: task -> days ago;
-    limits: task -> (percent at start, percent at end) of the 5-hour Codex window; partial: task -> why its reading is incomplete."""
+    limits: task -> (percent at start, percent at end) of the 5-hour Codex window; partial: task -> why its reading is incomplete;
+    anchor: the moment "days ago" counts back from (a test that renders the real app, which reads the real clock, passes the current time)."""
     ledger = cost_center._empty()
     for (role, task), counts in buckets.items():
         ledger["buckets"][f"{role}\t{task}\t{MODEL}"] = counts
     for number, (task, days) in enumerate((active or {}).items()):
         key = f"claude|store|session-{number:03d}-aaaa"
         ledger["sessions"][key] = {"provider": "claude", "role": "delivery", "status": "counted"}
-        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (NOW - timedelta(days=days)).isoformat()}]
+        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (anchor - timedelta(days=days)).isoformat()}]
     for number, (task, days) in enumerate((gemini or {}).items()):
         key = f"gemini|store|gemini-{number:03d}-bbbb"
         ledger["sessions"][key] = {"provider": "gemini", "role": "delivery"}
-        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (NOW - timedelta(days=days)).isoformat()}]
+        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (anchor - timedelta(days=days)).isoformat()}]
     for number, (task, why) in enumerate((partial or {}).items()):
         key = f"codex|store|codex-{number:03d}-cccc"
         ledger["sessions"][key] = {"provider": "codex", "role": "delivery", "status": "partial", "reason": why}
-        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (NOW - timedelta(days=1)).isoformat()}]
+        ledger["windows"][key] = [{"task": task, "role": "delivery", "from": (anchor - timedelta(days=1)).isoformat()}]
     for task, (start, end) in (limits or {}).items():
         ledger["limits"][task] = {"first": {"pct": start, "at": 1.0, "minutes": 300, "resets": 5}, "last": {"pct": end, "at": 2.0, "minutes": 300, "resets": 5}, "reset": False}
     cost_center._save(board, ledger)

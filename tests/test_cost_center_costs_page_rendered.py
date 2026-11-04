@@ -9,6 +9,7 @@ Run:  PYTHONPATH=. python3 -m unittest tests.test_cost_center_costs_page_rendere
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from harness import cost_center
@@ -48,7 +49,7 @@ class RenderedCostsPageTests(RenderedCase):
         for name, ledger in projects.items():
             entry = self.project(home, name, None)
             if ledger is not None:
-                write_ledger(Path(entry["data_root"]) / "board", **ledger)
+                write_ledger(Path(entry["data_root"]) / "board", anchor=datetime.now(timezone.utc), **ledger)   # the app reads the real clock, so the ledger is dated from it
         return home
 
     def read(self, projects, *, body=READ, **view):

@@ -360,14 +360,16 @@ def cmd_unlock(args: argparse.Namespace) -> int:
             "(see the Branching & Merge Policy)."
         )
 
+    # P8: only the lock of the task being finished is released; an agent's other,
+    # still-open task locks keep protecting their files.
     removed = 0
     for path, lock in _load_locks():
-        if lock.get("agent") == args.agent:
+        if lock.get("agent") == args.agent and lock.get("task") == args.task:
             path.unlink()
             removed += 1
             print(f"Removed lock: {path.name}")
     if removed == 0:
-        print(f"No locks found for agent={args.agent}.")
+        print(f"No locks found for agent={args.agent} task={args.task}.")
     return 0
 
 
@@ -581,8 +583,9 @@ def build_parser() -> argparse.ArgumentParser:
     lock.add_argument("--force", action="store_true")
     lock.set_defaults(func=cmd_lock)
 
-    unlock = sub.add_parser("unlock", help="Remove all locks for an agent.")
+    unlock = sub.add_parser("unlock", help="Remove the lock of one finished task (the agent's other locks stay).")
     unlock.add_argument("--agent", required=True)
+    unlock.add_argument("--task", required=True, help="The task whose lock is being released.")
     unlock.add_argument(
         "--require-merged",
         action="store_true",

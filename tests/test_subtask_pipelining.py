@@ -188,6 +188,44 @@ class SubtaskPipeliningTests(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(completed), 1)
 
+    def _crash_fold_at(self, crash_point: str) -> tuple[dict, dict, Path]:
+        self.declare()
+        reviewer = self.reviewer()
+        board.start_subtask(self.root, self.delivery["id"], "alpha")
+        self.commit("alpha", "alpha/result.txt")
+        request = self.request("alpha")
+        original = git_broker.GitBroker.integrate_subtask
+
+        def crash(broker, value, *, board_mutation, crash_after=""):
+            return original(broker, value, board_mutation=board_mutation, crash_after=crash_point)
+
+        with patch.object(git_broker.GitBroker, "integrate_subtask", new=crash):
+            with self.assertRaises(git_broker.InjectedCrash):
+                self.pass_request(reviewer, request, f"alpha-{crash_point}")
+        task_workspace = Path(board.snapshot(self.root)["task_workspaces"]["PIPELINE"])
+        return reviewer, request, task_workspace
+
+    def test_a_retried_fold_holds_instead_of_discarding_an_edit_made_after_the_crash(self):
+        # P10: the fold's git mutation landed, the journal was not marked done, and someone edited a
+        # tracked file in the task worktree before the retry; the retry's "already folded" branch ran
+        # `git reset --hard` with no dirty check and erased that edit.
+        reviewer, request, task_workspace = self._crash_fold_at("board_mutation")
+        (task_workspace / "test_smoke.py").write_text("edited after the crash\n", encoding="utf-8")
+        with self.assertRaisesRegex(Exception, "uncommitted"):
+            board.qa_result(
+                self.root, reviewer["id"], request["id"], "passed",
+                "TASK DONE: YES - alpha retried", self.evidence("retry-dirty"),
+            )
+        self.assertEqual((task_workspace / "test_smoke.py").read_text(encoding="utf-8"), "edited after the crash\n")
+
+    def test_fold_crash_recovery_holds_instead_of_discarding_an_edit_made_after_the_crash(self):
+        # Same guard on the recovery journal's own subtask-fold replay (git_broker.recover).
+        reviewer, request, task_workspace = self._crash_fold_at("git_mutation")
+        (task_workspace / "test_smoke.py").write_text("edited after the crash\n", encoding="utf-8")
+        recovery = board.recover_git_transactions(self.root)
+        self.assertTrue(recovery["holds"], "recovery must hold for the owner instead of resetting over the edit")
+        self.assertEqual((task_workspace / "test_smoke.py").read_text(encoding="utf-8"), "edited after the crash\n")
+
     def test_forced_path_overlap_serializes_while_first_scope_is_under_review(self):
         self.declare("shared", "shared/component")
         board.start_subtask(self.root, self.delivery["id"], "alpha")

@@ -204,6 +204,113 @@ class WorkspaceSettingsTests(unittest.TestCase):
                 Path(os.path.abspath(os.fspath(target))),
             )
 
+class CodexConfigWriteIsSafeTests(unittest.TestCase):
+    """P15: the owner's ~/.codex/config.toml (shared by every project) was rewritten in place with no
+    temp-file-and-rename and no lock, so a kill mid-write truncated it and two projects registering
+    at once lost one trust entry."""
+
+    def fixture(self, tmp: str):
+        codex_home = Path(tmp) / "codex-home"
+        codex_home.mkdir()
+        config = codex_home / "config.toml"
+        config.write_text('model = "keep-me"\n', encoding="utf-8")
+        return codex_home, config
+
+    def settings_for(self, tmp: str, name: str, config: Path) -> dict:
+        root = Path(tmp) / name
+        root.mkdir(exist_ok=True)
+        settings = workspace_settings.load(root)
+        settings["codex"]["config_path"] = str(config)
+        return settings
+
+    def test_a_crash_mid_write_leaves_the_owners_codex_config_intact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home, config = self.fixture(tmp)
+            settings = self.settings_for(tmp, "dev_harness", config)
+
+            def killed(descriptor, mode):
+                raise OSError("simulated kill after the new text was written to the temporary file")
+
+            with patch.object(workspace_settings.Path, "home", return_value=codex_home), \
+                    patch.object(workspace_settings.os, "fchmod", killed):
+                with self.assertRaises(OSError):
+                    workspace_settings.apply_provider_files(settings, "codex")
+            self.assertEqual(config.read_text(encoding="utf-8"), 'model = "keep-me"\n', "the owner's file must never be left truncated")
+            self.assertEqual([item.name for item in codex_home.iterdir() if item.name.endswith(".tmp")], [], "no half-written temporary file may stay behind")
+
+    def test_an_owner_only_config_stays_owner_only_after_the_update(self):
+        # B2 (review of Stage 3): the temp-file-and-rename replaced a 0600 file with a 0644 one.
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home, config = self.fixture(tmp)
+            config.chmod(0o600)
+            settings = self.settings_for(tmp, "dev_harness", config)
+            previous = os.umask(0o022)
+            try:
+                with patch.object(workspace_settings.Path, "home", return_value=codex_home):
+                    workspace_settings.apply_provider_files(settings, "codex")
+            finally:
+                os.umask(previous)
+            self.assertEqual(config.stat().st_mode & 0o777, 0o600, "other local users must not gain read access")
+            self.assertIn("trust_level", config.read_text(encoding="utf-8"))
+
+    def test_a_looser_existing_mode_is_kept_and_a_new_config_is_owner_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home, config = self.fixture(tmp)
+            config.chmod(0o640)
+            with patch.object(workspace_settings.Path, "home", return_value=codex_home):
+                workspace_settings.apply_provider_files(self.settings_for(tmp, "one", config), "codex")
+                self.assertEqual(config.stat().st_mode & 0o777, 0o640)
+                fresh = codex_home / "other" / "config.toml"
+                workspace_settings.apply_provider_files(self.settings_for(tmp, "two", fresh), "codex")
+            self.assertEqual(fresh.stat().st_mode & 0o777, 0o600)
+
+    def test_two_projects_registering_at_once_both_keep_their_trust_entries(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home, config = self.fixture(tmp)
+            first = self.settings_for(tmp, "project_one", config)
+            second = self.settings_for(tmp, "project_two", config)
+            real_read = Path.read_text
+            paused = threading.Event()
+            resume = threading.Event()
+            state = {"pauser": None}
+
+            def slow_read(self, *args, **keywords):
+                text = real_read(self, *args, **keywords)
+                if Path(self) == config and state["pauser"] is None:
+                    # The first reader keeps the window between read and write open; a serialized
+                    # writer makes the second caller wait, an unserialized one lets it slip in.
+                    state["pauser"] = threading.get_ident()
+                    paused.set()
+                    resume.wait(timeout=2)
+                return text
+
+            errors: list[BaseException] = []
+
+            def apply(settings):
+                try:
+                    workspace_settings.apply_provider_files(settings, "codex")
+                except BaseException as error:  # noqa: BLE001 - reported below
+                    errors.append(error)
+
+            # Patched once here, not inside each thread: two threads entering and leaving the same patch out of order leak it.
+            with patch.object(workspace_settings.Path, "home", return_value=codex_home), patch.object(Path, "read_text", slow_read):
+                one = threading.Thread(target=apply, args=(first,))
+                one.start()
+                self.assertTrue(paused.wait(timeout=2))
+                two = threading.Thread(target=apply, args=(second,))
+                two.start()
+                two.join(timeout=1)          # under a lock it is still waiting here
+                resume.set()
+                one.join(timeout=5)
+                two.join(timeout=5)
+            self.assertEqual(errors, [])
+            content = config.read_text(encoding="utf-8")
+            self.assertIn('model = "keep-me"', content)
+            self.assertIn(f'[projects."{Path(first["workspace_root"]).resolve()}"]', content)
+            self.assertIn(f'[projects."{Path(second["workspace_root"]).resolve()}"]', content)
+
+
 class OwnerCodexConfigIsNeverTouchedByTemporaryProjectsTests(unittest.TestCase):
     """2026-10-15: a throwaway project's trust entry landed in the owner's real ~/.codex/config.toml."""
 

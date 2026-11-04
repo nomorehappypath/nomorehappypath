@@ -618,7 +618,10 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     broker_governed = bool(latest_review and latest_review.get("mirror_ref") and state.get("task_repositories", {}).get(task))
     delivery_mode = task_plan.get("mode") or ("chunked" if task_chunks else "atomic")
     subtasks = board._live_subtasks(task_plan) if delivery_mode == "application" else {}
-    chunks_complete = bool(task_chunks) and all(chunk.get("status") == "passed" for chunk in task_chunks.values())
+    # A chunk Delivery retired (retire-chunk) is not required work; at least one live chunk must have passed.
+    live_task_chunks = board.live_chunks(task_chunks)
+    chunks_complete = bool(live_task_chunks) and all(chunk.get("status") == "passed" for chunk in live_task_chunks.values()) \
+        and not board.unfinished_merge_targets(task_chunks)   # merged work never declared is not done
     subtasks_complete = bool(subtasks) and all(subtask.get("status") == "passed" for subtask in subtasks.values())
     nested_chunks_complete = all(
         all(chunk.get("status") == "passed" for chunk in subtask.get("chunks", {}).values())
@@ -634,7 +637,7 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     chunk_reviews = [request for request in reviews if request.get("phase") == "chunk"]
     latest_chunk_reviews = {
         chunk: max((request for request in chunk_reviews if request.get("chunk") == chunk), key=lambda request: int(request["cycle"]), default=None)
-        for chunk in task_chunks
+        for chunk in live_task_chunks
     }
     internal_chunk_proof = chunks_complete and all(
         request and request.get("status") == "passed" and request.get("delivery_evidence")
