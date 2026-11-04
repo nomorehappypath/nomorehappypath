@@ -1,5 +1,5 @@
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
-"""Help and the README say what the app now does: projects load one at a time, and a Code analysis is described by project facts and answered by FINDINGS.md.
+"""Help says what the app now does (projects load one at a time, a Code analysis is described by project facts and answered by FINDINGS.md); the README names the kinds of work.
 
 Run:  PYTHONPATH=. python3 -m unittest tests.test_help_readme_current -v
 """
@@ -19,10 +19,9 @@ class HelpAndReadmeTests(unittest.TestCase):
                       "FINDINGS.md", "Tell it only the facts about your project", "Takes the project off this list"):
             self.assertIn(piece, PAGE)
 
-    def test_readme_lists_the_new_behaviour(self):
-        for piece in ("Write code, Analyze code or Write specs", "Analyze code, builder and Reviewer in parallel", "Projects load one at a time",
-                      "Delete on every project card", "FINDINGS.md"):
-            self.assertIn(piece, README)
+    def test_readme_names_the_kinds_of_work(self):
+        # The README's "What's new" lists were removed (owner 2026-11-04); Help above still covers the rest.
+        self.assertIn("Write code, Analyze code or Write specs", README)
 
 
 if __name__ == "__main__":
