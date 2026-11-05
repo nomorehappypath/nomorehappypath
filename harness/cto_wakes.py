@@ -37,6 +37,10 @@ EVENT_REASONS = {
     # 2026-11-05 (stranger run): Delivery posted "blocked" with a question for the CTO and nothing carried it there; the CTO had
     # closed the earlier item and slept while the stall ladder woke Delivery for four hours. A blocked builder is a stuck item.
     "delivery_blocked": "stuck",
+    # Owner 2026-11-05: a blocked Reviewer goes to the CTO first too; only when the CTO cannot solve it is the owner told.
+    "reviewer_blocked": "stuck",
+    # The stall ladder's hand-over: a builder or Reviewer that answered two wake-ups with nothing new is the CTO's to look at.
+    "stalled_agent_needs_cto": "stuck",
 }
 # The slow check-in (Settings, plumbing section: cto_heartbeat_seconds): a backstop under stalls no rule names, never switched off.
 # Default 24 hours (2026-10-28, owner: the CTO is not a paid timer); the board's own free checks below do the watching.

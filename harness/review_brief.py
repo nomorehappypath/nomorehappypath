@@ -326,7 +326,10 @@ def build(
                 "PASS always means TASK DONE: YES. Walk the whole path, not a fragment; do not "
                 "hunt boundaries that never or only rarely happen - note them as non-blocking. "
                 "This product serves one person on one computer (owner 2026-11-05): a theoretical variant of a case already handled "
-                "(another spelling of the same call, a path a solo user never takes) is a note, never a blocker or another round."
+                "(another spelling of the same call, a path a solo user never takes) is a note, never a blocker or another round. "
+                "The same for notes in the code: a check or finding about comments, file headers, docstrings or wording (whether a "
+                "function says what it takes and returns, whether a file opens with an explanation) is never blocking and never a "
+                "declared check that can fail the round; record it as a note. A round whose only failures are such notes is a PASS."
             ),
         }
         if brief["process"]["task_kind"] == "analysis":

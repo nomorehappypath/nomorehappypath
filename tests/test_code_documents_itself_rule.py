@@ -33,20 +33,23 @@ class ReviewerChecksTheDocumentationTests(unittest.TestCase):
         start = self.text.index(f"## {name}")
         return self.text[start:self.text.index("\n## ", start + 5)]
 
-    def test_the_reviewer_fails_missing_documentation_by_file_and_line(self):
+    def test_the_reviewer_notes_missing_documentation_by_file_and_line_and_never_fails_on_it(self):
+        """Owner 2026-11-05 (stranger run): a missing note is reported by file:line but never costs a round."""
         review = self.chapter("review-workflow")
         self.assertIn("Check the in-code documentation", review)
-        self.assertIn("Any of them missing is material: FAIL and\nname each gap by file:line", review)
-        self.assertIn("Files the task did not touch, and the wording of a note that is there, are\nnever a reason to fail", review)
+        self.assertIn("missing is recorded as a note naming each gap by file:line", review)
+        self.assertIn("never a declared check\nthat can fail the round, and a round whose only failures are such notes is a PASS", review)
+        self.assertNotIn("missing is material: FAIL", review)
 
-    def test_materiality_lists_missing_documentation_as_material(self):
-        self.assertIn("the in-code\n  documentation of chapter `delivery-workflow` missing", self.chapter("materiality"))
+    def test_materiality_lists_missing_documentation_as_a_note(self):
+        self.assertIn("the task created or changed is a note, never material", self.chapter("materiality"))
 
     def test_both_role_cards_carry_the_rule(self):
         delivery = (ROOT / "directives" / "cards" / "DELIVERY.md").read_text(encoding="utf-8")
         reviewer = (ROOT / "directives" / "cards" / "REVIEWER.md").read_text(encoding="utf-8")
         self.assertIn("open with what the file does, say what each function you add or change takes and returns", delivery)
-        self.assertIn("or why-comment is material: FAIL naming each gap by file:line", reviewer)
+        self.assertIn("or why-comment is a note naming each gap by file:line, never a FAIL and never a declared check", reviewer)
+        self.assertNotIn("why-comment is material: FAIL", reviewer)
 
 
 if __name__ == "__main__":
