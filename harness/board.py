@@ -6091,8 +6091,13 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
         if agent.get("role") == "cto":
             owner_text = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) else note
             verdict = _owner_question_verdict(owner_text)
+            # Owner 2026-11-05 (Codex R1-1): a CTO that says it is blocked AND says what the owner must do is not "waiting with no
+            # action": telling the owner it cannot clear the cause IS its action (the red card in _store_status), so the two
+            # waiting guards below let that note through, also after the watchdog found a stall. Every other waiting note,
+            # "blocked" with no word for the owner included, is refused as before.
+            explicit_block = cto_block_for_the_owner(state_name, note)
             # the agent's own "working" label does not count: a note about a blocked review that states no action is waiting
-            blocked = [] if verdict["refusal"] else _blocked_reviews_without_action(state)
+            blocked = [] if verdict["refusal"] or explicit_block else _blocked_reviews_without_action(state)
             if blocked and _note_is_inaction_about(note, state_name, blocked):
                 verdict = {**verdict, "refusal": _waiting_refusal(blocked)}
                 _event(state, "cto_waiting_refused", agent, {
@@ -6106,10 +6111,11 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
                         "task": str(blocked[0].get("task") or ""),
                         "message": f"The review of {blocked[0].get('task')} has been blocked since {blocked[0].get('at')} with no action: the Reviewer is being recovered; the owner is not asked to test the unreviewed build.",
                     })
-            if not verdict["refusal"] and state_name.strip().lower() in CTO_WAITING_STATES:
+            if not verdict["refusal"] and not explicit_block and state_name.strip().lower() in CTO_WAITING_STATES:
                 failures = _unrouted_failures(state)
                 if failures:
-                    verdict = {**verdict, "refusal": _waiting_refusal(failures)}
+                    verdict = {**verdict, "refusal": _waiting_refusal(failures) + (
+                        CTO_BLOCK_HOW if state_name.strip().lower() == "blocked" else "")}
                     _event(state, "cto_waiting_refused", agent, {
                         "task": str(failures[0].get("task") or ""), "failure_kind": failures[0].get("kind"),
                         "failure_at": failures[0].get("at"),
@@ -6147,13 +6153,39 @@ def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state
     """
     if True:
         stored_note = redaction.redact(note)
+        same_block = state_name == "blocked" and agent.get("status") == "blocked" and bool(agent.get("blocked_since"))
         agent.update({"status": state_name, "status_note": stored_note, "last_status_at": now()})
+        # Codex R2-1 (2026-11-05): when a block began is kept apart from the progress clock, which every status report moves.
+        # A repeated "blocked" report is the same block (same start, and it never reopens the CTO's turn); any other state ends it.
+        if state_name != "blocked":
+            agent.pop("blocked_since", None)
+        elif not same_block:
+            agent["blocked_since"] = agent["last_status_at"]
         wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": stored_note})
-        if state_name == "blocked" and agent.get("role") in DEVELOPER_ROLES:
+        block_kind = ("delivery_blocked" if agent.get("role") in DEVELOPER_ROLES else "reviewer_blocked" if agent.get("role") == "qa" else "") \
+            if state_name == "blocked" else ""
+        if block_kind and (not same_block or any(
+                item.get("status") == "open" and item.get("subject") == f"{block_kind}:{agent['task']}"
+                for item in (state.get("cto_pending") or {}).values())):
             # 2026-11-05 (stranger run): a blocked builder's words reach the CTO as a stuck item (cto_wakes.EVENT_REASONS);
             # before, they sat in the status line while the stall ladder woke the builder every five minutes for four hours.
-            _event(state, "delivery_blocked", agent, {"task": agent["task"], "message": f"Delivery is blocked: {stored_note}"[:600]})
+            # Owner 2026-11-05: a blocked Reviewer goes to the CTO first, exactly like a blocked builder (same stuck item).
+            # A repeat of the same block merges into the CTO's open item; once the CTO judged it, a repeat opens no new one.
+            who = "Delivery is blocked" if block_kind == "delivery_blocked" else "The Reviewer is blocked"
+            _event(state, block_kind, agent, {"task": agent["task"], "message": f"{who}: {stored_note}"[:600]})
+        elif block_kind:
+            pass   # the same block, already judged by the CTO: the stall ladder brings the owner in (self_heal)
+        elif agent.get("role") == "cto" and cto_block_for_the_owner(state_name, note):
+            # Owner 2026-11-05: when the CTO itself is blocked nobody is left to solve it, so the owner is told at once, in red,
+            # what the problem is (the CTO's own words) and what to do. One card per CTO: a repeated note merges into it.
+            card = _record_owner_action(
+                state, agent, "Blocked, needs you: the CTO cannot solve this on its own", "",
+                blocked_card_text(f"The CTO says it is blocked. Its words: {stored_note}",
+                                  "Read the CTO's words. Fix the cause it names, or answer it with Message the CTO on this page "
+                                  "(View agent opens its window). The work continues once the CTO has what it asked for."),
+                agent.get("task", ""), kind="agent", for_agent=str(agent.get("id") or ""))
+            card["blocked"] = True
         _flag_ready_claim(state, agent, note)
         if wake_pending:
             # A board write from the CTO refutes "not responding": it is alive and logged in, and the wake is answered.
@@ -6178,6 +6210,27 @@ def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state
 
 
 OWNER_ACTION_NOTE_PREFIX = "OWNER ACTION:"
+
+
+CTO_BLOCK_HOW = (' If you cannot clear it yourself, tell the owner instead of waiting: status --state blocked '
+                 '"<the problem in one sentence>; the owner must <what to do>".')
+
+
+def cto_block_for_the_owner(state_name: str, note: str) -> bool:
+    """Whether a CTO status is its escalation to the owner: the state is "blocked" and the note names the owner (or the user),
+    which is how the CTO's rule tells it to say what the owner must do. Takes the status state and the note; returns True
+    for the escalation (it passes the waiting guards and raises the red card) and False for any other note, so "blocked"
+    used as another word for waiting stays ordinary waiting."""
+    return state_name.strip().lower() == "blocked" and bool(re.search(r"\b(owner|user)\b", note, re.IGNORECASE))
+
+
+def blocked_card_text(problem: str, what_to_do: str) -> str:
+    """The two lines of a red "Blocked, needs you" card (owner 2026-11-05): what the problem is, then what the owner should do.
+
+    Takes the problem and the action as plain sentences; returns them as "Problem: ...", a line break, "What to do: ...",
+    each with its whitespace collapsed, cut to fit a card (the page shows the line break)."""
+    return (f"Problem: {' '.join(str(problem).split())[:640]}\n"
+            f"What to do: {' '.join(str(what_to_do).split())[:560]}")
 MAX_OWNER_ACTION_COMMAND = 4000
 # Backlog #9: a card that no event can clear leaves Mission Control after this.
 OWNER_ACTION_TTL = timedelta(hours=24)
@@ -8079,7 +8132,71 @@ def record_cto_disposition(root: Path, agent_id: str, item_id: str, outcome: str
             "message": f"CTO judged {len(closed)} item{'' if len(closed) == 1 else 's'}: {outcome.strip().lower()} - {' '.join(note.split())[:200]}",
             "route_note": " ".join(note.split()) if outcome.strip().lower() == "route" else "",   # a route reaches the stuck role complete (a summary above stays short)
         })
-        return {"closed": [item["id"] for item in closed], "still_open": [item["id"] for item in cto_wakes.open_items(state)]}
+        result = {"closed": [item["id"] for item in closed], "still_open": [item["id"] for item in cto_wakes.open_items(state)]}
+        addressees = _route_addressees(state, closed, note) if outcome.strip().lower() == "route" else []
+    # 2026-11-05 (Codex R3-1 on blocked-escalation): a route was only an event the task's agents "read on their next poll", and a
+    # waiting agent never polls: two CTO routes sat unread while Delivery slept. The route is now typed to the agent it is for.
+    routed = []
+    for routed_agent, session_id in addressees:
+        text = (f"[SYSTEM CONTROL cto-route] THE CTO ROUTED THIS TO YOU (task {about or 'the project'}): {' '.join(note.split())} "
+                "Act on it now, then report with a status line.")
+        instruction_id, route_error = "", ""
+        try:
+            from harness import control  # local, as everywhere in this module (import cycle)
+            instruction_id = control.enqueue_instruction(root, session_id, text, source="cto-route")["id"]
+        except (ValueError, OSError) as error:
+            route_error = str(error)
+        with locked_state(root) as state:
+            live = (state.get("agents") or {}).get(routed_agent)
+            _event(state, "instruction_route_queued" if instruction_id else "instruction_route_failed", live, {
+                "task": about, "instruction_id": instruction_id, "source": "cto-route", "error": route_error,
+                "message": ("the CTO's route is durably queued for the agent it is for" if instruction_id
+                            else f"the CTO's route could not be queued for its agent: {route_error[:200]}"),
+            })
+        if instruction_id:
+            routed.append(routed_agent)
+    if outcome.strip().lower() == "route":
+        result["routed_to"] = routed
+        if not addressees:
+            # Nobody live is responsible for the judged work: the note is not typed to anybody else. It stays in the event.
+            result["not_routed"] = "no live agent is responsible for this item; the note stays on the board and was typed to nobody"
+    return result
+
+
+def _route_addressees(state: dict[str, Any], items: list[dict[str, Any]], note: str) -> list[tuple[str, str]]:
+    """Who the CTO's route note is for, as (agent id, terminal session id) pairs with a live session.
+
+    Takes the board state, the judgment items the route closed and the note. The note's first word decides the role when it
+    names one ("Delivery: ..." or "Reviewer: ..."), as the CTO's rule tells it to write; otherwise an item about a blocked
+    Reviewer means the Reviewer and anything else the Delivery agent. Within the role only the agent responsible for the
+    judged work is chosen: the Delivery agent of the judged task (every Delivery agent when the items name no task); the
+    Reviewer that holds a review of the judged task (reserved, claimed or routed to it), or, for an item about a blocked
+    Reviewer, the Reviewer that says it is blocked. A Reviewer working on another task is never typed this task's
+    instruction (Codex R1-1, 2026-11-05). Returns an empty list when nobody live is responsible."""
+    lead = " ".join(str(note).split()).lower()
+    about_blocked_reviewer = bool(items) and all(str(item.get("subject") or "").startswith("reviewer_blocked:") for item in items)
+    to_reviewer = lead.startswith(("reviewer", "the reviewer"))
+    to_delivery = lead.startswith(("delivery", "the delivery", "builder", "the builder", "developer", "the developer"))
+    if not to_reviewer and not to_delivery:
+        to_reviewer = about_blocked_reviewer
+    named = {str(item.get("task") or "") for item in items} - {""}
+    tasks = named - {"GLOBAL_MONITOR", "REVIEW_QUEUE"}
+    holders = {str(request.get(key)) for request in (state.get("qa_requests") or {}).values()
+               if request.get("task") in tasks and request.get("status") in {"authoring", "open", "reserved", "claimed"}
+               for key in ("reserved_by", "claimed_by", "routed_to") if request.get(key)}
+    found = []
+    for agent in (state.get("agents") or {}).values():
+        if not agent.get("active") or not agent.get("session_id"):
+            continue
+        if to_reviewer:
+            responsible = agent.get("role") == "qa" and (
+                str(agent.get("id")) in holders
+                or (about_blocked_reviewer and agent.get("status") == "blocked" and agent.get("task") in named))
+        else:
+            responsible = agent.get("role") in DEVELOPER_ROLES and (not tasks or agent.get("task") in tasks)
+        if responsible:
+            found.append((str(agent["id"]), str(agent["session_id"])))
+    return found
 
 
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
@@ -9148,6 +9265,16 @@ def relinquish_review_reservation(root: Path, agent_id: str, request_id: str, re
         except (ValueError, OSError):
             pass
     result["event_id"] = event.get("id") if isinstance(event, dict) else None
+    # A final review given back because the work moved on is not offered to another Reviewer: it is withdrawn and Delivery is
+    # told to request the review again on what is saved now (see _withdraw_superseded_review).
+    session, text = _withdraw_superseded_review(root, request_id)
+    if text:
+        result.update({"status": "withdrawn", "superseded": True})
+        if session:
+            try:
+                control.enqueue_instruction(root, session, text, source="review-superseded")
+            except (ValueError, OSError):
+                pass  # the board event and the withdrawn request still carry the repair
     return result
 
 
@@ -14605,6 +14732,64 @@ def review_brief(
 LOST_EVIDENCE_PREFIX = "independent review requires intact Delivery scenario evidence: "
 
 
+def _withdraw_open_request(state: dict[str, Any], request: dict[str, Any], reason: str) -> tuple[dict[str, Any], str]:
+    """Close an open review request that can never reach a verdict and free its scope (inside the state lock).
+
+    Takes the board state, the request and the plain reason. Marks it withdrawn and, for an application subtask, clears the
+    pointer that kept the scope "in_review" (otherwise the replacement request-review and start-subtask are both refused);
+    the candidate is kept. Returns the Delivery agent that filed it ({} when it is gone) and the scope's name."""
+    developer = (state.get("agents") or {}).get(str(request.get("developer_id") or "")) or {}
+    scope = str(request.get("subtask") or request.get("chunk") or request.get("phase") or "the task")
+    withdrawn_at = now()
+    request.update({"status": "withdrawn", "withdrawn_at": withdrawn_at, "withdrawn_reason": reason})
+    subtask = str(request.get("subtask") or "")
+    item = (((state.get("delivery_plans") or {}).get(str(request.get("task") or "")) or {}).get("subtasks") or {}).get(subtask)
+    if isinstance(item, dict) and item.get("active_review_request") == request.get("id"):
+        item.pop("active_review_request", None)
+        if item.get("pipeline_status") == "in_review":
+            item["pipeline_status"] = "in_progress"
+        item["pipeline_updated_at"] = withdrawn_at
+    return developer, scope
+
+
+def _withdraw_superseded_review(root: Path, request_id: str) -> tuple[str, str]:
+    """Withdraw a final review request that was given back and names a saved version the task has moved past.
+
+    2026-11-05 (Codex R3-1 on blocked-escalation): Delivery corrected its work while the final review was pending; the request
+    kept naming the old commit, each Reviewer gave it back as obsolete, and replacement Reviewers were started over the same
+    request while Delivery slept. No Reviewer can pass a superseded version, so the board withdraws it and tells Delivery the
+    one repair: request the final review again on what is saved now. Nothing about the candidate checks changes.
+    Takes the project root and the request id; returns the Delivery session to tell and the instruction ('' , '' when the
+    request is not an open final review, or still names the task's saved version)."""
+    before = snapshot(root)
+    request = (before.get("qa_requests") or {}).get(request_id) or {}
+    named = str(request.get("reviewed_commit") or "")
+    if request.get("status") not in {"authoring", "open"} or request.get("phase") != "final_acceptance" or not named:
+        return "", ""
+    workspace = task_workspace(root, str(request.get("task") or ""))
+    head = git_process.run(["git", "rev-parse", "HEAD"], cwd=workspace, capture_output=True, text=True)
+    saved = head.stdout.strip() if head.returncode == 0 else ""
+    if not saved or saved == named:
+        return "", ""
+    with locked_state(root) as state:
+        request = (state.get("qa_requests") or {}).get(request_id)
+        if not request or request.get("status") not in {"authoring", "open"} or str(request.get("reviewed_commit") or "") != named:
+            return "", ""
+        developer, scope = _withdraw_open_request(
+            state, request, f"it names saved version {named[:12]} and the task's saved version is now {saved[:12]}")
+        _event(state, "review_withdrawn_superseded", developer or {"id": str(request.get("developer_id") or ""), "role": "development", "task": request.get("task", "")}, {
+            "task": request.get("task", ""), "request_id": request_id, "named_commit": named, "saved_commit": saved,
+            "message": f"review request {request_id} withdrawn: it names saved version {named[:12]} but the task is now at {saved[:12]}; "
+                       f"Delivery must file request-review again for {scope}. No test failed",
+        })
+        text = (f"[SYSTEM CONTROL review-superseded] REVIEW SUPERSEDED: request {request_id} for task {request.get('task', '')} "
+                f"({scope}) was withdrawn because it names saved version {named[:12]} and your saved work is now {saved[:12]}; "
+                f"no Reviewer can pass an older version, and no test failed. Repair: run request-review again for the same scope "
+                f"on what is saved now, with --ledger <your Scenario Ledger file>, and make no further edits until the verdict. "
+                f"The scope is free again and the Reviewer will be routed to the new request.")
+        return str(developer.get("session_id") or ""), text
+
+
 def _withdraw_for_lost_evidence(root: Path, request_id: str, problems: str) -> tuple[str, str]:
     """Close a review request whose stored Delivery evidence is gone and tell Delivery the one repair.
 
@@ -14617,20 +14802,7 @@ def _withdraw_for_lost_evidence(root: Path, request_id: str, problems: str) -> t
         request = (state.get("qa_requests") or {}).get(request_id)
         if not request or request.get("status") not in {"authoring", "open"}:
             return "", ""
-        developer = (state.get("agents") or {}).get(str(request.get("developer_id") or "")) or {}
-        scope = str(request.get("subtask") or request.get("chunk") or request.get("phase") or "the task")
-        withdrawn_at = now()
-        request.update({"status": "withdrawn", "withdrawn_at": withdrawn_at,
-                        "withdrawn_reason": f"the board's stored copy of Delivery's evidence is gone ({problems})"})
-        # The scope must be free again (round 1: an application subtask stayed "in_review" pointing at the withdrawn request, so
-        # the replacement request-review and start-subtask were both refused). Back to in_progress, pointer cleared, candidate kept.
-        subtask = str(request.get("subtask") or "")
-        item = (((state.get("delivery_plans") or {}).get(str(request.get("task") or "")) or {}).get("subtasks") or {}).get(subtask)
-        if isinstance(item, dict) and item.get("active_review_request") == request_id:
-            item.pop("active_review_request", None)
-            if item.get("pipeline_status") == "in_review":
-                item["pipeline_status"] = "in_progress"
-            item["pipeline_updated_at"] = withdrawn_at
+        developer, scope = _withdraw_open_request(state, request, f"the board's stored copy of Delivery's evidence is gone ({problems})")
         _event(state, "review_withdrawn_evidence_lost", developer or {"id": str(request.get("developer_id") or ""), "role": "development", "task": request.get("task", "")}, {
             "task": request.get("task", ""), "request_id": request_id,
             "message": f"review request {request_id} withdrawn: {problems}; Delivery must file request-review again for {scope} with its Scenario Ledger",

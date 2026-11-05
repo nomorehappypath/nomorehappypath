@@ -82,13 +82,17 @@ class HeldTerminalEndToEndTests(unittest.TestCase):
                 control.enqueue_instruction(root, session["id"], "Review the pending request.", "independent-review")
                 output = self.read_until(master, b"NOTHING_WHILE_HELD", timeout=15)
                 self.assertNotIn(b"GOT_WHILE_HELD", output)
-                self.assertNotIn(b"Review the pending request", output)
+                # One read can carry the marker AND what the terminal printed after it: the forty filler lines that scroll the
+                # limit line away, the release, and the instruction typed then (seen on full-suite runs, 2026-11-05). Only the
+                # bytes before the marker are "while held"; the rest is kept for the delivery check below.
+                during_hold, after_hold = output.split(b"NOTHING_WHILE_HELD", 1)
+                self.assertNotIn(b"Review the pending request", during_hold)
                 released = _wait_for(lambda: (r := self.session_record(root, session["id"])).get("attention_reason") is None and r, timeout=15)
                 self.assertTrue(released.get("last_limit_seen_at"))
                 self.assertTrue(released.get("limit_cleared_at"))
                 self.assertNotIn("limit_seen_at", released)
-                received = self.read_until(master, b"RECEIVED:", timeout=15)
-                self.assertIn(b"Review the pending request", received)
+                received = after_hold if b"RECEIVED:" in after_hold else after_hold + self.read_until(master, b"RECEIVED:", timeout=15)
+                self.assertIn(b"Review the pending request", received.split(b"RECEIVED:", 1)[1], "delivered once the line was gone")
                 process.wait(timeout=10)
             finally:
                 if process.poll() is None:

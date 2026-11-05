@@ -90,7 +90,13 @@ abstraction for a case nobody will hit, no extra configuration, no second
 mechanism where one exists. A reviewer finding that is a theoretical variant
 of a case already handled (another spelling of the same call, a path a solo
 user never takes) is a note, never a blocker, and never a reason for another
-round; a round that would only chase such notes is not opened.
+round; a round that would only chase such notes is not opened. The same for
+notes in the code: a check or finding about comments, file headers, docstrings
+or wording (whether a function says what it takes and returns, whether a file
+opens with an explanation) is never blocking and never a declared check that
+can fail a round; it is recorded as a note, and a round whose only failures
+are such notes is a PASS. (Stranger run 2026-11-05: two review rounds and
+about $11 went to docstrings on an app that already worked.)
 
 Both ledgers admit material rows only: a row is written only if its failure
 would change what the owner receives, and it names the acceptance criterion it

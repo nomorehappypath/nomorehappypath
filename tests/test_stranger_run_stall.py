@@ -70,7 +70,7 @@ class TwoEmptyWakesEndTheLadder(_Stall):
 
     def test_the_builder_s_stall_pauses_the_project_with_one_card(self):
         session, agent, _ = self.delivery_with_task("weather-app")
-        board.status(self.root, agent["id"], "Route question: the review needs a Python with Streamlit.", "blocked")
+        board.status(self.root, agent["id"], "Running the app's tests once more.", "working")
         self.silent(agent["id"], self.window + 60)
         self.assertEqual(self.actions(), ["stall_wake"])
         board.poll(self.root, agent["id"])                      # one poll, nothing new
@@ -84,8 +84,10 @@ class TwoEmptyWakesEndTheLadder(_Stall):
         self.assertEqual(board.pause_state(self.root)["status"], "paused")
         cards = self.cards()
         self.assertEqual(len(cards), 1)
-        self.assertIn("is stuck: the project is paused to stop spending", cards[0]["title"])
-        self.assertIn("Route question", cards[0]["why"])
+        self.assertIn("Blocked, needs you: the Delivery Agent is stuck and the project is paused", cards[0]["title"])
+        self.assertTrue(cards[0].get("blocked"), "the red card (owner 2026-11-05)")
+        self.assertIn("Running the app's tests once more", cards[0]["why"])
+        self.assertIn("\nWhat to do: ", cards[0]["why"])
         paused = self.events("stall_paused")
         self.assertEqual(len(paused), 1)
         self.assertIn("answered 2 wake-ups with nothing new", paused[0]["message"])
@@ -94,6 +96,21 @@ class TwoEmptyWakesEndTheLadder(_Stall):
         self.quiet_again(agent["id"])
         self.assertNotIn("stall_wake", self.actions(), "a paused project is not woken")
         self.assertEqual(len(self.cards()), 1, "one card, never a second")
+
+    def test_a_builder_that_says_blocked_with_nobody_to_ask_is_paused_after_one_window_without_a_wake(self):
+        """The live case (blocked builder, no answer for four hours, 82 wake-ups): now no wake-up at all."""
+        _, agent, _ = self.delivery_with_task("weather-app")
+        board.status(self.root, agent["id"], "Route question: the review needs a Python with Streamlit.", "blocked")
+        self.assertEqual(self.actions(), [], "a fresh block is given its window")
+        with board.locked_state(self.root) as state:      # the block is a window old; the builder may still poll and report
+            state["agents"][agent["id"]]["blocked_since"] = _ago(self.window + 60)
+        self.assertEqual(self.actions(), ["stall_pause"])
+        self.assertEqual(board.pause_state(self.root)["status"], "paused")
+        self.assertEqual(self.events("agent_stall_step"), [], "never woken")
+        cards = self.cards()
+        self.assertEqual(len(cards), 1)
+        self.assertIn("Route question", cards[0]["why"])
+        self.assertIn("has been blocked", self.events("stall_paused")[0]["message"])
 
     def test_a_quiet_reviewer_is_left_alone_not_paused(self):
         _, agent, _ = self.reviewer("weather-app")

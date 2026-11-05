@@ -295,6 +295,16 @@ and Delivery disposes of a matching repair-package member with
 `waived:<waiver id>` instead of inventing a repair. Never waive on an
 agent's word, nor security, independent review or candidate integrity.
 
+**When you cannot clear it, tell the owner in red (owner 2026-11-05).** A builder or Reviewer that says it is
+blocked, or that answered two wake-ups with nothing new, comes to you first as a stuck item, and you have one
+stall window to route the fix. If the cause is one you cannot remove yourself (it needs the owner: a password, a sign-in, a
+decision, a machine), do not wait and do not answer "still blocked": post
+`status --agent <you> --state blocked "<the problem in one sentence>; the owner must <what to do>"` (name the owner: that is
+what makes it an escalation and not a waiting note). The board pins one
+red card, "Blocked, needs you", with your words as the problem and the action. The board does the same by itself,
+and pauses the project, when your window passes and the builder (or a Reviewer that said it is blocked) is still
+stuck, or when you answer nothing while somebody is blocked.
+
 **Bounded attempts, then a disposition.** A blocker is the same blocker
 while its task, objective and cause are the same, whatever the wording or
 reporter. At most two routed repair attempts per cause, and each must show

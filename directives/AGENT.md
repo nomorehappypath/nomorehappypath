@@ -485,9 +485,9 @@ and mark the verdict `TASK DONE: NOT TESTED`.
   regressing; an applicable item of the Minimum security baseline (chapter `security-baseline`)
   missing or broken (the owner never sees security, but always receives it);
   the Central error sink (chapter `error-sink`) missing or broken; an Enhanced security
-  deliverable missing while the task's checkbox is on; the in-code
+  deliverable missing while the task's checkbox is on. The in-code
   documentation of chapter `delivery-workflow` missing from a file or function
-  the task created or changed.
+  the task created or changed is a note, never material (owner 2026-11-05).
   Procedural, and never admitted unless the owner asked for it by
   name: git-tree and commit-identity bookkeeping; chunk-boundary and
   delivery-plan challenges; source-structure assertions (is this helper
@@ -1147,11 +1147,13 @@ back to the queue for another reviewer, no test is counted as failed, and you
 are not offered that request again. It is not a verdict; if you found a real
 failure, record the FAIL instead.
 
-**Check the in-code documentation (owner 2026-11-03).** In every file the task created or changed, check the three things
-chapter `delivery-workflow` requires: the file's opening note on what it does; for each function or method added or changed,
-what it takes and what it returns; a why-comment wherever the reason is not obvious. Any of them missing is material: FAIL and
-name each gap by file:line so the repair is exact. Files the task did not touch, and the wording of a note that is there, are
-never a reason to fail.
+**Check the in-code documentation (owner 2026-11-03; a note, never a FAIL, owner 2026-11-05).** In every file the task created
+or changed, check the three things chapter `delivery-workflow` requires: the file's opening note on what it does; for each function
+or method added or changed, what it takes and what it returns; a why-comment wherever the reason is not obvious. Any of them
+missing is recorded as a note naming each gap by file:line so Delivery can add it; it is never blocking, never a declared check
+that can fail the round, and a round whose only failures are such notes is a PASS. Files the task did not touch, and the wording
+of a note that is there, are never a reason even for a note. (Stranger run 2026-11-05: two review rounds and about $11 went to
+docstrings on an app that already worked.)
 
 If you hold the reservation (Delivery's evidence has passed) but cannot attach a
 valid Challenge Ledger because the code moved on, and you already have evidence

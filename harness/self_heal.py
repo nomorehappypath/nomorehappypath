@@ -571,7 +571,25 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
             # a fresh stall: an active agent with actionable work, a live terminal, and silence past the window
             if agent is None or not agent.get("active") or not session or session.get("status") not in control.ACTIVE_STATUSES:
                 continue
-            if _stall_blocked(state, agent, session, current) or not board._agent_has_actionable_work(state, agent):
+            if _stall_blocked(state, agent, session, current):
+                continue
+            if role != "cto" and agent.get("status") == "blocked":
+                # Codex R1-2, R2-1 (2026-11-05): an agent that SAID it is blocked is escalated on its own clock, whether or not it
+                # keeps polling the board or repeating the same report (neither is progress): the clock starts at the block's
+                # first report (_block_gate). Once the block is a full window old: the CTO is asked if it was not,
+                # gets its turn, and then the owner gets the pause and the red card. Once per gate, like the ladder's limit.
+                gate = _block_gate(agent, resumed)
+                said = _parsed(gate)
+                if said is not None and (current - said).total_seconds() >= window:
+                    if ((state.get("stall_wake_counts") or {}).get(key) or {}).get("gate") == gate and \
+                            ((state.get("stall_wake_counts") or {}).get(key) or {}).get("stopped_at"):
+                        continue
+                    turn = _cto_turn(state, agent, gate, current, window)
+                    if turn != "wait":
+                        actions.append({**base, "action": "stall_ask_cto" if turn == "ask" else "stall_pause", "gate": gate,
+                                        "said_blocked": True, "silence": int((current - said).total_seconds())})
+                    continue
+            if not board._agent_has_actionable_work(state, agent):
                 continue
             real = board.real_heartbeat(agent)
             work_since = _parsed(agent.get("actionable_since"))   # set only for an agent the board saw idle; silence counts from the work (2026-10-28)
@@ -599,9 +617,25 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
                 # Owner 2026-11-05 (stranger run): no wake loops. An agent that answers each wake with one poll and nothing new was woken
                 # 82 times in four hours. After two such wakes at the same gate the builder's stall pauses the project with one card;
                 # a quiet Reviewer or CTO is simply left alone until something is routed to it.
-                if not counter.get("stopped_at"):
-                    actions.append({**base, "action": "stall_pause" if role in board.DEVELOPER_ROLES else "stall_stop_waking",
-                                    "gate": gate, "silence": int((current - beat).total_seconds())})
+                # Owner 2026-11-05 (second order): "when the NMHP blocks dev, reviewer, the CTO tries to solve it; if the CTO is also
+                # blocked a clear message ... with red warning"; "The CTO needs to address the block before it gets to the user";
+                # "The CTO needs to ... make sure all is working". So at this point the board hands the agent to the CTO (once),
+                # gives the CTO one window, and only then brings the owner in: the builder, or a Reviewer that said it is blocked,
+                # pauses the project with the red card; a merely quiet Reviewer is left alone after the CTO was told. A CTO that
+                # stays silent while somebody is stuck gets the owner at once (nobody is left to ask).
+                if counter.get("stopped_at"):
+                    continue
+                needs_owner = (role in board.DEVELOPER_ROLES or (role == "qa" and agent.get("status") == "blocked")
+                               or (role == "cto" and _somebody_waits_on_the_cto(state)))
+                if role != "cto":
+                    turn = _cto_turn(state, agent, gate, current, window)
+                    if turn == "ask":
+                        actions.append({**base, "action": "stall_ask_cto", "gate": gate, "silence": int((current - beat).total_seconds())})
+                        continue
+                    if turn == "wait":
+                        continue
+                actions.append({**base, "action": "stall_pause" if needs_owner else "stall_stop_waking",
+                                "gate": gate, "silence": int((current - beat).total_seconds())})
                 continue
             actions.append({**base, "action": "stall_wake", "silence": int((current - beat).total_seconds()),
                             "since": real.isoformat() if real else "", "gate": gate,
@@ -821,6 +855,79 @@ def _progress_gate(agent: dict[str, Any], resumed: datetime | None) -> str:
     return latest.isoformat() if latest else ""
 
 
+def _block_gate(agent: dict[str, Any], resumed: datetime | None) -> str:
+    """When this agent's present block began, as the gate its escalation is counted from (Codex R2-1): the first "blocked"
+    report of the block (board keeps it in blocked_since through repeated reports), or the owner's last Resume when that is
+    later. Takes the agent and the Resume time; returns an ISO time, falling back to the progress gate for an agent blocked
+    before blocked_since existed."""
+    began = _parsed(agent.get("blocked_since"))
+    if began is None:
+        return _progress_gate(agent, resumed)
+    return max(began, resumed).isoformat() if resumed is not None else began.isoformat()
+
+
+def _somebody_waits_on_the_cto(state: dict[str, Any]) -> bool:
+    """Whether a silent CTO leaves somebody stuck: an open stuck item is waiting for its judgment, or a live builder or Reviewer
+    has said it is blocked. Takes the board state; returns True when the owner must be told instead of leaving the CTO alone."""
+    if any(item.get("status") == "open" and item.get("reason") == "stuck" for item in (state.get("cto_pending") or {}).values()):
+        return True
+    return any(agent.get("active") and agent.get("status") == "blocked" and agent.get("role") != "cto"
+               for agent in (state.get("agents") or {}).values())
+
+
+def _stuck_item(state: dict[str, Any], agent: dict[str, Any], gate: str) -> dict[str, Any] | None:
+    """The CTO's item about this stuck agent that counts now: the newest one that is still open, or that the CTO judged after
+    the agent last moved (its gate). Takes the board state, the agent and its progress gate (ISO time, '' for none); returns the
+    item, or None when the CTO has not been asked about this stall yet. The item is opened by the agent's own "blocked" status
+    (board._store_status) or by the ladder's stall_ask_cto."""
+    kind = "reviewer_blocked" if agent.get("role") == "qa" else "delivery_blocked"
+    subjects = {f"{kind}:{agent.get('task')}", f"stalled_agent_needs_cto:{agent.get('task')}"}
+    moved = _parsed(gate)
+    found = []
+    for item in (state.get("cto_pending") or {}).values():
+        if item.get("reason") != "stuck" or item.get("subject") not in subjects:
+            continue
+        closed = _parsed(item.get("closed_at"))
+        if item.get("status") == "open" or (closed is not None and (moved is None or closed >= moved)):
+            found.append(item)
+    return max(found, key=lambda item: str(item.get("opened_at")), default=None)
+
+
+def _cto_turn(state: dict[str, Any], agent: dict[str, Any], gate: str, current: datetime, window: int) -> str:
+    """Owner 2026-11-05: "The CTO needs to address the block before it gets to the user."
+
+    Takes the board state, the stuck builder or Reviewer, its progress gate, the time and the stall window (seconds). Returns
+    "ask" when a live CTO has not been asked about this stall yet; "wait" while its item is open and it has had less than one
+    full window since it was woken for it (or since the item opened, when the wake is still owed), or for one window after
+    it judged the item (its route needs time to land); and "over" once that time has passed with the agent still stuck, or
+    when the CTO cannot answer at all (no CTO, a CTO that says it is blocked, or one that answers nobody): only then is the
+    owner brought in."""
+    cto = next((a for a in (state.get("agents") or {}).values() if a.get("role") == "cto" and a.get("active")), None)
+    if cto is None or cto.get("status") == "blocked" or cto.get("recovery_state") == "unresponsive":
+        return "over"
+    item = _stuck_item(state, agent, gate)
+    if item is None:
+        return "ask"
+    if item.get("status") != "open":
+        # The CTO judged it. Its route needs time to land: the agent has one window from the judgment to move again.
+        judged = _parsed(item.get("closed_at"))
+        return "wait" if judged is not None and (current - judged).total_seconds() < window else "over"
+    since = _parsed(item.get("last_woken_at")) or _parsed(item.get("opened_at"))
+    return "wait" if since is not None and (current - since).total_seconds() < window else "over"
+
+
+def _cto_answer(state: dict[str, Any], agent: dict[str, Any], gate: str) -> str:
+    """One sentence for the red card saying what the CTO did about this stuck agent, or '' when the CTO was never asked
+    (the agent is the CTO, or no CTO exists). Takes the board state, the agent and its progress gate; the sentence starts
+    with a space so it follows the problem sentence."""
+    item = None if agent.get("role") == "cto" else _stuck_item(state, agent, gate)
+    if item is None:
+        return ""
+    if item.get("status") == "closed":
+        return f" The CTO was asked first; its answer: {' '.join(str(item.get('disposition') or 'none').split())[:200].rstrip('. ')}."
+    return " The CTO was asked first and has not cleared it."
+
+
 def _cost_line(root: Path) -> str:
     """The project's cost line for the pause card (API-equivalent, information only), or '' when it cannot be computed."""
     try:
@@ -958,6 +1065,20 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
                       "The CTO does not need to do its work and the owner does not need to act.",
                       task=task, silence_seconds=silence)
         return {"action": name, "stall_key": key, "step": "wake"}
+    if name == "stall_ask_cto":
+        with board.locked_state(root) as state:
+            live = (state.get("agents") or {}).get(action.get("agent_id", ""))
+            if live is None or _stuck_item(state, live, str(action.get("gate") or "")) is not None:
+                return {"action": name, "stall_key": key, "duplicate": True}
+            last_word = " ".join(str(live.get("status_note") or "").split())[:300]
+            who = agent_words[0].upper() + agent_words[1:]
+            # cto_wakes.EVENT_REASONS turns this event into one stuck item for the CTO (subject stalled_agent_needs_cto:<task>).
+            board._event(state, "stalled_agent_needs_cto", live, {
+                "task": task, "self_heal_key": action["self_heal_key"],
+                "message": (f"{who} says it is blocked and nobody has cleared it." if action.get("said_blocked") else
+                            f"{who} answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new.")
+                           + f" Its last word: {last_word or 'none'}"[:560]})
+        return {"action": name, "stall_key": key, "step": "ask_cto"}
     if name in {"stall_pause", "stall_stop_waking"}:
         gate = str(action.get("gate") or "")
         with board.locked_state(root) as state:
@@ -974,15 +1095,26 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
                           "The harness stops waking it; the next request routed to it wakes it, and nothing is lost.", task=task)
             return {"action": name, "stall_key": key, "step": "stop_waking"}
         cost = _cost_line(root)
-        message = (f"{who} has made no progress {quiet} and answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new. "
+        stalled = (f"{who} has been blocked {quiet} and nobody could clear it. " if action.get("said_blocked") else
+                   f"{who} has made no progress {quiet} and answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new. ")
+        message = (stalled +
                    f"Its last word: {last_word or 'none'}. The project is paused so nothing more is spent"
                    f"{' (' + cost + ')' if cost else ''}. Open its terminal or tell the CTO what to do, then press Resume.")
         with board.locked_state(root) as state:
             live = (state.get("agents") or {}).get(action.get("agent_id", ""))
             board._event(state, "stall_paused", live, {"task": task, "self_heal_key": action["self_heal_key"], "message": message})
             if live is not None:
-                board._record_owner_action(state, live, f"{who} is stuck: the project is paused to stop spending"[:240], "",
-                                           message[:800], task, kind="agent", for_agent=str(live.get("id")))
+                # The red card (owner 2026-11-05): the problem in the agents' own words, then what the owner should do.
+                problem = (f"{who} is stuck and nobody could solve it. Its last word: {(last_word or 'none').rstrip('. ')}."
+                           + _cto_answer(state, live, gate))
+                what_to_do = ("Read the problem above and fix its cause if it is on your side (a sign-in, a password, a missing tool). "
+                              "Then press Resume; to tell the agents what to do, use Message the CTO on this page (View agent "
+                              "opens an agent's window). The project is paused so nothing more is spent"
+                              f"{' (' + cost + ')' if cost else ''}.")
+                card = board._record_owner_action(state, live, f"Blocked, needs you: {agent_words} is stuck and the project is paused"[:240],
+                                                  "", board.blocked_card_text(problem, what_to_do), task, kind="agent",
+                                                  for_agent=str(live.get("id")))
+                card["blocked"] = True
         _pause_project(root)
         return {"action": name, "stall_key": key, "step": "paused"}
     steps = list(entry.get("steps") or [])
