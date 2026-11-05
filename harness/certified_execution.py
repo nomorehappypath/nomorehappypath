@@ -145,6 +145,7 @@ _LOCK_POLL_SECONDS = 0.1
 
 
 def in_progress_message(limit: float, holder: str = "") -> str:
+    """Return the message explaining that the run did not wait past limit seconds, naming holder's process if known."""
     return (
         "an identical certified run is still in progress, so this request did not wait any longer "
         f"(waited {int(limit)} seconds). No test failed. "
@@ -155,6 +156,7 @@ def in_progress_message(limit: float, holder: str = "") -> str:
 
 
 def _read_holder(handle_path: Path) -> str:
+    """Return a description of the process holding the lock file at handle_path, or "" if it cannot be identified."""
     try:
         info = json.loads(handle_path.read_text(encoding="utf-8") or "{}")
         pid = int(info["pid"])
@@ -190,6 +192,7 @@ def acquire_flock(handle: Any, path: Path, wait_seconds: float, *, holder_info: 
 
 @contextmanager
 def _identity_lock(root: Any, identity_sha256: str, wait_seconds: float | None = None) -> Iterator[None]:
+    """Context manager yielding once the exclusive lock for identity_sha256 under root is held, waiting up to wait_seconds; the effect is to serialize duplicate runs."""
     limit = _LOCK_WAIT_SECONDS if wait_seconds is None else wait_seconds
     directory = execution_identity.board.board_dir(root) / "execution-locks"
     directory.mkdir(parents=True, exist_ok=True)
@@ -203,14 +206,17 @@ def _identity_lock(root: Any, identity_sha256: str, wait_seconds: float | None =
 
 
 def _at() -> str:
+    """Return the current UTC time as an ISO 8601 string, used to timestamp audit records."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _test_count(output: str) -> int | None:
+    """Return the number of executed tests found in output, or None if it cannot be determined."""
     return executed_test_count(output)
 
 
 def _protected_prompt_processes(table: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Return the subset of table whose process command matches a protected system-prompt app, so those entries are never killed."""
     protected = ("securityagent.app/", "coreservicesuiagent.app/", "tccaccessrequestor.app/")
     return {
         pid: dict(value) for pid, value in table.items()
@@ -230,6 +236,7 @@ def _scrubbed_tree(value: Any, scrub: Any) -> Any:
 
 
 def _write_process_audit(board_root: Any, audit: dict[str, Any]) -> dict[str, str]:
+    """Write audit as a content-addressed JSON file under board_root's execution-audits directory and return its path info."""
     payload = (json.dumps(audit, indent=2, sort_keys=True) + "\n").encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
     directory = execution_identity.board.board_dir(board_root) / "execution-audits"
@@ -382,6 +389,7 @@ class CouldNotRun(ValueError):
     """A stored contract check could not run (no tests found, no browser): not a pass, not a failure, nothing certified."""
 
     def __init__(self, reason: str, output: str = ""):
+        """Store reason and output on the exception; the effect is to preserve them for later reporting."""
         super().__init__(reason)
         self.reason, self.output = reason, output
 

@@ -10,6 +10,15 @@ from harness import board, release_coordinator
 
 
 def _wake_recovered(root: Path, recovered: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Send a recovery instruction to each distinct wake session named in recovered.
+
+    Args:
+        root: The project root passed through to control.enqueue_instruction.
+        recovered: The list of recovered-execution event dicts to route wakes for.
+
+    Return:
+        The list of instructions successfully enqueued, one per distinct session.
+    """
     from harness import control
 
     routed = []

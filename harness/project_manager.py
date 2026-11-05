@@ -95,6 +95,17 @@ def project_folder_name(name: str) -> str:
 
 
 def scaffold_code_root(parent_root: str, name: str) -> Path:
+    """Compute the folder a new scaffolded project would be created at.
+
+    Args:
+        parent_root: the absolute path of the folder the new project folder
+            will be created inside.
+        name: the project name used to derive the folder's name.
+
+    Return: the Path of the not-yet-created project folder; raises
+    ValueError if parent_root is not an absolute, existing directory or a
+    folder with that name already exists inside it.
+    """
     parent = Path(str(parent_root)).expanduser()
     if not parent.is_absolute():
         raise ValueError("choose a parent folder")
@@ -329,6 +340,14 @@ def _project_cost(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _open_cards(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect this board's still-open, not-yet-expired owner action cards.
+
+    Args:
+        state: the board's full state document, read for its owner_actions.
+
+    Return: a list of the owner_actions entries whose status is "open" and
+    whose expiry (if any) has not yet passed.
+    """
     current = datetime.now(timezone.utc)
     cards = []
     for card in (state.get("owner_actions") or {}).values():
@@ -586,6 +605,16 @@ def _one_lifecycle_step(method):
     """Run a project lifecycle step while holding the manager's lifecycle lock."""
     @functools.wraps(method)
     def serialized(self, *args, **kwargs):
+        """Run the wrapped lifecycle method under the lifecycle lock, after
+        the re-entrancy and cancellation checks above decide it may proceed.
+
+        Args:
+            self: the ProjectManager instance the wrapped method runs on.
+            args: positional arguments forwarded to the wrapped method.
+            kwargs: keyword arguments forwarded to the wrapped method.
+
+        Return: whatever the wrapped method returns.
+        """
         starting = self.__dict__.get("worker_starting", "")
         if starting and self.__dict__.get("_starting_thread") != threading.get_ident():
             # Another thread's start is in flight (re-entrant calls from the same start,
@@ -611,6 +640,23 @@ class ProjectManager:
                  worker_start_timeout: float = WORKER_START_TIMEOUT,
                  terminal_launcher: Any = None,
                  runtime: dict[str, Any] | None = None):
+        """Build the manager's in-memory state from the registry on disk.
+
+        Args:
+            home: the settings/registry home directory this manager serves.
+            board_port: the port the per-project board worker binds to.
+            manager_url: this manager's own externally reachable URL.
+            public_board_url: the public URL prefix the board is proxied
+                under, or empty to use the worker's own loopback URL.
+            worker_start_timeout: seconds to wait for a started worker to
+                become ready before giving up.
+            terminal_launcher: optional override used by tests in place of
+                the real terminal relaunch call.
+            runtime: this process's runtime identity, or None to use the
+                process-wide default.
+
+        Return: None; it initializes self in place.
+        """
         self.home = Path(home)
         try:
             registered = registry.entries(self.home)
@@ -657,6 +703,15 @@ class ProjectManager:
         self._machine_reconciled: set[str] = set()
 
     def _machine_reconcile_once(self, entry: dict[str, Any]) -> None:
+        """Reconcile this project's test machine against this manager, once.
+
+        Args:
+            entry: the project's registry entry to reconcile the machine for.
+
+        Return: None; it records entry's id as reconciled and leaves it in
+        self._machine_reconciled so later calls for the same entry are a
+        no-op.
+        """
         if entry["id"] in self._machine_reconciled:
             return
         self._machine_reconciled.add(entry["id"])
@@ -670,6 +725,12 @@ class ProjectManager:
 
     # -- render ------------------------------------------------------------
     def projects_payload(self) -> dict[str, Any]:
+        """Build the project list page's full payload: one row per registered
+        project, plus the active project and page metadata.
+
+        Return: a dict with "projects" (a list of per-project status rows),
+        "active", "native_folder_picker", and "page_version".
+        """
         self._reconcile_worker()
         active = registry.active_project(self.home)
         rows = []
@@ -738,6 +799,13 @@ class ProjectManager:
         return {"projects": rows, "tiles": tiles, "prices": cost_center.prices_line()}
 
     def settings_payload(self) -> dict[str, Any]:
+        """Build the Settings page's full payload: the stored settings plus
+        every read-only reference table the page needs to render choices.
+
+        Return: a dict of the stored settings merged with roles, providers,
+        provider efforts/models/descriptions, provider availability, OpenAI
+        status, the chat model, and the plumbing view.
+        """
         # Opening Settings is the one read that still repairs and creates the file (`load` is read-only since
         # 2026-10-17 so that no launch or refresh poll can change Settings).
         value = global_settings.initialize(self.home)
@@ -803,16 +871,34 @@ class ProjectManager:
         return self.settings_payload()
 
     def save_openai_api_key(self, key: str) -> dict[str, Any]:
+        """Validate, verify against OpenAI, and store a new chat API key.
+
+        Args:
+            key: the raw OpenAI API key text typed into Settings.
+
+        Return: the refreshed settings payload with the new connectivity
+        result; raises ValueError if the key is malformed or OpenAI rejects
+        it.
+        """
         return self._verify_openai_api_key(
             global_settings.validate_openai_api_key(key), store=True,
         )
 
     def test_openai_api_key(self) -> dict[str, Any]:
+        """Re-verify the OpenAI API key already stored, without changing it.
+
+        Return: the refreshed settings payload with the connectivity test's
+        result; raises ValueError if no key is stored or OpenAI rejects it.
+        """
         return self._verify_openai_api_key(
             global_settings.openai_api_key(self.home), store=False,
         )
 
     def remove_openai_api_key(self) -> dict[str, Any]:
+        """Delete the stored OpenAI API key and disable the chat surface.
+
+        Return: the refreshed settings payload, now with no OpenAI key.
+        """
         global_settings.remove_openai_api_key(self.home)
         return self.settings_payload()
 
@@ -852,12 +938,26 @@ class ProjectManager:
         return tuple(fields[:2]) if len(fields) >= 2 else None
 
     def _worker_board_url(self) -> str:
+        """The private, manager-process-local URL the board worker listens on.
+
+        Return: the loopback URL for self.board_port.
+        """
         return f"http://127.0.0.1:{self.board_port}/"
 
     def _browser_board_url(self) -> str:
+        """The URL a browser should use to reach the board.
+
+        Return: self.public_board_url if one is configured, else the
+        private worker URL from _worker_board_url.
+        """
         return self.public_board_url or self._worker_board_url()
 
     def _stop_worker(self) -> None:
+        """Terminate the board worker process, if one is running, and clear
+        every piece of state tied to it (project id and proxy tokens).
+
+        Return: None.
+        """
         worker = self.worker
         if worker and worker.poll() is None:
             worker.terminate()
@@ -870,6 +970,16 @@ class ProjectManager:
 
     def _worker_request(self, path: str, *, data: bytes | None = None,
                         method: str = "GET") -> Request:
+        """Build an authenticated urllib Request aimed at the board worker.
+
+        Args:
+            path: the worker-local URL path to request.
+            data: the request body, or None for a bodyless request.
+            method: the HTTP method to use.
+
+        Return: a Request carrying the proxy-auth header and, if data is
+        given, a JSON content-type header.
+        """
         headers = {PROXY_HEADER: self.worker_proxy_token}
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -977,6 +1087,15 @@ class ProjectManager:
         )
 
     def _launch_resumed_terminal(self, context, session: dict[str, Any]) -> None:
+        """Relaunch one preserved terminal session on resume, via the test
+        launcher if one is injected, else by asking the board worker.
+
+        Args:
+            context: the project context the session belongs to.
+            session: the session record to relaunch, with its id.
+
+        Return: None; raises ValueError if the worker refuses the relaunch.
+        """
         if self.terminal_launcher is not None:
             self.terminal_launcher(context, session)
             return
@@ -989,6 +1108,18 @@ class ProjectManager:
             raise ValueError("project worker did not accept the resume launch")
 
     def _existing_worker_result(self, entry: dict[str, Any]) -> dict[str, Any] | None:
+        """Check whether a board worker already running is this project's own,
+        ready worker, so an open or resume can reuse it instead of starting
+        a new one.
+
+        Args:
+            entry: the registry entry of the project being opened or resumed.
+
+        Return: a dict with "board_url" and "worker_pid" if a matching,
+        ready worker is already running; None if no worker is usable;
+        raises ValueError if a worker is running but answers for something
+        else or fails its readiness check.
+        """
         self._reconcile_worker()
         if not self.worker or self.worker_project != entry["id"] or self.worker.poll() is not None:
             return None
@@ -1016,6 +1147,16 @@ class ProjectManager:
 
     @_one_lifecycle_step
     def open_project(self, project_id: str, _from_resume: bool = False) -> dict[str, Any]:
+        """Open one project, tracking it as the one currently starting so a
+        concurrent lifecycle call can see and react to the in-flight start.
+
+        Args:
+            project_id: the id of the project to open.
+            _from_resume: True when this open is itself part of a resume, so
+                the outer bookkeeping below is only done once per start.
+
+        Return: the dict _open_project returns for the opened project.
+        """
         outer = not self.worker_starting
         if outer:
             self.worker_starting, self.worker_starting_since = project_id, time.monotonic()
@@ -1028,6 +1169,19 @@ class ProjectManager:
                 self.worker_starting, self._starting_thread = "", None
 
     def _open_project(self, project_id: str, _from_resume: bool = False) -> dict[str, Any]:
+        """Switch the active project to project_id and start its board
+        worker: close any other active project, apply provider access files,
+        and launch and wait for the new worker to become ready.
+
+        Args:
+            project_id: the id of the project to open.
+            _from_resume: True when called from resume_project, in which
+                case a paused board is not itself resumed again here.
+
+        Return: a dict with "provider_access", "activated", "board_url",
+        "worker_pid", "memory", and "runtime"; raises ValueError if the
+        project's folder is missing or its worker fails to start.
+        """
         self._reconcile_worker()
         entry = registry._find(registry.load(self.home), project_id)
         # The owner's rule: any registered project opens at any time. Health
@@ -1133,9 +1287,19 @@ class ProjectManager:
         }
 
     def _request_restart(self) -> None:
+        """Schedule this process to receive SIGTERM shortly, so the update
+        apply call can return its response before the restart tears the
+        process down.
+
+        Return: None.
+        """
         import threading
 
         def stop() -> None:
+            """Send this process SIGTERM, asking it to shut down gracefully.
+
+            Return: None.
+            """
             os.kill(os.getpid(), signal.SIGTERM)
 
         threading.Timer(0.7, stop).start()
@@ -1158,6 +1322,17 @@ class ProjectManager:
             return True
 
     def apply_update(self, expected_version: str = "", expected_commit: str = "") -> dict[str, Any]:
+        """Install the exact release the owner was shown, then schedule a
+        restart so the new code takes effect.
+
+        Args:
+            expected_version: the version string the owner confirmed.
+            expected_commit: the commit the owner confirmed, checked against
+                what is actually installed.
+
+        Return: the result of update_check.apply_update; raises ValueError
+        if an update is already in progress or a project is still open.
+        """
         if getattr(self, "_update_in_progress", False):
             raise ValueError("An update is already being applied; the app is restarting.")
         if self._open_project_blocks_update():
@@ -1201,6 +1376,14 @@ class ProjectManager:
 
     @_one_lifecycle_step
     def close_project(self, project_id: str) -> dict[str, Any]:
+        """Stop this project's test machine authorization and board worker,
+        and release it from the registry's active slot.
+
+        Args:
+            project_id: the id of the project to close.
+
+        Return: a dict {"closed": project_id}.
+        """
         self._machine_stop(project_id, "project_stopped")
         if self.worker_project == project_id:
             self._stop_worker()
@@ -1244,6 +1427,14 @@ class ProjectManager:
         return registry.adopt_held(self.home)
 
     def _paused(self, project_id: str) -> bool:
+        """Whether a project's board is currently paused.
+
+        Args:
+            project_id: the id of the project to check.
+
+        Return: True if the project's board pause status is "paused"; False
+        otherwise, including when the project cannot be read.
+        """
         try:
             entry = registry._find(registry.load(self.home), project_id)
             return board.pause_state(registry.context_for_entry(entry)).get("status") == "paused"
@@ -1252,11 +1443,27 @@ class ProjectManager:
 
     # -- test machine ------------------------------------------------------------
     def _machine_context(self, project_id: str):
+        """Load a project's context, reconciling its test machine first.
+
+        Args:
+            project_id: the id of the project to load.
+
+        Return: the project's context, ready for test-machine operations.
+        """
         entry = registry._find(registry.load(self.home), project_id)
         self._machine_reconcile_once(entry)
         return registry.context_for_entry(entry)
 
     def _machine_summary(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """The test machine's current public status for one project, with a
+        heartbeat and any pending handoff or recovery refresh applied.
+
+        Args:
+            entry: the project's registry entry.
+
+        Return: the machine's public status dict, with "reserved", "busy",
+        and "busy_seconds" added; {"state": "unknown"} if it cannot be read.
+        """
         self._machine_reconcile_once(entry)
         try:
             context = registry.context_for_entry(entry)
@@ -1280,6 +1487,13 @@ class ProjectManager:
         return status
 
     def machine_status(self, project_id: str) -> dict[str, Any]:
+        """Look up and summarize one project's test machine status.
+
+        Args:
+            project_id: the id of the project to look up.
+
+        Return: the dict from _machine_summary for that project's entry.
+        """
         return self._machine_summary(registry._find(registry.load(self.home), project_id))
 
     def machine_scan(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1303,6 +1517,19 @@ class ProjectManager:
         }
 
     def machine_connect(self, project_id: str, body: dict[str, Any], *, loopback: bool) -> dict[str, Any]:
+        """Step 2 of Connect: use the owner's password to authenticate to the
+        test machine, pinning or confirming its host key as scanned.
+
+        Args:
+            project_id: the id of the project whose machine is connecting.
+            body: the request body, carrying the password, the scan
+                challenge id, and confirmation flags.
+            loopback: True only when the request came from this computer;
+                the password is refused otherwise.
+
+        Return: the machine's refreshed status summary, with "seconds"
+        added; raises test_machine.MachineError on any refusal or failure.
+        """
         if not loopback:
             raise test_machine.MachineError(
                 "The password is only accepted on the computer that runs Mission Control. Open Mission Control there "
@@ -1346,9 +1573,24 @@ class ProjectManager:
         return status
 
     def machine_check(self, project_id: str) -> dict[str, Any]:
+        """Run the test machine's diagnostic self-check for one project.
+
+        Args:
+            project_id: the id of the project whose machine is checked.
+
+        Return: the diagnostic result from test_machine.diagnose.
+        """
         return test_machine.diagnose(self._machine_context(project_id))
 
     def machine_release(self, project_id: str) -> dict[str, Any]:
+        """Release a project's test machine reservation, cancelling any
+        Connect still running and voiding its open scan challenge.
+
+        Args:
+            project_id: the id of the project whose machine is released.
+
+        Return: the result of test_machine.release for that project.
+        """
         context = self._machine_context(project_id)
         with self._machine_jobs_guard:
             self._machine_stop_generation[project_id] = self._machine_stop_generation.get(project_id, 0) + 1
@@ -1642,11 +1884,31 @@ class ProjectManager:
 
 
 def make_handler(manager: ProjectManager):
+    """Build the HTTP request handler class bound to one ProjectManager.
+
+    Args:
+        manager: the ProjectManager instance the handler's routes act on.
+
+    Return: a BaseHTTPRequestHandler subclass that serves the manager's
+    page and API routes.
+    """
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet server
+            """Suppress the base handler's default per-request log line.
+
+            Args:
+                args: the log_message arguments the base class would format;
+                    ignored.
+
+            Return: None.
+            """
             return
 
         def end_headers(self):
+            """Add the anti-framing headers before sending the usual ones.
+
+            Return: None.
+            """
             # Never shown inside another site's frame (security scan 2026-10-04, finding 4).
             for name, value in web_guard.FRAME_HEADERS:
                 self.send_header(name, value)
@@ -1662,6 +1924,17 @@ def make_handler(manager: ProjectManager):
             return bool(reason)
 
         def _send(self, code: int, value: Any, content_type="application/json", extra_headers: dict[str, str] | None = None):
+            """Write a complete HTTP response: status, headers, and body.
+
+            Args:
+                code: the HTTP status code to send.
+                value: the response body; bytes/str are sent as-is, anything
+                    else is JSON-encoded.
+                content_type: the Content-Type header value to send.
+                extra_headers: additional response headers to send, if any.
+
+            Return: None.
+            """
             body = (value if isinstance(value, (bytes, str)) else json.dumps(value))
             if isinstance(body, str):
                 body = body.encode("utf-8")
@@ -1675,10 +1948,20 @@ def make_handler(manager: ProjectManager):
             self.wfile.write(body)
 
         def _body(self) -> dict:
+            """Read and JSON-decode the request body.
+
+            Return: the decoded body as a dict, or {} if there is no body.
+            """
             length = int(self.headers.get("Content-Length") or 0)
             return json.loads(self.rfile.read(length) or b"{}") if length else {}
 
         def _browser_close_token(self) -> str:
+            """Read the Mission Control close form's action token, validating
+            the request's shape and encoding before trusting any of it.
+
+            Return: the submitted action_token value; raises ValueError if
+            the request's length or content type is not a valid close form.
+            """
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError as error:
@@ -1693,10 +1976,22 @@ def make_handler(manager: ProjectManager):
             return str(values.get("action_token", [""])[0])
 
         def _require_json_api(self):
+            """Reject a mutation request that is not JSON-encoded.
+
+            Return: None; raises ValueError if the Content-Type header is
+            not application/json.
+            """
             if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
                 raise ValueError("project API mutations require application/json")
 
         def _redirect(self, location: str):
+            """Send a 303 redirect response to location.
+
+            Args:
+                location: the URL to redirect the browser to.
+
+            Return: None.
+            """
             self.send_response(303)
             self.send_header("Location", location)
             self.send_header("Cache-Control", "no-store")
@@ -1772,6 +2067,11 @@ def make_handler(manager: ProjectManager):
             return self._send(status, response_body, content_type)
 
         def do_GET(self):
+            """Route a GET request: the proxied project, the landing page,
+            the favicon, or one of the read-only JSON API endpoints.
+
+            Return: None; writes the response via _send/_proxy_project.
+            """
             if self.refused():
                 return
             request_path = urlparse(self.path).path
@@ -1810,6 +2110,14 @@ def make_handler(manager: ProjectManager):
             return self._send(404, {"error": "not found"})
 
         def do_POST(self):
+            """Route a POST request: the proxied project, the browser close
+            form, or one of the mutating JSON API endpoints (folders,
+            settings, update, projects, test machine, and lifecycle actions).
+
+            Return: None; writes the response via _send/_redirect, or a 400
+            JSON error if the handler raises OSError/ValueError/KeyError/
+            RuntimeError.
+            """
             if self.refused():
                 return
             try:
@@ -1971,6 +2279,13 @@ def make_handler(manager: ProjectManager):
                 return self._send(400, {"error": str(error)})
 
         def do_DELETE(self):
+            """Route a DELETE request: the proxied project, removing the
+            stored OpenAI key, or removing a project from the registry.
+
+            Return: None; writes the response via _send/_proxy_project, or
+            a 400 JSON error if the handler raises OSError/ValueError/
+            KeyError/RuntimeError.
+            """
             if self.refused():
                 return
             if urlparse(self.path).path.startswith(PROJECT_ROUTE):
@@ -2001,6 +2316,19 @@ def parse_start_timeout(value) -> float:
 
 def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
           board_port: int = BOARD_PORT, worker_start_timeout: float = WORKER_START_TIMEOUT) -> None:
+    """Run the manager's HTTP server until stopped, then shut it down cleanly.
+
+    Args:
+        home: the settings/registry home directory to serve.
+        host: the host/interface to bind the manager's HTTP server to.
+        port: the port the manager's HTTP server listens on.
+        board_port: the port the project board worker will bind to.
+        worker_start_timeout: seconds to wait for a started worker to become
+            ready before giving up.
+
+    Return: None; blocks until interrupted, then calls manager.shutdown()
+    and closes the server. Raises ValueError if port equals board_port.
+    """
     if port == board_port:
         raise ValueError("manager and private worker ports must be different")
     manager = ProjectManager(home, board_port=board_port, worker_start_timeout=worker_start_timeout)
@@ -2013,6 +2341,15 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
         previous_term = signal.getsignal(signal.SIGTERM)
 
         def graceful_stop(_signum, _frame):
+            """Turn SIGTERM into a KeyboardInterrupt so serve_forever exits
+            through the same clean shutdown path as Ctrl-C.
+
+            Args:
+                _signum: the signal number delivered; unused.
+                _frame: the interrupted stack frame; unused.
+
+            Return: never returns normally; always raises KeyboardInterrupt.
+            """
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGTERM, graceful_stop)
@@ -2029,6 +2366,15 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
 
 
 def main(argv=None) -> int:
+    """Parse CLI arguments and run the manager's server (the module entry
+    point).
+
+    Args:
+        argv: the command-line arguments to parse, or None to use sys.argv.
+
+    Return: 0 on a normal exit; parser.error exits the process directly
+    if worker-start-timeout is invalid.
+    """
     import argparse
     parser = argparse.ArgumentParser(description="Harness projects landing page")
     parser.add_argument("--home", default=str(registry.default_home()))

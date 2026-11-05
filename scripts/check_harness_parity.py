@@ -12,6 +12,13 @@ from harness.parity_audit import audit_roots, production_files, test_methods
 
 
 def main() -> int:
+    """Run the harness parity audit from command-line arguments --dev-root and --next-root.
+
+    Takes no parameters (reads sys.argv via argparse). Compares the Dev tree against the
+    harness_next tree, printing PASSED or FAILED with the problems found.
+
+    Return: 0 when the audit passes (no problems), 1 when it fails.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--dev-root", type=Path, required=True)
     parser.add_argument("--next-root", type=Path, required=True)

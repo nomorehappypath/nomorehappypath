@@ -151,6 +151,7 @@ STAGE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -173,20 +174,42 @@ def binary_identity(provider: str, *, source_environment: dict[str, str] | None 
 
 
 def _key(identity: dict[str, str]) -> str:
+    """Return a stable cache key for identity, built from its provider, path, version, and sha256.
+
+    The provider, path, version and sha256 fields are joined and hashed so
+    the key changes whenever any of them changes. Output is
+    "<provider>-<16 hex chars>".
+    """
     material = "\0".join((identity["provider"], identity["path"], identity["version"], identity["sha256"]))
     return f"{identity['provider']}-{hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]}"
 
 
 def cache_path(home: Path, identity: dict[str, str], *, live: bool = False) -> Path:
+    """Return the cache file path for identity under home.
+
+    live selects the ".live.json" variant (spike-recorded results) instead
+    of the static probe's plain ".json" file.
+    """
     return Path(home) / CACHE_DIRECTORY / f"{_key(identity)}{'.live' if live else ''}.json"
 
 
 def _run(argv: list[str], environment: dict[str, str], cwd: Path) -> subprocess.CompletedProcess:
+    """Run argv as a subprocess with environment and cwd, capturing text output.
+
+    Bounds the call with PROBE_TIMEOUT_SECONDS. Return: the completed
+    subprocess.CompletedProcess.
+    """
     return subprocess.run(argv, env=environment, cwd=str(cwd), capture_output=True, text=True,
                           timeout=PROBE_TIMEOUT_SECONDS)
 
 
 def _scratch_environment(executable: str, scratch: Path) -> dict[str, str]:
+    """Build a probe environment for executable that keeps all state under scratch.
+
+    Creates "codex-home" and "claude-config" subdirectories of scratch and
+    points CODEX_HOME and CLAUDE_CONFIG_DIR at them, so a static probe never
+    touches the owner's real configuration. Return: the environment dict.
+    """
     environment = global_settings.provider_environment(executable)
     environment["CODEX_HOME"] = str(scratch / "codex-home")
     environment["CLAUDE_CONFIG_DIR"] = str(scratch / "claude-config")
@@ -196,6 +219,14 @@ def _scratch_environment(executable: str, scratch: Path) -> dict[str, str]:
 
 
 def _probe_codex(executable: str, scratch: Path) -> dict[str, bool]:
+    """Run the static capability probe for the Codex CLI binary at executable.
+
+    Uses scratch as an isolated home so nothing of the owner's real Codex
+    configuration is read or written. Inspects --help text, the enabled
+    features list, and the generated app-server protocol schema, and runs
+    the Stage 3 probe. Return: a dict mapping each codex.* static capability
+    name to a boolean.
+    """
     environment = _scratch_environment(executable, scratch)
     help_text = _run([executable, "--help"], environment, scratch).stdout
     features = _run([executable, "features", "list"], environment, scratch).stdout
@@ -239,6 +270,14 @@ def _probe_codex(executable: str, scratch: Path) -> dict[str, bool]:
 
 
 def _probe_claude(executable: str, scratch: Path) -> dict[str, bool]:
+    """Run the static capability probe for the Claude Code CLI binary at executable.
+
+    Uses scratch as an isolated home. Starts the CLI once, unauthenticated,
+    with an inline SessionStart hook that records whether the hook fired and
+    whether the inbox socket env var was set, checks --help for supported
+    flags, and runs the Claude relay-admission probe. Return: a dict mapping
+    each claude.* static capability name to a boolean.
+    """
     environment = _scratch_environment(executable, scratch)
     help_text = _run([executable, "--help"], environment, scratch).stdout
     record = scratch / "hook-env.txt"
@@ -321,6 +360,13 @@ def _probe_codex_stage3(executable: str, scratch: Path, environment: dict[str, s
     thread_id, policy_ok = "", False
     try:
         def call(identifier: int, method: str, params: dict) -> dict:
+            """Send one JSON-RPC request to the app-server and wait for its matching reply.
+
+            Writes identifier, method and params as a JSON line to the
+            server's stdin, then reads stdout lines until one whose "id"
+            equals identifier appears or PROBE_TIMEOUT_SECONDS elapses.
+            Return: the matching reply dict, or {} on timeout/EOF.
+            """
             server.stdin.write(json.dumps({"id": identifier, "method": method, "params": params}) + "\n")
             server.stdin.flush()
             deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
@@ -342,6 +388,13 @@ def _probe_codex_stage3(executable: str, scratch: Path, environment: dict[str, s
         codex_app_server.end_process_group(server)
 
     def launches(mode: str) -> bool:
+        """Launch today's remote TUI command through a fresh CodexMultiplexer and report whether it starts.
+
+        mode is "fresh" to open a new thread or "resume" to resume thread_id.
+        Spins up a throwaway runtime directory and multiplexer, runs the
+        launch line inside a pty, and watches it briefly. Return: whether
+        the process is still alive and the multiplexer initialized.
+        """
         runtime = Path(tempfile.mkdtemp(prefix="hnc-", dir="/tmp" if os.path.isdir("/tmp") else None))
         mux = codex_app_server.CodexMultiplexer(
             str(runtime / "t.sock"), [executable, "app-server", "--listen", "stdio://", *flags],
@@ -547,6 +600,10 @@ def provider_availability(home: Path, provider: str, *, source_environment: dict
 
 
 def _version_tuple(version: str) -> tuple[int, ...] | None:
+    """Return version's leading numeric components (up to three) as a tuple for comparison.
+
+    Output is None when version has no digits at all.
+    """
     parts = re.findall(r"\d+", str(version or ""))
     return tuple(int(part) for part in parts[:3]) if parts else None
 
@@ -676,6 +733,11 @@ def stage_status(home: Path, stage: str, provider: str, *, settings: dict[str, A
             return {"enabled": True, "reason": f"PLUMBING PROVING {stage} unproven: " + ", ".join(missing)}
     if missing:
         def label(name: str) -> str:
+            """Return the fallback-reason label to show for one missing capability name.
+
+            Output is "false" when name is a static capability or was
+            explicitly proven false live, otherwise UNPROVEN.
+            """
             if name in record.get("static", {}):
                 return "false"
             return "false" if record.get("live", {}).get(name) is False else UNPROVEN
@@ -685,6 +747,11 @@ def stage_status(home: Path, stage: str, provider: str, *, settings: dict[str, A
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI capabilities report: parse argv, print capabilities and stage status as JSON.
+
+    --home names the manager home that caches results and --refresh forces
+    reprobing. Return: 0 always.
+    """
     import argparse
     parser = argparse.ArgumentParser(description="Show the plumbing capabilities of the installed agent CLIs")
     parser.add_argument("--home", required=True, help="the manager home that caches the results")

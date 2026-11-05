@@ -65,7 +65,7 @@ class RenameShapedPipelineTests(test_subtask_pipelining.SubtaskPipeliningTests):
             self.root, "development", board.AWAITING_OWNER_DIRECTION,
             vendor="OpenAI", session_id=session["id"],
         )
-        board.record_owner_direction(self.root, session["id"], "Rebuild the bundled application")
+        board.record_owner_direction(self.root, session["id"], "Rebuild the bundled application", allow_split=True)
         board.begin_task(self.root, self.delivery["id"], "PIPELINE")
         contract.create_contract(self.root, "PIPELINE", "Rebuild the bundled application", ["delivery"])
         agreed_requirements(self.root, self.delivery["id"], "Rebuild and independently verify the bundle.")

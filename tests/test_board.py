@@ -61,7 +61,7 @@ class BoardTests(unittest.TestCase):
         session = control.create(self.root, "codex_delivery")
         agent = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor=vendor, session_id=session["id"])
         objective = f"OWNER DIRECTION — {task}"
-        board.record_owner_direction(self.root, session["id"], objective)
+        board.record_owner_direction(self.root, session["id"], objective, allow_split=True)   # the board fixtures declare chunks: the owner allowed the split
         board.begin_task(self.root, agent["id"], task)
         agreed_requirements(self.root, agent["id"], f"Final agreed requirements for {task}: preserve the requested delivery and verify it end to end.")
         if create_contract:
@@ -857,7 +857,7 @@ class BoardTests(unittest.TestCase):
         dev = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, "Delivery Agent", session_id=session["id"])
         with self.assertRaises(ValueError):
             self.declare_chunks(dev["id"], [("guessed", "must not invent work")])
-        board.record_owner_direction(self.root, session["id"], "OWNER DIRECTION — designed work")
+        board.record_owner_direction(self.root, session["id"], "OWNER DIRECTION — designed work", allow_split=True)   # it declares chunks below
         begun = board.begin_task(self.root, dev["id"], "OWNER-DIRECTED-TASK")
         self.assertEqual(begun["task"], "OWNER-DIRECTED-TASK")
         contract.create_contract(self.root, "OWNER-DIRECTED-TASK", "OWNER DIRECTION — designed work", ["delivery"])

@@ -36,6 +36,7 @@ PROJECT_KINDS = {"scaffold", "adopted"}
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string, with no parameters."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -45,6 +46,7 @@ def default_home() -> Path:
 
 
 def _registry_path(home: Path) -> Path:
+    """Return the registry.json file path located inside the given home directory."""
     return Path(home) / REGISTRY_FILENAME
 
 
@@ -56,6 +58,8 @@ def _same_directory(left: Path, right: Path) -> bool:
     directory with two spellings.  When both paths exist, compare device and
     inode — the filesystem's own identity — and fall back to resolved-path
     equality for paths that do not exist yet.
+
+    left and right are the two paths being compared. Return: whether they name the same directory.
     """
     left, right = Path(left), Path(right)
     try:
@@ -66,12 +70,14 @@ def _same_directory(left: Path, right: Path) -> bool:
 
 
 def _is_within(inner: Path, outer: Path) -> bool:
+    """Resolve inner and outer and return whether inner is outer itself or nested inside outer."""
     inner = Path(inner).resolve(strict=False)
     outer = Path(outer).resolve(strict=False)
     return inner == outer or outer in inner.parents
 
 
 def _audit(home: Path, message: str) -> None:
+    """Append a timestamped audit line with message to the audit log under home; produces no return value."""
     path = Path(home) / AUDIT_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
@@ -116,10 +122,12 @@ def save(home: Path, registry: dict[str, Any]) -> None:
 
 
 def entries(home: Path) -> list[dict[str, Any]]:
+    """Load the registry at home and return its list of project entries."""
     return list(load(home)["projects"])
 
 
 def _find(registry: dict[str, Any], project_id: str) -> dict[str, Any]:
+    """Return the entry in registry whose id matches project_id, or raise KeyError if none exists."""
     for entry in registry["projects"]:
         if entry["id"] == project_id:
             return entry
@@ -127,6 +135,11 @@ def _find(registry: dict[str, Any], project_id: str) -> dict[str, Any]:
 
 
 def _reject_overlap(registry: dict[str, Any], context: ProjectContext, *, ignore_id: str = "") -> None:
+    """Raise ValueError if context's roots collide with or nest inside any other registry entry's roots.
+
+    Every entry in registry is compared against context's code_root, data_root and workspace_root, except the
+    one whose id equals ignore_id. Produces no return value when nothing overlaps.
+    """
     for entry in registry["projects"]:
         if entry["id"] == ignore_id:
             continue
@@ -148,6 +161,12 @@ def _reject_overlap(registry: dict[str, Any], context: ProjectContext, *, ignore
 
 
 def _context_for(kind: str, code_root: Path, data_root: Path | None, workspace_root: Path | None) -> ProjectContext:
+    """Build and return a ProjectContext for kind from code_root, data_root and workspace_root.
+
+    Raises ValueError when kind is unknown, or when an adopted project's data_root or workspace_root is
+    missing or would sit inside code_root. For a scaffold project with no data_root and no workspace_root
+    given, the default context is derived from code_root alone.
+    """
     if kind not in PROJECT_KINDS:
         raise ValueError(f"kind must be one of {sorted(PROJECT_KINDS)}")
     if kind == "adopted":
@@ -172,6 +191,14 @@ def register(
     data_root: Path | None = None,
     workspace_root: Path | None = None,
 ) -> dict[str, Any]:
+    """Validate and register a new project, then return its saved entry as a dict.
+
+    Builds a ProjectContext for kind from code_root, data_root and workspace_root (allocating
+    collision-free defaults for scaffold and adopted projects when data_root/workspace_root are not
+    given), rejects a duplicate name or overlapping roots, initializes project memory with name and
+    description when code_root already exists, appends the entry to the registry at home, saves it,
+    and writes an audit record.
+    """
     name = str(name).strip()
     if not name:
         raise ValueError("a project needs a name")
@@ -322,6 +349,11 @@ def update_entry(home: Path, project_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def remove(home: Path, project_id: str) -> dict[str, Any]:
+    """Delete the project with project_id from the registry at home and return its removed entry.
+
+    Saves the updated registry and writes an audit record noting that the project's folders were
+    left untouched. The result is the entry dict that was removed.
+    """
     registry = load(home)
     entry = _find(registry, project_id)
     registry["projects"] = [item for item in registry["projects"] if item["id"] != project_id]
@@ -408,6 +440,7 @@ def trusted_project_store(root, *, home: Path | None = None, namespace: str = "r
 
 
 def context_for_entry(entry: dict[str, Any]) -> ProjectContext:
+    """Build and return the ProjectContext for a registry entry from its code_root, data_root and workspace_root."""
     return context_from_roots(
         code_root=entry["code_root"], data_root=entry["data_root"], workspace_root=entry["workspace_root"],
     )
@@ -416,10 +449,12 @@ def context_for_entry(entry: dict[str, Any]) -> ProjectContext:
 # --- activation lock -------------------------------------------------------
 
 def _lock_path(home: Path) -> Path:
+    """Return the activation lock file path located inside the given home directory."""
     return Path(home) / LOCK_FILENAME
 
 
 def _pid_alive(pid: int) -> bool:
+    """Return whether the process identified by pid is still alive, treating a permission error as alive."""
     if pid <= 0:
         return False
     try:
@@ -471,11 +506,14 @@ def activate(home: Path, project_id: str, pid: int | None = None) -> dict[str, A
 
 
 def _activation_guard(home: Path):
+    """Return a context manager that holds an exclusive file lock scoped to home while active."""
     import contextlib
     import fcntl
 
     @contextlib.contextmanager
     def held():
+        """Open or create the guard file under home, hold an exclusive flock for the duration, then release
+        and close it. Yield: control to the caller while the lock is held; produces no return value."""
         descriptor = os.open(str(home / ".activation.guard"), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -487,6 +525,14 @@ def _activation_guard(home: Path):
 
 
 def _activate_locked(home: Path, project_id: str, pid: int | None) -> dict[str, Any]:
+    """Acquire or reclaim the activation lock for project_id under home and return the activation record.
+
+    Looks up project_id in the registry, builds a record (pid, falling back to the current process id
+    when pid is None), and publishes it to the lock file by writing a temp file and hard-linking it
+    into place. If the lock already exists and its pid is dead, it is replaced and the reclaim is
+    audited; if the lock is live, RuntimeError is raised. On success, last_active_at is updated and the
+    record is returned.
+    """
     registry = load(home)
     entry = _find(registry, project_id)
     record = {"pid": int(pid if pid is not None else os.getpid()), "project_id": project_id,

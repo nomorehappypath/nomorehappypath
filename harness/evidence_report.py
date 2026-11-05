@@ -17,6 +17,9 @@ from harness import board, lifecycle_metrics
 
 
 def _strict_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read the durable event log at path strictly: reject truncated, non-UTF-8,
+    or malformed JSON lines. Return an empty list if path does not exist, or
+    the list of parsed record dicts otherwise."""
     if not path.is_file():
         return []
     try:
@@ -42,6 +45,10 @@ def _strict_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _exact_duplicate_executions(requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """Scan requests for command executions sharing the same execution_identity.
+    Return a summary dict giving the count of distinct identities, the number
+    of duplicate exact-success references, how many records lacked an
+    identity, and a Measured/Unavailable status."""
     counts: dict[str, int] = {}
     unavailable = 0
     for request in requests:
@@ -65,6 +72,9 @@ def _exact_duplicate_executions(requests: list[dict[str, Any]]) -> dict[str, Any
 
 
 def _time_anomalies(requests: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Check each request in requests for backwards intervals in its lifecycle timestamps, where
+    a later-ordered field's value precedes an earlier-ordered field's value.
+    Return a list of anomaly dicts describing each out-of-order pair found."""
     ordered_fields = (
         "requested_at", "reserved_at", "challenge_ledger_attached_at",
         "claimed_at", "completed_at",
@@ -89,6 +99,11 @@ def _time_anomalies(requests: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 def build(root: Path, task: str, *, measurement_cutoff_at: str = "") -> dict[str, Any]:
+    """Assemble the deterministic evidence report for task within the board at
+    root, using measurement_cutoff_at to bound the measurement window. Output
+    a dict containing the task's version, a source_sha256 content identity,
+    its field-trial or legacy metrics, exact execution duplicates, and time
+    anomalies."""
     event_path = board.board_dir(root) / "events.jsonl"
     events = _strict_jsonl(event_path)
     task_events = [event for event in events if event.get("task") == task]
@@ -136,10 +151,16 @@ def build(root: Path, task: str, *, measurement_cutoff_at: str = "") -> dict[str
 
 
 def _display(value: Any) -> str:
+    """Render value for the markdown report: give the string "Unavailable" if
+    value is None or an empty string, otherwise give str(value) as the
+    result."""
     return "Unavailable" if value is None or value == "" else str(value)
 
 
 def render(report: dict[str, Any]) -> str:
+    """Format the report dict as a human-readable markdown document covering
+    measured duration, execution reuse, integrity anomalies, and any
+    unavailable measurements. Return the assembled markdown text."""
     metrics = report["metrics"]
     lines = [
         f"# Efficiency report: {report['task']}", "",
@@ -174,6 +195,12 @@ def render(report: dict[str, Any]) -> str:
 
 
 def generate(root: Path, task: str, *, measurement_cutoff_at: str = "") -> dict[str, Any]:
+    """Build and persist the content-addressed markdown report for task within
+    the board at root, bounded by measurement_cutoff_at. Writes the rendered
+    report to a digest-named file under generated-reports, verifying any
+    pre-existing file at that digest matches rather than overwriting it.
+    Return a dict with the sha256 digest, the destination path, and the
+    underlying report."""
     report = build(root, task, measurement_cutoff_at=measurement_cutoff_at)
     payload = render(report).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()

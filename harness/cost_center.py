@@ -49,6 +49,7 @@ _memo: dict[str, Any] = {}
 
 
 def _clock() -> datetime:
+    """Return the current time in UTC, used as the default "now" for ledger operations."""
     return datetime.now(timezone.utc)
 
 
@@ -69,6 +70,7 @@ def configure(plumbing: Any) -> None:
 
 
 def limits() -> tuple[int, int]:
+    """Return the configured (bytes, seconds) collection limits, falling back to the defaults when unset."""
     return _configured.get("bytes", MAX_BYTES_DEFAULT), _configured.get("seconds", SECONDS_DEFAULT)
 
 
@@ -107,6 +109,7 @@ def load_card() -> tuple[dict[str, Any], str]:
 
 
 def _card_key() -> tuple:
+    """Builds a cache key for the owner's rate card file (its path, modification time and size) so a change to the file can be detected. Return the key tuple."""
     owner = _configured.get("card_path")
     try:
         stat = Path(owner).stat() if owner else None
@@ -140,10 +143,12 @@ PROJECT_RECORD_WORDS = "from Claude's project record (the session file was not w
 
 
 def _empty() -> dict[str, Any]:
+    """Return a freshly created empty ledger dict, with the current ledger version and every section empty."""
     return {"version": LEDGER_VERSION, "sessions": {}, "windows": {}, "replies": {}, "buckets": {}, "limits": {}, "notes": []}
 
 
 def ledger_path(ledger_dir: Path) -> Path:
+    """Builds the path to the cost ledger file inside ledger_dir. Return the resulting Path."""
     return Path(ledger_dir) / LEDGER_NAME
 
 
@@ -170,6 +175,7 @@ def _load(ledger_dir: Path) -> tuple[dict[str, Any], str]:
 
 
 def _save(ledger_dir: Path, ledger: dict[str, Any]) -> None:
+    """Writes ledger to the ledger file under ledger_dir, atomically: a temporary file is written, fsynced and renamed into place, and is removed if anything goes wrong first. Returns None."""
     path = ledger_path(ledger_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -187,6 +193,7 @@ def _save(ledger_dir: Path, ledger: dict[str, Any]) -> None:
 
 
 def _moment(value: Any) -> datetime | None:
+    """Parses value (expected to be an ISO-8601 timestamp) into a timezone-aware UTC datetime. Returns None when value cannot be parsed."""
     try:
         moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
@@ -195,10 +202,12 @@ def _moment(value: Any) -> datetime | None:
 
 
 def _bucket_key(role: str, task: str, model: str) -> str:
+    """Builds the ledger bucket key from role, task and model, joined by tabs so each combination is uniquely identified. Return the key string."""
     return f"{role}\t{task}\t{model}"
 
 
 def _add(ledger: dict[str, Any], role: str, task: str, model: str, counts: list[int], sign: int = 1) -> None:
+    """Adds counts (scaled by sign) to ledger's bucket identified by role, task and model, never letting a bucket value drop below zero. Returns None."""
     key = _bucket_key(role, task, model)
     bucket = ledger["buckets"].setdefault(key, [0, 0, 0, 0])
     for index, count in enumerate(counts):
@@ -208,6 +217,7 @@ def _add(ledger: dict[str, Any], role: str, task: str, model: str, counts: list[
 # ---- who held which task ------------------------------------------------------------------------------------------------------
 
 def session_key(provider: str, store: str, vendor_id: str, managed: str = "") -> str:
+    """Builds the ledger's session key from provider, store and vendor_id when a vendor_id is known, otherwise falls back to a pending key built from provider and managed. Return the key string."""
     if vendor_id:
         return f"{provider}|{store}|{vendor_id}"
     return f"{provider}|pending|{managed}"
@@ -268,6 +278,7 @@ def _attribution(windows: list[dict[str, Any]], when: datetime | None, fallback_
 # ---- finding and reading the program files ---------------------------------------------------------------------------------------
 
 def default_store(provider: str) -> str:
+    """Return the default on-disk store (config/session home) for provider ("claude" or "codex"), or an empty string for any other provider."""
     if provider == "claude":
         return str(Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")))
     if provider == "codex":
@@ -317,6 +328,7 @@ def _project_record(store: str, vendor_id: str) -> dict[str, Any] | None:
 
 
 def _apply_project_record(ledger: dict[str, Any], key: str, entry: dict[str, Any], record: dict[str, Any], now: datetime) -> None:
+    """Applies the counts from Claude's per-project record to ledger under key, attributing them via entry's windows as of now, replacing any previously recorded reply for the same model, and marking entry as read from the project record. Returns None."""
     role, task = _attribution(ledger["windows"].get(key, []), now, entry.get("role", ""))
     for model, usage in record["lastModelUsage"].items():
         if not isinstance(usage, dict):
@@ -353,6 +365,7 @@ def _read_complete_lines(path: Path, offset: int, budget: int) -> tuple[list[byt
 
 
 def _count(value: Any) -> int:
+    """Return value as a non-negative int count, or 0 when value is not a valid non-negative integer."""
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
@@ -423,6 +436,7 @@ def _note_limit(ledger: dict[str, Any], task: str, when: datetime | None, limit:
 
 
 def _apply_claude(ledger: dict[str, Any], key: str, entry: dict[str, Any], lines: list[bytes]) -> None:
+    """Parses each Claude transcript line in lines and applies its token counts to ledger under key, removing any prior bucket contribution for a repeated message id (Claude replies are de-duplicated by id) and attributing new ids via entry's role and the session's windows. Returns None."""
     windows = ledger["windows"].get(key, [])
     for line in lines:
         row = _claude_row(line)
@@ -441,6 +455,7 @@ def _apply_claude(ledger: dict[str, Any], key: str, entry: dict[str, Any], lines
 
 
 def _apply_codex(ledger: dict[str, Any], key: str, entry: dict[str, Any], lines: list[bytes]) -> None:
+    """Parses each Codex transcript line in lines, updates entry's tracked model and cumulative totals, computes the delta since the last reading (restarting from zero when the counters went down, or while replaying a shrunk file), applies the delta to ledger under key, and records any subscription limit reading. Returns None."""
     windows = ledger["windows"].get(key, [])
     for line in lines:
         row = _codex_row(line)
@@ -583,6 +598,7 @@ def collect(ledger_dir: Path, observations: list[dict[str, Any]], *, now: dateti
 
 
 def _mark_waiting(entry: dict[str, Any]) -> int:
+    """Marks entry as partially read because more data remains than this check's byte budget allowed, to be continued on the next check. Return 0 bytes used."""
     entry.update(status="partial", reason="more to read than one check allows; it continues on the next check")
     return 0
 
@@ -590,6 +606,7 @@ def _mark_waiting(entry: dict[str, Any]) -> int:
 # ---- what is shown ---------------------------------------------------------------------------------------------------------------
 
 def _tokens_text(count: int) -> str:
+    """Formats count as a short human-readable token amount (e.g. "1.2M", "10K"). Return the formatted string."""
     if count >= 1_000_000:
         return f"{count / 1_000_000:.1f}M"
     if count >= 10_000:
@@ -600,6 +617,7 @@ def _tokens_text(count: int) -> str:
 
 
 def _money(value: float) -> str:
+    """Formats value as a dollar amount, using four decimal places for amounts under ten cents (except exactly zero) so tiny costs are not rounded away. Return the formatted string."""
     return f"${value:,.2f}" if value >= 0.10 or value == 0 else f"${value:.4f}"
 
 
@@ -613,6 +631,7 @@ tokens_text = _tokens_text
 
 
 def _zero() -> dict[str, Any]:
+    """Return a freshly zeroed totals dict (usd, tokens, estimated, roles, counted) used as the starting point for summing a task, overhead or project total."""
     return {"usd": 0.0, "tokens": 0, "estimated": False, "roles": {}, "counted": 0}   # counted = ledger buckets in it; 0 means never measured, not "zero cost"
 
 
@@ -691,6 +710,7 @@ def summarize(ledger_dir: Path) -> dict[str, Any]:
 
 
 def _window_words(minutes: int) -> str:
+    """Describes minutes as a day/hour/minute-named usage window (e.g. "1-day", "3-hour"), or "usage" when minutes is falsy. Return the description string."""
     if minutes and minutes % 1440 == 0:
         return f"{minutes // 1440}-day"
     if minutes and minutes % 60 == 0:
@@ -706,6 +726,7 @@ def limit_sentence(limit: dict[str, Any]) -> str:
 
 
 def _through(summary: dict[str, Any]) -> str:
+    """Formats summary's counted_through timestamp as a local HH:MM time. Return the formatted string, or "" when counted_through is missing or unparseable."""
     moment = _moment(summary.get("counted_through"))
     return moment.astimezone().strftime("%H:%M") if moment else ""
 
@@ -735,6 +756,7 @@ def task_line(summary: dict[str, Any], task: str) -> str:
 
 
 def project_line(summary: dict[str, Any]) -> str:
+    """Builds the one-sentence project cost summary (total, overhead, unallocated, Gemini and price-list notes) from summary. Return the sentence, or "" when summary is not available."""
     if not summary.get("available"):
         return ""
     total, overhead, loose = summary["total"], summary["overhead"], summary["unallocated"]
@@ -762,14 +784,17 @@ WEEK_DAYS = 7
 
 
 def _sum_parts(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sums the usd and counted fields across every dict in parts. Return the combined {"usd", "counted"} dict."""
     return {"usd": sum(part["usd"] for part in parts), "counted": sum(part["counted"] for part in parts)}
 
 
 def _role_total(row: dict[str, Any], role: str) -> dict[str, Any]:
+    """Looks up role's totals inside row's "roles" mapping. Return that role's {"usd", "counted"} dict, or a zeroed one when role is not present."""
     return row["roles"].get(role) or {"usd": 0.0, "counted": 0}
 
 
 def _window_text(limit: dict[str, Any] | None) -> str:
+    """Describes a Codex subscription window limit reading in short form (a reset, or the percentage increase and window size). Return the description, or "" when limit is falsy."""
     if not limit:
         return ""
     if limit["reset"]:
@@ -778,12 +803,14 @@ def _window_text(limit: dict[str, Any] | None) -> str:
 
 
 def _task_notes(row: dict[str, Any]) -> list[str]:
+    """Collects the problem and Gemini notes to show for a task's row. Return the combined list of note strings."""
     notes = list(row["problems"])
     notes += [f"Gemini ({ROLE_WORDS.get(role, role)}): {GEMINI_WORDS}" for role in sorted(set(row["gemini"]))]
     return notes
 
 
 def _project_rows(summary: dict[str, Any]) -> dict[str, Any]:
+    """Builds the Costs table figures (builder, reviewer, CTO and total amounts, plus coverage/Gemini/estimate notes) from summary's tasks, overhead and unallocated totals. Returns the result dict."""
     tasks = summary["tasks"]
     builder = _sum_parts([_role_total(row, "delivery") for row in tasks.values()])
     reviewer = _sum_parts([_role_total(row, "reviewer") for row in tasks.values()])

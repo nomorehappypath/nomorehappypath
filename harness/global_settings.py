@@ -63,6 +63,7 @@ PROVIDER_SEARCH_DIRECTORIES = platform_support.discovery().owner_tool_directorie
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string, used to stamp settings records."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -122,6 +123,7 @@ OWNER_QUESTION_LISTS = ("question_markers", "authority_patterns", "what_markers"
 
 
 def default_owner_questions() -> dict[str, Any]:
+    """Return the built-in defaults for the owner_questions settings, copied from harness.board's own constants."""
     from harness import board
     return {
         "default_minutes": board.OWNER_QUESTION_DEFAULT_MINUTES,
@@ -133,6 +135,7 @@ def default_owner_questions() -> dict[str, Any]:
 
 
 def _validated_owner_questions(value: Any) -> dict[str, Any]:
+    """Validate and normalize the owner_questions settings value, filling in defaults; return the validated dict or raise ValueError."""
     from harness import board
     if value is None:
         return default_owner_questions()
@@ -171,6 +174,7 @@ PROVING_FLAG = "prove_live_items"
 
 
 def default_plumbing() -> dict[str, Any]:
+    """Return the built-in defaults for the plumbing settings: every stage off, proving off, and each limit/text at its default."""
     value: dict[str, Any] = {f"{stage}_enabled": False for stage in PLUMBING_STAGES}
     value[PROVING_FLAG] = False
     value.update({name: default for name, (default, _low, _high) in PLUMBING_LIMITS.items()})
@@ -179,6 +183,7 @@ def default_plumbing() -> dict[str, Any]:
 
 
 def _validated_plumbing(value: Any) -> dict[str, Any]:
+    """Validate and normalize the plumbing settings value against PLUMBING_STAGES/LIMITS/TEXT; return the validated dict or raise ValueError."""
     if value is None:
         return default_plumbing()
     if not isinstance(value, dict):
@@ -229,6 +234,7 @@ def plumbing_status(home: Path, *, settings: dict[str, Any] | None = None) -> di
 
 
 def _default() -> dict[str, Any]:
+    """Return the full default global settings document: version, agent/recovery settings, empty connectivity, plumbing and owner_questions defaults."""
     return {
         "version": SETTINGS_VERSION,
         "agent_settings": control.default_agent_settings(),
@@ -242,6 +248,7 @@ def _default() -> dict[str, Any]:
 
 
 def _tolerant_recovery_models(value: Any) -> dict[str, str]:
+    """Return value validated as recovery models, or the validated defaults if value itself fails validation."""
     try:
         return control.validated_recovery_models(value)
     except ValueError:
@@ -249,6 +256,14 @@ def _tolerant_recovery_models(value: Any) -> dict[str, str]:
 
 
 def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str, Any]:
+    """Validate and normalize a whole global settings document, collecting repair notices into repairs if given.
+
+    Args:
+        value: the raw loaded document to validate (must be an object at SETTINGS_VERSION).
+        repairs: an optional list that any agent-settings repair notices are appended to.
+
+    Return: the validated document dict, or raises ValueError when the version or shape is wrong.
+    """
     if not isinstance(value, dict) or int(value.get("version", 0)) != SETTINGS_VERSION:
         raise ValueError(f"global settings must use version {SETTINGS_VERSION}")
     connectivity = value.get("connectivity", {})
@@ -280,11 +295,13 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
 
 
 def _path(home: Path) -> Path:
+    """Return the path to the global settings file under home."""
     return Path(home) / SETTINGS_FILENAME
 
 
 @contextmanager
 def _locked(home: Path) -> Iterator[None]:
+    """Hold an exclusive file lock on home's settings lock file for the duration of the with-block. Yields None; gives no other result."""
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
     with (home / ".settings.lock").open("a+", encoding="utf-8") as stream:
@@ -296,6 +313,7 @@ def _locked(home: Path) -> Iterator[None]:
 
 
 def _write(home: Path, value: dict[str, Any]) -> None:
+    """Write value as the global settings document under home, atomically via a temporary file and rename. Returns None."""
     path = _path(home)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -422,6 +440,7 @@ def chat_settings(
 
 
 def _validated_openai_api_key(value: str) -> str:
+    """Return value trimmed, after checking it looks like a usable OpenAI API key (sk- prefix, length, no stray whitespace); else raise ValueError."""
     key = str(value or "").strip()
     encoded = key.encode("utf-8")
     if (
@@ -449,6 +468,7 @@ def validate_openai_api_key(value: str) -> str:
 
 
 def openai_api_key_path(home: Path) -> Path:
+    """Return the path to the stored OpenAI API key secret file under home."""
     return Path(home) / SECRETS_DIRECTORY / OPENAI_API_KEY_FILENAME
 
 
@@ -705,6 +725,7 @@ _CLI_VERSIONS: dict[tuple[str, float], str] = {}
 
 
 def _version_key(text: str) -> tuple[int, ...]:
+    """Return text's dotted version number as a tuple of ints for comparison, or (-1,) if text is empty, so an unknown version sorts lowest."""
     return tuple(int(part) for part in text.split(".")) if text else (-1,)
 
 
@@ -778,6 +799,16 @@ def provider_environment(
 
 
 def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: Any = None, reviewer_retry_models: Any = None) -> dict[str, Any]:
+    """Validate and save a new agent_settings document (and optionally recovery_models/reviewer_retry_models) to home.
+
+    Args:
+        home: the global settings directory to save into.
+        value: the raw agent_settings to validate via control._validated_agent_settings before saving.
+        recovery_models: the raw recovery_models to validate and save, or None to leave the stored value unchanged.
+        reviewer_retry_models: the raw reviewer_retry_models to validate and save, or None to leave the stored value unchanged.
+
+    Returns: the saved settings document, or raises ValueError when a role's provider is unavailable or the settings are invalid.
+    """
     save_notices: list[str] = []
     validated = control._validated_agent_settings(value, notices=save_notices)
     validated_recovery = control.validated_recovery_models(recovery_models) if recovery_models is not None else None
@@ -811,6 +842,7 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
 
 
 def _record_connectivity(home: Path, provider: str, result: dict[str, Any]) -> bool:
+    """Store result as provider's connectivity entry in home's settings document; return True on success, False if the document could not be read."""
     with _locked(home):
         try:
             current = _validate_document(json.loads(_path(home).read_text(encoding="utf-8")))
@@ -860,6 +892,7 @@ def _test_gemini_connection(home: Path, model: str, effort: str, workspace: Path
     tested_at = _now()
 
     def fail(message: str) -> ValueError:
+        """Record a failed Gemini connectivity result with message, and return (not raise) a ValueError carrying message."""
         _record_connectivity(home, "gemini", {"ok": False, "model": model, "effort": effort,
                                               "tested_at": tested_at, "message": message})
         return ValueError(message)

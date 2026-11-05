@@ -40,5 +40,13 @@ def record(state: dict[str, Any], task: str, step: str, raw: Any) -> bool:
 
 
 def notes(state: dict[str, Any], task: str) -> list[str]:
+    """Look up the previously recorded code-quality notes for a task.
+
+    Args:
+        state: The board state dict holding the "code_quality_notes" mapping.
+        task: The task identifier whose notes should be returned.
+
+    Returns: the stored notes list for the task, or an empty list if none exist.
+    """
     entry = (state.get("code_quality_notes") or {}).get(task)
     return clean(entry.get("notes")) if isinstance(entry, dict) else []

@@ -56,12 +56,20 @@ unchanged and archive the confirmation directly after it.
 
 Before implementation, Product Management records exactly one delivery mode:
 
-- `atomic` for a cohesive small task: no artificial chunks; developer unit
-  tests and acceptance QA are followed by one independent final acceptance;
-- `chunked` for one large or risky task: each logical chunk is unit-tested,
-  acceptance-tested, and independently reviewed, followed by final acceptance
-  of the integrated task; or
-- `application` for a full product objective: declare product subtasks with
+- `atomic`, the rule for every task: one build, one independent final
+  acceptance after developer unit tests and acceptance QA. The app never
+  splits a task on its own (owner 2026-11-04); a change that alters no
+  behaviour (in-code documentation, comments, wording, a version bump, a
+  config value) is atomic however many files it touches, and is filed with
+  `propose-requirements --small-change`;
+- `chunked`, only when the owner's direction allowed a split (the "Allow
+  splitting" box on Give direction; the board refuses it otherwise), for one
+  large or risky task whose parts each deliver working behaviour: each chunk
+  is unit-tested, acceptance-tested, and independently reviewed, followed by
+  final acceptance of the integrated task. Every chunk costs a full review
+  round; or
+- `application`, also only when the owner allowed a split, for a full product
+  objective: declare product subtasks with
   acceptance proof and dependencies. A large subtask may have optional chunks;
   every subtask receives independent acceptance and the full application then
   receives a separate end-to-end final acceptance.
@@ -75,6 +83,14 @@ eligible request immediately, Mission Control shows that its distinct
 Challenge Ledger is being prepared, and execution begins only after the board
 validates the attached ledger. An unattached reservation expires and reopens
 after ten minutes.
+
+NoMoreHappyPath is built for one person on one computer (owner, 2026-11-05).
+Do not over-engineer: the smallest change that fixes the real problem, no
+abstraction for a case nobody will hit, no extra configuration, no second
+mechanism where one exists. A reviewer finding that is a theoretical variant
+of a case already handled (another spelling of the same call, a path a solo
+user never takes) is a note, never a blocker, and never a reason for another
+round; a round that would only chase such notes is not opened.
 
 Both ledgers admit material rows only: a row is written only if its failure
 would change what the owner receives, and it names the acceptance criterion it

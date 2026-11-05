@@ -74,7 +74,7 @@ class RepairPackageBoardIntegrationTests(unittest.TestCase):
             self.root, "development", board.AWAITING_OWNER_DIRECTION,
             vendor="OpenAI", session_id=session["id"],
         )
-        board.record_owner_direction(self.root, session["id"], "Repair the grouped findings")
+        board.record_owner_direction(self.root, session["id"], "Repair the grouped findings", allow_split=True)
         board.begin_task(self.root, self.delivery["id"], "REPAIR-TASK")
         agreed_requirements(
             self.root, self.delivery["id"], "Repair every grouped finding and preserve review depth.",

@@ -39,6 +39,7 @@ def handoff_pending(root: ProjectRoot) -> bool:
 
 
 def connection_message(root: ProjectRoot) -> str:
+    """Build the system-control announcement text for root's current test-machine connection. Return the formatted message string."""
     report = test_machine.status_report(root)
     return (
         "[SYSTEM CONTROL — test-machine] The owner connected the test machine: "
@@ -51,10 +52,12 @@ def connection_message(root: ProjectRoot) -> str:
 
 
 def _active_sessions(root: ProjectRoot) -> list[dict[str, Any]]:
+    """Return the control sessions for root whose status is one of the active statuses."""
     return [value for value in control.snapshot(project_context(root)).get("sessions", []) if value.get("status") in control.ACTIVE_STATUSES]
 
 
 def stale_requests(root: ProjectRoot, state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Find the non-terminal qa_requests in root (or the given state, when provided) whose machine evidence is stale. Return a list of dicts describing each stale request's id, task, status, developer_id, and stale commands."""
     state = state if state is not None else board.snapshot(root)
     found = []
     for request_id, request in (state.get("qa_requests") or {}).items():
@@ -129,6 +132,7 @@ def after_connect(root: ProjectRoot) -> dict[str, Any]:
         done = {"value": False}
 
         def change(current: dict[str, Any]) -> None:
+            """Update current's recovering obligations and announced/handoff epoch fields in place, only when current still belongs to this epoch. Return nothing; the effect is the in-place mutation of current and the outer done flag."""
             if int(current.get("auth_epoch", 0)) != epoch or current.get("reauth_required"):
                 return   # a stop, release or newer connection owns the record now
             current["recovering"] = obligations
@@ -151,6 +155,7 @@ def refresh_recovering(root: ProjectRoot) -> list[dict[str, Any]]:
 
 
 def _refresh_recovering_locked(root: ProjectRoot) -> list[dict[str, Any]]:
+    """Recompute root's recovering obligations while already holding the handoff lock, dropping ones no longer stale or already resubmitted and re-sending ones with no agent when one is now available. Return the kept obligations list."""
     try:
         record = test_machine.read(root) or {}
     except test_machine.Damaged:

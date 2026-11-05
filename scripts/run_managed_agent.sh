@@ -30,6 +30,8 @@ launch_retries="${HARNESS_LAUNCH_RETRIES:-4}"
 launch_retry_seconds="${HARNESS_LAUNCH_RETRY_SECONDS:-2}"
 [[ "$launch_retry_seconds" =~ ^([0-9]|10)$ ]] || launch_retry_seconds=2
 
+# Takes no arguments (reads $launch_err_file). Restores the terminal's real stderr and removes
+# the temporary capture file; no stdout output.
 restore_stderr() {
   # The CLI must get the terminal's own stderr, not the capture pipe.
   if [[ -n "$launch_err_file" ]]; then
@@ -39,6 +41,9 @@ restore_stderr() {
   fi
 }
 
+# Takes code (the runner's exit code) as a positional argument (reads $session_id, $python_bin,
+# $target_root, $runner_step, $runner_signal, $launch_err_file). Reports the failed launch attempt
+# to the session registry via control.py; no stdout output.
 report_launch_failure() {
   local code="$1" diagnostic="" signal_args=()
   [[ -n "${session_id:-}" && -n "${python_bin:-}" && -n "${target_root:-}" && -x "${python_bin:-}" ]] || return 0
@@ -55,6 +60,9 @@ report_launch_failure() {
       ${signal_args[@]+"${signal_args[@]}"} >/dev/null 2>&1 || true
 }
 
+# Takes code (the shell's exit code at EXIT trap time) as a positional argument. On a nonzero
+# code, reports the failure and prints a message to stderr, exiting 75 for an unrecognized
+# failure; no stdout output.
 on_runner_exit() {
   local code="$1"
   trap - EXIT HUP INT TERM
@@ -72,6 +80,8 @@ on_runner_exit() {
   fi
 }
 
+# Takes a signal name and its number as positional arguments. Records the signal name in
+# $runner_signal and exits with the conventional 128+signal code; no stdout output.
 on_runner_signal() {
   runner_signal="$1"
   exit "$((128 + $2))"
@@ -257,6 +267,10 @@ PY
   unset board_environment_json
 fi
 
+# Takes board_role, board_task, board_name and board_vendor as positional arguments (reads
+# $python_bin, $harness_root, $context_args, $session_id, $launch_retries, $launch_retry_seconds).
+# Registers the agent on the board, retrying while the board reports itself busy. Prints the
+# new agent id to stdout.
 register_agent() {
   local board_role="$1" board_task="$2" board_name="$3" board_vendor="$4" registered attempt=1 register_err register_status
   register_err="$(mktemp "${TMPDIR:-/tmp}/harness-register.XXXXXX")"
@@ -280,6 +294,8 @@ register_agent() {
   "$python_bin" -E -c 'import json,sys; print(json.loads(sys.stdin.read())["id"])' <<<"$registered"
 }
 
+# Takes one argument, the CLI program name or path to check. Exits 2 with a REFUSED message to
+# stderr when it is not found or not executable; no output otherwise.
 require_runnable() {
   # A failed exec ends a bash 3.2 shell without running its EXIT trap, so a missing CLI is refused here, where it is reported.
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -288,6 +304,10 @@ require_runnable() {
   fi
 }
 
+# Takes the CLI's own argv ("$@") to launch (reads $provider, $python_bin, $harness_root,
+# $session_id, $kind, $claude_auth_bootstrap, and other launch-state variables). Replaces this
+# shell process (exec) with the chosen CLI, through the interactive supervisor when attached to a
+# terminal; never returns on success. No stdout output of its own.
 launch_visible_cli() {
   runner_step="starting the CLI"
   if [[ "$provider" == "gemini" ]]; then require_runnable "${HARNESS_AGY_BIN:-agy}"; else require_runnable "$1"; fi
@@ -385,11 +405,16 @@ plan_cli_launch() {
   fi
 }
 
+# Takes one argument, the session id to build the command for (reads $python_bin, $harness_root,
+# $target_root, $data_root, $workspace_root). Prints a shell-quoted "control.py conversation"
+# command line to stdout, for another function to run or show.
 conversation_command_for() {
   printf '%q -E %q --root %q --data-root %q --workspace-root %q conversation --session-id %q' \
     "$python_bin" "$harness_root/harness/control.py" "$target_root" "$data_root" "$workspace_root" "$1"
 }
 
+# Takes no arguments (reads $python_bin, $harness_root, $predecessor_session). Prints the note
+# about the predecessor session's conversation to stdout, via harness.conversation.
 earlier_conversation_note() {
   "$python_bin" -E - "$harness_root" "$predecessor_session" "$(conversation_command_for "$predecessor_session")" <<'PY'
 import sys
@@ -399,6 +424,9 @@ print(earlier_conversation_note(sys.argv[2], sys.argv[3]))
 PY
 }
 
+# Takes no arguments (reads $session_id, $cli_session_id, $transcript_path, $agent_id,
+# $board_command_prefix, $after_pause). Prints the recovery message shown to a resumed agent to
+# stdout, via harness.conversation.
 recovery_prompt() {
   local conversation_command
   conversation_command="$(conversation_command_for "$session_id")"
@@ -410,6 +438,8 @@ print(recovery_message(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.a
 PY
 }
 
+# Takes no arguments (reads $target_root, $data_root, $workspace_root, $kind). Prints the
+# test-machine launch note for this role to stdout, via harness.test_machine.
 machine_note() {
   # The CTO has no test-machine chapter; Delivery and the Reviewer are pointed at it (directive diet, 2026-10-25).
   "$python_bin" -E - "$harness_root" "$target_root" "$data_root" "$workspace_root" "$kind" <<'PY'
@@ -421,6 +451,8 @@ print(test_machine.launch_note(context_from_roots(sys.argv[2], sys.argv[3], sys.
 PY
 }
 
+# Takes no arguments (reads $session_id). Prints the note shown after a pause/resume to stdout,
+# via harness.conversation.
 pause_resume_note() {
   "$python_bin" -E - "$harness_root" "$(conversation_command_for "$session_id")" <<'PY'
 import sys
@@ -430,6 +462,9 @@ print(pause_resume_note(sys.argv[2]))
 PY
 }
 
+# Takes directive_text and kickoff_text as positional arguments (reads $provider, $manager_home,
+# $board_bootstrap, $launch_mode). Builds the agent's first prompt or resume message, plans the
+# CLI launch, and hands off to launch_visible_cli; never returns on success. No stdout output.
 launch_agent_cli() {
   local directive_text="$1" kickoff_text="$2" prompt
   plan_cli_launch

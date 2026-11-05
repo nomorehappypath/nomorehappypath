@@ -37,7 +37,7 @@ class SubtaskPipeliningTests(unittest.TestCase):
             self.root, "development", board.AWAITING_OWNER_DIRECTION,
             vendor="OpenAI", session_id=session["id"],
         )
-        board.record_owner_direction(self.root, session["id"], "Build the pipelined application")
+        board.record_owner_direction(self.root, session["id"], "Build the pipelined application", allow_split=True)   # application plan: the owner allowed the split
         board.begin_task(self.root, self.delivery["id"], "PIPELINE")
         contract.create_contract(
             self.root, "PIPELINE", "Build the pipelined application", ["delivery"],

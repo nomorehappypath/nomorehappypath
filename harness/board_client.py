@@ -44,6 +44,13 @@ class WorkerTransportError(OSError):
 
 
 def environment_state(environment: dict[str, str] | None = None) -> str:
+    """Classify the authenticated board environment variables.
+
+    Checks the token, endpoint, and protocol names against the given
+    environment mapping (or os.environ when environment is None).
+    Return "active" if all are present, "invalid" if only some are
+    present, and "legacy" if none are present.
+    """
     source = os.environ if environment is None else environment
     present = [bool(source.get(name)) for name in ENVIRONMENT_NAMES]
     if all(present):
@@ -54,6 +61,13 @@ def environment_state(environment: dict[str, str] | None = None) -> str:
 
 
 def _strip_context_arguments(arguments: list[str]) -> list[str]:
+    """Drop any leading --root/--data-root/--workspace-root option from arguments.
+
+    Walks arguments from the start, skipping each matched option and its
+    value (or its inline "name=value" form), and stops at the first
+    argument that is not one of those options. Return the remaining
+    arguments starting at that point.
+    """
     index = 0
     while index < len(arguments):
         argument = arguments[index]
@@ -71,6 +85,14 @@ def _strip_context_arguments(arguments: list[str]) -> list[str]:
 
 
 def _nonce(token: str) -> int:
+    """Produce a strictly increasing nonce value for the given token.
+
+    Uses a lock-protected file under the temp directory, named by a hash
+    of the token, to persist the last value issued for that token across
+    calls and processes. Return the new value, which is the greater of
+    the previous stored value plus one and the current nanosecond clock,
+    so repeated calls never produce the same output.
+    """
     label = hashlib.sha256(token.encode("utf-8")).hexdigest()
     directory = Path(tempfile.gettempdir()) / "harness-board-nonces"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -94,6 +116,14 @@ def _nonce(token: str) -> int:
 
 
 def _option_value(arguments: list[str], name: str) -> str | None:
+    """Find the single value supplied for the option name in arguments.
+
+    Scans arguments for an exact match of name (taking the following
+    entry as its value) or a "name=value" entry, collecting every match
+    found. Raises ValueError if name is supplied more than once, or if
+    an exact match has no following value. Return the one matched
+    value, or None if name does not appear at all.
+    """
     found: list[str] = []
     for index, argument in enumerate(arguments):
         if argument == name:
@@ -108,6 +138,15 @@ def _option_value(arguments: list[str], name: str) -> str | None:
 
 
 def _replace_option(arguments: list[str], name: str, value: str) -> list[str]:
+    """Replace the first occurrence of option name in arguments with value.
+
+    Walks arguments, substituting the first exact match of name (and its
+    following value) or the first "name=value" entry with the pair
+    (name, value); any later occurrence of name is dropped entirely
+    instead of being kept. Raises ValueError if an exact match has no
+    following value. Return the rebuilt argument list, appending (name,
+    value) at the end if name was not found at all.
+    """
     result: list[str] = []
     index = 0
     replaced = False
@@ -152,6 +191,12 @@ def _read_artifact(path_value: str, field: str) -> dict[str, Any]:
 
 
 def _read_artifact_checked(path_value: str, field: str) -> dict[str, Any]:
+    """Validate and read the artifact file at path_value, refusing anything that is not a plain,
+    single-link, size-bounded regular file, and label any refusal with field.
+
+    Opens the file with O_NOFOLLOW to refuse a symlink race, re-checks identity after opening, and
+    reads its bytes. Return: a dict describing the artifact's field, path and content.
+    """
     path = Path(path_value)
     try:
         before = os.lstat(path)
@@ -247,6 +292,17 @@ def _read_artifact_checked(path_value: str, field: str) -> dict[str, Any]:
 
 
 def _prepare_artifacts(operation: str, arguments: list[str]) -> tuple[list[str], dict[str, Any]]:
+    """Swap a local file path argument for an uploaded artifact, for operation.
+
+    Looks up operation in UPLOAD_ARGUMENTS to find which option carries a
+    file path and whether it is required; if operation has no such
+    specification, arguments pass through unchanged. When the option's
+    value is a trusted:// board reference rather than a real local path,
+    raises ArtifactError. Otherwise reads the file at that path and
+    replaces its value with an "upload:<field>" placeholder. Return the
+    rewritten arguments together with a dict mapping the field name to
+    the read artifact (empty when nothing was uploaded).
+    """
     specification = UPLOAD_ARGUMENTS.get(operation)
     if not specification:
         return arguments, {}
@@ -269,6 +325,13 @@ def _prepare_artifacts(operation: str, arguments: list[str]) -> tuple[list[str],
 
 
 def _error_message(error: HTTPError) -> str:
+    """Extract a human-readable message from a failed board HTTPError.
+
+    Attempts to parse error's response body as JSON and pull out its
+    "error" string field. Return that string when it is found; give the
+    generic fallback "authenticated board command failed" otherwise,
+    including when the body cannot be read or is not valid JSON.
+    """
     try:
         value: Any = json.loads(error.read())
         if isinstance(value, dict) and isinstance(value.get("error"), str):
@@ -279,6 +342,14 @@ def _error_message(error: HTTPError) -> str:
 
 
 def _loopback_endpoint(value: str) -> str:
+    """Validate that value is a bare loopback HTTP endpoint and normalize it.
+
+    Parses value as a URL and raises ValueError if it cannot be parsed,
+    or if it is not a plain "http://127.0.0.1:<port>" address: any
+    scheme other than http, any host other than 127.0.0.1, a missing
+    port, embedded credentials, or a non-empty path, query, or fragment
+    all fail the check. Return value with any trailing slash removed.
+    """
     try:
         parsed = urlparse(value.rstrip("/"))
         port = parsed.port
@@ -328,6 +399,18 @@ def call(arguments: list[str], *, timeout: float, uploads: bool = False) -> dict
 
 
 def invoke(argv: list[str]) -> int:
+    """Run one authenticated board CLI command described by argv and print its result.
+
+    Validates the authenticated board environment, strips any leading
+    context arguments from argv, resolves the operation's upload option
+    (if any) into an artifact payload, and posts the request to the
+    loopback board worker, retrying a few times only for the "poll"
+    operation and using a longer timeout for the operations known to run
+    long. On success, prints the JSON result and gives an exit code of
+    0. On any HTTPError, transport failure, artifact problem, or invalid
+    response, prints an "error:" message to stderr and gives an exit
+    code of 2 instead.
+    """
     state = environment_state()
     if state != "active":
         print("error: authenticated board environment is incomplete", file=sys.stderr)

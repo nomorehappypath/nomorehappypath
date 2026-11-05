@@ -14,6 +14,7 @@ port="8742"
 open_browser=1
 root_was_supplied=0
 
+# Takes no arguments. Prints the command's usage text to stdout.
 usage() {
   cat <<'EOF'
 Usage: start_board_viewer.sh [--root PROJECT_ROOT] [--data-root DATA_ROOT]
@@ -83,6 +84,8 @@ url="http://127.0.0.1:${port}/"
 python3 -E "$harness_root/harness/board.py" "${context_args[@]}" view >/dev/null
 viewer_pid=""
 
+# Takes no arguments (reads $harness_root). Prints a hash of harness/'s source bytes to stdout,
+# used to detect when the viewer needs to be restarted.
 viewer_revision() {
   # Supervise executable sources directly instead of consulting Git. Besides
   # supporting installed copies, this keeps inherited GIT_* routing state out
@@ -105,6 +108,8 @@ print(digest.hexdigest(), end="")
 PY
 }
 
+# Takes no arguments (reads $context_args, $settings_home, $port). Launches board_viewer.py in
+# the background and records its pid in $viewer_pid; no stdout output of its own.
 start_viewer() {
   python3 -E "$harness_root/harness/board_viewer.py" "${context_args[@]}" \
     --settings-home "$settings_home" --port "$port" &
@@ -118,6 +123,8 @@ agent_stale_after=240 # Keep synchronized with board.AGENT_STALE_SECONDS.
 python3 -E "$harness_root/harness/watchdog.py" "${context_args[@]}" --interval "$watchdog_interval" --stale-after "$agent_stale_after" &
 watchdog_pid=$!
 
+# Takes no arguments (reads $viewer_pid, $watchdog_pid). Kills the viewer and watchdog processes
+# and waits for them to exit; no stdout output.
 cleanup() {
   trap - EXIT INT TERM
   kill "$viewer_pid" 2>/dev/null || true
@@ -127,6 +134,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Takes no arguments (reads $url). Exit status 0 when the viewer answers an HTTP request with
+# its expected page content; no stdout output.
 viewer_ready() {
   # Do not pipe curl into grep under `set -o pipefail`: grep may exit after a
   # match while curl is still writing, producing a false SIGPIPE failure.
@@ -136,6 +145,8 @@ viewer_ready() {
   [[ "$page" == *"NoMoreHappyPath Mission Control"* ]]
 }
 
+# Takes no arguments (reads $viewer_pid). Polls viewer_ready for up to 5 seconds. Exit status 0
+# if it became ready, 1 on timeout or an early process exit; no stdout output.
 wait_for_viewer() {
   for _ in {1..50}; do
     if viewer_ready; then

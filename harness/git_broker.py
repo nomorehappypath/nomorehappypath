@@ -73,10 +73,12 @@ class GitIdentity:
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 timestamp string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _safe(value: str) -> str:
+    """Produce a filesystem/ref-safe slug for value by replacing unsafe characters with '-'."""
     return SAFE_COMPONENT.sub("-", str(value)).strip("-.") or "task"
 
 
@@ -152,6 +154,7 @@ def effective_owned_paths(owned_paths: Sequence[str]) -> list[str]:
 
 
 def _is_within(path: Path, root: Path) -> bool:
+    """Return whether the resolved path is root itself or nested somewhere under root."""
     path, root = path.resolve(strict=False), root.resolve(strict=False)
     return path == root or root in path.parents
 
@@ -163,6 +166,7 @@ def context_for_repository(board_root: ProjectRoot, repository: Path) -> Project
 
 
 def _has_conflict_markers(path: Path) -> bool:
+    """Return whether the file at path still contains unresolved Git merge conflict markers."""
     try:
         text = path.read_bytes()
     except (OSError, IsADirectoryError):
@@ -183,6 +187,7 @@ class GitBroker:
         state_loader: Callable[[], Mapping[str, Any]] | None = None,
         use_os_sandbox: bool = True,
     ) -> None:
+        """Initialize broker storage under context, using state_loader for board state and use_os_sandbox to gate confinement; the effect is none returned, setup only."""
         self.context = project_context(context)
         self._state_loader = state_loader or self._read_board_state
         self.journal_root = self.context.storage_path("broker-journal")
@@ -198,6 +203,7 @@ class GitBroker:
         self._prepare_storage()
 
     def _prepare_storage(self) -> None:
+        """Create the broker's journal directories and lock them down. Return: none."""
         for path in (self.journal_root, self.home_root, self.temp_root, self.hooks_root):
             path.mkdir(parents=True, exist_ok=True)
         try:
@@ -207,6 +213,7 @@ class GitBroker:
             pass
 
     def _read_board_state(self) -> Mapping[str, Any]:
+        """Return the durable board state loaded and parsed from its JSON file on disk."""
         path = self.context.storage_path("board", "state.json")
         if not path.is_file():
             raise AuthorizationError("board state is unavailable")
@@ -219,6 +226,7 @@ class GitBroker:
         return value
 
     def state(self) -> Mapping[str, Any]:
+        """Return the current board state via the configured loader, validated as a mapping."""
         value = self._state_loader()
         if not isinstance(value, Mapping):
             raise AuthorizationError("board state loader returned an invalid value")
@@ -242,6 +250,7 @@ class GitBroker:
                 os.close(descriptor)
 
     def _append_jsonl(self, path: Path, record: Mapping[str, Any]) -> None:
+        """Durably append record as one JSON line to path, fsyncing before return; the effect is none returned."""
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(dict(record), sort_keys=True, separators=(",", ":")) + "\n"
         descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
@@ -252,6 +261,7 @@ class GitBroker:
             os.close(descriptor)
 
     def _journal(self, transaction_id: str, operation: str, step: str, **fields: Any) -> None:
+        """Append a durable transaction record for transaction_id/operation/step plus fields. Return: none."""
         self._append_jsonl(self.transactions_path, {
             "transaction_id": transaction_id,
             "operation": operation,
@@ -303,6 +313,7 @@ class GitBroker:
         return sorted(found)
 
     def _hold(self, transaction_id: str, operation: str, reason: str, **fields: Any) -> dict[str, Any]:
+        """Open a CTO recovery hold for transaction_id/operation/reason (with extra fields) and return the record."""
         record = {
             "transaction_id": transaction_id,
             "operation": operation,
@@ -316,12 +327,14 @@ class GitBroker:
         return record
 
     def _nonce_key(self, state: Mapping[str, Any], agent_id: str) -> str:
+        """Return the per-session nonce key for agent_id, looked up in state (falling back to agent_id itself)."""
         agent = state.get("agents", {}).get(agent_id)
         if not isinstance(agent, Mapping):
             raise AuthorizationError(f"unknown agent: {agent_id}")
         return str(agent.get("session_id") or agent_id)
 
     def consume_nonce(self, state: Mapping[str, Any], agent_id: str, nonce: int, operation: str) -> None:
+        """Validate and durably record nonce as the latest accepted for agent_id/operation in state. Return: none, raising ReplayError on reuse or regression."""
         if operation not in WRITE_OPERATIONS:
             raise BrokerError("unknown Git write operation")
         try:
@@ -354,6 +367,7 @@ class GitBroker:
         })
 
     def _agent(self, state: Mapping[str, Any], agent_id: str) -> Mapping[str, Any]:
+        """Return the board agent record for agent_id from state, or raise if it is unknown or lacks write authority."""
         agent = state.get("agents", {}).get(agent_id)
         if not isinstance(agent, Mapping):
             raise AuthorizationError(f"unknown agent: {agent_id}")
@@ -362,6 +376,7 @@ class GitBroker:
         return agent
 
     def _delivery_task(self, state: Mapping[str, Any], agent_id: str) -> tuple[Mapping[str, Any], str]:
+        """Return the (agent, task) pair for agent_id in state, requiring an active Delivery role with a governed task."""
         agent = self._agent(state, agent_id)
         if agent.get("role") not in DEVELOPER_ROLES or not agent.get("active", True):
             raise AuthorizationError("operation requires the active Delivery task owner")
@@ -371,6 +386,7 @@ class GitBroker:
         return agent, task
 
     def _repository_for(self, state: Mapping[str, Any], task: str) -> Path:
+        """Return the resolved Git repository root bound to task in state, verified to be a real Git root."""
         raw = state.get("task_repositories", {}).get(task)
         if not raw:
             raise BrokerError(f"board state has no repository bound to task {task}")
@@ -383,6 +399,7 @@ class GitBroker:
         return repository
 
     def _workspace_for(self, state: Mapping[str, Any], task: str, subtask: str = "") -> Path:
+        """Return the resolved isolated worktree for task (and subtask, if given) from state, inside workspace_root."""
         raw = ""
         if subtask:
             raw = state.get("subtask_workspaces", {}).get(task, {}).get(subtask, "")
@@ -395,6 +412,7 @@ class GitBroker:
         return workspace
 
     def _git_environment(self) -> dict[str, str]:
+        """Return the locked-down environment variables under which trusted git subprocesses run."""
         environment = child_process.environment(git=True, python=True, shell=True)
         environment.update({
             "HOME": str(self.home_root),
@@ -435,6 +453,14 @@ class GitBroker:
         input: str | bytes | None = None,
         index_file: Path | None = None,
     ) -> subprocess.CompletedProcess:
+        """Run the trusted git binary with arguments inside cwd under a sandbox profile.
+
+        Builds a fixed, hardened option prefix, confines the process to readable/writable
+        paths (plus any Git metadata directories discovered under cwd), optionally allows
+        sandbox_network or allow_shell, and optionally redirects the index via index_file.
+        input is passed through as the subprocess stdin. The result is the completed
+        subprocess.CompletedProcess.
+        """
         candidates = platform_support.discovery().trusted_git_candidates()
         git = next((path for path in candidates if path.is_file()), candidates[-1])
         if not git.is_file():
@@ -580,6 +606,7 @@ class GitBroker:
             return {"ok": checkout.returncode == 0, "clone": cloned, "checkout": checkout}
 
     def _identity(self, repository: Path, revision: str = "HEAD") -> GitIdentity:
+        """Resolve revision inside repository to its canonical GitIdentity (commit and tree hash); return it."""
         commit = self._run_git(["rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=repository, writable=[repository])
         if commit.returncode != 0 or not commit.stdout.strip():
             raise BrokerError(f"commit cannot be resolved: {revision}")
@@ -590,6 +617,7 @@ class GitBroker:
         return GitIdentity(canonical, tree.stdout.strip())
 
     def _validate_paths(self, workspace: Path, paths: Sequence[str]) -> list[str]:
+        """Return paths normalized to posix form, rejecting any that are empty, absolute, escape workspace, name a directory, look like a Git option, or duplicate another."""
         if not paths:
             raise BrokerError("stage+commit requires explicit relative file paths")
         prepared: list[str] = []
@@ -618,6 +646,7 @@ class GitBroker:
         return prepared
 
     def _refuse_required_filters(self, workspace: Path, repository: Path, paths: Sequence[str]) -> None:
+        """Raise FilterRequiredError if staging paths in workspace (backed by repository) would trigger an attribute-driven clean/smudge filter. Return: none otherwise."""
         self._refuse_worktree_filter_attributes(workspace, "stage+commit")
         checked = self._run_git(["check-attr", "-a", "--", *paths], cwd=workspace, writable=[workspace, repository])
         if checked.returncode != 0:
@@ -631,6 +660,7 @@ class GitBroker:
 
     @staticmethod
     def _filter_attribute_line(line: str) -> bool:
+        """Return whether a .gitattributes/check-attr line declares a non-empty, non-unset filter= attribute."""
         tokens = line.split()
         return any(
             token.startswith("filter=") and token.split("=", 1)[1] not in {"", "unset", "unspecified"}
@@ -638,11 +668,13 @@ class GitBroker:
         )
 
     def _raise_filter_hold(self, operation: str, source: str) -> None:
+        """Open a CTO recovery hold naming operation and source, then always raise FilterRequiredError. Return: none."""
         transaction = f"filter-{secrets.token_hex(8)}"
         self._hold(transaction, operation, "attribute-driven filter required", attribute_source=source)
         raise FilterRequiredError("attribute-driven filter execution is refused; CTO recovery hold opened")
 
     def _refuse_worktree_filter_attributes(self, workspace: Path, operation: str) -> None:
+        """Scan every .gitattributes file under workspace for operation and raise a filter hold if any declares a filter. Return: none otherwise."""
         for attributes in workspace.rglob(".gitattributes"):
             if attributes.is_symlink() or not _is_within(attributes, workspace):
                 raise BrokerError("repository attributes path escapes the governed worktree")
@@ -654,6 +686,7 @@ class GitBroker:
                 self._raise_filter_hold(operation, str(attributes.relative_to(workspace)))
 
     def _refuse_tree_filter_attributes(self, repository: Path, revision: str, operation: str) -> None:
+        """Check repository's local attributesFile config, .git/info/attributes, and revision's tracked .gitattributes files for operation, raising a filter hold on any filter= declaration. Return: none otherwise."""
         configured = self._run_git(
             ["config", "--local", "--get", "core.attributesFile"],
             cwd=repository, writable=[repository],
@@ -681,6 +714,13 @@ class GitBroker:
                 self._raise_filter_hold(operation, path)
 
     def branch_create(self, agent_id: str, nonce: int, *, subtask: str = "") -> dict[str, Any]:
+        """Create an isolated task (or subtask) branch and worktree for agent_id after consuming nonce.
+
+        Derives the task and repository from board state, builds a safe branch name and
+        workspace path (using subtask when given), creates the worktree from the current
+        HEAD, and replays any inherited tracked candidate changes into it. Return: a dict
+        describing the task, subtask, repository, workspace, branch, and base identity.
+        """
         state = self.state()
         _, task = self._delivery_task(state, agent_id)
         if subtask:
@@ -751,6 +791,13 @@ class GitBroker:
         *,
         subtask: str = "",
     ) -> dict[str, Any]:
+        """Stage the explicit paths and commit message in the agent_id task (or subtask) worktree, consuming nonce.
+
+        Validates paths, refuses attribute-driven filters, forces staging of any explicitly
+        named but ignored path, commits with a fixed broker identity, and verifies the
+        worktree afterward. Return: a dict with task, subtask, commit, tree, manifest, and
+        any files left uncommitted.
+        """
         state = self.state()
         _, task = self._delivery_task(state, agent_id)
         message = str(message).strip()
@@ -895,12 +942,14 @@ class GitBroker:
             return self._reintegration_outcome(transaction, task, workspace, repository, main, "merged")
 
     def _unmerged_paths(self, workspace: Path, repository: Path) -> list[str]:
+        """Return the sorted list of paths with unmerged (conflicted) index entries in workspace, backed by repository."""
         listed = self._run_git(["ls-files", "-u", "-z"], cwd=workspace, writable=[workspace, repository])
         return sorted({row.split("\t", 1)[1] for row in listed.stdout.split("\0") if "\t" in row})
 
     def _reintegration_outcome(
         self, transaction: str, task: str, workspace: Path, repository: Path, main: str, status: str,
     ) -> dict[str, Any]:
+        """Verify workspace (backed by repository) is clean and descends from main, journal transaction as done for task, and return the outcome dict with status."""
         identity = self._identity(workspace)
         clean = self._run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=workspace, writable=[workspace, repository])
         if clean.returncode != 0 or clean.stdout.strip():
@@ -989,6 +1038,7 @@ class GitBroker:
 
     @staticmethod
     def _path_is_owned(path: str, scopes: Sequence[str]) -> bool:
+        """Return whether the relative path falls under one of the declared ownership scopes (or '*')."""
         candidate = Path(path)
         if candidate.is_absolute() or not candidate.parts or ".." in candidate.parts:
             return False
@@ -1319,6 +1369,7 @@ class GitBroker:
             return outcome
 
     def _ensure_mirror(self, repository: Path) -> None:
+        """Initialize the project's bare Git mirror if absent and verify it stays a bare repository; repository is unused beyond documenting intent. Return: none."""
         if not (self.mirror_root / "HEAD").is_file():
             self.mirror_root.parent.mkdir(parents=True, exist_ok=True)
             initialized = self._run_git(["init", "--bare", str(self.mirror_root)], cwd=self.mirror_root.parent, writable=[self.mirror_root.parent])
@@ -1329,6 +1380,7 @@ class GitBroker:
             raise RecoveryHoldError("project Git mirror is not a bare repository")
 
     def _import_object(self, repository: Path, identity: GitIdentity) -> None:
+        """Fetch identity's commit from repository into the mirror and verify the mirror now holds a matching identity. Return: none."""
         fetched = self._run_git(
             ["fetch", "--no-tags", str(repository), identity.commit],
             cwd=self.mirror_root, writable=[self.mirror_root], readable=[repository],
@@ -1341,6 +1393,7 @@ class GitBroker:
             raise RecoveryHoldError("local repository and mirror objects do not correspond")
 
     def _read_ref(self, repository: Path, ref: str) -> str:
+        """Return the commit hash ref resolves to in repository, or an empty string if it cannot be verified."""
         result = self._run_git(["rev-parse", "--verify", ref], cwd=repository, writable=[repository])
         return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -1620,6 +1673,7 @@ class GitBroker:
         return {"url": redaction.redact(url), "remote_ref": remote_ref, "expected_remote_tip": expected}
 
     def transaction_records(self) -> list[dict[str, Any]]:
+        """Return every durable transaction journal record parsed from the transactions log, in file order."""
         if not self.transactions_path.is_file():
             return []
         records = []

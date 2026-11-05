@@ -33,7 +33,7 @@ class ZeroConfigThreeCliE2E(unittest.TestCase):
             contract.add_evidence(root, "TASK-ZERO", "delivery", [evidence])
             session = control.create(root, "codex_delivery")
             delivery = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
-            board.record_owner_direction(root, session["id"], "Deliver without owner configuration")
+            board.record_owner_direction(root, session["id"], "Deliver without owner configuration", allow_split=True)
             board.begin_task(root, delivery["id"], "TASK-ZERO")
             agreed_requirements(root, delivery["id"], "Final agreed requirements: deliver the zero-configuration release flow and verify it end to end.")
             reviewer = board.register(root, "qa", "REVIEW-QUEUE", vendor="Anthropic")

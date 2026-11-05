@@ -25,6 +25,13 @@ _FILES: dict[tuple[str, str, str], Path] = {}
 
 
 def _parsed(value: Any) -> datetime | None:
+    """Parse value into a timezone-aware datetime.
+
+    Args:
+        value: the raw candidate timestamp, coerced to str before parsing as ISO-8601.
+
+    Returns: the parsed datetime (assumed UTC when naive), or None when value cannot be parsed.
+    """
     try:
         parsed = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):

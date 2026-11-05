@@ -25,6 +25,12 @@ from harness.project_context import context_from_roots  # noqa: E402
 
 
 def _project(home: Path, name: str) -> dict:
+    """Look up and return the registered project dict matching name under home.
+
+    The registry.json file inside home is read, and its "projects" entries are
+    searched for one whose "name" or "id" equals name. Exits with SystemExit when
+    no match is found.
+    """
     registry = json.loads((home / "registry.json").read_text(encoding="utf-8"))
     for project in registry.get("projects", []):
         if name in {project.get("name"), project.get("id")}:
@@ -33,6 +39,14 @@ def _project(home: Path, name: str) -> dict:
 
 
 def main() -> int:
+    """Run the project chat probe end to end and print each answer.
+
+    Parses command-line arguments (including --home, --project and the questions
+    list), copies the named project's board, tasks and memory into a temporary
+    scratch folder, loads the saved OpenAI key into the environment, then asks
+    project_chat.answer_question for each question and prints the answer with its
+    cited facts. Return: 0 on success.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--home", default=str(Path.home() / ".harness-home"))
     parser.add_argument("--project", required=True, help="registered project name or id")

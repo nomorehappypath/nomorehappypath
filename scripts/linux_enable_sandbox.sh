@@ -11,11 +11,17 @@ if [[ "$(uname -s)" != "Linux" ]]; then echo "This is for Linux only."; exit 1; 
 if [[ $EUID -ne 0 ]]; then echo "Run it with sudo:  sudo bash $0"; exit 1; fi
 owner="${SUDO_USER:-}"
 
+# Takes no arguments; runs the same bubblewrap call the app makes, as the
+# owning user when running under sudo. Prints nothing; its exit status (0 for
+# works, nonzero otherwise) is the only output, used to decide whether sandboxing already works.
 works() {  # the same bubblewrap call the app makes, as the person who runs the app
   local run=(bwrap --ro-bind / / --dev-bind /dev /dev --proc /proc -- /bin/true)
   if [[ -n "$owner" ]]; then sudo -u "$owner" "${run[@]}" >/dev/null 2>&1; else "${run[@]}" >/dev/null 2>&1; fi
 }
 
+# Takes one or more package names ($@) and installs them with whichever
+# package manager is present (apt-get, dnf, pacman, zypper). No output on
+# success; prints an instruction and exits 1 if none of those managers exist.
 install_packages() {
   if   command -v apt-get >/dev/null 2>&1; then apt-get install -y "$@"
   elif command -v dnf     >/dev/null 2>&1; then dnf install -y "$@"

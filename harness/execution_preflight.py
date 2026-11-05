@@ -14,6 +14,8 @@ _INSTALL_ACTIONS = {"ci", "install", "i"}
 
 
 def _tokens(command: str) -> list[str]:
+    """Split command into shell tokens with shlex, then drop any leading VAR=value
+    environment assignments. Return: the list of remaining tokens."""
     try:
         values = shlex.split(command, posix=True)
     except ValueError as error:
@@ -38,6 +40,9 @@ _VALUE_FLAGS = {"-W", "-X", "-r", "--require", "--import", "-e", "--eval", "-p",
 
 
 def _resolves_to_board(token: str, cwd: Path, search_path: str) -> bool:
+    """Resolve token to an absolute path, either relative to cwd when it contains a
+    slash or by looking it up on search_path, and compare it to HARNESS_BOARD.
+    Return: True when token resolves to the board script, False otherwise."""
     if "/" in token:
         candidate = (cwd / token).resolve()
     else:
@@ -86,6 +91,9 @@ def calls_the_board(values: list[str], *, cwd: Path, search_path: str) -> bool:
 
 
 def _npm_root(root: Path, values: list[str]) -> Path:
+    """Find the npm package root implied by any --prefix option in values, resolved
+    relative to root, and raise ValueError if that root escapes root.
+    Return: the resolved package root path."""
     prefix = "."
     for index, value in enumerate(values):
         if value == "--prefix" and index + 1 < len(values):
@@ -99,6 +107,9 @@ def _npm_root(root: Path, values: list[str]) -> Path:
 
 
 def _npm_action(values: list[str]) -> str:
+    """Scan values after the npm executable, skipping --prefix (and its value) and
+    other flag arguments, to find the first positional npm action.
+    Return: the npm action name, or an empty string if values has none."""
     skip_next = False
     for value in values[1:]:
         if skip_next:
@@ -114,6 +125,9 @@ def _npm_action(values: list[str]) -> str:
 
 
 def _node_dependencies_required(package_root: Path) -> bool:
+    """Read package_root's package.json, if present, and check whether it declares any
+    dependencies, devDependencies, or optionalDependencies.
+    Return: True when Node dependencies are declared, False when the manifest is missing or empty."""
     manifest = package_root / "package.json"
     if not manifest.is_file():
         return False
@@ -132,6 +146,9 @@ def validate_commands(
     The check never installs dependencies or mutates the candidate. It catches
     executable absence and the lockfile/install state that forced Task D's
     complete final gate to run twice.
+
+    root is the execution root the commands run under; environment supplies PATH.
+    Return: a dict reporting any problems found.
     """
     execution_root = Path(root).resolve()
     problems: list[str] = []

@@ -100,6 +100,7 @@ def consumed_entry(line: str, marker: str) -> bool:
 
 
 def delivery_marker(client_id: str) -> str:
+    """Return the delivery marker text that embeds client_id in a receipt for the transcript check."""
     return f"(harness delivery {client_id})"
 
 
@@ -112,6 +113,9 @@ class ClaudeInbox:
         command_of: Callable[[int], str], on_event: Callable[[str, str], None] = lambda kind, detail: None,
         turn_state: Callable[[], tuple[str, float]] = lambda: ("", 0.0), busy_wait: float = 900.0,
     ) -> None:
+        """Store socket_path, session_id, cli_pid, is_cli, peer_pid, command_of, on_event, turn_state, and busy_wait
+        on the instance for later use by start, admission, and delivery; the effect is to set up initial state
+        with no return value."""
         self.socket_path = socket_path
         self.turn_state = turn_state
         self.busy_wait = busy_wait
@@ -134,6 +138,8 @@ class ClaudeInbox:
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
+        """Bind and listen on socket_path, tighten its permissions, then start the background accept loop thread.
+        Return: nothing to the caller."""
         if os.path.lexists(self.socket_path):
             os.unlink(self.socket_path)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -148,6 +154,8 @@ class ClaudeInbox:
         threading.Thread(target=self._accept_loop, daemon=True).start()
 
     def stop(self) -> None:
+        """Mark the inbox stopped, wake any waiters, close the relay and listener sockets, and remove the socket
+        file. The effect is irreversible for this instance."""
         with self.lock:
             self.stopped = True
             self.lock.notify_all()
@@ -160,17 +168,24 @@ class ClaudeInbox:
             pass
 
     def alive(self) -> bool:
+        """Give back whether the inbox has not been stopped yet, as a boolean. Return: True unless stop() was
+        called."""
         return not self.stopped
 
     def up(self) -> bool:
+        """Provide the same boolean as ready(), kept as a short alias. Return: whatever ready() yields."""
         return self.ready()
 
     def ready(self) -> bool:
+        """Determine whether the relay is attached and a transcript path is known while not stopped. Return:
+        True only when all three hold."""
         with self.lock:
             return not self.stopped and self.relay is not None and bool(self.transcript)
 
     # -- admission -----------------------------------------------------------
     def _refuse(self, connection: socket.socket, detail: str, reader=None) -> None:
+        """Report detail through on_event as a refusal, then close connection and reader. Produce no return
+        value."""
         self.on_event("refused", detail)
         _close(connection, reader)
 
@@ -190,6 +205,9 @@ class ClaudeInbox:
             probe.close()
 
     def _accept_loop(self) -> None:
+        """Loop accepting relay connections until stopped, verifying each peer's pid and hello handshake before
+        swapping in the new relay as the active one. The effect is to update self.relay and self.relay_reader;
+        it returns nothing itself but drives admission continuously."""
         while not self.stopped:
             try:
                 connection, _ = self.listener.accept()
@@ -229,6 +247,9 @@ class ClaudeInbox:
             threading.Thread(target=self._read_loop, args=(connection, reader), daemon=True).start()
 
     def _read_loop(self, connection: socket.socket, reader) -> None:
+        """Read JSON reply lines from reader until the connection closes, storing each by id in self.replies,
+        then clear the relay state if connection is still current and fire an ended event. Returns nothing but
+        has the side effect of updating replies for deliver() to consume."""
         for raw in reader:
             try:
                 reply = json.loads(raw)
@@ -245,6 +266,8 @@ class ClaudeInbox:
 
     # -- delivery ------------------------------------------------------------
     def _in_transcript(self, marker: str) -> bool:
+        """Check whether marker appears in a transcript line that consumed_entry confirms as delivered, scanning
+        the transcript file named by self.transcript. Return: True when found, False on any read error."""
         with self.lock:
             path = self.transcript
         try:
@@ -254,6 +277,9 @@ class ClaudeInbox:
             return False
 
     def already_delivered(self, client_id: str, timeout: float) -> bool:
+        """Determine already-delivered status for client_id by checking its marker in the transcript; timeout
+        is accepted for interface compatibility but is not itself used in the check. Return: the boolean
+        transcript lookup result."""
         return self._in_transcript(delivery_marker(client_id))
 
     def deliver(self, client_id: str, text: str, *, response_timeout: float, receipt_timeout: float) -> str:

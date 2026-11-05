@@ -27,7 +27,7 @@ from unittest import mock
 from harness import board, control
 from harness.platform_support import agent_window
 from harness.platform_support import defaults
-from harness.terminal_titles import role_title
+from harness.terminal_titles import window_title
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,7 +59,7 @@ class WindowCommandTests(unittest.TestCase):
         self.assertIn("/usr/bin/screen -c /dev/null -r", parts[3])
         self.assertIn(str(Path(defaults.__file__).resolve().parent / "agent_window.py"), parts)
         self.assertIn(str(data / "control" / "terminal-close.log"), parts)
-        self.assertIn("Developer [codex_delivery-abc]", parts)
+        self.assertIn("Developer [abc]", parts)
         self.assertIn("--exit-code", parts[3])
         self.assertNotIn("exec /usr/bin/env SCREENDIR", command)
         self.assertEqual(run.call_args_list[1].kwargs["timeout"], 30)
@@ -100,7 +100,9 @@ class WindowCommandTests(unittest.TestCase):
             with _macos(), mock.patch.object(defaults.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "focused\n", "")) as run:
                 defaults.TERMINAL_HOST.view_session({"id": "codex_delivery-abc"}, root=root)
             script = run.call_args.args[0][2]
-            self.assertIn("(custom title of terminalTab is item 1 of argv) and (busy of terminalTab)", script)
+            self.assertIn("((custom title of terminalTab is item 1 of argv) or (custom title of terminalTab is item 2 of argv)) and ((processes of terminalTab) contains \"screen\")", script)
+            self.assertEqual(run.call_args.args[0][3:], ["Developer [abc]", "Developer [codex_delivery-abc]"])
+            self.assertNotIn("busy of terminalTab", script)
             self.assertEqual(run.call_args.kwargs["timeout"], 30)
 
     def test_the_focus_scripts_survive_a_closed_window_that_lingers_in_terminals_list(self):
@@ -341,7 +343,7 @@ class RealTerminalWindowTests(unittest.TestCase):
         environment = {**os.environ, "HARNESS_HEADLESS_AGENTS": "1"} if headless else {k: v for k, v in os.environ.items() if k != "HARNESS_HEADLESS_AGENTS"}
         with mock.patch.dict(os.environ, environment, clear=True):
             defaults.TERMINAL_HOST.open_session(session_id, [sys.executable, str(child), "--data-root", str(self.data)], color_rgb=(0, 0, 0))
-        return session_id, role_title(session_id) + " [" + session_id + "]"
+        return session_id, window_title(session_id)
 
     def wait_window(self, title, timeout=8):
         deadline = time.monotonic() + timeout
@@ -458,7 +460,7 @@ class RealTerminalWindowTests(unittest.TestCase):
         # the old window keeps its title while the same session is resumed: a second start of the same id
         self.assertTrue(self.wait_gone(first))
         again, _ = self.start(3)
-        window = self.wait_window(role_title(again) + " [" + again + "]")
+        window = self.wait_window(window_title(again))
         self.assertTrue(window)
         self.assertTrue(self.wait_gone(window))
         self.assert_owner_windows_untouched()

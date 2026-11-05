@@ -61,14 +61,20 @@ def configure(plumbing: Any) -> None:
 
 
 def heartbeat_seconds() -> int:
+    """Return the configured slow check-in interval, or the default when unset."""
     return _configured.get("seconds", HEARTBEAT_DEFAULT_SECONDS)
 
 
 def no_progress_seconds() -> int:
+    """Return the configured no-progress stall threshold, or the default when unset."""
     return _configured.get("no_progress", NO_PROGRESS_DEFAULT_SECONDS)
 
 
 def _parsed(value: Any) -> datetime | None:
+    """Parse value as an ISO timestamp, defaulting a naive result to UTC.
+
+    Return: the parsed, timezone-aware datetime, or None when value does not parse.
+    """
     try:
         moment = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -79,6 +85,7 @@ def _parsed(value: Any) -> datetime | None:
 # ---- counters (the instrument) ------------------------------------------------------------------------------------------
 
 def counters(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the state's cto_wakes counters dict, creating it with defaults if missing."""
     found = state.setdefault("cto_wakes", {})
     found.setdefault("total", 0)
     found.setdefault("by_reason", {})
@@ -99,11 +106,13 @@ def count_wake(state: dict[str, Any], reason: str, task: str = "") -> None:
 
 
 def count_poll(state: dict[str, Any]) -> None:
+    """Increment state's poll counter by one. Return: none; the effect is updating the counters in place."""
     found = counters(state)
     found["polls"] = int(found["polls"]) + 1
 
 
 def count_post(state: dict[str, Any]) -> None:
+    """Increment state's status-post counter by one. Return: none; the effect is updating the counters in place."""
     found = counters(state)
     found["posts"] = int(found["posts"]) + 1
 
@@ -121,19 +130,23 @@ def usage_sentence(state: dict[str, Any], task: str) -> str:
 # ---- pending judgments -----------------------------------------------------------------------------------------------
 
 def _items(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the state's cto_pending items dict, creating it empty if missing."""
     return state.setdefault("cto_pending", {})
 
 
 def has_cto(state: dict[str, Any]) -> bool:
+    """Return whether state has an active agent with the cto role."""
     return any(a.get("role") == "cto" and a.get("active") for a in (state.get("agents") or {}).values())
 
 
 def open_items(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return state's open pending-judgment items, sorted by opened_at then id."""
     return sorted((i for i in (state.get("cto_pending") or {}).values() if i.get("status") == "open"),
                   key=lambda i: (str(i.get("opened_at")), str(i.get("id"))))
 
 
 def urgent_items(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return state's open items that still have wake_pending set."""
     return [i for i in open_items(state) if i.get("wake_pending")]
 
 
@@ -321,6 +334,7 @@ def requeue(state: dict[str, Any], item_ids: list[str]) -> None:
 
 
 def _line(item: dict[str, Any]) -> str:
+    """Return the one-line plain-text rendering of item, truncated to fit a wake message."""
     return f"[{item['id']}] {PLAIN.get(item['reason'], item['reason'])}: {item.get('detail') or item.get('subject')}"[:DETAIL_CHARS + 40]
 
 

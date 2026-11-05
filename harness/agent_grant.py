@@ -38,6 +38,7 @@ class GrantTooBroad(ValueError):
 
 
 def _resolved(path) -> Path:
+    """Return path as a Path with symlinks resolved, so a renamed or linked path cannot evade an identity check."""
     return Path(os.path.realpath(str(path)))
 
 

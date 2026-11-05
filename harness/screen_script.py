@@ -112,6 +112,7 @@ class ScriptError(ValueError):
 
 
 def _text(value: Any, label: str, *, allow_empty: bool = False) -> str:
+    """Validate that value is a text string suitable for a step field named by label, raising ScriptError if it is not a string, is blank (unless allow_empty is set), or exceeds MAX_TEXT. Return the value unchanged on success."""
     if not isinstance(value, str) or (not allow_empty and not value.strip()):
         raise ScriptError(f"{label} must be a non-empty text")
     if len(value) > MAX_TEXT:
@@ -158,6 +159,7 @@ def parse_steps(payload: bytes | str) -> list[dict[str, Any]]:
 
 
 def _normal(text: str) -> str:
+    """Collapse all runs of whitespace in text down to single spaces. Return the normalized result."""
     return " ".join(str(text).split())
 
 
@@ -165,6 +167,7 @@ class _Driver(ba._DevToolsSocket):
     """The DevTools socket plus event handling: the page's own server is the only place it may reach."""
 
     def __init__(self, port: int, path: str, timeout: float, origin: str) -> None:
+        """Set up the driver's DevTools connection on port and path with timeout, restricting the page to the given origin. Returns nothing; the effect is to initialize the violations and notes lists and the target_id."""
         super().__init__(port, path, timeout)
         self.origin = origin
         self.violations: list[str] = []
@@ -172,6 +175,7 @@ class _Driver(ba._DevToolsSocket):
         self.target_id = ""
 
     def _write(self, method: str, params: dict[str, Any] | None = None) -> int:
+        """Encode a JSON-RPC call for method with params as a masked WebSocket frame and send it over the socket. Return the request id assigned to this call, used to match the eventual result."""
         self.next_id += 1
         body = json.dumps({"id": self.next_id, "method": method, "params": params or {}}).encode()
         mask = ba.os.urandom(4)
@@ -185,12 +189,14 @@ class _Driver(ba._DevToolsSocket):
         return self.next_id
 
     def _allowed(self, url: str) -> bool:
+        """Decide whether url is permitted to be reached by the page: data/blob/about URLs always are, and http/ws URLs only when their host and port match this driver's own origin. Return True if allowed, False otherwise."""
         parts = urlsplit(url)
         if parts.scheme in {"data", "blob", "about"}:
             return True
         return parts.scheme in {"http", "ws"} and f"{parts.hostname}:{parts.port}" == self.origin
 
     def _event(self, message: dict[str, Any]) -> None:
+        """Handle one unsolicited DevTools event message: continue or fail paused fetch requests depending on origin, record file-chooser/dialog/new-window/download attempts as violations or notes, and dismiss dialogs and close stray targets. Returns nothing; the effect is entirely the recorded violations/notes and the protocol replies it writes."""
         method, params = message.get("method"), message.get("params") or {}
         if method == "Fetch.requestPaused":
             url = str((params.get("request") or {}).get("url") or "")
@@ -213,6 +219,7 @@ class _Driver(ba._DevToolsSocket):
             self.violations.append("the page tried to download a file; downloads are not allowed in a screen script")
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Send a DevTools method call with params and block, dispatching any unrelated events through _event, until the matching reply arrives. Return the reply's result dict, raising RuntimeError if the reply carries an error."""
         ident = self._write(method, params)
         while True:
             message = self._message()
@@ -231,6 +238,7 @@ class _Driver(ba._DevToolsSocket):
                 self._event(self._message())
 
     def evaluate(self, expression: str) -> Any:
+        """Run expression in the page via Runtime.evaluate and raise RuntimeError with the page's own error description if it throws. Return the evaluated value."""
         result = self.call("Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": False})
         if result.get("exceptionDetails"):
             details = result["exceptionDetails"]
@@ -239,6 +247,7 @@ class _Driver(ba._DevToolsSocket):
 
 
 def _json(value: Any) -> str:
+    """Serialize value as JSON text restricted to ASCII, so it is safe to splice into a JavaScript template. Return the serialized string."""
     return json.dumps(value, ensure_ascii=True)
 
 
@@ -328,6 +337,7 @@ def run_script(
 
 
 def _wait_ready(driver: _Driver, deadline: float, limit: float = STEP_WAIT_SECONDS) -> None:
+    """Pump driver's events and poll document.readyState until the page reports complete, stopping at whichever of deadline or limit comes first. Returns nothing; the effect is simply to let the page settle before the next step runs."""
     end = min(deadline, time.monotonic() + limit)
     while time.monotonic() < end:
         driver.pump(0.15)
@@ -340,6 +350,7 @@ def _wait_ready(driver: _Driver, deadline: float, limit: float = STEP_WAIT_SECON
 
 
 def _run_step(driver: _Driver, kind: str, value: Any, url: str, deadline: float) -> tuple[bool, str]:
+    """Carry out one validated step of kind ("open", "expect", "click" or "type") with its value against the page driver controls, resolving relative navigation against url and bounding waits by deadline. Return a (ok, reason) pair: ok is True on success, and reason explains a failure."""
     if kind == "open":
         target = urljoin(url, value)
         parts = urlsplit(target)

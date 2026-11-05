@@ -11,6 +11,7 @@
 
 # --- which platform is this -----------------------------------------------------
 
+# Takes no arguments. Prints "darwin", "linux" or "unsupported" to stdout based on `uname -s`.
 platform_kind() {
   case "$(uname -s)" in
     Darwin) printf '%s' "darwin" ;;
@@ -21,8 +22,11 @@ platform_kind() {
 
 # --- where this platform keeps things -----------------------------------------
 
+# Takes no arguments. Prints the fixed reverse-DNS service identifier to stdout.
 service_label() { printf '%s' "com.nomorehappypath.app"; }
 
+# Takes no arguments (reads platform_kind, $HOME, $XDG_CONFIG_HOME). Prints the path of this
+# platform's service definition file (a launchd plist or a systemd user unit) to stdout.
 service_unit_path() {
   if [[ "$(platform_kind)" == "darwin" ]]; then
     printf '%s' "$HOME/Library/LaunchAgents/$(service_label).plist"
@@ -31,6 +35,8 @@ service_unit_path() {
   fi
 }
 
+# Takes no arguments (reads platform_kind, $HOME, $XDG_STATE_HOME). Prints the directory this
+# platform's service log file lives in to stdout.
 service_log_path() {
   if [[ "$(platform_kind)" == "darwin" ]]; then
     printf '%s' "$HOME/Library/Logs"
@@ -50,6 +56,8 @@ service_manager_available() {
   fi
 }
 
+# Takes no arguments (reads platform_kind). Prints the human-readable name of this platform's
+# service manager to stdout, for messages shown to the owner.
 service_manager_label() {
   if [[ "$(platform_kind)" == "darwin" ]]; then printf '%s' "launchd (per-user LaunchAgent)"
   else printf '%s' "systemd (per-user service)"; fi
@@ -65,11 +73,15 @@ service_manager_label() {
 # `id -un` always answers.
 service_user() { printf '%s' "${USER:-$(id -un)}"; }
 
+# Takes no arguments (reads platform_kind, service_user). Exit status 0 when systemd lingering
+# is on for this user (always true off Linux); no stdout output.
 linger_enabled() {
   [[ "$(platform_kind)" == "linux" ]] || return 0
   [[ "$(loginctl show-user "$(service_user)" --property=Linger --value 2>/dev/null)" == "yes" ]]
 }
 
+# Takes no arguments (reads service_user). Prints the sudo command the owner can run to enable
+# lingering, to stdout.
 linger_command() { printf '%s' "sudo loginctl enable-linger $(service_user)"; }
 
 # --- the platform gate --------------------------------------------------------
@@ -78,8 +90,12 @@ linger_command() { printf '%s' "sudo loginctl enable-linger $(service_user)"; }
 # Everything else in this file branches on platform_kind rather than re-deriving
 # the platform from `uname` at each site.
 
+# Takes no arguments (reads platform_kind). Exit status 0 when this platform is one the app
+# supports; no stdout output.
 platform_supported() { [[ "$(platform_kind)" != "unsupported" ]]; }
 
+# Takes no arguments (reads platform_kind, runs sw_vers or reads /etc/os-release). Prints a
+# human-readable OS name and version to stdout, for messages shown to the owner.
 platform_display_label() {
   if [[ "$(platform_kind)" == "darwin" ]]; then
     printf 'macOS %s' "$(sw_vers -productVersion 2>/dev/null || echo '(version unknown)')"
@@ -93,6 +109,8 @@ platform_display_label() {
 
 # --- the auto-start service ---------------------------------------------------
 
+# Takes no arguments (reads service_unit_path). Exit status 0 when the auto-start service's
+# unit file exists on disk; no stdout output.
 autostart_installed() { [[ -f "$(service_unit_path)" ]]; }
 
 # Deactivate and LEAVE the unit in place, so the owner need not rerun the
@@ -124,6 +142,8 @@ autostart_remove() {
   [[ "$(platform_kind)" == "darwin" ]] || systemctl --user daemon-reload 2>/dev/null || true
 }
 
+# Takes root (the app's checkout path) and log_dir (where the service should log) as positional
+# arguments. Writes and activates this platform's auto-start service definition; no stdout output.
 autostart_install() {
   local root="$1" log_dir="$2"
   local unit; unit="$(service_unit_path)"

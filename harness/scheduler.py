@@ -31,6 +31,19 @@ def reap_children():
     return completed
 
 def tick(root: ProjectRoot, profile_path: Path, execute=False):
+    """Run one scheduler cycle: reap children, find due board items, and optionally dispatch them.
+
+    Args:
+        root: the project root used to derive the storage context.
+        profile_path: path to the validated project profile that authorizes
+            per-vendor agent launch commands.
+        execute: when true, spawn the approved vendor command for each due
+            item instead of only recording what would have been dispatched.
+
+    Return: a dict with the tick timestamp and the list of dispatch records,
+    after appending that record to the dispatches log. Raises ValueError if
+    the profile is invalid.
+    """
     context = project_context(root)
     reap_children()
     profile_check=contract.validate_profile(profile_path)
@@ -54,6 +67,14 @@ def tick(root: ProjectRoot, profile_path: Path, execute=False):
     return out
 
 def main(argv=None):
+ """Parse CLI arguments, run one scheduler tick, and print the result as JSON.
+
+ Args:
+     argv: optional list of CLI argument strings; defaults to sys.argv when None.
+
+ Returns: exit code 0 on success; an invalid profile is reported via
+ parser.error before exit.
+ """
  p=argparse.ArgumentParser(); add_context_arguments(p); p.add_argument("--profile",required=True); p.add_argument("--execute",action="store_true")
  a=p.parse_args(argv)
  try: out=tick(context_from_args(a),Path(a.profile).resolve(),a.execute)

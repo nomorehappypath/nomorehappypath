@@ -17,6 +17,11 @@ except ImportError:  # Legacy harness compatibility.
     ProjectRoot = Union[Path, str]
 
     def project_context(value: ProjectRoot):
+        """Build a legacy-compatible namespace of roots for value.
+
+        Return: a SimpleNamespace with code_root, data_root, and workspace_root
+        derived from value, used when harness.project_context is unavailable.
+        """
         code = Path(value).resolve()
         return SimpleNamespace(
             code_root=code, data_root=code / ".harness",
@@ -29,6 +34,10 @@ MAX_TEXT = 4000
 
 
 def _process_rule(kind: str) -> str:
+    """Return the review-process rule text that applies for task kind.
+
+    kind selects between "spec", "analysis", and the development default.
+    """
     if kind == "spec":
         return "Spec or document (the owner chose it): judge the text deliverable by reading it against the confirmed requirements."
     if kind == "analysis":
@@ -44,10 +53,15 @@ def _process_rule(kind: str) -> str:
 
 
 def _text(value: Any) -> str:
+    """Coerce value to a stripped string truncated to MAX_TEXT characters.
+
+    Return: the resulting string, or "" when value is falsy.
+    """
     return str(value or "").strip()[:MAX_TEXT]
 
 
 def _bounded(values: list[Any]) -> list[Any]:
+    """Return the last MAX_ITEMS entries of values, dropping older ones."""
     return values[-MAX_ITEMS:]
 
 
@@ -56,6 +70,14 @@ def build(
     *, delivery_scenarios: list[dict[str, Any]] | None = None,
     include_delivery_evidence: bool = True,
 ) -> dict[str, Any]:
+    """Assemble the bounded independent-review brief for one request.
+
+    root locates the project context; state holds the harness board state;
+    request is the review request being briefed; delivery_scenarios supplies
+    the candidate delivery scenarios to report, and include_delivery_evidence
+    controls whether their outcomes are disclosed. Return: a dict with the
+    full brief, including its own sha256 digest.
+    """
     task = _text(request.get("task"))
     if not task:
         raise ValueError("review brief requires an exact task")
@@ -302,7 +324,9 @@ def build(
             "verdict_first_line": "TASK DONE: YES|NO — <expected result> vs <what happened>",
             "rule": (
                 "PASS always means TASK DONE: YES. Walk the whole path, not a fragment; do not "
-                "hunt boundaries that never or only rarely happen - note them as non-blocking."
+                "hunt boundaries that never or only rarely happen - note them as non-blocking. "
+                "This product serves one person on one computer (owner 2026-11-05): a theoretical variant of a case already handled "
+                "(another spelling of the same call, a path a solo user never takes) is a note, never a blocker or another round."
             ),
         }
         if brief["process"]["task_kind"] == "analysis":

@@ -81,6 +81,8 @@ KNOWN_DESTINATIONS = {
 
 
 def destination_is_known(name: str, following: str) -> bool:
+    """Return whether name, alone or combined with the word following it, matches a
+    destination already known to the owner (a terminal, settings, or the like)."""
     first = name.lower().strip("'’s ")
     second = f"{first} {following.lower()}".strip() if following else first
     if first in KNOWN_DESTINATIONS or second in KNOWN_DESTINATIONS:
@@ -95,6 +97,8 @@ def place_phrases(text: str, known_names: set[str] | frozenset[str] = frozenset(
     found: list[tuple[str, str, str]] = []
 
     def following(end: int) -> str:
+        """Return the whole word immediately after position end in text, used to decide
+        whether a phrase's destination is already known."""
         rest = text[end:].lstrip()
         return re.match(r"[\w-]*", rest).group(0) if rest else ""
 
@@ -130,11 +134,16 @@ def names_a_location_need(title: str, why: str, known_names: set[str] | frozense
 
 
 def names_a_harness_control(title: str, why: str, command: str) -> bool:
+    """Return whether title, why, and command together mention one of the harness's own
+    controls, such as Mission Control or a terminal, that the owner already reaches
+    without any agent's copy."""
     return bool(HARNESS_CONTROLS.search(f"{title} {why} {command}"))
 
 
 
 def urls_in(*texts: str) -> list[str]:
+    """Return every distinct URL found across texts, in the order first seen, with
+    trailing punctuation stripped from each match."""
     found: list[str] = []
     for text in texts:
         for match in URL.finditer(text or ""):
@@ -167,6 +176,8 @@ def classify_host(url: str) -> tuple[str, str, int]:
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        """Refuse to follow the redirect described by req, fp, code, msg, headers, and
+        newurl; always return None so the probe never leaves the exact url it was given."""
         return None
 
 
@@ -191,6 +202,8 @@ def probe(url: str, timeout: float = PROBE_TIMEOUT_SECONDS) -> tuple[str, str]:
 
 
 def _run(arguments: list[str]) -> str:
+    """Run the subprocess named by arguments and return its captured stdout, or an empty
+    result if the process could not be started or timed out."""
     try:
         return subprocess.run(arguments, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL).stdout
     except (OSError, subprocess.SubprocessError):
@@ -212,6 +225,8 @@ def listeners(port: int) -> tuple[list[int], str]:
 
 
 def _proc_listeners(port: int) -> list[int]:
+    """Return the sorted process ids whose open socket file descriptors match a listening
+    inode found for port in /proc/net/tcp and /proc/net/tcp6."""
     inodes: set[str] = set()
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
@@ -238,6 +253,8 @@ def _proc_listeners(port: int) -> list[int]:
 
 
 def process_cwd(pid: int) -> str:
+    """Return the working directory of the process identified by pid, read from /proc
+    first and falling back to lsof; give an empty result if neither succeeds."""
     try:
         return os.readlink(f"/proc/{pid}/cwd")
     except OSError:
@@ -250,6 +267,8 @@ def process_cwd(pid: int) -> str:
 
 
 def ancestors(pid: int, limit: int = 32) -> list[int]:
+    """Return the chain of parent process ids above pid, reading /proc/<pid>/stat or
+    falling back to ps, stopping after limit steps, at pid 1, or on a repeat."""
     chain: list[int] = []
     current = pid
     for _ in range(limit):
@@ -265,11 +284,16 @@ def ancestors(pid: int, limit: int = 32) -> list[int]:
 
 
 def temp_folders() -> list[Path]:
+    """Return the real, resolved paths of the system's temporary folders (/tmp,
+    /private/tmp, and the platform default), used to recognize a private copy's
+    working directory."""
     folders = [Path("/tmp"), Path("/private/tmp"), Path(tempfile.gettempdir())]
     return [Path(os.path.realpath(str(folder))) for folder in folders]
 
 
 def _under(path: str, bases: list[Path]) -> bool:
+    """Return whether path, once resolved to its real location, equals one of bases or
+    lies beneath one of them."""
     if not path:
         return False
     resolved = Path(os.path.realpath(path))
@@ -313,5 +337,7 @@ def check(url: str, *, project_roots: list[Path], agent_copy_roots: list[Path], 
 
 
 def _verdict(url: str, verdict: str, reason: str) -> dict[str, Any]:
+    """Produce the location-check result dict combining url, verdict, and reason with the
+    current checked_at timestamp."""
     from harness.board import now
     return {"url": url, "verdict": verdict, "reason": reason, "checked_at": now()}

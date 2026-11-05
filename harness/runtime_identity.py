@@ -16,6 +16,15 @@ from harness import git_process
 _LINEAGE_NS = "8f407d14ed13d0117e7367256ed2a17f"
 
 def _git(root: Path, *args: str) -> str:
+    """Run a git command in root and return its trimmed stdout.
+
+    Args:
+        root: Directory to run the git command in.
+        args: The git subcommand and its arguments.
+
+    Returns:
+        The stripped stdout on success, or an empty string on failure.
+    """
     try:
         completed = git_process.run(
             ["git", *args], cwd=root, capture_output=True, text=True, timeout=5,
@@ -94,6 +103,14 @@ def matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def digest(value: dict[str, Any]) -> str:
+    """Produce a stable hash of value's commit, tree, and source_digest fields.
+
+    Args:
+        value: An identity dict such as one returned by capture().
+
+    Returns:
+        The hex SHA-256 digest of the selected fields, serialized deterministically.
+    """
     fields = {key: value.get(key) for key in ("commit", "tree", "source_digest")}
     return hashlib.sha256(
         json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")

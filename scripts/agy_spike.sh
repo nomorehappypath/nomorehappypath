@@ -26,9 +26,12 @@ AGY="${HARNESS_AGY_BIN:-$(command -v agy || true)}"
 MODEL="${AGY_SPIKE_MODEL:-gemini-3.8-flash-low}"
 PROJ="$WORK/proj"; RUNTIME="$WORK/runtime"; STORE="$WORK/control"
 mkdir -p "$PROJ" "$RUNTIME/.agents/rules" "$STORE"
+# Takes no arguments (reads $WORK). Deletes the spike's scratch work directory; no stdout output.
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
+# Takes the gate's item name, true|false, and evidence text as positional arguments. Prints a
+# "GATE ..." line to stdout, and with --record writes the result via cli_capabilities.
 result() {   # result <item> <true|false> <evidence>
   echo "GATE $1 $2 $3"
   if [ -n "$RECORD" ]; then

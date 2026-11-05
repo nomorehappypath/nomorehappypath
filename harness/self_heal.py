@@ -66,10 +66,12 @@ ROLE_BY_KIND = {"codex_delivery": "the Delivery Agent", "claude_reviewer": "the 
 
 
 def _now() -> datetime:
+    """Return: the current time as a UTC-aware datetime."""
     return datetime.now(timezone.utc)
 
 
 def _parsed(value: Any) -> datetime | None:
+    """Parse value into a UTC-aware datetime, giving None when value is missing or unparseable. Return: the parsed datetime or None."""
     try:
         parsed = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -78,11 +80,13 @@ def _parsed(value: Any) -> datetime | None:
 
 
 def _age(value: Any, current: datetime) -> float | None:
+    """Compute the seconds between the parsed value and current, giving None when value cannot be parsed. Return: the age in seconds."""
     parsed = _parsed(value)
     return None if parsed is None else (current - parsed).total_seconds()
 
 
 def _needs_sign_in(session: dict[str, Any]) -> bool:
+    """Check whether session shows a consent prompt or one of the sign-in/limit words in its attention reason. Return: True if session needs sign-in."""
     reason = str(session.get("attention_reason") or "").lower()
     return attention.needs_consent(session) or any(word in reason for word in SIGN_IN_WORDS)
 
@@ -150,11 +154,13 @@ def _ledger(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _recent_attempts(state: dict[str, Any], key: str, current: datetime) -> int:
+    """Count how many ledger attempts for key in state fall within the hour before current. Return: the count of recent attempts."""
     since = current - timedelta(hours=1)
     return sum(1 for at in _ledger(state)["attempts"].get(key, []) if (_parsed(at) or since) > since)
 
 
 def _gave_up_recently(state: dict[str, Any], key: str, current: datetime) -> bool:
+    """Check whether the ledger in state recorded giving up on key within the hour before current. Return: True if a give-up was recorded recently."""
     at = _parsed(_ledger(state)["gave_up"].get(key))
     return at is not None and at > current - timedelta(hours=1)
 
@@ -326,6 +332,8 @@ def plan(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
 # (requested, stopping, creating, started), every step is idempotent, and the owner is never asked anything.
 # ---------------------------------------------------------------------------
 def _recovery_actions(state: dict[str, Any], control_state: dict[str, Any], current: datetime) -> list[dict[str, Any]]:
+    """Build the review-recovery actions to take right now, walking each review_escalations entry in state, matching
+    it against the live sessions in control_state, and anchoring wait times at current. Return: the list of actions."""
     sessions = {str(item.get("id")): item for item in control_state.get("sessions", [])}
     resumed = _parsed((state.get("project_pause") or {}).get("resumed_at"))
     actions: list[dict[str, Any]] = []
@@ -415,6 +423,8 @@ def _retire_recovery_session(root: Path, key: str, at: str) -> dict[str, Any]:
 
 def _execute_recovery(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]], Any],
                       create: Callable[..., dict[str, Any]] | None) -> dict[str, Any]:
+    """Carry out one review-recovery action against the board at root, using launch to open a staged session and
+    create to make a fresh one when action is review_recovery_create. Return: the outcome dict for action."""
     key, name, at = action["review_key"], action["action"], action.get("at") or _now().isoformat()
     state = board.snapshot(root)
     entry = (state.get("review_escalations") or {}).get(key)
@@ -475,11 +485,13 @@ def _execute_recovery(root: Path, action: dict[str, Any], launch: Callable[[dict
 # The stall ladder (2026-10-15): no stall ends silent, none needs a human.
 # ---------------------------------------------------------------------------
 def _role_words(agent: dict[str, Any]) -> str:
+    """Return: a plain-English phrase naming agent's role (the CTO, the Reviewer, or the Delivery Agent)."""
     role = agent.get("role")
     return "the CTO" if role == "cto" else "the Reviewer" if role == "qa" else "the Delivery Agent"
 
 
 def _stall_key(agent: dict[str, Any]) -> str:
+    """Build the stall-ladder key for agent by combining its role and task. Return: the key string."""
     return f"{agent.get('role')}:{agent.get('task')}"
 
 
@@ -627,6 +639,8 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
 
 
 def _limited(state: dict[str, Any], key: str, current: datetime, action: dict[str, Any]) -> dict[str, Any]:
+    """Apply the hourly cap to action: once state's ledger shows key was attempted too often by current, swap it
+    for a give_up action (or drop it if already given up on). Return: the resulting action dict, possibly empty."""
     if _recent_attempts(state, key, current) >= MAX_ACTIONS_PER_HOUR:
         if _gave_up_recently(state, key, current):
             return {}
@@ -636,6 +650,8 @@ def _limited(state: dict[str, Any], key: str, current: datetime, action: dict[st
 
 
 def _record(root: Path, kind: str, key: str, message: str, **payload: Any) -> None:
+    """Write one board event of kind for key at root, carrying message and any extra payload fields (such as agent_id).
+    Return: nothing; the effect is a locked-state board write."""
     with board.locked_state(root) as state:
         agent = (state.get("agents") or {}).get(payload.get("agent_id", ""))
         board._event(state, kind, agent, {"task": (agent or {}).get("task", ""), "self_heal_key": key, "message": message, **payload})
@@ -785,11 +801,14 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
 
 
 def _minutes(seconds: Any) -> str:
+    """Format seconds as a human-readable minute count, never less than one minute. Return: a string like '5 minutes'."""
     minutes = max(int(seconds or 0) // 60, 1)
     return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def _ladder_event(root: Path, action: dict[str, Any], step: str, message: str, **extra: Any) -> None:
+    """Record an agent_stall_step board event at root for action, tagging it with step, message, and any extra fields.
+    Return: nothing; the effect is a board write."""
     _record(root, "agent_stall_step", action["self_heal_key"], message, agent_id=action.get("agent_id", ""),
             step=step, role_kind=action.get("kind", ""), **extra)
 
@@ -805,6 +824,7 @@ def _mark_stop(root: Path, key: str, stopped: dict[str, Any]) -> None:
 
 
 def _set_ladder(root: Path, key: str, **fields: Any) -> dict[str, Any]:
+    """Merge fields into the stall_ladder entry for key at root, creating the entry if it is absent. Return: the updated entry dict."""
     with board.locked_state(root) as state:
         entry = state.setdefault("stall_ladder", {}).setdefault(key, {})
         entry.update(fields)
@@ -1004,6 +1024,8 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
 
 
 def _relaunch(root: Path, session_id: str, launch: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
+    """Stage session_id for relaunch at root and, once it is ready, mark it launch-requested and call launch to open it.
+    Return: a dict describing the relaunch outcome for session_id."""
     staged = control.prepare_resume_sessions(root, [session_id])
     if not staged or staged[0].get("action") not in {"relaunch", "awaiting_attachment"}:
         return {"action": "relaunch", "session_id": session_id, "skipped": (staged or [{}])[0].get("action", "missing")}

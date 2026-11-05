@@ -78,6 +78,17 @@ end run'''
 
 
 def _log(path: str, title: str, window: str, reason: str) -> None:
+    """Append one timestamped line noting that the window was left open and why.
+
+    Args:
+        path: The log file to append to; nothing is written if path is empty.
+        title: The window's custom title, for the log line.
+        window: The window id, or empty if it is not known.
+        reason: Why the window was left open.
+
+    Returns:
+        None.
+    """
     if not path:
         return
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -89,6 +100,16 @@ def _log(path: str, title: str, window: str, reason: str) -> None:
 
 
 def _osascript(script: str, arguments: list[str], timeout: float) -> str:
+    """Run an AppleScript via osascript with the given arguments and return its stdout.
+
+    Args:
+        script: The AppleScript source to run.
+        arguments: The positional arguments passed to the script's run handler.
+        timeout: The maximum seconds to let osascript run before raising.
+
+    Returns:
+        The stripped stdout text produced by the script.
+    """
     result = subprocess.run(
         ["/usr/bin/osascript", "-e", script, *arguments],
         capture_output=True, text=True, check=False, timeout=timeout, stdin=subprocess.DEVNULL,
@@ -129,6 +150,18 @@ def close_after_exit(log: str, title: str, exit_code: int, stdin_fd: int = 0) ->
 
 
 def _closer(window: str, tty: str, closing: str, log: str, title: str) -> None:
+    """Run the detached CLOSE_SCRIPT against window and log a line if it was left open.
+
+    Args:
+        window: The Terminal window id to close.
+        tty: The tty the agent's tab must still hold to be closed.
+        closing: The closing-suffix title the tab must still hold to be closed.
+        log: The log file to record a "left open" or failure reason to.
+        title: The window's original title, for the log line.
+
+    Returns:
+        None.
+    """
     try:
         answer = _osascript(CLOSE_SCRIPT, [window, tty, closing], CLOSER_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -139,6 +172,14 @@ def _closer(window: str, tty: str, closing: str, log: str, title: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and either run the detached closer or the initial lookup-and-spawn step.
+
+    Args:
+        argv: The command-line arguments to parse, or None to use sys.argv.
+
+    Returns:
+        0 always.
+    """
     parser = argparse.ArgumentParser(description="Close this agent view's Terminal window after the view ended")
     parser.add_argument("--log", default="")
     parser.add_argument("--title", default="")

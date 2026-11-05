@@ -146,7 +146,7 @@ class LifecycleInstrumentationTests(unittest.TestCase):
                 root, "development", board.AWAITING_OWNER_DIRECTION,
                 vendor="OpenAI", session_id=session["id"],
             )
-            board.record_owner_direction(root, session["id"], "Instrument the lifecycle")
+            board.record_owner_direction(root, session["id"], "Instrument the lifecycle", allow_split=True)
             board.begin_task(root, developer["id"], "TASK")
             agreed_requirements(root, developer["id"], "Instrument and verify each phase.")
             contract.create_contract(root, "TASK", "Instrument the lifecycle", ["telemetry"])

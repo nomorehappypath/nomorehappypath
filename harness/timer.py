@@ -19,6 +19,7 @@ SCHEDULER_SCRIPT = Path(__file__).with_name("scheduler.py").resolve()
 
 
 def _python_executable(value: str | None) -> str:
+    """Resolve value (or sys.executable when value is None) to an absolute, existing interpreter path. Return that resolved path as a string, or raise ValueError when no executable file can be located."""
     candidate = value or sys.executable
     located = candidate if Path(candidate).is_absolute() else shutil.which(candidate)
     if not located:
@@ -30,6 +31,7 @@ def _python_executable(value: str | None) -> str:
 
 
 def command(root: ProjectRoot, profile: Path, python: str | None = None) -> str:
+    """Build the shell command that runs the scheduler against root's code directory using profile and the python interpreter. Return the assembled shell command string."""
     context = project_context(root)
     root_arg = shlex.quote(str(context.code_root))
     profile_arg = shlex.quote(str(Path(profile).resolve()))
@@ -39,6 +41,7 @@ def command(root: ProjectRoot, profile: Path, python: str | None = None) -> str:
 
 
 def cron(root: ProjectRoot, profile: Path, interval_minutes: int, python: str | None = None) -> str:
+    """Build a crontab line that runs the scheduler command for root, profile, and python every interval_minutes, logging to the watch log. Return the crontab line, or raise ValueError when interval_minutes is not a positive divisor of 60."""
     if interval_minutes <= 0 or 60 % interval_minutes:
         raise ValueError("interval_minutes must be a positive divisor of 60")
     log = shlex.quote(str(project_context(root).storage_path("board", "watch.log")))
@@ -46,6 +49,7 @@ def cron(root: ProjectRoot, profile: Path, interval_minutes: int, python: str | 
 
 
 def launchd(root: ProjectRoot, profile: Path, interval_seconds: int, label: str, python: str | None = None) -> str:
+    """Build a launchd plist XML string, named by label, that runs the scheduler for root and profile every interval_seconds using the python interpreter. Return the plist text, or raise ValueError when interval_seconds is not positive."""
     if interval_seconds <= 0:
         raise ValueError("interval_seconds must be positive")
     context = project_context(root)
@@ -66,6 +70,7 @@ def launchd(root: ProjectRoot, profile: Path, interval_seconds: int, label: str,
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse argv to choose a cron or launchd timer and print the rendered output. Return the process exit code."""
     parser = argparse.ArgumentParser(description="Render Dev Harness board-watch timers")
     add_context_arguments(parser)
     parser.add_argument("--python", default=sys.executable)

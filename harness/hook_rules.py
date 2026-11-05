@@ -50,6 +50,7 @@ def _set_aside(match: "re.Match[str]") -> str:
 
 
 def _without_file_heredocs(command: str) -> str:
+    """Strip file-writing heredocs out of command so later rule checks skip their body text. Return: the command with each matched heredoc replaced by its opening line alone (via _set_aside), unless that heredoc body still runs a command substitution."""
     return HEREDOC_TO_FILE.sub(_set_aside, command)
 
 
@@ -61,10 +62,12 @@ CREDENTIAL_FILES = (".codex/auth.json", ".claude/.credentials.json", "/.credenti
 
 
 def _text(value: Any) -> str:
+    """Coerce value to a plain string for safe pattern matching. Return: value itself when it is already a str, otherwise an empty string."""
     return value if isinstance(value, str) else ""
 
 
 def _inside(path: str, roots: list[str]) -> bool:
+    """Check whether path, once expanded and resolved to its real filesystem location, falls inside any of roots. Return: False when path is empty or lies outside every root, True when it equals or is nested under one of the resolved roots."""
     if not path:
         return False
     real = os.path.realpath(os.path.expanduser(path))
@@ -105,4 +108,5 @@ def evaluate(role: str, tool_name: str, tool_input: dict[str, Any], *, project_r
 
 
 def project_roots_for(code_root: str | Path, workspace_root: str | Path) -> list[str]:
+    """Build the list of roots evaluate() checks a write target against, combining code_root and workspace_root. Return: a list containing the string form of code_root followed by the string form of workspace_root."""
     return [str(code_root), str(workspace_root)]

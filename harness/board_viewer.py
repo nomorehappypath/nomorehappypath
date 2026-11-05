@@ -207,7 +207,7 @@ PAGE = r"""<!doctype html>
 <dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Up to 5 files, 10 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
-<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
+<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label id="owner-message-split" class="task-kind-note" hidden><input type="checkbox" id="owner-message-allow-split"> Allow Delivery to split this task into parts that are each reviewed on their own. Leave it off for one build and one review.</label><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
 <dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
@@ -1734,6 +1734,7 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
 function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
   directionLauncher=false; setAttachmentFields(true); setTaskKindField(type==='direction');
+  {const split=el('#owner-message-split');if(split){split.hidden=type!=='direction';el('#owner-message-allow-split').checked=false;}}   // off unless the owner ticks it: the app never splits a task on its own (owner 2026-11-04)
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -1749,11 +1750,11 @@ async function submitOwnerMessage(event){
   let validated;try{validated=validateOwnerMessageText(el('#owner-message-text').value);}catch(failure){error.textContent=failure.message;return false;}
   if(directionLauncher){
     // No Delivery agent exists yet: keep the words, start the three agents with the owner's saved launch settings, then send.
-    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),savedAt:Date.now()});
+    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now()});
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
   }
-  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('task_kind',selectedTaskKind()); if(selectedTaskKind()==='spec')form.append('document_only','1'); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
+  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('task_kind',selectedTaskKind()); if(selectedTaskKind()==='spec')form.append('document_only','1'); form.append('allow_split',el('#owner-message-allow-split')?.checked?'1':''); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
   for(const file of Array.from(el('#owner-message-attachments').files||[]))form.append('attachments',file,file.name);
   const submit=el('#owner-message-submit'); submit.disabled=true; error.textContent='';
   try{
@@ -2139,13 +2140,18 @@ function renderTimeline(story){
   }else if(!tl||tl.error||!(tl.steps||[]).length){
     html='<h2 id="story-timeline-title">The story of this task</h2><p class="mc-hint">The step list could not be shown just now. Everything else on this page still works.</p>';
   }else{
-    const rows=tl.steps,shown=rows.filter(row=>!row.fold),skipped=rows.filter(row=>row.fold==='skipped'),later=rows.filter(row=>row.fold==='later');
+    const rows=tl.steps,shown=rows.filter(row=>!row.fold),skipped=rows.filter(row=>row.fold==='skipped'),later=rows.filter(row=>row.fold==='later'),ifNeeded=rows.filter(row=>row.fold==='if_needed');
+    // a task split into parts: say what the number is made of, so "N more steps" is never a bare surprise (owner 2026-11-04)
+    const partsLeft=Number((tl.counts||{}).parts_left||0);
+    const laterLabel=later.length===1?'1 more step to come':partsLeft?`${later.length} more steps to come: ${partsLeft===1?'1 more part':partsLeft+' more parts'} still to build, test and review, then the final steps`:later.length+' more steps to come';
+    const ifNeededLabel=ifNeeded.length===1?'1 step only if a review fails':ifNeeded.length+' steps only if a review fails: repair and a second round';
     const problem=c.exception;
     html=`<h2 id="story-timeline-title">The story of this task</h2>`
       +(problem?`<div class="mc-attention" role="alert" data-story-attention><strong>Needs attention first</strong>${esc(problem.reason)} ${esc(problem.action)}</div>`:'')
       +`<p class="mc-hint">Select a step to see what happened.</p><ol class="mc-steps" aria-labelledby="story-timeline-title" data-story-steps>${timelineListHtml(shown,c.task)}</ol>`
       +(skipped.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-skipped" data-fold="skipped"><summary>${skipped.length===1?'1 step not needed':skipped.length+' steps not needed'}</summary><ol class="mc-steps">${timelineListHtml(skipped,c.task)}</ol></details>`:'')
-      +(later.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-later" data-fold="later"><summary>${later.length===1?'1 more step to come':later.length+' more steps to come'}</summary><ol class="mc-steps">${timelineListHtml(later,c.task)}</ol></details>`:'');
+      +(later.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-later" data-fold="later"><summary>${laterLabel}</summary><ol class="mc-steps">${timelineListHtml(later,c.task)}</ol></details>`:'')
+      +(ifNeeded.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-ifneeded" data-fold="if_needed"><summary>${ifNeededLabel}</summary><ol class="mc-steps">${timelineListHtml(ifNeeded,c.task)}</ol></details>`:'');
   }
   writeHtml(node,html);
 }
@@ -2450,7 +2456,7 @@ async function advanceDirectionStart(){
     const sessionHasDirection=agent=>Boolean((state.owner_directions||{})[agent.session_id]?.text);
     const waiting=developerAgents(state).find(agent=>agent.task==='AWAITING_OWNER_DIRECTION'&&!sessionHasDirection(agent));
     if(waiting){
-      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec'});
+      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec',allow_split:pending.allowSplit===true});
       writePendingDirection(null); renderDirectionNote(null);
       el('#notice').textContent='Your complete direction was sent to Delivery.';
       await startMissingAgents(); return;
@@ -2870,6 +2876,7 @@ def rendered_page(project_name: str = "", project_description: str = "", manager
 
 
 def payload(root: Path) -> dict:
+    """Build the JSON payload for root by taking a fresh board snapshot. Return a dict with the current timestamp and state."""
     state = board.snapshot(root)
     return {"updated": board.now(), "state": state}
 
@@ -3137,6 +3144,7 @@ def _task_names_from_state(state: dict, contracts: dict) -> set[str]:
 
 
 def _task_requests(state: dict, task: str) -> list[dict]:
+    """Collect every QA request for task found in state's live, archived, and indexed stores. Return the combined list with duplicates by id removed."""
     current = [value for value in (state.get("qa_requests") or {}).values() if value.get("task") == task]
     archived = [
         entry.get("value", {})
@@ -3188,6 +3196,7 @@ def _safe_owner_description(value: object) -> str:
 
 
 def _path_within(path: Path, roots: list[Path]) -> bool:
+    """Check whether the resolved path falls inside any of the given roots. Return True on the first match, False otherwise."""
     try:
         resolved = path.resolve(strict=False)
     except OSError:
@@ -3202,6 +3211,7 @@ def _path_within(path: Path, roots: list[Path]) -> bool:
 
 
 def _task_evidence_roots(root: Path, state: dict, task: str) -> list[Path]:
+    """Gather the directories under root where task's evidence may live, including the code and data roots plus any task or subtask workspaces recorded in state. Return the list of candidate paths."""
     context = project_context(root)
     values = [context.code_root, context.data_root]
     workspace = (state.get("task_workspaces") or {}).get(task)
@@ -3312,6 +3322,7 @@ def _scenario_rows_for_view(path: Path) -> list[dict[str, str]]:
 
 
 def _review_cycle(request: dict) -> int:
+    """Read the review cycle number out of request. Return a non-negative int, defaulting to 0 when the value is missing or malformed."""
     try:
         return max(0, int(request.get("cycle", 0)))
     except (TypeError, ValueError):
@@ -3329,6 +3340,7 @@ def _read_verified_ledger_rows(path: Path, expected_digest: object = "") -> list
 
 
 def _ledger_sort_key(request):
+    """Build the sort key tuple for ordering ledger request entries chronologically. Return a tuple of the request's timestamp, final-acceptance flag, and review cycle."""
     return (
         str(request.get("requested_at") or request.get("completed_at") or ""),
         request.get("phase") == "final_acceptance",
@@ -3364,6 +3376,7 @@ def _ledger_rows_for_request(root: Path, state: dict, task: str, request: dict, 
 
 
 def _checklist_section(rows: list[dict[str, str]], bundle: object, *, evidence_allowed: bool = True, root: Path | None = None) -> dict:
+    """Combine the ledger rows with verified outcomes from bundle under root, honoring evidence_allowed to decide whether outcomes may be applied. Return a dict with the section state and the per-scenario status list."""
     outcomes, exception_ids = _verified_scenario_outcomes(bundle, root) if evidence_allowed else ({}, set())
     scenarios: list[dict[str, str]] = []
     for row in rows:
@@ -3505,6 +3518,7 @@ def _task_test_ledgers(root: Path, state: dict, task: str) -> list:
 
 
 def _reviewer_request_for_agent(state: dict, agent: dict) -> dict | None:
+    """Find the QA request that agent currently owns as reviewer within state, whether claimed, reserved, or routed. Return the most recent eligible request, or None when no request is assigned."""
     eligible = [
         request for request in (state.get("qa_requests") or {}).values()
         if (
@@ -3773,6 +3787,7 @@ ORPHAN_SESSION_GRACE_SECONDS = 900
 
 
 def _session_age_seconds(session: dict) -> float:
+    """Compute how many seconds have elapsed since session was created. Return that age, or 0.0 when the created_at timestamp is missing or unparseable."""
     try:
         created = datetime.fromisoformat(str(session.get("created_at", "")))
     except ValueError:
@@ -4099,6 +4114,7 @@ def serve_findings_report(root: Path, path: str) -> tuple[int, bytes, str]:
     from the commit the release names, so nothing in the working folder and no other path can be reached.
     """
     def refuse(status: int, reason: str) -> tuple[int, bytes, str]:
+        """Build a plain-text refusal response carrying status and reason. Return the (status, body, media type) tuple for serve_findings_report to give back."""
         return status, reason.encode("utf-8"), "text/plain; charset=utf-8"
     task = unquote(path[len("/api/releases/"):-len("/findings")])
     state = board.snapshot(root)
@@ -4117,6 +4133,7 @@ def serve_findings_report(root: Path, path: str) -> tuple[int, bytes, str]:
 def serve_owner_document(root: Path, path: str) -> tuple[int, bytes, str]:
     """GET /api/deliverables/<project ref>/<task>/<deliverable index>/<evidence index> -> (status, body, media type)."""
     def refuse(reason: str) -> tuple[int, bytes, str]:
+        """Build a JSON 404 refusal response carrying reason. Return the (status, body, media type) tuple for serve_owner_document to give back."""
         return 404, json.dumps({"error": reason}).encode("utf-8"), "application/json; charset=utf-8"
     parts = path[len("/api/deliverables/"):].split("/")
     if len(parts) != 4:
@@ -4150,6 +4167,7 @@ def open_build_download(root: Path, path: str) -> tuple[int, bytes, tuple[int, i
     from harness import build_collection
 
     def refuse(status: int, reason: str) -> tuple[int, bytes, None]:
+        """Build a JSON refusal response carrying status and reason, with no file descriptor. Return the (status, body, None) tuple for open_build_download to give back."""
         return status, json.dumps({"error": reason}).encode("utf-8"), None
     parts = path[len("/api/builds/"):].split("/")
     if len(parts) != 2:
@@ -4461,7 +4479,7 @@ def parse_release_multipart(raw: bytes, content_type: str) -> tuple[dict[str, st
             })
         elif name in {
             "decision", "reason", "text", "message_type",
-            "directive_source", "directive_filename", "document_only", "task_kind",
+            "directive_source", "directive_filename", "document_only", "task_kind", "allow_split",
         }:
             try:
                 fields[name] = data.decode("utf-8", errors="strict")
@@ -4486,6 +4504,7 @@ def normalize_owner_message_text(text: str) -> tuple[str, int]:
 
 
 def owner_message_input(fields: dict[str, str]) -> tuple[str, dict[str, object]]:
+    """Validate and normalize submitted owner-message fields, checking the text content and the optional directive source/filename. Return the normalized text together with a metadata dict describing the input; raise ValueError on any invalid field."""
     text, size = normalize_owner_message_text(fields.get("text", ""))
     source = str(fields.get("directive_source", "text") or "text").strip().lower()
     filename = str(fields.get("directive_filename", "") or "")
@@ -4512,21 +4531,25 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                  settings_home: Path | None = None, ready_token: str = "", project_id: str = "",
                  chat_action_token: str = "", runtime: dict | None = None,
                  api_prefix: str = "", worker_health=None):
+    """Build the HTTP request handler class bound to root and the given project/runtime settings (project_name, project_description, manager_url, settings_home, ready_token, project_id, chat_action_token, api_prefix, worker_health). Return the Handler class for use by the HTTP server."""
     runtime = runtime or runtime_identity.PROCESS
     class Handler(BaseHTTPRequestHandler):
         def end_headers(self):
+            """Add the anti-framing headers before sending the rest of the response headers. Returns nothing; the effect is that every response carries the frame-guard headers."""
             # Never shown inside another site's frame (finding 4).
             for name, value in web_guard.FRAME_HEADERS:
                 self.send_header(name, value)
             super().end_headers()
 
         def refused(self) -> bool:
+            """Check the current request against the web guard's refusal rules and send a 403 JSON error if refused. Return True when the request was refused, False otherwise."""
             reason = web_guard.request_refusal(self.command, self.headers, str(self.server.server_address[0]))
             if reason:
                 self.send_json(403, {"error": reason})
             return bool(reason)
 
         def send_json(self, status: int, value: dict):
+            """Write value as a JSON response body with status and no-store caching. Returns nothing; the effect is that the response is sent to the client."""
             body = json.dumps(value).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -4536,6 +4559,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
             self.wfile.write(body)
 
         def do_GET(self):
+            """Dispatch an incoming GET request to the matching API or page route. Returns nothing; the output is written directly to the response stream."""
             if self.refused():
                 return
             path = urlparse(self.path).path
@@ -4704,6 +4728,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
             self.wfile.write(body)
 
         def do_POST(self):
+            """Dispatch an incoming POST request to the matching API action route. Returns nothing; the output is written directly to the response stream."""
             if self.refused():
                 return
             path = urlparse(self.path).path
@@ -4868,6 +4893,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             fields.get("message_type", "direction"), attachments,
                             document_only=str(fields.get("document_only", "")).strip().lower() in {"1", "true", "on", "yes"},
                             task_kind=str(fields.get("task_kind", "")),
+                            allow_split=str(fields.get("allow_split", "")).strip().lower() in {"1", "true", "on", "yes"},
                         )
                     else:
                         if length > 128 * 1024:
@@ -4882,6 +4908,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             str(data.get("message_type", "direction")), [],
                             document_only=data.get("document_only") is True,
                             task_kind=str(data.get("task_kind", "")),
+                            allow_split=data.get("allow_split") is True,
                         )
                     response["input"] = input_metadata
                     self.send_json(201, response); return
@@ -4988,6 +5015,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 self.send_json(500, {"error": str(error)})
 
         def log_message(self, *_):
+            """Suppress the base handler's default per-request access logging; the ignored varargs are received as _. Return: nothing, since all logging output is discarded."""
             return
 
     return Handler
@@ -4996,6 +5024,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
 def serve(root: Path, host: str = "127.0.0.1", port: int = 8742,
           project_name: str = "", project_description: str = "", manager_url: str = "",
           settings_home: Path | None = None, ready_token: str = "", project_id: str = "") -> None:
+    """Run the live board HTTP server on host and port for root, recovering pending git transactions and ledgers first and wiring project_name, project_description, manager_url, settings_home, ready_token, and project_id into the handler. Returns nothing; the effect is that the process blocks serving requests until interrupted."""
     board.recover_git_transactions(root)
     board.certify_legacy_review_ledgers(root)
     release_coordinator.coordinate(root)
@@ -5015,6 +5044,7 @@ def serve(root: Path, host: str = "127.0.0.1", port: int = 8742,
 
 
 def main(argv=None) -> int:
+    """Parse argv as the command-line entry point and launch the live board server with the resulting settings. Return the process exit status code."""
     parser = argparse.ArgumentParser(description="Live zero-config NoMoreHappyPath board display")
     add_context_arguments(parser)
     parser.add_argument("--host", default="127.0.0.1")

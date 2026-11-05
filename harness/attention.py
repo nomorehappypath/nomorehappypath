@@ -111,6 +111,7 @@ def limit_reason(provider: str | None) -> str:
 
 
 def is_limit_reason(reason: str | None) -> bool:
+    """Whether reason is the usage-limit marker text. Return: True when LIMIT_REASON_MARK appears in reason, else False."""
     return LIMIT_REASON_MARK in str(reason or "")
 
 
@@ -297,6 +298,8 @@ def needs_sign_in(session: dict | None) -> bool:
     Nothing routed to such a session can run until the owner signs it in
     again, so the board stops routing to it (2026-09-27 backlog #8). The state
     clears by itself when the prompt leaves the screen after /login.
+
+    Return: True when session's attention reason mentions /login or Gemini's sign-in message.
     """
     reason = str((session or {}).get("attention_reason") or "")
     return "/login" in reason or GEMINI_SIGN_IN_REASON in reason
@@ -320,6 +323,7 @@ def needs_owner(session: dict | None) -> bool:
 
 
 def owner_block(session: dict | None) -> str:
+    """Which owner-only block, if any, holds this session. Return: "sign_in", "quota", "consent", or "" when session is not blocked."""
     return "sign_in" if needs_sign_in(session) else ("quota" if has_quota_block(session) else ("consent" if needs_consent(session) else ""))
 
 
@@ -363,6 +367,7 @@ def limit_sentence(role: str, session: dict | None, now: datetime | None = None)
 
 
 def _parsed(value: str) -> datetime:
+    """Parse value as an ISO datetime. Return: the parsed datetime, or the epoch (1970-01-01 UTC) when value cannot be parsed."""
     try:
         return datetime.fromisoformat(value)
     except ValueError:
@@ -434,6 +439,7 @@ class Screen:
     """
 
     def __init__(self, height: int = DEFAULT_HEIGHT) -> None:
+        """Start a blank one-row screen with height rows (DEFAULT_HEIGHT when height is falsy or less than 2). Returns nothing; the effect is to set up rows, cursor position, and the pending-bytes buffers."""
         self.rows: list[str] = [""]
         self.row = 0
         self.col = 0
@@ -450,6 +456,7 @@ class Screen:
 
     # -- geometry helpers -------------------------------------------------
     def _ensure_row(self) -> None:
+        """Keep the cursor row within the screen's height, scrolling off top rows as needed. Returns nothing; the effect is on self.rows and self.row."""
         # Clamp BEFORE allocating: a cursor sent a million rows down is at the
         # bottom of the screen, not a million rows away (reviewer finding,
         # round 3: CSI 1000000 L allocated 16 MB before the height applied).
@@ -464,6 +471,7 @@ class Screen:
             self.row = max(0, self.row - overflow)
 
     def _write(self, text: str) -> None:
+        """Overwrite the current row at the cursor column with text, as a real terminal does. Returns nothing; the effect is on self.rows and self.col."""
         self._ensure_row()
         line = self.rows[self.row]
         if self.col > len(line):
@@ -473,6 +481,7 @@ class Screen:
         self.col = min(self.col + len(text), MAX_COLS)
 
     def _erase_line(self, mode: int) -> None:
+        """Erase part of the current row per the CSI EL mode: 0 from cursor to end, 1 from start to cursor, else the whole line. Returns nothing; the effect is on self.rows."""
         self._ensure_row()
         line = self.rows[self.row]
         if mode == 0:
@@ -483,6 +492,7 @@ class Screen:
             self.rows[self.row] = ""
 
     def _erase_display(self, mode: int) -> None:
+        """Erase part of the screen per the CSI ED mode: 0 from cursor to end, 1 from start to cursor, else the whole screen. Returns nothing; the effect is on self.rows."""
         self._ensure_row()
         if mode == 0:
             self._erase_line(0)
@@ -495,6 +505,7 @@ class Screen:
             self.clear()
 
     def clear(self) -> None:
+        """Reset the screen to a single blank row with the cursor at the origin. Returns nothing; the effect is on self.rows, self.row, and self.col."""
         self.rows = [""]
         self.row = 0
         self.col = 0
@@ -502,6 +513,7 @@ class Screen:
     # -- input ------------------------------------------------------------
     @staticmethod
     def _param(params: str, index: int, default: int) -> int:
+        """Read the integer at index in the semicolon-separated params string, falling back to default when missing or unparsable. Return: the value clamped to [0, 1_000_000]."""
         parts = params.split(";")
         try:
             value = int(parts[index]) if index < len(parts) and parts[index] else default
@@ -516,9 +528,11 @@ class Screen:
         return min(max(1, self._param(params, index, 1)), self.height)
 
     def _cols(self, params: str, index: int = 0) -> int:
+        """A column count from params at index, clamped between 1 and MAX_COLS. Return: what a real terminal would move or write by."""
         return min(max(1, self._param(params, index, 1)), MAX_COLS)
 
     def feed(self, data: bytes) -> None:
+        """Decode data (joined with any held-back partial bytes), hold back an incomplete trailing multibyte character or escape sequence, and apply each resulting token (text, control character, or CSI) to the screen. Returns nothing; the effect is on self.rows, self.row, and self.col."""
         data = self._partial + data
         text = data.decode("utf-8", errors="replace")
         # A multibyte character split across reads would decode as U+FFFD;
@@ -556,6 +570,7 @@ class Screen:
                 self._csi(match.group("csi_params"), match.group("csi_final"))
 
     def _csi(self, params: str, final: str) -> None:
+        """Apply one CSI control sequence (params and its final letter) to the screen: cursor moves, absolute positioning, erase, insert/delete lines, or the alternate-screen toggle. Returns nothing; the effect is on self.rows, self.row, and self.col."""
         if params.startswith("?"):
             # Alternate screen on/off: a new, empty screen either way.
             if final in "hl" and params[1:] in {"1049", "47", "1047"}:
@@ -602,6 +617,7 @@ class Screen:
         # Colours, cursor save/restore, scroll regions and the rest: ignored.
 
     def text(self) -> str:
+        """Render the visible screen as plain text. Output: the rows joined by newlines, each with its terminal sequences stripped."""
         return "\n".join(strip_terminal_sequences(row) for row in self.rows)
 
 
@@ -623,6 +639,7 @@ class PromptWatch:
 
     def __init__(self, height: int | None = None, provider: str = "",
                  clock: Callable[[], datetime] | None = None) -> None:
+        """Start a watch over a new Screen of height rows for provider, using clock (default: the local wall clock) to time incidents. Returns nothing; the effect is to set up self.screen and the visible/reason/incident state."""
         self.screen = Screen(height or DEFAULT_HEIGHT)
         self.provider = str(provider or "").lower()
         self.clock = clock or (lambda: datetime.now().astimezone())
@@ -631,6 +648,7 @@ class PromptWatch:
         self.incident: dict | None = None
 
     def resize(self, height: int | None) -> tuple[str, str | None] | None:
+        """The terminal changed size to height rows; resize the underlying screen and re-check it for a prompt. Return: ("waiting", reason), ("cleared", None), or None, as _reconcile reports."""
         self.screen.resize(height)
         return self._reconcile()
 
@@ -652,6 +670,7 @@ class PromptWatch:
         return True
 
     def _reconcile(self) -> tuple[str, str | None] | None:
+        """Check the current screen text against the usage-limit and prompt-form detectors, update self.visible, self.reason, and self.incident. Return: ("waiting", reason) when a new or changed prompt appears, ("cleared", None) when one just left the screen, otherwise None."""
         observed = self.clock()
         text = self.screen.text()
         found = detect_limit(text, self.provider, observed) if self.provider in LIMIT_PATTERNS else None
@@ -684,6 +703,8 @@ class PromptWatch:
         """The owner answered in the terminal: whatever was waiting is now theirs.
 
         Not a usage-limit message: typing does not prove the allowance is back, so that reason stays until the line leaves the screen.
+
+        Return: ("cleared", None) when a non-limit reason was cleared, otherwise None.
         """
         if self.reason and not is_limit_reason(self.reason):
             self.reason = None

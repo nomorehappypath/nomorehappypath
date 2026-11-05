@@ -135,6 +135,7 @@ class _OwnerKeyClassifier:
     """
 
     def __init__(self) -> None:
+        """Set up an empty classifier state with no pending fragment or provisional keys. Returns none."""
         self.fragment = b""
         self.fragment_at = 0.0
         self.provisional = b""        # bytes counted as keys on timeout, still extendable
@@ -157,6 +158,8 @@ class _OwnerKeyClassifier:
         return self._classify(data, now)
 
     def _classify(self, data: bytes, now: float) -> bool:
+        """Scan data (joined with any carried-over fragment from a prior read, using now as its arrival time) for owner key
+        sequences versus terminal replies. Return: True when at least one owner keystroke was found."""
         buffer = self.fragment + data
         started = self.fragment_at if self.fragment else now
         self.fragment = b""
@@ -231,6 +234,7 @@ def _fresh_launch(root: Path, session_id: str) -> bool:
 
 
 def _write(fd: int, data: bytes) -> None:
+    """Write all of data to fd, looping until every byte is accepted. Returns nothing (none); the effect is a complete write."""
     while data:
         written = os.write(fd, data)
         data = data[written:]
@@ -307,6 +311,7 @@ def _maybe_nudge_limit(root: Path, session_id: str, watch, attempts: dict[str, i
         return False
 
     def not_sent(reason: str) -> bool:
+        """Record that the nudge was withheld, with reason, and return False."""
         try:
             control.record_limit_nudge(root, session_id, sent=False, note=reason)
         except (ValueError, OSError):
@@ -542,6 +547,7 @@ def _terminal_rows(fd: int) -> int | None:
 
 
 def _make_controlling_terminal() -> None:
+    """Start a new session and make the current terminal its controlling terminal. Returns nothing (none)."""
     os.setsid()
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
@@ -779,6 +785,7 @@ def _turn_state(root: Path, session_id: str) -> tuple[str, float]:
 
 
 def _plumbing_event(root: Path, agent_id: str, kind: str, message: str) -> None:
+    """Record one Stage 3 plumbing event (kind, message) for agent_id under root, swallowing a storage failure. Returns none."""
     try:
         board.record_plumbing_event(root, agent_id, kind, message)
     except (ValueError, OSError):
@@ -826,6 +833,17 @@ def run(
     gemini_delivery: bool = False, conversation_wait: float = 1800.0, codex_expected_policy: dict | None = None, busy_wait: float = 900.0,
     receipt_timeout: float = 30.0, response_timeout: float = 20.0, codex_launch: dict | None = None,
 ) -> int:
+    """Supervise one visible interactive CLI terminal under local harness control until it exits.
+
+    Launches command as agent_id's session_id under root, recording owner input and transcript via conversation, and
+    delivers queued controller messages back into the real terminal (closing it on exit when close_terminal_on_exit is
+    set). provider identifies the CLI (codex/claude/gemini) and execution_root and runtime_directory locate its working
+    files; codex_app_server and codex_launch carry Codex's private app-server command and launch policy, and
+    codex_expected_policy is the permission policy the app-server must report. claude_inbox and gemini_delivery pick each
+    provider's message-delivery mode. conversation_wait, busy_wait, receipt_timeout, and response_timeout bound how long
+    the supervisor waits on conversation state, a busy CLI, a delivery receipt, and a response before falling back.
+    Return: the child process's exit code.
+    """
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive supervisor requires a real Terminal")
     stdin_fd, stdout_fd = sys.stdin.fileno(), sys.stdout.fileno()
@@ -853,12 +871,15 @@ def run(
     first_turn_settled = False
 
     def _note_first_turn(value: bool) -> bool:
+        """Latch first_turn_settled true once value is true, and give value back unchanged."""
         nonlocal first_turn_settled
         first_turn_settled = first_turn_settled or value
         return value
     controller_queue: list[dict] = []
 
     def note_attention(change: tuple[str, str | None] | None) -> None:
+        """Apply an attention-watch change (a (kind, reason) pair, or None for no change) to input_held, returning
+        queued controller messages to the board when a blocking menu takes over. Returns nothing (none)."""
         nonlocal input_held
         if not change:
             return
@@ -909,6 +930,7 @@ def run(
         event_lock = _threading.Lock()
 
         def stage3_event(kind: str, detail: str) -> None:
+            """Record one Stage 3 app-server event (kind, detail) under the shared lock. Returns none."""
             with event_lock:
                 stage3["events"].append((kind, detail))
 
@@ -945,10 +967,12 @@ def run(
         stage3["stage"] = "stage3_claude_socket_delivery"
 
         def stage3_event(kind: str, detail: str) -> None:
+            """Record one Stage 3 inbox event (kind, detail) under the shared lock. Returns none."""
             with event_lock:
                 stage3["events"].append((kind, detail))
 
         def command_of(pid: int) -> str:
+            """Return the command line of process pid, or an empty string when it cannot be looked up."""
             try:
                 return str((platform_support.process_identity().process_table().get(pid) or {}).get("command", ""))
             except OSError:
@@ -981,10 +1005,12 @@ def run(
         stage3["stage"] = "stage3_gemini_delivery"
 
         def stage3_event(kind: str, detail: str) -> None:
+            """Record one Stage 3 Gemini delivery event (kind, detail) under the shared lock. Returns none."""
             with event_lock:
                 stage3["events"].append((kind, detail))
 
         def command_of(pid: int) -> str:
+            """Return the command line of process pid, or an empty string when it cannot be looked up."""
             try:
                 return str((platform_support.process_identity().process_table().get(pid) or {}).get("command", ""))
             except OSError:
@@ -1055,10 +1081,13 @@ def run(
     resize_pending = False
 
     def request_stop(_signal, _frame):
+        """Signal handler: mark that a termination signal (_signal, caught at frame _frame) was received. Returns none."""
         nonlocal stop_requested
         stop_requested = True
 
     def resize(_signal, _frame):
+        """Signal handler: note that the terminal was resized (_signal, caught at frame _frame), for the main loop to
+        apply once it is safe. Returns none."""
         # SIGWINCH can interrupt a control update that already holds its file
         # lock. Never acquire that lock (via note_attention) from the handler:
         # the interrupted update cannot release it until this handler returns.
@@ -1304,6 +1333,8 @@ def run(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse command-line arguments (argv, or sys.argv when omitted) and run the interactive supervisor. Return: the
+    supervised CLI's exit code."""
     parser = argparse.ArgumentParser(description="Visible CLI with owner-direction and retry routing")
     add_context_arguments(parser, root_required=True)
     parser.add_argument("--session-id", required=True)

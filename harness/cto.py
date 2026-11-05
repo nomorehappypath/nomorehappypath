@@ -32,6 +32,12 @@ HEALTH_COMMAND_TIMEOUT_SECONDS = 600
 
 
 def _requests_for_task(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return every QA/review request for task found in state.
+
+    Combines the active, archived, and legacy-indexed request records (de-
+    duplicated by id), filters to those matching task, and sorts them by
+    stage then cycle.
+    """
     active = list(state.get("qa_requests", {}).values())
     archived = [entry["value"] for entry in state.get("archive", []) if entry.get("kind") == "qa_request"]
     known = {value.get("id") for value in active + archived}
@@ -92,6 +98,12 @@ _SCOPE_STOPWORD_STEMS = {_scope_stem(term) for term in _SCOPE_STOPWORDS}
 
 
 def _scope_terms(text: str) -> set[str]:
+    """Return the set of normalized scope-word stems extracted from text.
+
+    Lowercases and tokenizes text, stems each token with _scope_stem, and
+    drops short tokens and known stopword stems so only meaningful
+    capability words remain.
+    """
     return {
         stem for term in re.findall(r"[a-z0-9]+", contract.normalize_owner_direction(text).lower())
         if len(term) > 3
@@ -101,6 +113,11 @@ def _scope_terms(text: str) -> set[str]:
 
 
 def _git_output(repo: Path, *args: str) -> str:
+    """Run `git` with args inside repo and return its trimmed stdout.
+
+    Return an empty string when the git invocation exits non-zero, so
+    callers can treat any failure as "no output" without raising.
+    """
     result = git_process.run(["git", *args], cwd=repo, capture_output=True, text=True)
     return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -121,6 +138,11 @@ def _status_paths(repo: Path) -> list[str]:
 
 
 def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    """Return whether ancestor is a git ancestor of descendant in repo.
+
+    Uses `git merge-base --is-ancestor`; returns False immediately when
+    either ancestor or descendant is empty, without running git at all.
+    """
     if not ancestor or not descendant:
         return False
     result = git_process.run(
@@ -131,6 +153,11 @@ def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
 
 
 def _changed_paths(repo: Path, base: str, candidate: str) -> list[str]:
+    """Return the sorted file paths changed between base and candidate in repo.
+
+    Runs a name-only git diff of base..candidate; returns an empty list when
+    the git command fails instead of raising.
+    """
     result = git_process.run(
         ["git", *accepted_bytes.name_only_arguments(f"{base}..{candidate}")],
         cwd=repo, capture_output=True, text=True,
@@ -390,6 +417,14 @@ def _task_artifact_gate(root: Path, task: str, repo: Path, latest_review: dict[s
 
 
 def _clean_process_audit(root: Path, entry: dict[str, Any]) -> bool:
+    """Verify entry's recorded process-audit file is clean and authentic.
+
+    Resolves the process_audit manifest attached to entry, confirms its
+    path lives under root's execution-audits directory and its bytes match
+    the recorded sha256, then checks the audit contents for problems,
+    timeouts, forbidden browser descendants, and new keychain/permission
+    prompts. Return True only when every one of those checks passes.
+    """
     manifest = (entry.get("metadata") or {}).get("process_audit") or {}
     path_value = str(manifest.get("path") or "")
     expected = str(manifest.get("sha256") or "")
@@ -539,6 +574,12 @@ END_TO_END_RULE_FROM = "2026-09-30"
 
 
 def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
+    """Return whether review's verdict text explicitly says TASK DONE: YES.
+
+    Reviews recorded before END_TO_END_RULE_FROM predate the "TASK DONE:
+    YES|NO" convention and are exempt (treated as yes). A missing review
+    gives a result of False.
+    """
     if not review:
         return False
     if str(review.get("completed_at") or "")[:10] < END_TO_END_RULE_FROM:
@@ -599,6 +640,17 @@ def owner_artifacts_readable(root: Path, state: dict[str, Any], task: str, lates
 
 
 def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict | None = None, execute_health: bool = False, health_command: str = "") -> dict[str, Any]:
+    """Run the full release gate for task and return its check results.
+
+    Reads task state under root, evaluates requirements confirmation,
+    delivery-plan structure, QA and independent-review evidence, the
+    Scenario Ledger at ledger, owner-document readability, and the task
+    artifact in repo (optionally running health_command there when
+    execute_health is set; profile supplies a fallback health command and
+    other defaults). Return a dict of named boolean/aux checks, including
+    "ready_for_owner_test", which is True only when every required check
+    for this task's delivery mode passes.
+    """
     release_check_started_at = lifecycle.now()
     state = board.snapshot(root)
     requests = _requests_for_task(state, task)
@@ -890,6 +942,13 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments (from argv, or sys.argv when argv is None) and run the requested CTO subcommand.
+
+    Dispatches to board-watch, board-cleanup, or release-check, refusing the
+    first two (and a --record-ready release-check) when run inside an agent
+    sandbox, since those write harness-owned board storage directly.
+    Return the process exit code (0 on success, 2 on a usage/sandbox error).
+    """
     parser = argparse.ArgumentParser(description="Dev Harness CTO checks")
     add_context_arguments(parser)
     sub = parser.add_subparsers(dest="command", required=True)

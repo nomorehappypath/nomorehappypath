@@ -47,10 +47,12 @@ PAUSE_RESUME_LABEL = "[SYSTEM CONTROL — project resumed]"
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string with second precision, used to stamp transcript lines."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def strip_terminal_sequences(text: str) -> str:
+    """Return text with CSI, OSC, remaining two-byte escape sequences and other control bytes removed, leaving plain text."""
     text = _OSC.sub("", text)
     text = _CSI.sub("", text)
     text = _TWO_BYTE.sub("", text)
@@ -59,12 +61,14 @@ def strip_terminal_sequences(text: str) -> str:
 
 
 def transcript_path(root: ProjectRoot, session_id: str) -> Path:
+    """Return the transcript log path for session_id under root's control directory, or raise ValueError if session_id is not a plain identifier."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", str(session_id or "")):
         raise ValueError("session id must be a plain identifier")
     return control.control_dir(root) / "transcripts" / f"{session_id}.log"
 
 
 def transcript_text(root: ProjectRoot, session_id: str) -> str | None:
+    """Return the raw transcript text for session_id under root, or None if the file cannot be read."""
     path = transcript_path(root, session_id)
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -83,6 +87,7 @@ class Transcript:
     """
 
     def __init__(self, path: Path) -> None:
+        """Open path for appending (creating its parent directory first) and set up the pending-line and dedup state. Returns None."""
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("a", encoding="utf-8")
@@ -90,15 +95,18 @@ class Transcript:
         self._last_agent_line = ""
 
     def note(self, text: str) -> None:
+        """Flush any pending agent output, then write text as a "--" system note line. Returns None."""
         self._flush_pending()
         self._emit("--", text)
 
     def owner(self, text: str) -> None:
+        """Flush any pending agent output, then write each line of text as a ">>" owner line. Returns None."""
         self._flush_pending()
         for line in str(text).splitlines() or [""]:
             self._emit(">>", line)
 
     def agent_bytes(self, data: bytes) -> None:
+        """Decode raw PTY data, strip terminal sequences, and emit every complete line, keeping the remainder pending. Returns None."""
         text = strip_terminal_sequences(data.decode("utf-8", errors="replace"))
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         self._pending += text
@@ -107,6 +115,7 @@ class Transcript:
             self._agent_line(line)
 
     def close(self) -> None:
+        """Flush any pending agent output and close the underlying file handle, ignoring an OSError on close. Returns None."""
         self._flush_pending()
         try:
             self._handle.close()
@@ -114,11 +123,13 @@ class Transcript:
             pass
 
     def _flush_pending(self) -> None:
+        """Emit the pending agent text as a line, if it is not blank, and clear the pending buffer. Returns None."""
         if self._pending.strip():
             self._agent_line(self._pending)
         self._pending = ""
 
     def _agent_line(self, line: str) -> None:
+        """Emit line as a "<<" agent line, unless it is blank or identical to the last agent line (collapsing TUI redraws). Returns None."""
         line = line.rstrip()
         if not line.strip() or line == self._last_agent_line:
             return
@@ -126,6 +137,7 @@ class Transcript:
         self._emit("<<", line)
 
     def _emit(self, marker: str, line: str) -> None:
+        """Redact any Claude token or other secret from line, then write it to the transcript file with marker and a timestamp. Returns None."""
         token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
         if token:
             line = line.replace(token, "[REDACTED CLAUDE TOKEN]")
@@ -140,10 +152,12 @@ class Transcript:
 # ---------------------------------------------------------------- vendor stores
 
 def claude_config_dir() -> Path:
+    """Return the Claude Code config directory: CLAUDE_CONFIG_DIR if set, else ~/.claude."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
 
 
 def codex_home() -> Path:
+    """Return the Codex home directory: CODEX_HOME if set, else ~/.codex."""
     return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 
 
@@ -352,6 +366,18 @@ def plan_cli_launch(root: ProjectRoot, session_id: str, provider: str) -> dict[s
 
 def recovery_message(cli_session_id: str, transcript: str, agent_id: str, board_command_prefix: str,
                      conversation_command: str = "", after_pause: bool = False) -> str:
+    """Return the system-control message told to a relaunched or resumed agent, pointing it at its prior conversation.
+
+    Args:
+        cli_session_id: the vendor session id that was resumed, named in the message.
+        transcript: the raw transcript path to mention when conversation_command is not given.
+        agent_id: the board agent id the message tells the agent it remains.
+        board_command_prefix: the prefix the message tells the agent to start every board command with.
+        conversation_command: the command to run to reread the conversation in readable form, if any.
+        after_pause: whether this follows an owner pause/resume rather than an ordinary relaunch, which changes the wording.
+
+    Returns: the composed message text.
+    """
     reread = (
         f"To reread the conversation in readable form, run: {conversation_command}"
         if conversation_command else
@@ -463,6 +489,7 @@ def vendor_conversation_path(provider: str, cli_session_id: str) -> Path | None:
 
 
 def _entry(at: str, who: str, kind: str, text: str) -> dict[str, str]:
+    """Return one conversation entry dict built from at, who, kind and text, for the readable conversation view."""
     return {"at": str(at or ""), "who": who, "kind": kind, "text": text}
 
 
@@ -626,6 +653,7 @@ def _unquote(value: Any) -> Any:
 
 
 def read_vendor_conversation(provider: str, cli_session_id: str) -> list[dict[str, str]] | None:
+    """Return the parsed conversation entries for cli_session_id of provider, dispatching to the provider's own reader, or None if no file exists."""
     path = vendor_conversation_path(provider, cli_session_id)
     if path is None:
         return None
@@ -637,6 +665,7 @@ def read_vendor_conversation(provider: str, cli_session_id: str) -> list[dict[st
 
 
 def _clock(at: str) -> str:
+    """Return the HH:MM:SS time of day extracted from an ISO timestamp at, or "--:--:--" if none is found."""
     match = re.search(r"T(\d{2}:\d{2}:\d{2})", at or "")
     return match.group(1) if match else "--:--:--"
 

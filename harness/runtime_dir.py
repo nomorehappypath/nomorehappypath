@@ -25,11 +25,20 @@ class RuntimeDirectoryRefused(ValueError):
 
 
 def session_directory(manager_home: str | os.PathLike, project_key: str, session_id: str) -> Path:
+    """Return the runtime directory path for one session.
+
+    Combines project_key and session_id into a short sha256 digest so the
+    resulting path under manager_home stays well inside socket path limits.
+    """
     digest = hashlib.sha256(f"{project_key}\0{session_id}".encode("utf-8")).hexdigest()[:12]
     return Path(manager_home) / RUNTIME_DIRECTORY / digest
 
 
 def _inside(path: str, root: str) -> bool:
+    """Return whether path is the same as root or nested under root.
+
+    Resolves both path and root to their real, symlink-free form first.
+    """
     path, root = os.path.realpath(path), os.path.realpath(root)
     return path == root or path.startswith(root.rstrip("/") + "/")
 
@@ -46,6 +55,11 @@ def validate(directory: Path, agent_write_paths: list[str], socket_names: tuple[
 
 
 def create(directory: Path) -> Path:
+    """Create directory and its parent with 0700 permissions and return directory.
+
+    Narrows the umask while creating both levels so no other user can read
+    or write them, then restores the previous umask before returning.
+    """
     previous = os.umask(0o077)
     try:
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -58,4 +72,8 @@ def create(directory: Path) -> Path:
 
 
 def remove(directory: Path) -> None:
+    """Delete directory and everything under it, ignoring any removal errors.
+
+    Returns nothing; the effect is that directory no longer exists on disk.
+    """
     shutil.rmtree(directory, ignore_errors=True)

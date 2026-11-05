@@ -31,6 +31,7 @@ _lock = threading.Lock()
 
 class ClaudeAuthRequired(RuntimeError):
     def __init__(self, reason="missing", detail=""):
+        """Store reason and detail on the instance and give the exception's message via action()'s why text. Return nothing; the effect is initializing this ClaudeAuthRequired instance."""
         self.reason = reason
         self.detail = detail
         super().__init__(action(reason, detail)["why"])
@@ -61,6 +62,7 @@ def _require_bypass_consent() -> None:
 
 
 def action(reason="missing", detail="") -> dict:
+    """Build the card shown to the owner for a given auth failure reason, using detail for extra context when the reason is consent. Return a dict with title, why, and instructions (or, for a token-fixable reason, with a set of named keys)."""
     why = {"missing": "Claude needs its own sign-in token (a setup-token) before this agent can start.",
            "rejected": "Claude rejected the setup-token (its sign-in token). Generate a replacement before restarting this agent.",
            **NOT_A_TOKEN_PROBLEM}[reason]
@@ -74,6 +76,7 @@ def action(reason="missing", detail="") -> dict:
 
 
 def resolve_token(environment=None) -> str:
+    """Read the Claude setup-token from the platform credential store or, as a last resort, from environment's reviewer token variable. Return the validated token string, or raise ClaudeAuthRequired when none is usable."""
     environment = os.environ if environment is None else environment
     token = platform_support.claude_credentials().read_token(environment) or str(environment.get(REVIEWER_TOKEN_ENV, "")).strip()
     if not token or len(token) > 2048 or any(ord(c) < 33 or ord(c) > 126 for c in token):
@@ -82,6 +85,7 @@ def resolve_token(environment=None) -> str:
 
 
 def manager_environment(environment) -> dict:
+    """Build a copy of environment with the Claude token resolved and set (and a token-source hint when stored outside the environment). Return the resulting dict, unchanged except for the token entries when no token can be resolved."""
     value = dict(environment)
     value.pop(TOKEN_ENV, None)
     try:
@@ -95,6 +99,7 @@ def manager_environment(environment) -> dict:
 
 
 def _probe_prefix(home):
+    """Build the sandbox-wrapping command prefix that confines a Claude auth probe to home's temp and config paths. Return the list of prefix arguments to prepend to the probe command."""
     implementation = platform_support.agent_confinement()
     protected = implementation.protected_read_paths(Path.home()) + implementation.protected_read_paths(home, str(home / ".claude"))
     return implementation.wrap([], [str(home), *implementation.temp_paths()], store=home / "guard", protected_reads=protected)
@@ -107,6 +112,7 @@ def _sandbox_failed(completed) -> bool:
 
 
 def validate_token(token: str) -> None:
+    """Confirm that token is accepted by Claude, running a sandboxed auth-status check and a short probe prompt against the resolved CLI, with results cached briefly. Return nothing; the effect is raising ClaudeAuthRequired with the specific reason when the token or the environment is not usable."""
     cli = global_settings.resolved_cli("claude").get("path")
     if not cli:
         raise ClaudeAuthRequired("cli")
@@ -167,6 +173,7 @@ def validate_token(token: str) -> None:
 
 
 def prepare_launch(root, session: dict) -> str:
+    """Validate Claude auth for session before it launches under root, recording a card on failure or clearing prior ones on success. Return the credential-handoff socket path to use for the launch, or an empty string when session's provider is not claude."""
     provider = session.get("provider") or control.default_agent_settings()[control.role_for_kind(session["kind"])]["provider"]
     if provider != "claude":
         _clear_cards(root, session)  # a role that moved to another provider no longer needs a Claude sign-in card
@@ -221,6 +228,7 @@ def settle_consent_cards(root) -> int:
 
 
 def _clear_cards(root, session: dict) -> None:
+    """Remove any stale claude_auth_action cards from prior sessions of root that share session's kind. Return nothing; the effect is clearing those cards from the locked state, or doing nothing when there is nothing to clear."""
     try:
         sessions = control._read_state(root).get("sessions", {})
     except (OSError, ValueError):
@@ -234,6 +242,7 @@ def _clear_cards(root, session: dict) -> None:
 
 
 def _handoff(root, session_id: str, token: str) -> str:
+    """Open a one-time Unix-socket listener under root and start a background thread that hands token to session_id once a matching, verified peer connects. Return the socket path the launched process should connect to for the handoff."""
     directory = Path(tempfile.mkdtemp(prefix="nmhp-auth-"))
     directory.chmod(0o700)
     path = directory / "claim.sock"
@@ -244,6 +253,7 @@ def _handoff(root, session_id: str, token: str) -> str:
     listener.settimeout(1)
 
     def deliver():
+        """Accept connections on the handoff socket until the deadline, sending the stored token to the first caller that proves it is the right session's process. Return nothing; the effect is sending the token (or a refusal) over the socket and cleaning up the listener and its directory."""
         deadline = time.monotonic() + float(os.environ.get("HARNESS_CLAUDE_AUTH_HANDOFF_SECONDS", "120"))
         try:
             while time.monotonic() < deadline:
@@ -274,6 +284,7 @@ def _handoff(root, session_id: str, token: str) -> str:
 
 
 def exec_with_token(path: str, session_id: str, command: list[str], share_with_commands: bool = False) -> None:
+    """Fetch the handed-off token from path for session_id, then replace this process by executing command with that token in its environment (also exposed to subcommands when share_with_commands is set). Return nothing; the effect is that this process is replaced by command, or exits with status 2 on failure."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(5)

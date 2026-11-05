@@ -21,6 +21,7 @@ MIN_CHARS = 8
 
 
 def enabled() -> bool:
+    """Return True unless HARNESS_STANDING_CHECKS is set to an off-like value ("off", "0", "no" or "false")."""
     return os.environ.get("HARNESS_STANDING_CHECKS", "on").strip().lower() not in {"off", "0", "no", "false"}
 
 
@@ -31,6 +32,7 @@ def has_line(text: Any, label: str, min_chars: int = MIN_CHARS) -> bool:
 
 
 def requirements_problem(text: Any) -> str:
+    """Return the message asking for a missing "Security:" line in text's requirements, or "" when the check is off or satisfied."""
     if enabled() and not has_line(text, "Security"):
         return ("add a \"Security:\" line to the requirements, in plain words next to the \"Non-functional:\" lines: how this task keeps the "
                 "owner's data and users safe, or why none of it applies. Open `standing-checks`.")
@@ -38,6 +40,7 @@ def requirements_problem(text: Any) -> str:
 
 
 def hand_in_problem(summary: Any) -> str:
+    """Return the message naming which of "Security:" and "Code quality:" is missing from summary, or "" when none are missing or the check is off."""
     if not enabled():
         return ""
     missing = [label for label in ("Security", "Code quality") if not has_line(summary, label)]
@@ -122,6 +125,20 @@ def disputes_problem(hand_in: Any, verdict: Any) -> str:
 
 def verdict_problem(summary: Any, quality_notes_given: bool, quality_notes_stored: bool, report_only: bool, analysis: bool = False,
                     clean_total: int | None = None, hand_in: Any = "") -> str:
+    """Return everything missing from a reviewer's PASS verdict, joined into one message, or "" when the verdict is complete.
+
+    Args:
+        summary: the verdict's text, checked for the required "Security check:" line and, for a report_only task, a
+            "Not examined:" line, and for an analysis, the lines verified_findings_problem/clean_list_problem/disputes_problem check.
+        quality_notes_given: whether at least one --code-quality line was given with this verdict.
+        quality_notes_stored: whether a --code-quality line was already stored for the task.
+        report_only: whether the task is report-only, requiring a "Not examined:" line.
+        analysis: whether the task is a Code analysis, requiring the extra findings/clean-list/disputes lines.
+        clean_total: the board's clean-list item count, used by clean_list_problem when analysis is true.
+        hand_in: the builder's hand-in text, used by disputes_problem when analysis is true.
+
+    Returns: the combined problem message, or "" when nothing is missing and the check is off or satisfied.
+    """
     if not enabled():
         return ""
     missing = []
@@ -155,6 +172,7 @@ _TEST_DELIVERABLE = re.compile(r"\btests?\b|\bunittest\b|\bpytest\b|\bsuite\b|\b
 
 
 def is_test_file(path: Any) -> bool:
+    """Return True if path looks like a test file or sits in a test directory, matching the _TEST_FILE pattern."""
     return bool(_TEST_FILE.search(str(path).replace("\\", "/")))
 
 
@@ -179,6 +197,7 @@ _PROOF_NAMES_TESTS = re.compile(r"(?:\btests?/|\btest_\w+|\w+_test\b|\.(?:test|s
 
 
 def _line_text(text: Any, label: str) -> str:
+    """Return the trimmed text following "label:" on its own line in text, or "" if no such line is found."""
     match = re.search(rf"^\s*(?:[-*]\s*)?{re.escape(label)}\s*:\s*(\S.*)$", str(text or ""), re.I | re.M)
     return match.group(1).strip() if match else ""
 
@@ -221,6 +240,7 @@ def report_only_extra_files(files: list[Any], allowed_paths: list[str]) -> list[
 
 
 def report_only_files_problem(extra: list[str]) -> str:
+    """Return the message asking a report-only task to undo the stray changes listed in extra, or "" when extra is empty or the check is off."""
     if not extra or not enabled():
         return ""
     shown = ", ".join(extra[:6]) + (f" and {len(extra) - 6} more" if len(extra) > 6 else "")

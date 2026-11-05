@@ -27,7 +27,7 @@ class StagedReviewAuthoringTests(unittest.TestCase):
             self.root, "development", board.AWAITING_OWNER_DIRECTION,
             vendor="OpenAI", session_id=session["id"],
         )
-        board.record_owner_direction(self.root, session["id"], "Build the staged review fixture")
+        board.record_owner_direction(self.root, session["id"], "Build the staged review fixture", allow_split=True)
         board.begin_task(self.root, self.delivery["id"], "STAGED-REVIEW")
         agreed_requirements(
             self.root, self.delivery["id"],

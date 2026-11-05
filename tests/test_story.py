@@ -466,6 +466,26 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual([row(result, n)["fold"] for n in (20, 21, 22, 23)], ["", "", "later", "later"], "only the next two steps stay open; the rest fold under 'more steps to come'")
         self.assertEqual(result["timeline"]["counts"]["later"], 5)
 
+    def test_repair_and_second_round_fold_as_if_needed_until_round_one_has_a_result(self):
+        # Owner 2026-11-04: a task not yet reviewed showed repair, review round 2 and the last retry as "steps to come".
+        result = built(state(requirement_confirmations=contract(), delivery_plans={TASK: {"mode": "atomic"}}))
+        self.assertEqual(row(result, 18)["status"], "next")
+        self.assertEqual([row(result, n)["fold"] for n in (19, 20, 21)], ["if_needed"] * 3)
+        self.assertEqual(result["timeline"]["counts"]["if_needed"], 3)
+        self.assertEqual(result["timeline"]["counts"]["parts_left"], 0)
+        self.assertNotIn(19, [r["n"] for r in result["timeline"]["steps"] if r["fold"] == "later"])
+
+    def test_a_task_split_into_parts_counts_only_real_steps_and_says_how_many_parts_are_left(self):
+        chunks = {TASK: {"c1": {"status": "open"}, "c2": {"status": "open"}, "c3": {"status": "open"}}}
+        result = built(state(requirement_confirmations=contract(), delivery_plans={TASK: {"mode": "chunked"}}, task_chunks=chunks))
+        counts = result["timeline"]["counts"]
+        folds = [r["fold"] for r in result["timeline"]["steps"] if r["n"] in (19, 20, 21)]
+        self.assertEqual(folds, ["if_needed"] * 9, "three parts, none reviewed: nine conditional steps")
+        self.assertEqual(counts["if_needed"], 9)
+        self.assertEqual(counts["parts_left"], 2, "the first part is being built; two have not started")
+        self.assertEqual(counts["later"], len([r for r in result["timeline"]["steps"] if r["fold"] == "later"]))
+        self.assertLess(counts["later"] + counts["if_needed"], 3 * 10 + 5 + 11)
+
     def test_a_gap_is_never_done_and_the_early_steps_say_what_happened(self):
         result = built(state(requirement_confirmations=contract(), requests=[self.failed_round_one()]))
         self.assertEqual(row(result, 8)["status"], "gap")

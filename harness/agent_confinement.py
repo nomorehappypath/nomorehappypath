@@ -117,6 +117,14 @@ EXTRA_READ_ENV = "HARNESS_AGENT_READ_PATHS"
 
 
 def _system_path(path: str) -> bool:
+    """Decide whether `path` is one of the fixed OS system folders or lives inside one.
+
+    Args:
+        path: the filesystem path to check.
+
+    Return: True if path equals or is nested under /usr, /bin, /sbin, /lib,
+    /lib64, or /etc; False otherwise.
+    """
     return any(path == root or path.startswith(root + "/") for root in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"))
 
 
@@ -133,6 +141,15 @@ def tool_read_roots(clis: list[str], *, home: str | Path, extra: list[str] | Non
     found: list[str] = []
 
     def add(path) -> None:
+        """Resolve `path` and, unless it is missing, the root, the home folder, an
+        ancestor of the home folder, or a system folder already listed, append it
+        to the enclosing `found` list.
+
+        Args:
+            path: the candidate read-root path to resolve and possibly record.
+
+        Returns: None; the effect is appending the resolved path to `found`.
+        """
         real = Path(path).expanduser().resolve()
         if not real.exists() or real == Path("/") or real == home_real or real in home_real.parents:
             return
@@ -140,6 +157,18 @@ def tool_read_roots(clis: list[str], *, home: str | Path, extra: list[str] | Non
             found.append(str(real))
 
     def add_tool_folder(folder: Path) -> None:
+        """Record `folder` itself via `add`, and, when `folder` is a `bin` directory
+        that looks like the bin of an installed package or virtual environment
+        (a sibling `lib`, `pyvenv.cfg`, or `node_modules`), also record its parent
+        install prefix, unless that parent is the home folder or a generic
+        `.local`/`local` folder.
+
+        Args:
+            folder: the tool's own directory to add, and to inspect for a sibling
+                install prefix.
+
+        Returns: None; the effect is adding one or two paths via `add`.
+        """
         add(folder)
         parent = folder.parent
         looks_installed = (parent / "lib").is_dir() or (parent / "pyvenv.cfg").is_file() or (parent / "node_modules").is_dir()
@@ -306,6 +335,19 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse command-line arguments and print the confined launch command as JSON.
+
+    Builds the wrapped command via `wrap`, using the writable roots, protected
+    writes, home, provider, and read-confinement options parsed from `argv`
+    (or `sys.argv` when `argv` is None). If the platform cannot confine the
+    agent, prints the `ConfinementUnavailable` error to stderr instead.
+
+    Args:
+        argv: the command-line arguments to parse, or None to use the process's own.
+
+    Returns: 0 on success after printing the wrapped command as JSON, or 3 if
+    confinement is unavailable on this platform.
+    """
     parser = argparse.ArgumentParser(description="Print the confined launch command for a managed Claude terminal as JSON")
     parser.add_argument("--store", required=True, help="where a generated profile is kept (the project's control dir)")
     parser.add_argument("--writable-roots", required=True, help="JSON list of the granted roots")

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
+import hashlib
+import base64
 import os
 import re
 import socket
@@ -638,6 +641,53 @@ class BoardSurfaceCommandTests(unittest.TestCase):
             release.set(); first.join(3); second.join(3)
         self.assertEqual(len(results), 2)
         self.assertEqual(peak, 1)
+
+    def test_two_short_commands_on_two_threads_each_get_their_own_answer(self):
+        # 2026-11-04 (Codex R4F-1): sys.stdout was swapped process-wide per command, so concurrent reads swapped answers.
+        _, first_agent, _, first_token, first_gateway = self.session()
+        _, second_agent, _, second_token, second_gateway = self.session("claude_reviewer", "qa", "REVIEW_QUEUE")
+        both_inside = threading.Barrier(2, timeout=5)
+
+        def fake_main(arguments):
+            marker = arguments[arguments.index("--agent") + 1]
+            print("")                      # a stray line first, as real commands may print before their answer
+            both_inside.wait()             # both commands are inside their capture at the same moment
+            print(json.dumps({"answer": marker}))
+            both_inside.wait()
+            return 0
+
+        results = {}
+        with mock.patch.object(board, "main", side_effect=fake_main):
+            threads = [
+                threading.Thread(target=lambda: results.setdefault("first", first_gateway.execute(
+                    first_token, self.request("status", ["--agent", first_agent["id"]], nonce=700)))),
+                threading.Thread(target=lambda: results.setdefault("second", second_gateway.execute(
+                    second_token, self.request("status", ["--agent", second_agent["id"]], nonce=700)))),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+        self.assertEqual(results["first"]["result"], {"answer": first_agent["id"]})
+        self.assertEqual(results["second"]["result"], {"answer": second_agent["id"]})
+        self.assertNotIsInstance(sys.__stdout__, type(None))
+
+    def test_uploaded_evidence_stays_when_the_command_ran_but_its_answer_was_garbled(self):
+        # 2026-11-04: a request-review whose answer could not be read had its stored ledger deleted although the board had
+        # recorded the request; the Reviewer could then never claim it.
+        _, agent, _, token, gateway = self.session()
+        payload = b"| ID | What was tested |\n|---|---|\n| S-D001 | kept |\n"
+        artifact = {"content": base64.b64encode(payload).decode("ascii"), "length": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(), "media_type": "text/markdown"}
+        request = self.request("request-review", ["--agent", agent["id"], "--ledger", "upload:ledger", "--summary", "kept"], nonce=710)
+        request["artifacts"] = {"ledger": artifact}
+        with mock.patch.object(board, "main", side_effect=lambda _arguments: (print("not json at all"), 0)[1]):
+            with self.assertRaisesRegex(SurfaceProtocolError, "invalid response"):
+                gateway.execute(token, request)
+        uploads = self.context.storage_path("evidence", "uploads")
+        kept = [path for path in uploads.rglob("*-ledger-*.md")]
+        self.assertEqual(len(kept), 1, "the stored ledger survives a garbled answer")
+        self.assertEqual(kept[0].read_bytes(), payload)
 
     def test_path_ingestion_operations_require_authenticated_bytes(self):
         _, agent, _, token, gateway = self.session()

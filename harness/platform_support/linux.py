@@ -154,6 +154,9 @@ class _ProcProcessIdentity(_ProcessIdentity):
             return None
 
     def _command(self, pid_dir: Path, fallback: str = "") -> str:
+        """Read the command line of the process at pid_dir from /proc, joining its NUL-separated argv parts with spaces.
+
+        Return fallback when cmdline cannot be read or is empty (as for a kernel thread)."""
         try:
             raw = (pid_dir / "cmdline").read_bytes()
         except OSError:
@@ -196,6 +199,10 @@ class _ProcProcessIdentity(_ProcessIdentity):
         return stat[2] if stat else ""
 
     def process_table(self) -> dict[int, dict[str, Any]]:
+        """Build the full snapshot of live processes from /proc: pid, ppid, pgid, start_token and command for each.
+
+        Raise ProcessTableUnavailable when /proc cannot be listed, or when the listing comes back empty (which is
+        impossible on a readable /proc, since this process is itself in it). The result is a dict keyed by pid."""
         try:
             entries = [d for d in self.PROC.iterdir() if d.name.isdigit()]
         except OSError as error:
@@ -274,6 +281,9 @@ PROCESS_IDENTITY = _ProcProcessIdentity()
 
 
 def _setup_script() -> str:
+    """Give the absolute path to the linux_enable_sandbox.sh script that fixes a missing tmux or bubblewrap setup.
+
+    The result is computed from this file's own location, two parents up, so it is correct wherever the harness is installed."""
     return str(Path(__file__).resolve().parents[2] / "scripts" / "linux_enable_sandbox.sh")
 
 
@@ -337,13 +347,19 @@ class _TmuxTerminalHost:
         return f"{SESSION_PREFIX}-{safe}"
 
     def attach_command(self, session_id: str) -> str:
+        """Give the shell command the owner types to attach to the tmux session for session_id."""
         return f"tmux attach -t {self.session_name(session_id)}"
 
     def _colour(self, color_rgb) -> str:
+        """Convert the three-channel color_rgb tuple into a clamped '#rrggbb' hex string tmux accepts for a pane background. Return that hex string."""
         red, green, blue = (max(0, min(255, int(channel))) for channel in color_rgb)
         return f"#{red:02x}{green:02x}{blue:02x}"
 
     def open_session(self, session_id: str, argv, *, color_rgb) -> SessionSurface:
+        """Start a new tmux session named for session_id running argv, colour its pane with color_rgb, and give the SessionSurface.
+
+        Raise UnsupportedPlatformOperation when launch_problem reports the host cannot run agents. Replaces a leftover
+        dead session of the same name (a live one is re-adopted elsewhere, never reaching this path)."""
         problem = launch_problem()
         if problem:
             raise UnsupportedPlatformOperation(problem)
@@ -385,18 +401,29 @@ class _TmuxTerminalHost:
     )
 
     def keep_failure_visible(self, argv) -> list[str]:
+        """Wrap argv in a shell command that holds the tmux window open with the exit code when argv ends with an error.
+
+        The result is the argv tmux's new-session actually runs; a clean exit still closes the window at once."""
         return ["/bin/sh", "-c", self.HOLD_ON_FAILURE, "nmhp-agent", *[str(item) for item in argv]]
 
     def _pane(self, session_id: str) -> str:
+        """Give the tmux target string (an exact session match, pane 0.0) for session_id."""
         return "=" + self.session_name(session_id) + ":0.0"
 
     def _view_run(self, argv):
+        """Run the tmux argv command with the configured view timeout and return its CompletedProcess.
+
+        Raise ValueError when the live terminal cannot be reached (the process errors, times out, or argv is invalid)."""
         try:
             return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=float(os.environ.get("HARNESS_AGENT_VIEW_TIMEOUT_SECONDS", "5")))
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             raise ValueError("The live terminal could not be reached. Retry View agent.") from error
 
     def capture_session(self, session_id: str) -> dict:
+        """Capture the current screen contents, size and cursor position of session_id's tmux pane.
+
+        Raise ValueError when the pane's size or screen cannot be read. The result is a dict with keys screen,
+        cols, rows, cursor_x and cursor_y."""
         target = self._pane(session_id)
         size = self._view_run(["tmux", "display-message", "-p", "-t", target, "#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}"])
         if size.returncode:
@@ -408,6 +435,9 @@ class _TmuxTerminalHost:
         return {"screen": screen.stdout, "cols": width, "rows": height, "cursor_x": x, "cursor_y": y}
 
     def input_session(self, session_id: str, data: bytes) -> None:
+        """Send the raw bytes in data as keystrokes to session_id's tmux pane.
+
+        Raise ValueError when the input could not be sent. Returns nothing; the effect is on the live terminal only."""
         # Hex sends raw bytes, including arrow keys, paste, Enter and Ctrl+C.
         # Neither input nor the session name is a shell command.
         result = self._view_run(["tmux", "send-keys", "-t", self._pane(session_id), "-H", *[f"{value:02x}" for value in data]])
@@ -467,9 +497,14 @@ class _BwrapConfinement:
     SYSTEM_PATHS: tuple[str, ...] = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
 
     def available(self) -> bool:
+        """Return True when the bwrap binary can be found on PATH."""
         return shutil.which(self.BWRAP) is not None
 
     def wrap(self, argv, grant: Grant, *, store, enabled: bool = True) -> Confined:
+        """Build the bubblewrap command that runs argv confined to grant's readable/writable paths and network, under store.
+
+        When enabled is False, the result runs argv unconfined. Raise UnsupportedPlatformOperation when bubblewrap is
+        not installed. Output: a Confined wrapping the full command, or the plain argv when not enabled."""
         if not enabled:
             return Confined(list(argv), enforced=False)
         if not self.available():
@@ -512,28 +547,40 @@ class _BwrapAgentConfinement(_AgentConfinement):
     """
 
     def __init__(self, which=shutil.which):
+        """Store which, the PATH lookup function used to find the bwrap binary (overridable for tests). Return: none."""
         self._which = which
 
     def cli_state_paths(self, home, claude_config_dir=None) -> list[str]:
+        """List the CLI's own state paths under home: its config directory (claude_config_dir or home/.claude), claude.json, cache and npm folders.
+
+        The result is a list of path strings these agent CLIs need read-write access to."""
         home = Path(home).expanduser()
         config_dir = Path(claude_config_dir).expanduser() if claude_config_dir else home / ".claude"
         return [str(config_dir), str(home / ".claude.json"), str(home / ".cache"), str(home / ".npm")]
 
     def temp_paths(self) -> list[str]:
+        """Give the system temporary directories (/tmp and /var/tmp) an agent needs writable."""
         return ["/tmp", "/var/tmp"]
 
     confines_reads = True
 
     def binary(self) -> str | None:
+        """Give the bwrap binary path: HARNESS_BWRAP_BIN when it names an existing file, otherwise the PATH lookup.
+
+        Output: the path string, or None when no usable bwrap binary is found."""
         named = os.environ.get("HARNESS_BWRAP_BIN")
         if named:
             return named if Path(named).is_file() else None
         return self._which("bwrap")
 
     def available(self) -> bool:
+        """Return True when binary() finds a usable bwrap executable."""
         return self.binary() is not None
 
     def login_file_paths(self, home, claude_config_dir=None) -> list[str]:
+        """List the saved-login credential file paths under home, and under claude_config_dir when given, with duplicates removed.
+
+        The result feeds the protected-reads list so a setup-token agent cannot fall back to these files."""
         home = Path(home).expanduser()
         paths = [str(home / ".claude" / ".credentials.json")]
         if claude_config_dir:
@@ -571,6 +618,14 @@ class _BwrapAgentConfinement(_AgentConfinement):
              protected_writes: list[str] | None = None,
              denied_executables: list[str] | None = None, confine_reads: bool = False,
              read_roots: list[str] | None = None) -> list[str]:
+        """Build the bwrap command that runs argv as a confined agent under store, with writable bound read-write.
+
+        When confine_reads is True the sandbox starts from an empty root with only the system folders, read_roots and
+        device files visible; otherwise the whole filesystem is bound read-only. protected_writes are bound back
+        read-only after writable (so a granted path inside them stays uneditable), and protected_reads are masked
+        with /dev/null or an empty tmpfs. denied_executables is accepted for signature parity with other platforms
+        but is not used here. Raise AgentConfinementUnavailable when no bwrap binary is available. Output: the full
+        argv list bwrap should run, ending in the original argv."""
         bwrap = self.binary()
         if not bwrap:
             raise AgentConfinementUnavailable(
@@ -672,6 +727,7 @@ def _ensure_token_directory(path) -> None:
 
 
 def _valid_token(token: str) -> bool:
+    """Return True when token is non-empty, at most 2048 characters, and made only of printable ASCII characters."""
     return bool(token) and len(token) <= 2048 and all(32 < ord(c) < 127 for c in token)
 
 
@@ -680,6 +736,10 @@ class _ClaudeCredentials:
     uses_file = True
 
     def read_token(self, environment) -> str:
+        """Give the Claude OAuth token to use: environment's own override, or else the one saved in the token file.
+
+        When environment marks HARNESS_CLAUDE_TOKEN_SOURCE as "file" the environment value is ignored, so a token
+        replaced on disk reaches a project that is already open. Output: the token string, or "" when none is set."""
         token = environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
         # A value the manager copied from the saved file into its worker is not an owner override: reread the file,
         # so a replaced token reaches a project that is already open.
@@ -712,6 +772,10 @@ class _ClaudeCredentials:
         return (token, "") if _valid_token(token) else ("", f"The saved Claude token at {path} is not a valid setup-token. Save it again.")
 
     def store_token(self, token: str) -> Path:
+        """Validate token and write it (mode 600) to the saved-token file, replacing any previous one atomically.
+
+        Raise ValueError when token is not a valid setup-token or its parent folder is a link. Output: the path the
+        token was written to."""
         token = token.strip()
         if not _valid_token(token):
             raise ValueError("That is not a setup-token.")
@@ -731,6 +795,9 @@ class _ClaudeCredentials:
         return path
 
     def instructions(self) -> str:
+        """Give the owner-facing text explaining how to generate and save a Claude setup-token, with any current file problem prefixed.
+
+        Output: the full instructions string, including the store-token command and the file's location."""
         script = Path(__file__).resolve().parents[1] / "claude_auth.py"
         problem = self.read_file()[1]
         return ((problem + "\n" if problem else "") +

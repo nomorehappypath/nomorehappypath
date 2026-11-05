@@ -37,22 +37,27 @@ class MemoryRecordConflict(ValueError):
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def memory_dir(root: ProjectRoot) -> Path:
+    """Return the memory storage directory path for the project root."""
     return project_context(root).storage_path("memory")
 
 
 def records_dir(root: ProjectRoot) -> Path:
+    """Return the immutable-records subdirectory under the root's memory directory."""
     return memory_dir(root) / "records"
 
 
 def index_path(root: ProjectRoot) -> Path:
+    """Return the path to the compact index file under the root's memory directory."""
     return memory_dir(root) / "index.md"
 
 
 def memory_lock_path(root: ProjectRoot) -> Path:
+    """Return the lock file path used to serialize writes to the root's memory directory."""
     return memory_dir(root).with_name(".memory.lock")
 
 
@@ -70,6 +75,7 @@ def _memory_write_lock(root: ProjectRoot):
 
 
 def external_backup_root(root: ProjectRoot) -> Path:
+    """Return the external backup directory for the root, outside the live data root."""
     context = project_context(root)
     if context.is_compatibility:
         return context.code_root.parent / ".harness-memory-backups" / context.code_root.name
@@ -77,6 +83,7 @@ def external_backup_root(root: ProjectRoot) -> Path:
 
 
 def _atomic_text(path: Path, value: str) -> None:
+    """Write value to path atomically via a temp file and rename. Returns none."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(value, encoding="utf-8")
@@ -88,6 +95,7 @@ def _atomic_text(path: Path, value: str) -> None:
 
 
 def _unknown_answers() -> dict[str, str]:
+    """Return the default placeholder answers used when no project facts are recorded."""
     return {
         "project_about": "Project purpose is not recorded.",
         "current_status": "No project status is recorded.",
@@ -97,6 +105,7 @@ def _unknown_answers() -> dict[str, str]:
 
 
 def _safe_project(project: dict[str, Any] | None) -> dict[str, str]:
+    """Return a normalized name/description pair derived from project, defaulting to empty strings."""
     value = project or {}
     return {
         "name": str(value.get("name", "")).strip(),
@@ -108,6 +117,7 @@ def _index_document(
     project: dict[str, str], answers: dict[str, str], board_sequence: int,
     record_refs: list[str],
 ) -> dict[str, Any]:
+    """Build the compact index document from project, answers, board_sequence and record_refs. Return the assembled dict."""
     sequence = max(0, int(board_sequence))
     generated_at = _now()
     unknown = _unknown_answers()
@@ -136,6 +146,7 @@ def _index_document(
 
 
 def _render_index(value: dict[str, Any]) -> str:
+    """Render the index document value into the Markdown-plus-embedded-JSON index text. Return the rendered string."""
     project = value["project"]
     answers = value["answers"]
     name = project.get("name") or "Unnamed project"
@@ -155,6 +166,7 @@ def _render_index(value: dict[str, Any]) -> str:
 
 
 def _parse_index_text(text: str) -> dict[str, Any]:
+    """Parse the embedded JSON metadata out of index text and validate its shape. Return the parsed dict."""
     start = text.rfind(INDEX_START)
     end = text.find(INDEX_END, start + len(INDEX_START)) if start >= 0 else -1
     if start < 0 or end < 0:
@@ -172,10 +184,12 @@ def _parse_index_text(text: str) -> dict[str, Any]:
 
 
 def _read_index_at(path: Path) -> dict[str, Any]:
+    """Read and parse the index document at path. Return the parsed dict."""
     return _parse_index_text(path.read_text(encoding="utf-8"))
 
 
 def _write_index(root: ProjectRoot, value: dict[str, Any]) -> dict[str, Any]:
+    """Render value and atomically write it as the index file for root, enforcing the size limit. Return value unchanged."""
     rendered = _render_index(value)
     if len(rendered.encode("utf-8")) > 32_000:
         raise ValueError("project memory index exceeded the compact 32 KiB limit")
@@ -187,6 +201,7 @@ def initialize(
     root: ProjectRoot, *, project_name: str = "", description: str = "",
     create_backup: bool = True,
 ) -> dict[str, Any]:
+    """Create or refresh the memory index for root under the write lock, using project_name, description and create_backup. Return the resulting index."""
     with _memory_write_lock(root):
         return _initialize_unlocked(
             root, project_name=project_name, description=description,
@@ -228,6 +243,7 @@ def _initialize_unlocked(
 
 
 def load_index(root: ProjectRoot, *, restore: bool = True) -> dict[str, Any]:
+    """Load the index document for root, restoring from backup first when restore is true and the index is invalid. Return the loaded dict."""
     try:
         return _read_index_at(index_path(root))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -237,6 +253,7 @@ def load_index(root: ProjectRoot, *, restore: bool = True) -> dict[str, Any]:
 
 
 def _record_name(event: dict[str, Any]) -> str:
+    """Derive the record file name for event from its sequence and kind. Return the file name string."""
     sequence = int(event.get("sequence", 0))
     if sequence <= 0:
         raise ValueError("memory records require a positive board sequence")
@@ -292,6 +309,7 @@ def _append_replay_batch(root: ProjectRoot, events: list[dict[str, Any]]) -> Non
 
 
 def _known_tasks(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the task_owner_directions mapping from state, or an empty dict when state holds none."""
     value = state.get("task_owner_directions", {})
     return value if isinstance(value, dict) else {}
 
@@ -355,6 +373,7 @@ def answers_from_board(state: dict[str, Any], project: dict[str, Any] | None = N
 
 
 def _board_sequence(state: dict[str, Any]) -> int:
+    """Return the highest board event sequence number implied by state."""
     values = [int(state.get("next_event", 1)) - 1]
     values.extend(
         int(event.get("sequence", 0)) for event in state.get("events", [])
@@ -382,6 +401,16 @@ def _sync_events_unlocked(
     root: ProjectRoot, state: dict[str, Any], material: list[dict[str, Any]],
     *, project: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    """Apply material events to root's memory index (loading or initializing it first) and save it.
+
+    Args:
+        root: the project whose memory index file is read and rewritten.
+        state: the caller's board/session state, passed through to the indexing step.
+        material: the events to fold into the index; must be non-empty.
+        project: optional project name/description used only when the index needs to be created.
+
+    Return: the updated, saved index dict, or None when indexing produced nothing to save.
+    """
     try:
         current = load_index(root)
     except ValueError:
@@ -494,6 +523,7 @@ def log_sync_failure(root: ProjectRoot, error: BaseException) -> None:
 
 
 def _read_record(root: ProjectRoot, name: str) -> dict[str, Any]:
+    """Read and validate the immutable record called name under root. Return the record dict, or an unavailable-detail marker on failure."""
     try:
         candidate = Path(name)
         if candidate.is_absolute() or ".." in candidate.parts or candidate.name != str(name):
@@ -669,6 +699,7 @@ def restore_latest(root: ProjectRoot) -> bool:
 
 
 def _valid_snapshot(path: Path) -> bool:
+    """Return whether path holds a readable index and a records directory, making it a usable snapshot."""
     try:
         _read_index_at(path / "index.md")
         return (path / "records").is_dir()

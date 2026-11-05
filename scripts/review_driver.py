@@ -50,6 +50,10 @@ class StepFailed(RuntimeError):
 
 class Driver:
     def __init__(self, app: str, evidence: Path, home: Path | None):
+        """Set up the driver: store app, create the evidence directory, keep home, and start the clock.
+
+        Returns nothing; the effect is recording app, evidence, and home on self.
+        """
         self.app = app.rstrip("/")
         self.evidence = evidence
         self.evidence.mkdir(parents=True, exist_ok=True)
@@ -58,6 +62,10 @@ class Driver:
 
     # -- HTTP ------------------------------------------------------------------
     def call(self, method: str, path: str, body: dict | None = None, *, timeout: float = 120) -> Any:
+        """Send an HTTP method request to path on the app, with an optional body, waiting up to timeout.
+
+        Return: the parsed JSON response, or the raw text if it is not JSON.
+        """
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(self.app + path, data=data, method=method)
         if body is not None:
@@ -76,13 +84,25 @@ class Driver:
             return raw
 
     def board(self) -> dict:
+        """Fetch the board state from the project API.
+
+        Return: the board's state dict.
+        """
         return self.call("GET", "/project/api/board")["state"]
 
     def control(self) -> dict:
+        """Fetch the control-plane state (sessions and their status) from the project API.
+
+        Return: the control-plane response dict.
+        """
         return self.call("GET", "/project/api/control")
 
     # -- evidence --------------------------------------------------------------
     def record(self, step: str, value: Any) -> Any:
+        """Write value as JSON evidence for step and print a one-line summary of it.
+
+        Return: value, unchanged, so callers can record and return in one call.
+        """
         (self.evidence / f"{step}.json").write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
         elapsed = time.monotonic() - self.started
         print(f"[{elapsed:7.1f}s] {step}: {summary(value)}", flush=True)
@@ -122,25 +142,39 @@ class Driver:
 
     # -- steps -----------------------------------------------------------------
     def create(self, parent: str, name: str, description: str) -> dict:
+        """Create a new scaffold project under parent with name and description, via the projects API.
+
+        Return: the recorded API response entry (includes the new project id).
+        """
         entry = self.call("POST", "/api/projects", {"kind": "scaffold", "parent_root": os.path.expanduser(parent),
                                                     "name": name, "description": description})
         return self.record("create", entry)
 
     def open(self, project: str) -> dict:
+        """Open project through the API and wait until the project reports ready.
+
+        Return: the recorded open response.
+        """
         value = self.call("POST", f"/api/projects/{project}/open", {}, timeout=300)
         self.wait("open", lambda: self._ready(), 120, poll=1)
         return self.record("open", value)
 
     def _ready(self) -> bool:
+        """Return whether the project API currently reports ready, treating any request failure as not ready."""
         try:
             return bool(self.call("GET", "/project/api/ready").get("ready"))
         except (StepFailed, AttributeError, OSError):
             return False
 
     def launch(self, kinds: tuple[str, ...] = KINDS) -> dict:
+        """Launch one session per kind in kinds and wait until every one of them is running.
+
+        Return: the recorded mapping of each kind to its new session id.
+        """
         launched = {kind: self.call("POST", "/project/api/sessions", {"kind": kind})["session"]["id"] for kind in kinds}
 
         def attached():
+            """Return whether every session in launched is now running, raising if any failed, exited, or stopped."""
             rows = {row.get("id"): row for row in self.control().get("sessions", [])}
             failed = [f"{session}: {rows[session].get('reason')}" for session in launched.values()
                       if rows.get(session, {}).get("status") in {"failed", "exited", "stopped"}]
@@ -151,19 +185,33 @@ class Driver:
         return self.record("launch", launched)
 
     def delivery_agent(self) -> str:
+        """Wait for the board to show an active engineering-role agent.
+
+        Return: that agent's id.
+        """
         def find():
+            """Look through the board's agents and return the id of the active engineering agent, or empty string if none is active yet."""
             agents = self.board().get("agents", {})
             return next((agent_id for agent_id, agent in agents.items()
                          if agent.get("role") == "engineering" and agent.get("active")), "")
         return self.wait("delivery-agent", find, 300)
 
     def direct(self, text: str) -> dict:
+        """Send text as an owner direction message to the current delivery agent.
+
+        Return: the recorded response, along with the agent id it was sent to.
+        """
         agent = self.delivery_agent()
         value = self.call("POST", f"/project/api/agents/{agent}/owner-message", {"text": text, "message_type": "direction"})
         return self.record("direct", {"agent": agent, "response": value})
 
     def go_ahead(self, task: str = "") -> dict:
+        """Wait for a requirement proposal awaiting the owner (matching task if given) and send the go_ahead decision.
+
+        Return: the recorded response, with the matched task name.
+        """
         def awaiting():
+            """Return the name of a requirement proposal awaiting the owner that matches task, or empty string if none is found yet."""
             proposals = self.board().get("requirement_proposals", {})
             return next((name for name, proposal in proposals.items()
                          if proposal.get("status") == "awaiting_owner" and (not task or name == task)), "")
@@ -172,24 +220,42 @@ class Driver:
         return self.record("go-ahead", {"task": name, "response": value})
 
     def pause(self, project: str) -> dict:
+        """Pause project through the API.
+
+        Return: the recorded pause response.
+        """
         return self.record("pause", self.call("POST", f"/api/projects/{project}/pause", {}, timeout=600))
 
     def resume(self, project: str) -> dict:
+        """Resume project through the API and wait until the project reports ready again.
+
+        Return: the recorded resume response.
+        """
         value = self.call("POST", f"/api/projects/{project}/resume", {}, timeout=600)
         self.wait("resume", lambda: self._ready(), 180, poll=2)
         return self.record("resume", value)
 
     def wait_release(self, task: str = "", timeout: float = 5400) -> dict:
+        """Wait up to timeout seconds for a release (matching task if given) to reach VISUAL_TEST_REQUIRED.
+
+        Return: the recorded release-ready result.
+        """
         def released():
+            """Return the first release matching task with status VISUAL_TEST_REQUIRED, or None if none is ready yet."""
             releases = self.board().get("releases", {})
             return next(({"task": name, "release": release} for name, release in releases.items()
                          if release.get("status") == "VISUAL_TEST_REQUIRED" and (not task or name == task)), None)
         return self.record("release-ready", self.wait("release-ready", released, timeout, poll=15))
 
     def accept(self, task: str) -> dict:
+        """Send the accepted decision for task and wait until the release settles.
+
+        Return: the recorded response and settlement details for task.
+        """
         value = self.call("POST", f"/project/api/releases/{task}/decision", {"decision": "accepted"})
 
         def settled():
+            """Return the settlement details once task is accepted and its delivery agent has stopped or no longer holds it, otherwise None."""
             state = self.board()
             accepted = (state.get("releases", {}).get(task, {}).get("status") == "ACCEPTED")
             stopped = any(event.get("kind") == "delivery_stopped_after_acceptance" and event.get("task") == task
@@ -228,15 +294,20 @@ class Driver:
     def directives(self, moment: str) -> dict:
         """Stage 4: each live agent's rules are in its CLI's system layer, read from the processes themselves.
 
+        The moment label (e.g. "launch" or "resume") is recorded with this check.
+
         Claude: `--append-system-prompt <rules>` and `--system-prompt-snapshot off`.
         Codex: the app-server carries `developer_instructions=<rules>`, and the
         window's own line carries none of it (its first message is the short
         kickoff). Run after launch and again after a resume: a resumed agent
         must have its full rules back, not only the recovery note.
+
+        Return: the recorded per-session directive report.
         """
         titles = {"codex_delivery": "# Agent Directive", "claude_reviewer": "# Agent Directive", "claude_cto": "# CTO Directive"}
 
         def running():
+            """Return the sessions whose kind is in titles once all of them are running with a pid, otherwise None."""
             rows = [row for row in self.control().get("sessions", []) if row.get("kind") in titles]
             return rows if rows and all(row.get("status") == "running" and row.get("pid") for row in rows) else None
         rows = self.wait(f"directives-{moment}", running, 180, poll=2)
@@ -275,6 +346,10 @@ class Driver:
         return value
 
     def stop_all(self) -> dict:
+        """Stop every session through the API and poll for up to 30 seconds for leftover processes or runtime folders.
+
+        Return: the leftover-check reading, raising StepFailed if anything is still left.
+        """
         sessions = self.session_ids()
         started = time.monotonic()
         value = self.call("POST", "/project/api/sessions/stop-all", {}, timeout=300)
@@ -290,6 +365,10 @@ class Driver:
         return reading
 
     def session_ids(self) -> list[str]:
+        """Read the control endpoint's current sessions.
+
+        Return: the list of their ids, or an empty list if the call fails.
+        """
         try:
             return [str(row.get("id")) for row in self.control().get("sessions", []) if row.get("id")]
         except StepFailed:
@@ -298,10 +377,14 @@ class Driver:
     def _clean(self, sessions: list[str] | None = None) -> dict:
         """What of this app's agent sessions still runs, and its runtime folders.
 
+        Checks sessions (or every known session id if sessions is None).
+
         Every process of a session - supervisor, CLI, inbox relay, Codex
         app-server - carries HARNESS_MANAGED_SESSION=<id> in its environment,
         so it is counted by that, never by a command line that merely names a
         path (a shell running `grep` would match that).
+
+        Return: a dict describing which pids and runtime folders are still left.
         """
         sessions = self.session_ids() if sessions is None else sessions
         marks = [f"HARNESS_MANAGED_SESSION={session}" for session in sessions]
@@ -318,15 +401,27 @@ class Driver:
         return {"sessions_checked": len(sessions), "left": left}
 
     def close(self, project: str) -> dict:
+        """Close project through the API.
+
+        Return: the recorded close response.
+        """
         return self.record("close", self.call("POST", f"/api/projects/{project}/close", {}, timeout=300))
 
 
 def summary(value: Any) -> str:
+    """Render value as a compact JSON string for the one-line progress log.
+
+    Return: the JSON text, truncated with an ellipsis if it is longer than 220 characters.
+    """
     text = json.dumps(value, default=str)
     return text if len(text) <= 220 else text[:217] + "..."
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse command-line arguments from argv and run the requested step against a new Driver.
+
+    Return: 0 on success, or 1 if the step raised StepFailed.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("step", choices=["run", "create", "open", "launch", "direct", "go-ahead", "pause", "resume",
                                          "wait-release", "accept", "rendered", "stop-all", "check-clean", "close", "status", "directives"])

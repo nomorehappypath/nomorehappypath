@@ -39,6 +39,7 @@ CHAT_PHASES = {"selection_ms", "provider_ms", "validation_ms", "total_ms"}
 
 
 def chat_metrics_path(root: ProjectRoot) -> Path:
+    """Return the on-disk path of the bounded chat metrics document for root."""
     return project_context(root).storage_path("control", "chat-metrics.json")
 
 
@@ -104,6 +105,7 @@ def record_chat_measurement(root: ProjectRoot, *, outcome: str, **phases: float)
 
 
 def _parse(iso: str) -> datetime | None:
+    """Return iso parsed as a datetime, or None when it is not a valid ISO timestamp."""
     try:
         return datetime.fromisoformat(iso)
     except (TypeError, ValueError):
@@ -111,6 +113,10 @@ def _parse(iso: str) -> datetime | None:
 
 
 def _seconds(start: str, end: str) -> float | None:
+    """Return the non-negative number of seconds between start and end timestamps.
+
+    Output is None when either start or end fails to parse as ISO.
+    """
     a, b = _parse(start), _parse(end)
     if a is None or b is None:
         return None
@@ -148,14 +154,21 @@ def _all_events(root: Path) -> list[dict[str, Any]]:
 
 
 def _first(events: list[dict[str, Any]], kind: str) -> str:
+    """Return the "at" timestamp of the first event in events whose kind matches, or "" if none."""
     return next((e.get("at", "") for e in events if e.get("kind") == kind), "")
 
 
 def _last(events: list[dict[str, Any]], kind: str) -> str:
+    """Return the "at" timestamp of the last event in events whose kind matches, or "" if none."""
     return next((e.get("at", "") for e in reversed(events) if e.get("kind") == kind), "")
 
 
 def _task_requests(root: Path, task: str) -> list[dict[str, Any]]:
+    """Return every qa_request for task under root, active and archived, oldest first.
+
+    Deduplicates by request id (active entries take precedence over archived
+    ones with the same id) and sorts the result by requested_at.
+    """
     state = board.historical_snapshot(root) if hasattr(board, "historical_snapshot") else board.snapshot(root)
     active = list((state.get("qa_requests") or {}).values())
     archived = [entry.get("value", {}) for entry in state.get("archive", [])
@@ -168,6 +181,13 @@ def _task_requests(root: Path, task: str) -> list[dict[str, Any]]:
 
 
 def task_metrics(root: Path, task: str) -> dict[str, Any]:
+    """Project task's lifecycle phases, review cycles, and totals from durable records under root.
+
+    Derives definition, implementation, review, repair, and mechanical-tail
+    durations purely from recorded event and request timestamps. Return: a
+    dict with started_at, concluded_at, total_seconds, phases, reviews,
+    repair_turnarounds, review_count, and failed_cycles.
+    """
     events = _task_events(root, task)
     requests = _task_requests(root, task)
     begun = _first(events, "task_begun")
@@ -317,6 +337,12 @@ def field_trial_metrics(
     )[0]
 
     def measured_seconds(left: str, right: str) -> float | None:
+        """Return the seconds between left and right, unless right falls after cutoff_limit.
+
+        When cutoff_limit is set and right parses to a time after it, the
+        interval is not yet complete as of the cutoff. Output is None in
+        that case or whenever _seconds itself cannot parse left/right.
+        """
         if cutoff_limit is not None:
             end = _parse(right)
             if end is None or end > cutoff_limit:

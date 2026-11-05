@@ -30,6 +30,10 @@ _configured: dict[str, int] = {}
 
 
 def _clock() -> datetime:
+    """Give the current moment in UTC.
+
+    Returns: the current timezone-aware datetime, in UTC.
+    """
     return datetime.now(timezone.utc)
 
 
@@ -49,14 +53,32 @@ def configure(plumbing: Any) -> None:
 
 
 def limits() -> tuple[int, int]:
+    """Give the active file-count and byte-size limits.
+
+    Returns: a tuple of (max files, max bytes), each the owner's configured value if one was
+    installed by configure(), otherwise the module default.
+    """
     return _configured.get("files", MAX_FILES_DEFAULT), _configured.get("bytes", MAX_BYTES_DEFAULT)
 
 
 def _size_text(count: int) -> str:
+    """Turn a byte count into a short human-readable size.
+
+    Args:
+        count: the number of bytes to describe.
+
+    Return: a string in MB (one decimal place) when count is a million bytes or more,
+    otherwise a whole-KB string (never less than 1 KB).
+    """
     return f"{count / 1_000_000:.1f} MB" if count >= 1_000_000 else f"{max(1, round(count / 1000))} KB"
 
 
 def measure_seconds() -> int:
+    """Give the timeout to use for the git calls that measure a candidate's size.
+
+    Returns: the owner's configured number of seconds if one was installed by configure(),
+    otherwise the module default.
+    """
     return _configured.get("seconds", MEASURE_SECONDS_DEFAULT)
 
 
@@ -173,6 +195,14 @@ def count_turn(state: dict[str, Any], agent: dict[str, Any] | None, payload: dic
 
 
 def _moment(value: Any) -> datetime | None:
+    """Parse a stored timestamp into a timezone-aware datetime.
+
+    Args:
+        value: the raw stored value (typically an ISO-format string) to parse.
+
+    Returns: the parsed datetime, assumed UTC when it carries no timezone of its own, or None
+    when value cannot be parsed.
+    """
     try:
         moment = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -205,6 +235,15 @@ def open_stretch(request: dict[str, Any], at: datetime | None = None) -> None:
 
 
 def _active_seconds(request: dict[str, Any], end: datetime) -> float:
+    """Give the total active review time for a request, including any stretch still open.
+
+    Args:
+        request: the qa request record, holding its banked seconds and any open stretch marker.
+        end: the moment to measure an open stretch up to.
+
+    Returns: the banked review_active_seconds plus the seconds from the current open stretch
+    (from its start up to end), or just the banked seconds when no stretch is open.
+    """
     start = _running_since(request)
     return float(request.get("review_active_seconds", 0.0) or 0.0) + (max(0.0, (end - start).total_seconds()) if start else 0.0)
 
@@ -236,6 +275,16 @@ def review_minutes(state: dict[str, Any], task: str, at: datetime | None = None)
 
 
 def usage(state: dict[str, Any], task: str, at: datetime | None = None) -> dict[str, Any]:
+    """Build the owner-facing summary of how much work a task has used so far.
+
+    Args:
+        state: the board's own state, holding the recorded turn counts and review seconds.
+        task: the task whose usage is being reported.
+        at: the moment to measure any still-open review stretch up to; defaults to now.
+
+    Return: a dict with agent_turns, review_minutes, a plain-language line describing both
+    (plus any CTO-wake sentence), and the task's cto_wakes count.
+    """
     turns = int((state.get("task_turns") or {}).get(task, 0) or 0)
     minutes = review_minutes(state, task, at)
     return {

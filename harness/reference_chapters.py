@@ -33,10 +33,12 @@ def reference_hint(*names: str) -> str:
 
 
 def reference_path(role: str, directives_dir: Path | None = None) -> Path:
+    """Return the path to the role's long reference file, under directives_dir if given, else DIRECTIVES_DIR."""
     return (directives_dir or DIRECTIVES_DIR) / ROLE_FILES[role][0]
 
 
 def card_path(role: str, directives_dir: Path | None = None) -> Path:
+    """Return the path to the role's short card file, under directives_dir if given, else DIRECTIVES_DIR."""
     return (directives_dir or DIRECTIVES_DIR) / "cards" / ROLE_FILES[role][1]
 
 
@@ -64,6 +66,7 @@ def chapters(text: str) -> dict[str, str]:
 
 
 def role_chapters(role: str, directives_dir: Path | None = None) -> dict[str, str]:
+    """Return the role's reference file split into chapters, via chapters(), reading from directives_dir if given."""
     return chapters(reference_path(role, directives_dir).read_text(encoding="utf-8"))
 
 

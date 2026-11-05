@@ -22,6 +22,15 @@ RELEASE_NOTES_URL = "https://github.com/nomorehappypath/nomorehappypath/releases
 
 
 def _run_git(root: Path, *arguments: str) -> subprocess.CompletedProcess:
+    """Run a git command with the given arguments in root and return its result.
+
+    Args:
+        root: The directory the git command is run in (its working tree).
+        arguments: The git subcommand and flags to execute, e.g. "status".
+
+    Returns:
+        The CompletedProcess result of running git with the given arguments.
+    """
     return git_process.run(
         ["git", *arguments], cwd=root,
         capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS,
@@ -47,6 +56,14 @@ def installed_version(root: Path) -> str:
 
 
 def _parse(tag: str) -> tuple[int, int, int] | None:
+    """Parse tag as a "vMAJOR.MINOR.PATCH" version string.
+
+    Args:
+        tag: The candidate version tag text to parse, e.g. "v1.2.3".
+
+    Returns:
+        A (major, minor, patch) tuple of ints, or None if tag does not match.
+    """
     match = VERSION_TAG.fullmatch(tag.strip())
     return tuple(int(part) for part in match.groups()) if match else None
 

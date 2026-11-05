@@ -349,6 +349,7 @@ class NativeAgentViewRenderedTests(unittest.TestCase):
                 self.browser = browser_acceptance._DevToolsSocket(port, path, timeout=15)
                 self.addCleanup(self.browser.close)
                 self.wait("document.querySelectorAll('#agents .agent-row').length === 3")
+                self.browser.evaluate("document.getElementById('tab-advanced-btn')?.click()")   # the agent terminals live in the Advanced tab since the Mission Control redesign
                 ids = {s['id'] for s in running}
                 for session in running:
                     selector = '#agents [data-session-id="' + session['id'] + '"] .actions button:first-child'
@@ -425,7 +426,7 @@ end run''', tty], check=True, capture_output=True)
                             os.kill(session['pid'], signal.SIGTERM)
                         except ProcessLookupError:
                             pass
-                    title = defaults.role_title(session['id']) + ' [' + session['id'] + ']'
+                    title = defaults.window_title(session['id'])
                     if title:
                         # Close only a single-tab test window matching our owned TTY.
                         script = '''on run argv

@@ -20,9 +20,9 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import threading
 from contextlib import contextmanager
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,6 +243,11 @@ class SurfaceProtocolError(ValueError):
     """A command request did not satisfy the bounded wire protocol."""
 
 
+class _GarbledAnswer(SurfaceProtocolError):
+    """The board command finished with exit 0 but printed something that is not its JSON answer (2026-11-04)."""
+
+
+
 @dataclass(frozen=True)
 class SessionIdentity:
     project_id: str
@@ -254,14 +259,20 @@ class SessionIdentity:
     auth_epoch: int
 
     def public(self) -> dict[str, Any]:
+        """Return this identity as a plain dict, safe to hand back to a caller."""
         return asdict(self)
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def project_id(root: ProjectRoot) -> str:
+    """Derive the stable project identifier from root's code, data, and workspace roots.
+
+    Return: a sha256 hex digest that uniquely names the project.
+    """
     context = project_context(root)
     material = "\0".join(
         (str(context.code_root), str(context.data_root), str(context.workspace_root))
@@ -270,11 +281,19 @@ def project_id(root: ProjectRoot) -> str:
 
 
 def _verifier(project: str, session_id: str, token: str) -> str:
+    """Derive the durable verifier hash for project, session_id, and token.
+
+    Return: a sha256 hex digest; the raw token is never stored, only this.
+    """
     material = f"{project}\0{session_id}\0{token}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
 def _role_for_session(session: dict[str, Any]) -> str:
+    """Map session's provider kind to the board authorization role.
+
+    Return: "engineering", "qa", or "cto".
+    """
     role = control.role_for_kind(str(session.get("kind", "")))
     return {"delivery": "engineering", "reviewer": "qa", "cto": "cto"}[role]
 
@@ -283,6 +302,11 @@ class SessionTokenAuthority:
     """Issue and validate project-private, session-scoped credentials."""
 
     def __init__(self, root: ProjectRoot):
+        """Bind this authority to the project located at root.
+
+        Return: none; the effect is setting up context, project_id, and the
+        storage paths used for the durable verifier records.
+        """
         self.context = project_context(root)
         self.project_id = project_id(self.context)
         self.directory = self.context.storage_path("control")
@@ -292,6 +316,12 @@ class SessionTokenAuthority:
 
     @contextmanager
     def _records(self) -> Iterator[dict[str, Any]]:
+        """Open the durable session-token-verifiers file under an exclusive file lock.
+
+        Yields the parsed record dict for the caller to read or mutate; on exit,
+        writes it back atomically if it changed. Return: none directly; the
+        effect is this context manager's yielded value and any resulting write.
+        """
         self.directory.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -318,6 +348,11 @@ class SessionTokenAuthority:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def _session(self, session_id: str) -> dict[str, Any]:
+        """Look up session_id in the control snapshot.
+
+        Return: the session dict. Raises SurfaceAuthenticationError when no
+        matching session exists.
+        """
         sessions = {item["id"]: item for item in control.snapshot(self.context).get("sessions", [])}
         session = sessions.get(str(session_id))
         if not session:
@@ -396,6 +431,11 @@ class SessionTokenAuthority:
         return self.claim(session_id, attached_pid)
 
     def revoke(self, session_id: str) -> None:
+        """Mark session_id's verifier record revoked, if it exists and is not already.
+
+        Return: none; the effect is dropping any pending token and stamping
+        revoked_at in the durable record.
+        """
         self._pending.pop(session_id, None)
         with self._records() as value:
             record = value["sessions"].get(session_id)
@@ -403,6 +443,12 @@ class SessionTokenAuthority:
                 record["revoked_at"] = _now()
 
     def authenticate(self, token: str) -> SessionIdentity:
+        """Resolve token to the SessionIdentity of the session it was issued for.
+
+        Return: the matching SessionIdentity. Raises SurfaceAuthenticationError
+        when token is malformed, matches no live, authorized session, or its
+        derived role does not match the session's expected role.
+        """
         if not isinstance(token, str) or len(token) < 32:
             raise SurfaceAuthenticationError("session authentication failed")
         matched_session = ""
@@ -474,16 +520,23 @@ def session_environment(endpoint: str, token: str) -> dict[str, str]:
 
 
 def _project_command_lock(project: str) -> threading.Lock:
+    """Return the shared command-serialization lock for project, creating it if needed."""
     with _PROJECT_COMMAND_LOCKS_GUARD:
         return _PROJECT_COMMAND_LOCKS.setdefault(project, threading.Lock())
 
 
 def _project_nonce_lock(project: str) -> threading.Lock:
+    """Return the shared nonce-tracking lock for project, creating it if needed."""
     with _PROJECT_COMMAND_LOCKS_GUARD:
         return _PROJECT_NONCE_LOCKS.setdefault(project, threading.Lock())
 
 
 def _argument_value(arguments: list[str], name: str) -> str | None:
+    """Find the single value given for option name in arguments (as "name value" or "name=value").
+
+    Return: the value, or None when name is absent. Raises SurfaceProtocolError
+    when name has no value or is given more than once.
+    """
     found: list[str] = []
     for index, argument in enumerate(arguments):
         if argument == name:
@@ -581,6 +634,7 @@ def _concurrent_arguments(
 
 
 def _without_argument(arguments: list[str], name: str) -> list[str]:
+    """Return arguments with every occurrence of option name (and its value) removed."""
     result: list[str] = []
     index = 0
     while index < len(arguments):
@@ -601,6 +655,11 @@ def _without_argument(arguments: list[str], name: str) -> list[str]:
 def _canonical_argument(
     arguments: list[str], name: str, value: str, *, required: bool = True,
 ) -> list[str]:
+    """Force option name in arguments to value, refusing a caller-supplied mismatch.
+
+    required controls whether name must already be present (an identity argument
+    the surface itself always fills in). Return: arguments with name set to value.
+    """
     claimed = _argument_value(arguments, name)
     if required and claimed is None:
         raise SurfaceProtocolError(f"{name} is required")
@@ -610,6 +669,10 @@ def _canonical_argument(
 
 
 def _sanitized_text(value: str, context: ProjectRoot) -> str:
+    """Replace any occurrence of context's trusted data_root path in value with an opaque label.
+
+    Return: the sanitized text.
+    """
     result = value
     root = project_context(context)
     for path in (root.data_root,):
@@ -621,6 +684,11 @@ def _sanitized_text(value: str, context: ProjectRoot) -> str:
 
 
 def _sanitized_value(value: Any, context: ProjectRoot) -> Any:
+    """Recursively sanitize value for context: redact secret-looking dict keys and trusted paths in text.
+
+    Return: the sanitized copy of value (strings, lists, and dicts are rebuilt;
+    other types are returned unchanged).
+    """
     if isinstance(value, str):
         return _sanitized_text(value, context)
     if isinstance(value, list):
@@ -636,11 +704,92 @@ def _sanitized_value(value: Any, context: ProjectRoot) -> Any:
 
 @contextmanager
 def _without_client_environment() -> Iterator[None]:
-    saved = {name: os.environ.pop(name) for name in (TOKEN_ENV, ENDPOINT_ENV, PROTOCOL_ENV) if name in os.environ}
+    """Run a board command without the client session variables in the process environment.
+
+    Commands run on threads at the same time (a short read beside a long test run), so the scrub is counted: the
+    variables leave when the first command starts and return only when the last one ends. Before 2026-11-04 each
+    command restored them on its own exit while another was still running.
+    """
+    with _CLIENT_ENVIRONMENT_LOCK:
+        if _CLIENT_ENVIRONMENT_STATE["depth"] == 0:
+            _CLIENT_ENVIRONMENT_STATE["saved"] = {name: os.environ.pop(name) for name in (TOKEN_ENV, ENDPOINT_ENV, PROTOCOL_ENV) if name in os.environ}
+        _CLIENT_ENVIRONMENT_STATE["depth"] += 1
     try:
         yield
     finally:
-        os.environ.update(saved)
+        with _CLIENT_ENVIRONMENT_LOCK:
+            _CLIENT_ENVIRONMENT_STATE["depth"] -= 1
+            if _CLIENT_ENVIRONMENT_STATE["depth"] == 0:
+                os.environ.update(_CLIENT_ENVIRONMENT_STATE.pop("saved", {}))
+
+
+_CLIENT_ENVIRONMENT_LOCK = threading.Lock()
+_CLIENT_ENVIRONMENT_STATE: dict[str, Any] = {"depth": 0}
+
+
+class _ThreadOutput:
+    """sys.stdout / sys.stderr stand-in that captures per thread.
+
+    contextlib.redirect_stdout swaps the one process-wide sys.stdout, so two board commands on two threads wrote into
+    each other's buffer: a reference read got another command's chapter, a request-review got "invalid response" and
+    the board then deleted the evidence it had just stored (2026-11-04, Codex finding R4F-1). A thread that has started
+    a capture gets its own buffer; every other thread keeps the real stream.
+    """
+
+    def __init__(self, real: Any) -> None:
+        """Wrap the real stream; per-thread buffers start empty."""
+        self._real = real
+        self._local = threading.local()
+
+    def start(self) -> io.StringIO:
+        """Begin capturing this thread's output into a fresh buffer and return it."""
+        self._local.buffer = io.StringIO()
+        return self._local.buffer
+
+    def stop(self) -> None:
+        """End this thread's capture; its output goes to the real stream again."""
+        self._local.buffer = None
+
+    def _target(self) -> Any:
+        """This thread's buffer while capturing, else the real stream."""
+        return getattr(self._local, "buffer", None) or self._real
+
+    def write(self, text: str) -> int:
+        """Write text to this thread's target; returns the count written."""
+        return self._target().write(text)
+
+    def flush(self) -> None:
+        """Flush this thread's target."""
+        self._target().flush()
+
+    def __getattr__(self, name: str) -> Any:
+        """Everything else (encoding, isatty, fileno) comes from the real stream."""
+        return getattr(self._real, name)
+
+
+_THREAD_OUTPUT_LOCK = threading.Lock()
+
+
+def _thread_streams() -> tuple[_ThreadOutput, _ThreadOutput]:
+    """Install the per-thread stand-ins once (they forward to whatever streams were there) and return them."""
+    with _THREAD_OUTPUT_LOCK:
+        if not isinstance(sys.stdout, _ThreadOutput):
+            sys.stdout = _ThreadOutput(sys.stdout)
+        if not isinstance(sys.stderr, _ThreadOutput):
+            sys.stderr = _ThreadOutput(sys.stderr)
+        return sys.stdout, sys.stderr
+
+
+@contextmanager
+def _captured_output() -> Iterator[tuple[io.StringIO, io.StringIO]]:
+    """Capture this thread's stdout and stderr for the duration; yields the two buffers."""
+    out_stream, err_stream = _thread_streams()
+    stdout, stderr = out_stream.start(), err_stream.start()
+    try:
+        yield stdout, stderr
+    finally:
+        out_stream.stop()
+        err_stream.stop()
 
 
 _TASK_BRIEF_LIMIT_MESSAGE = "task brief needs a plan (1-420 chars) and update (1-240 chars)"
@@ -674,6 +823,7 @@ def _refusal_task(state: dict[str, Any], agent: dict[str, Any], operation: str, 
 # (operation, refusal text) pairs that never count toward the repeated-refusal hold (owner's Windows walk, 2026-10-21:
 # five over-long status notes froze a task). Substantive limits (findings, triage notes, proposals) are decisions, not formatting.
 def _cosmetic_refusals() -> tuple[tuple[str, str, bool], ...]:
+    """Return the (operation, message, exact) triples that never count toward a refusal hold."""
     from harness import board   # lazy: board imports this module's neighbours
     return (
         ("task-brief", _TASK_BRIEF_LIMIT_MESSAGE, True),
@@ -685,6 +835,11 @@ def _cosmetic_refusals() -> tuple[tuple[str, str, bool], ...]:
 
 
 def _is_cosmetic_refusal(operation: str, error: str) -> bool:
+    """Return whether error for operation matches one of the cosmetic-refusal messages.
+
+    Return: whether this refusal is formatting-only and should never count
+    toward a repeated-refusal hold.
+    """
     text = error.strip()
     for name, message, exact in _cosmetic_refusals():
         if operation != name:
@@ -708,6 +863,7 @@ _SELF_EXPLAINING_REFUSALS = (
 
 
 def _names_its_own_fix(error: str) -> bool:
+    """Return whether error already tells the agent its own exact fix, needing no escalation."""
     return any(marker in error for marker in _SELF_EXPLAINING_REFUSALS)
 
 
@@ -720,6 +876,11 @@ class CommandGateway:
     REFUSAL_WINDOW_SECONDS = 45 * 60.0
 
     def __init__(self, root: ProjectRoot, authority: SessionTokenAuthority):
+        """Set up the gateway for the project at root, authenticating through authority.
+
+        Return: none; the effect is initializing the nonce/command lock paths,
+        served_ports, and the refusal-tracking state.
+        """
         self.context = project_context(root)
         self.authority = authority
         self.directory = self.context.storage_path("control")
@@ -780,6 +941,11 @@ class CommandGateway:
         return told
 
     def _consume_nonce(self, session_id: str, nonce: int) -> None:
+        """Record nonce as used for session_id, rejecting a duplicate or out-of-order value.
+
+        Return: none; the effect is persisting the new highest nonce. Raises
+        SurfaceReplayError when nonce is not strictly greater than the previous one.
+        """
         self.directory.mkdir(parents=True, exist_ok=True)
         if self.nonce_path.is_file():
             try:
@@ -805,6 +971,12 @@ class CommandGateway:
         os.replace(temporary, self.nonce_path)
 
     def _validated_request(self, request: Any) -> tuple[int, str, list[str], dict[str, Any]]:
+        """Validate the bounded wire shape of request and extract its fields.
+
+        Return: the (nonce, operation, arguments, artifacts) tuple. Raises
+        SurfaceProtocolError or SurfaceAuthorizationError when request fails any
+        shape, size, or protected-argument check.
+        """
         required = {"protocol", "nonce", "operation", "arguments"}
         if (
             not isinstance(request, dict) or not required.issubset(request)
@@ -843,6 +1015,12 @@ class CommandGateway:
         return nonce, operation, list(arguments), dict(artifacts)
 
     def _authorized_arguments(self, identity: SessionIdentity, operation: str, arguments: list[str]) -> list[str]:
+        """Check identity is authorized for operation and rewrite arguments with its own identity fields.
+
+        Return: arguments with agent/task/session identity forced to identity's own
+        values. Raises SurfaceAuthorizationError when operation is not permitted
+        for identity's role, or a caller-supplied identity field disagrees.
+        """
         roles = AUTHORIZATION_MATRIX.get(operation)
         if roles is None or identity.role not in roles:
             raise SurfaceAuthorizationError("board operation is not authorized for this session")
@@ -903,6 +1081,13 @@ class CommandGateway:
     def _validated_artifacts(
         self, operation: str, arguments: list[str], artifacts: dict[str, Any],
     ) -> dict[str, dict[str, Any]]:
+        """Validate artifacts against operation's upload specification and decode their bytes.
+
+        arguments supplies the upload marker argument that must reference each
+        artifact field. Return: a dict mapping field to its decoded payload and
+        metadata. Raises SurfaceProtocolError or SurfaceAuthorizationError when
+        shape, size, hash, encoding, or media type checks fail.
+        """
         specification = UPLOAD_ARGUMENTS.get(operation)
         if not specification:
             if artifacts:
@@ -953,6 +1138,11 @@ class CommandGateway:
 
     @staticmethod
     def _write_new_file(path: Path, payload: bytes) -> None:
+        """Atomically create path with payload's bytes, refusing to overwrite an existing file.
+
+        Return: none; the effect is writing a new regular file at path with mode
+        0o600. Raises SurfaceProtocolError when path already exists.
+        """
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(path.parent, 0o700)
         if os.path.lexists(path):
@@ -988,6 +1178,12 @@ class CommandGateway:
         self, identity: SessionIdentity, operation: str, nonce: int,
         artifacts: dict[str, dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
+        """Persist each decoded entry in artifacts as a payload file plus a manifest, scoped to identity's session.
+
+        operation and nonce are recorded in each manifest for provenance. Return:
+        a dict mapping field to its stored metadata, including the files' paths
+        and a derived artifact_id. On any failure, the partial writes are cleaned up.
+        """
         stored: dict[str, dict[str, Any]] = {}
         session_label = hashlib.sha256(identity.session_id.encode("utf-8")).hexdigest()[:20]
         directory = self.context.storage_path("evidence", "uploads", session_label)
@@ -1034,6 +1230,10 @@ class CommandGateway:
 
     @staticmethod
     def _cleanup_artifacts(stored: dict[str, dict[str, Any]]) -> None:
+        """Remove every file previously written for stored's artifacts, in reverse order.
+
+        Return: none; the effect is deleting each created_paths entry that still exists.
+        """
         for metadata in stored.values():
             for path in reversed(metadata.get("created_paths", [])):
                 if isinstance(path, Path) and os.path.lexists(path):
@@ -1043,12 +1243,22 @@ class CommandGateway:
     def _artifact_arguments(
         arguments: list[str], stored: dict[str, dict[str, Any]],
     ) -> list[str]:
+        """Replace each upload marker in arguments with the on-disk path of its stored artifact.
+
+        Return: the rewritten arguments list, ready for board.main.
+        """
         result = list(arguments)
         for metadata in stored.values():
             result = [*_without_argument(result, metadata["option"]), metadata["option"], str(metadata["path"])]
         return result
 
     def execute(self, token: str, request: Any) -> dict[str, Any]:
+        """Authenticate token, authorize and run request's board operation, and return its output.
+
+        Return: a dict with the sanitized board result, the authenticated
+        identity, and a summary of any stored artifacts. Raises a Surface* error
+        when authentication, authorization, replay protection, or execution fails.
+        """
         nonce, operation, arguments, raw_artifacts = self._validated_request(request)
         # Authentication, replay protection, and byte ingestion are one short
         # transaction. Do not hold the long-command serialization lock here:
@@ -1068,8 +1278,8 @@ class CommandGateway:
                     stored = self._store_artifacts(identity, operation, nonce, artifacts)
                 finally:
                     fcntl.flock(file_lock.fileno(), fcntl.LOCK_UN)
-        board_succeeded = False
-        try:
+        recorded = False     # a command that ran and succeeded may have recorded the stored evidence: it stays even when its
+        try:                 # answer cannot be read (2026-11-04: deleting it then left a review nobody could claim)
             execution_arguments = self._artifact_arguments(arguments, stored)
             try:
                 if operation in CONCURRENT_BOARD_OPERATIONS:
@@ -1084,12 +1294,15 @@ class CommandGateway:
                                 output = self._execute_serialized(execution_arguments)
                             finally:
                                 fcntl.flock(execution_lock.fileno(), fcntl.LOCK_UN)
+            except _GarbledAnswer:
+                recorded = True       # the board finished (exit 0); only its answer was unreadable
+                raise
             except SurfaceProtocolError as refusal:
                 told = self._track_refusal(identity, operation, str(refusal), arguments)
                 if told:
                     raise SurfaceProtocolError(str(refusal) + told) from refusal
                 raise
-            board_succeeded = True
+            recorded = True
             return {
                 "result": _sanitized_value(output, self.context),
                 "identity": identity.public(),
@@ -1104,14 +1317,18 @@ class CommandGateway:
                 },
             }
         finally:
-            if stored and not board_succeeded:
+            if stored and not recorded:
                 self._cleanup_artifacts(stored)
 
     def _execute_serialized(self, arguments: list[str]) -> Any:
+        """Run board.main with arguments under the long-command serialization path.
+
+        Return: the parsed JSON result of the board command. Raises
+        SurfaceProtocolError when the command fails or returns invalid JSON.
+        """
         from harness import board
 
-        stdout, stderr = io.StringIO(), io.StringIO()
-        with _without_client_environment(), redirect_stdout(stdout), redirect_stderr(stderr):
+        with _without_client_environment(), _captured_output() as (stdout, stderr):
             try:
                 return_code = board.main([*context_cli_arguments(self.context), *arguments])
             except SystemExit as error:
@@ -1124,7 +1341,7 @@ class CommandGateway:
         try:
             return json.loads(stdout.getvalue())
         except json.JSONDecodeError as error:
-            raise SurfaceProtocolError("board command returned an invalid response") from error
+            raise _GarbledAnswer("board command returned an invalid response") from error
 
     def _execute_concurrent(self, operation: str, arguments: list[str]) -> Any:
         """Run the small staged-authoring surface without global command contention."""

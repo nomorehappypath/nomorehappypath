@@ -54,12 +54,26 @@ LIST_OF_IDS = {("split-repair-package", "--group")}   # each entry: comma-joined
 
 
 def _subcommands() -> dict[str, argparse.ArgumentParser]:
+    """Build the board CLI parser and pull out its subcommand parsers.
+
+    Return: a dict mapping each subcommand name to its own argparse parser,
+    taken from the single `--subparsers` action that `board.build_parser()`
+    registers.
+    """
     parser = board.build_parser()
     action = next(item for item in parser._actions if isinstance(item, argparse._SubParsersAction))  # noqa: SLF001
     return dict(action.choices)
 
 
 def _property(operation: str, action: argparse.Action) -> dict[str, Any]:
+    """Translate one argparse action of operation into a JSON-Schema property.
+
+    Handles booleans (store-true flags), the hand-split STRUCTURED and
+    LIST_OF_IDS fields for this operation, and plain scalars (with enum from
+    action.choices and a description from its help text), wrapping repeated
+    (append) actions in an array. Return: the JSON-Schema fragment describing
+    that single argument.
+    """
     option = action.option_strings[0]
     repeated = isinstance(action, argparse._AppendAction)  # noqa: SLF001
     description = action.help or (action.metavar if isinstance(action.metavar, str) else "") or ""
@@ -108,6 +122,14 @@ def tool_definitions(role: str) -> list[dict[str, Any]]:
 
 
 def _join(value: dict[str, Any], separator: str, fields: list[tuple[str, bool]]) -> str:
+    """Pack a structured-field value back into the CLI's hand-split string form.
+
+    For each (name, is_list) in fields, read the corresponding entry out of
+    value (list entries are comma-joined), and raise ValueError if any entry
+    contains a comma (for a list field) or the separator itself. Return: the
+    fields joined together with separator, matching what the board CLI
+    expects for that hand-split argument.
+    """
     parts = []
     for name, is_list in fields:
         item = value.get(name, [] if is_list else "")
@@ -160,6 +182,14 @@ def argv_for(operation: str, arguments: dict[str, Any]) -> list[str]:
 
 
 def _call(operation: str, arguments: dict[str, Any], agent: str = "") -> dict[str, Any]:
+    """Run one board operation as the MCP tool-call handler sees it.
+
+    Builds the argv for operation from arguments, appends agent as --agent
+    when the subcommand accepts it, and calls the board_client with a longer
+    timeout for LONG_RUNNING operations. Return: an MCP content/isError
+    dict - the board's JSON result on success, or an error message text when
+    the board refuses the call or an OSError/ValueError is raised.
+    """
     argv = argv_for(operation, arguments)
     if agent and "--agent" in _subcommands()[operation]._option_string_actions:  # noqa: SLF001
         # The registered id the runner was given; the surface still checks it
@@ -202,11 +232,26 @@ def _selftest() -> None:
 
 
 def serve(role: str, stdin=None, stdout=None, agent: str = "") -> int:
+    """Run the MCP stdio server loop for one agent role until stdin closes.
+
+    stdin and stdout default to sys.stdin/sys.stdout (overridable for tests).
+    Builds the role's tool_definitions once, then reads one JSON-RPC message
+    per line, answering initialize (also running the opt-in _selftest),
+    ping, tools/list and tools/call (dispatched through _call, scoped to
+    agent), and reporting unknown methods as JSON-RPC errors. Return: 0 once
+    stdin is exhausted, as the process exit code.
+    """
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     tools = tool_definitions(role)
     names = {tool["name"] for tool in tools}
 
     def reply(ident, result=None, error=None):
+        """Write one JSON-RPC response line for request ident and flush stdout.
+
+        Exactly one of result or error is expected to be set; whichever is
+        truthy is placed under the matching JSON-RPC key. The effect is to
+        serialize the message to stdout as a single compact JSON line.
+        """
         message = {"jsonrpc": "2.0", "id": ident}
         message["error" if error else "result"] = error or result
         stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
@@ -247,6 +292,11 @@ def serve(role: str, stdin=None, stdout=None, agent: str = "") -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse --role and --agent from argv and start the MCP server.
+
+    argv defaults to sys.argv (via argparse) when None. Return: the exit
+    code produced by serve() for the chosen role and agent id.
+    """
     parser = argparse.ArgumentParser(description="The board as MCP tools, for one agent role")
     parser.add_argument("--role", required=True, choices=["engineering", "qa", "cto"])
     parser.add_argument("--agent", default="", help="this session's registered board agent id")

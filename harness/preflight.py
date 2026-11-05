@@ -17,11 +17,23 @@ from typing import Mapping
 
 
 def _claude_config_dir(home: Path, env: Mapping[str, str]) -> tuple[Path, bool]:
+    """Return the Claude Code configuration folder to use, derived from env and home.
+
+    When CLAUDE_CONFIG_DIR is set in env, its expanded path is used; otherwise the
+    result falls back to home / ".claude". The second element of the output tuple is
+    True when an explicit CLAUDE_CONFIG_DIR was used, False otherwise.
+    """
     configured = str(env.get("CLAUDE_CONFIG_DIR", "")).strip()
     return (Path(configured).expanduser(), True) if configured else (home / ".claude", False)
 
 
 def _relative_config_dir(env: Mapping[str, str]) -> bool:
+    """Give back whether env sets CLAUDE_CONFIG_DIR to a non-absolute path.
+
+    The result is True only when CLAUDE_CONFIG_DIR is both present and relative,
+    since a relative value would resolve differently depending on the agent's
+    starting folder.
+    """
     configured = str(env.get("CLAUDE_CONFIG_DIR", "")).strip()
     return bool(configured) and not Path(configured).expanduser().is_absolute()
 
@@ -57,6 +69,12 @@ def claude_bypass_consent_state(home: Path, env: Mapping[str, str]) -> tuple[str
 
 
 def claude_bypass_consent_accepted(home: Path, env: Mapping[str, str]) -> bool:
+    """Return whether the owner already accepted the bypass-permissions warning.
+
+    This is a convenience wrapper around claude_bypass_consent_state, using home
+    and env to locate the settings, and collapsing its state string down to a
+    plain boolean.
+    """
     return claude_bypass_consent_state(home, env)[0] == "accepted"
 
 
@@ -143,6 +161,12 @@ def native_browser_problem(system: str | None = None, machine: str | None = None
 
 
 def role_defaults_text() -> str:
+    """Produce a one-line summary of the shipped default provider/model/effort per role.
+
+    No arguments are taken; the output lists, for each role in
+    control.ROLE_SETTINGS, its label, default provider, default model and default
+    effort, followed by a reminder about where to change them.
+    """
     from harness import control
     parts = []
     for role, entry in control.ROLE_SETTINGS.items():

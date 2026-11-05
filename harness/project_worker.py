@@ -96,6 +96,9 @@ class ProjectChatService:
 
     def __init__(self, root, settings_home: Path | None, project_id: str,
                  answerer: Callable | None = None) -> None:
+        """Set up the chat coordinator's state for root, under settings_home and project_id, using answerer
+        (or project_chat.answer_question when none is given) to produce an answer. Returns nothing.
+        """
         self.root = root
         self.settings_home = settings_home
         self.project_id = str(project_id or "")
@@ -108,6 +111,9 @@ class ProjectChatService:
         self.started: deque[float] = deque(maxlen=CHAT_RATE_LIMIT)
 
     def _rate_admit(self) -> None:
+        """Drop expired entries from the rate window and admit one more start, or raise ChatBusy if the
+        rate limit is already reached. Return: none; the effect is recorded on self.started.
+        """
         now = time.monotonic()
         while self.started and now - self.started[0] >= CHAT_RATE_WINDOW_SECONDS:
             self.started.popleft()
@@ -116,6 +122,10 @@ class ProjectChatService:
         self.started.append(now)
 
     def submit(self, request_id: str, question: str) -> dict:
+        """Validate request_id and question, deduplicate against any prior receipt for the same request_id,
+        enforce the single-slot rate limit, run the answerer, and record the receipt. Return: the chat
+        response dict (possibly marked duplicate).
+        """
         if not isinstance(request_id, str):
             raise ValueError("request_id must be text")
         if not CHAT_REQUEST_ID.fullmatch(request_id):
@@ -177,6 +187,10 @@ class ProjectChatService:
                 self.drained.notify_all()
 
     def cancel(self, request_id: str) -> bool:
+        """Signal cancellation of the active chat request matching request_id, if one is running.
+
+        Return: True if a running request was found and signalled, False if none was active.
+        """
         if not isinstance(request_id, str) or not CHAT_REQUEST_ID.fullmatch(request_id):
             raise ValueError("request_id is invalid")
         with self.lock:
@@ -187,6 +201,9 @@ class ProjectChatService:
             return True
 
     def shutdown(self) -> None:
+        """Signal every active chat request to cancel, clear stored receipts, and wait briefly for the
+        active set to drain. Returns nothing; the effect is a best-effort, bounded shutdown.
+        """
         with self.drained:
             for event in self.active.values():
                 event.set()
@@ -200,6 +217,7 @@ class StartupMaintenance:
     """Run trusted worker recovery once, after a controlled resume is active."""
 
     def __init__(self, root) -> None:
+        """Record root and initialize the lock and completion flag. Return: none."""
         self.root = root
         self.lock = threading.Lock()
         self.complete = False
@@ -231,6 +249,9 @@ class StartupMaintenance:
 def make_before_command(authority, maintenance: "StartupMaintenance") -> Callable[..., None]:
     """The worker's pre-command hook: authenticate first (an unauthenticated caller never triggers recovery), then maintenance."""
     def before_command(token: str, operation: Callable[[], str] | None = None) -> None:
+        """Authenticate token, then run startup maintenance (passing operation through) now that the
+        caller is known to be trusted. Return: none.
+        """
         authority.authenticate(token)
         maintenance.run(operation)
     return before_command
@@ -243,6 +264,11 @@ class ProjectWatchdog:
         self, root, *, interval_seconds: float = board.WATCHDOG_INTERVAL_SECONDS,
         stale_after: int = board.AGENT_STALE_SECONDS,
     ) -> None:
+        """Validate interval_seconds and stale_after and store root plus the watchdog's idle state.
+
+        Return: none. self_heal and notify are left unset here; serve_worker assigns them once
+        terminals can be opened.
+        """
         if interval_seconds <= 0 or stale_after < 1:
             raise ValueError("watchdog interval and stale threshold must be positive")
         self.root = root
@@ -255,6 +281,9 @@ class ProjectWatchdog:
         self.notify = None  # set by serve_worker: sends one owner alert outside the page
 
     def tick(self) -> list[dict]:
+        """Run one control-plane liveness check, trigger self-heal and cost-center collection when the
+        project is active, and forward any owner alerts. Return: the list of stalled agent reports.
+        """
         try:
             self.last_report = control_plane.tick(self.root, self.stale_after)
         except (OSError, ValueError):
@@ -280,6 +309,9 @@ class ProjectWatchdog:
         return list(self.last_report.get("stalled", []))
 
     def _run(self) -> None:
+        """Loop calling tick() on interval_seconds cadence until stop_event is set, logging any check
+        failure instead of letting it kill the watchdog thread. Return: none.
+        """
         while not self.stop_event.wait(self.interval_seconds):
             try:
                 self.tick()
@@ -287,6 +319,7 @@ class ProjectWatchdog:
                 print(f"HARNESS PROJECT WATCHDOG | check failed: {str(error)[:300]}", flush=True)
 
     def start(self) -> None:
+        """Start the watchdog's background daemon thread, refusing to run twice. Return: none."""
         if self.thread is not None:
             raise ValueError("project watchdog is already started")
         self.thread = threading.Thread(
@@ -295,11 +328,13 @@ class ProjectWatchdog:
         self.thread.start()
 
     def shutdown(self) -> None:
+        """Signal the watchdog loop to stop and join its thread, bounded by the check interval. Return: none."""
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=max(1.0, min(3.0, self.interval_seconds + 0.5)))
 
     def status(self) -> dict:
+        """Return a snapshot dict describing whether the watchdog thread is alive and its timing settings."""
         return {
             "active": bool(self.thread is not None and self.thread.is_alive()),
             "interval_seconds": self.interval_seconds,
@@ -363,6 +398,9 @@ def make_bootstrap_server(
     """Build the one-time credential handoff with an OS-derived peer PID."""
     class BootstrapHandler(socketserver.BaseRequestHandler):
         def handle(self):
+            """Read one bootstrap request from the connected peer, claim a session token keyed to the
+            peer's OS-verified pid, and send back the environment (or an error). Return: none.
+            """
             try:
                 payload = bytearray()
                 while len(payload) <= BOOTSTRAP_LIMIT:
@@ -418,6 +456,20 @@ def make_handler(
     manager_proxy_token: str = "",
     worker_health=None,
 ):
+    """Build the authenticated HTTP request Handler class for one project worker.
+
+    root is the project's board root. authority issues and checks session tokens; gateway (built from
+    root and authority when omitted) executes authenticated board commands; endpoint returns this
+    worker's own base URL; bootstrap_socket returns the path of the one-time credential handoff socket.
+    project_name, project_description, manager_url and project_id describe the project to the browser
+    UI; settings_home points at the owner's Settings directory; ready_token and chat_action_token gate
+    privileged browser actions (chat_action_token is generated when not supplied). before_command runs
+    ahead of every authenticated board command. chat_service (built from root, settings_home and
+    project_id when omitted) answers project-chat questions. runtime carries the loaded runtime
+    identity for display. browser_prefix and manager_proxy_token gate requests that must come through
+    the manager's own proxy rather than directly from a browser. worker_health reports watchdog status.
+    Return: the Handler class to pass to the HTTP server.
+    """
     gateway = gateway or CommandGateway(root, authority)
     chat_action_token = chat_action_token or secrets.token_urlsafe(32)
     chat_service = chat_service or ProjectChatService(root, settings_home, project_id)
@@ -429,6 +481,9 @@ def make_handler(
 
     class Handler(BaseHandler):
         def _manager_proxy_authorized(self) -> bool:
+            """Return whether this request carries the manager's own proxy credential, matched by
+            constant-time comparison against manager_proxy_token.
+            """
             return bool(
                 manager_proxy_token
                 and hmac.compare_digest(
@@ -437,12 +492,18 @@ def make_handler(
             )
 
         def do_GET(self):
+            """Handle an HTTP GET: refuse it with 403 unless it is manager-proxy authorized (when
+            browser_prefix is set), otherwise delegate to the base handler. Return: none.
+            """
             if browser_prefix and not self._manager_proxy_authorized():
                 self.send_json(403, {"error": "project worker is private to the manager"})
                 return
             super().do_GET()
 
         def _small_json(self, limit: int = BOOTSTRAP_LIMIT) -> dict:
+            """Read the request body (refusing anything longer than limit or any mismatched Content-Length)
+            and parse it as a JSON object. Return: the decoded dict.
+            """
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError as error:
@@ -458,6 +519,10 @@ def make_handler(
             return value
 
         def do_POST(self):
+            """Handle an HTTP POST: route project-chat, board-command, session-bootstrap, session-creation
+            and resume-launch requests to their handlers, with manager-proxy and origin checks where
+            required, and delegate anything else to the base handler. Return: none.
+            """
             path = urlparse(self.path).path
             if (
                 browser_prefix and path != "/api/board/command"
@@ -530,6 +595,9 @@ def make_handler(
                     parsed: list = []
 
                     def operation_name() -> str:
+                        """Parse the command body once, lazily, and return its "operation" field (or "" if
+                        the body is not a dict). Reused on later calls via the parsed cache.
+                        """
                         # the request is parsed once, and only when the hook asks (a resume is still finishing)
                         if not parsed:
                             parsed.append(self._small_json(COMMAND_LIMIT))
@@ -614,6 +682,9 @@ def make_handler(
             super().do_POST()
 
         def log_message(self, *_):
+            """Suppress the base HTTP handler's default per-request access logging, ignoring any arguments (_) given.
+
+            Return: none."""
             return
 
     return Handler
@@ -631,6 +702,14 @@ def serve(
     ready_token: str = "",
     browser_prefix: str = "",
 ) -> None:
+    """Run the authenticated Projects worker's HTTP server for root until interrupted.
+
+    Binds to host/port (loopback only); project_name, project_description, manager_url and project_id
+    describe the project for the browser UI; settings_home locates the owner's Settings; ready_token
+    and browser_prefix gate access as in make_handler. Starts recovery maintenance if the project is
+    already active, configures cost/contract/review subsystems from Settings, starts the watchdog and
+    release-preview supervisor, serves requests, and runs shutdown cleanup on exit. Returns nothing.
+    """
     if host not in {"127.0.0.1", "localhost"}:
         raise ValueError("Projects worker must bind only to loopback")
     maintenance = StartupMaintenance(root)
@@ -673,6 +752,9 @@ def serve(
             previous_term = signal.getsignal(signal.SIGTERM)
 
             def graceful_stop(_signum, _frame):
+                """Convert the SIGTERM signal (with its _signum and _frame arguments) into a KeyboardInterrupt
+                so the server's normal shutdown path runs. Produces no return value.
+                """
                 raise KeyboardInterrupt
 
             signal.signal(signal.SIGTERM, graceful_stop)
@@ -707,6 +789,12 @@ def serve(
         bootstrap_thread = threading.Thread(target=bootstrap_server.serve_forever, daemon=True)
         bootstrap_thread.start()
         def self_heal_create(kind: str, continues: str = "", recovery: bool = False) -> dict:
+            """Create a replacement agent session of kind for the self-heal path.
+
+            continues names the launch choice being continued (used only on an ordinary replacement,
+            not a recovery). recovery selects the "retry once" path after repeated failed reviews
+            instead of an ordinary continuation. Return: the new session dict.
+            """
             # Unreadable Settings refuse (never launch defaults silently); a replacement continues the owner's
             # launch choice through `continues`; the Gemini availability gate applies as on every new session.
             settings_override = board_viewer.read_agent_settings_for_launch(settings_home)
@@ -726,6 +814,9 @@ def serve(
                                   availability=board_viewer._delivery_availability(settings_home))
 
         def self_heal_launch(session: dict) -> None:
+            """Prepare a fresh credential for session and relaunch its terminal, revoking the credential
+            and marking the launch failed if that relaunch raises. Return: none.
+            """
             authority.prepare(session["id"])
             try:
                 launch_terminal(root, session, str(bootstrap_path), manager_home=settings_home)
@@ -752,11 +843,20 @@ def serve(
 
 def _shutdown_steps(*, preview_supervisor, watchdog, chat, previous_term, server, bootstrap_server, bootstrap_thread,
                     bootstrap_path, bootstrap_directory) -> list:
+    """Assemble the ordered list of (name, callable) shutdown steps for one worker run.
+
+    preview_supervisor, watchdog and chat are shut down unconditionally; previous_term restores the
+    prior SIGTERM handler; server, bootstrap_server and bootstrap_thread are shut down only if they
+    were actually started; bootstrap_path and bootstrap_directory are the one-time socket's file and
+    containing directory to remove. Return: the list of steps, for _run_cleanup to execute.
+    """
     def restore_term():
+        """Restore the SIGTERM handler that was in effect before serve() installed its own. Return: none."""
         if previous_term is not None:
             signal.signal(signal.SIGTERM, previous_term)
 
     def remove_bootstrap_file():
+        """Remove the bootstrap claim socket file from disk if it still exists. Return: none."""
         if bootstrap_path.exists():
             bootstrap_path.unlink()
 
@@ -787,6 +887,10 @@ def _run_cleanup(steps) -> list:
 
 
 def main(argv=None) -> int:
+    """Parse command-line argv and call serve() with the resulting project context and options.
+
+    Return: the process exit code (always 0; serve() runs until interrupted).
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description="Authenticated NoMoreHappyPath Projects worker")

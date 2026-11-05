@@ -49,6 +49,14 @@ def gemini_call(payload: dict) -> dict:
     name, args = str(call.get("name") or ""), call.get("args") if isinstance(call.get("args"), dict) else {}
 
     def value(key):
+        """Look up key in the Gemini call's args, decoding a JSON-encoded string value if present.
+
+        Args:
+            key: The argument name to look up.
+
+        Return:
+            The decoded string if args[key] is a JSON-encoded string, otherwise the raw item.
+        """
         item = args.get(key)
         if isinstance(item, str):
             try:
@@ -67,6 +75,15 @@ def gemini_call(payload: dict) -> dict:
 
 
 def _deny(provider: str, reason: str) -> str:
+    """Build the PreToolUse denial payload in the vocabulary the given provider's CLI expects.
+
+    Args:
+        provider: The CLI provider ("gemini" or otherwise, e.g. Claude Code).
+        reason: The human-readable reason the tool call is denied.
+
+    Return:
+        A JSON string encoding the provider-specific deny decision.
+    """
     if provider == "gemini":
         # Antigravity's documented PreToolUse reply.
         return json.dumps({"decision": "deny", "reason": reason})
@@ -90,6 +107,14 @@ def _compact(payload: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Read the hook payload from stdin, relay it to the worker, and print the hook decision.
+
+    Args:
+        argv: The CLI arguments (provider, event), or None to use sys.argv.
+
+    Returns:
+        0 always; the hook's effect is the printed decision, not the exit code.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     provider, event = (argv + ["", ""])[:2]
     guard = event == "PreToolUse"

@@ -50,7 +50,7 @@ class RepairContextTests(unittest.TestCase):
         session = control.create(self.root, "codex_delivery")
         dev = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION,
                              vendor="OpenAI", session_id=session["id"])
-        board.record_owner_direction(self.root, session["id"], "Ship repair flow")
+        board.record_owner_direction(self.root, session["id"], "Ship repair flow", allow_split=True)   # some runs use a chunked plan
         board.begin_task(self.root, dev["id"], "TASK-R")
         agreed_requirements(
             self.root, dev["id"], "Final agreed requirements: ship the repair flow with evidence.")

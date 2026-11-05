@@ -128,6 +128,12 @@ TEST_EQUIVALENTS: dict[str, tuple[str, ...]] = {
 
 
 def production_files(root: Path) -> dict[str, bytes]:
+    """Scan the harness and scripts directories under root for production source files.
+
+    Walks the "harness" and "scripts" subdirectories of root, skipping __pycache__
+    entries and any file whose suffix is not .py, .md, or .sh. Return a dict mapping
+    each surviving file's path (relative to root, as a string) to its raw bytes.
+    """
     result: dict[str, bytes] = {}
     for base in ("harness", "scripts"):
         for path in (root / base).rglob("*"):
@@ -140,6 +146,12 @@ def production_files(root: Path) -> dict[str, bytes]:
 
 
 def test_methods(root: Path) -> set[str]:
+    """Collect the fully-qualified names of every test function under root's tests directory.
+
+    Parses each tests/test_*.py file under root with ast, walking its syntax tree to find
+    FunctionDef and AsyncFunctionDef nodes whose name starts with "test_". Return a set of
+    strings of the form "tests/<filename>::<function name>" identifying each test method.
+    """
     result: set[str] = set()
     for path in sorted((root / "tests").glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -156,6 +168,16 @@ def audit_inventories(
     adapted_paths: Iterable[str] = ADAPTED_SHARED_PATHS,
     equivalents: dict[str, tuple[str, ...]] = TEST_EQUIVALENTS,
 ) -> list[str]:
+    """Compare dev_files/next_files and dev_tests/next_tests to find parity violations.
+
+    Checks that every production file present in dev_files also exists in next_files and
+    is covered by either exact_paths (requiring byte-for-byte equality between dev_files
+    and next_files) or adapted_paths (requiring presence only). Also checks that every
+    test in dev_tests missing from next_tests has a documented replacement named in
+    equivalents, and flags any equivalents entry that no longer corresponds to a missing
+    dev test as stale. Return a list of human-readable problem strings describing every
+    parity violation found; an empty list means parity holds.
+    """
     problems: list[str] = []
     exact, adapted = set(exact_paths), set(adapted_paths)
     for path in sorted(dev_files):
@@ -185,6 +207,12 @@ def audit_inventories(
 
 
 def audit_roots(dev_root: Path, next_root: Path) -> list[str]:
+    """Run the full parity audit comparing the dev_root and next_root repository checkouts.
+
+    Resolves dev_root and next_root, collects each one's production_files and
+    test_methods, and passes them to audit_inventories. Return the resulting list of
+    parity problem strings produced by that comparison.
+    """
     return audit_inventories(
         production_files(dev_root.resolve()), production_files(next_root.resolve()),
         test_methods(dev_root.resolve()), test_methods(next_root.resolve()),

@@ -62,6 +62,13 @@ def trust_workspaces(paths: list[str], home: str | Path | None = None) -> list[s
 
 
 def _trust_locked(path: Path, paths: list[str]) -> list[str]:
+    """Merge paths into the settings file's trustedWorkspaces list while the caller holds the folder lock.
+
+    Reads the JSON document at path (treating a missing or unparsable file, or one that is not a JSON
+    object, as having no existing trust), adds any of paths not already listed, and writes the result back
+    atomically via a temporary file. Returns the list of folders newly added, or an empty list if the
+    document could not be read, is not an object, or nothing new needed to be added.
+    """
     try:
         document = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     except (OSError, ValueError):
@@ -84,6 +91,13 @@ def _trust_locked(path: Path, paths: list[str]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI entry point: refuse if Gemini is on an API key, else honor an optional --trust request.
+
+    Uses argv if given, else the process's own command-line arguments (sys.argv[1:]). Prints the refusal
+    message and gives exit code 3 when api_key_problem reports one; otherwise, if the first argument is
+    "--trust", calls trust_workspaces with the remaining arguments as folders to trust. Returns 0 on success
+    or 3 when the API-key/custom-endpoint setup is refused.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     problem = api_key_problem()
     if problem:

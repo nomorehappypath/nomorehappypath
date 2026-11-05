@@ -146,6 +146,11 @@ ACTIVE_STATUSES = {"launching", "running", "stopping", "pausing"}
 
 
 def _attach_seconds(name: str, default: float) -> float:
+    """Read a float timeout from the environment variable `name`, falling back to `default`.
+
+    Return `default` when the variable is unset, unparsable, or outside the
+    sane window (0, 1e7); otherwise give back the parsed value.
+    """
     try:
         value = float(os.environ.get(name, "") or default)
     except ValueError:
@@ -205,10 +210,16 @@ def claude_launch_budget_seconds() -> float:
 
 
 def now() -> str:
+    """Give the current UTC timestamp as an ISO-8601 string. Takes no parameters; the result is the effect."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def default_agent_settings() -> dict[str, dict[str, str]]:
+    """Build the default provider/model/effort block for every role in ROLE_SETTINGS.
+
+    Takes no parameters. The result is a dict keyed by role, each value holding
+    that role's default provider, model and effort.
+    """
     return {
         role: {
             "provider": values["default_provider"],
@@ -220,6 +231,11 @@ def default_agent_settings() -> dict[str, dict[str, str]]:
 
 
 def role_for_kind(kind: str) -> str:
+    """Map a session `kind` (e.g. codex_delivery, claude_reviewer) to its role name.
+
+    Return the role string from KIND_TO_ROLE, or raise ValueError when `kind`
+    is not a recognized agent kind.
+    """
     try:
         return KIND_TO_ROLE[kind]
     except KeyError as error:
@@ -291,6 +307,16 @@ def normalize_provider_model(provider: str, model: str) -> str:
 
 def _validated_agent_settings(value: dict | None, *, notices: list[str] | None = None,
                               repair: bool = False) -> dict[str, dict[str, str]]:
+    """Validate and normalize an agent-settings block for every role.
+
+    `value` is the candidate settings dict (or None to start from the
+    defaults); each role's provider, model and effort are checked and
+    normalized, with Gemini's model/effort pair repaired or validated
+    depending on `repair`. Human-readable notices about any repair are
+    appended to `notices` when given. Return the normalized settings dict,
+    or raise ValueError when the input is malformed or delivery/reviewer
+    share the same provider.
+    """
     candidate = default_agent_settings() if value is None else value
     if not isinstance(candidate, dict):
         raise ValueError("agent settings must be an object")
@@ -318,6 +344,13 @@ def _validated_agent_settings(value: dict | None, *, notices: list[str] | None =
 
 
 def agent_settings(root: Path) -> dict[str, dict[str, str]]:
+    """Return the validated agent settings persisted for the project at `root`.
+
+    Reads the control state under `root` and validates it; if the stored
+    block is malformed (e.g. from an older build), the defaults are given
+    back instead so the dashboard stays usable. The result is a plain
+    JSON-cloned dict, safe for the caller to mutate.
+    """
     with locked_state(root) as state:
         try:
             validated = _validated_agent_settings(state.get("agent_settings"))
@@ -330,6 +363,11 @@ def agent_settings(root: Path) -> dict[str, dict[str, str]]:
 
 
 def update_agent_settings(root: Path, value: dict) -> dict[str, dict[str, str]]:
+    """Validate `value` and persist it as the project's agent settings under `root`.
+
+    Raises ValueError (via validation) when `value` is malformed. The
+    result is a plain JSON-cloned copy of the stored, normalized settings.
+    """
     validated = _validated_agent_settings(value)
     with locked_state(root) as state:
         state["agent_settings"] = validated
@@ -384,14 +422,21 @@ def session_launch_settings(root: Path, session_id: str, kind: str) -> dict[str,
 
 
 def control_dir(root: ProjectRoot) -> Path:
+    """Return the path to the control storage directory for the project at `root`."""
     return project_context(root).storage_path("control")
 
 
 def _state_path(root: Path) -> Path:
+    """Return the path of the sessions.json state file for the project at `root`."""
     return control_dir(root) / "sessions.json"
 
 
 def _initial_state() -> dict[str, Any]:
+    """Build an empty control state for a project that has no sessions.json yet.
+
+    Takes no parameters. The result is a dict with empty sessions, inbox and
+    instruction_receipts sections.
+    """
     # Provider/model/effort are manager-global in Projects Layer mode.  The
     # field remains readable when an older standalone harness explicitly saved
     # it, but new project control documents never create a second copy.
@@ -428,6 +473,15 @@ def initialize(root: ProjectRoot) -> dict[str, Any]:
 
 @contextmanager
 def locked_state(root: Path) -> Iterator[dict[str, Any]]:
+    """Yield the project's control state for `root` under an exclusive file lock.
+
+    Loads sessions.json (or builds the initial state if it is missing),
+    holds an OS-level flock around the directory's `.lock` file for the
+    duration of the `with` block so other processes cannot race the read,
+    and after the caller's edits writes the state back atomically only if
+    it actually changed. The yielded dict is mutated in place by the
+    caller; there is no separate return value.
+    """
     directory = control_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".lock").open("a+", encoding="utf-8") as lock:
@@ -448,6 +502,12 @@ def locked_state(root: Path) -> Iterator[dict[str, Any]]:
 
 
 def _pid_is_alive(pid: int | None) -> bool:
+    """Check whether process `pid` is still running.
+
+    Return False when `pid` is falsy or the process is gone, True when a
+    signal probe finds it alive or forbidden to signal (still alive, just
+    not ours to kill).
+    """
     if not pid:
         return False
     try:
@@ -510,6 +570,12 @@ STUCK_PAUSE_REASON = (
 
 
 def _stop_overdue(session: dict[str, Any]) -> bool:
+    """Check whether `session`'s pending stop or pause has waited past STOP_RECONCILE_SECONDS.
+
+    Return False when the session is not stopping/pausing, has no recorded
+    request time, or the timestamp cannot be parsed; otherwise give back
+    whether the elapsed wait has reached the threshold.
+    """
     requested = session.get("pause_requested_at") or session.get("stop_requested_at")
     if session["status"] not in {"stopping", "pausing"} or not requested:
         return False
@@ -521,6 +587,13 @@ def _stop_overdue(session: dict[str, Any]) -> bool:
 
 
 def _reconcile(state: dict[str, Any]) -> None:
+    """Bring `state`'s sessions up to date and close out any stale attention/limit holds.
+
+    Delegates to _reconcile_sessions to update statuses, then for every
+    session that is no longer active but still carries a limit hold, clears
+    the hold and ends it. Mutates `state` in place; the effect is the
+    update, there is no return value.
+    """
     from harness import attention      # not at module level: attention imports conversation, which imports this module
     try:
         _reconcile_sessions(state)
@@ -570,6 +643,15 @@ def _force_kill(pid: int, expected_start_token: str) -> bool:
 
 
 def _reconcile_sessions(state: dict[str, Any]) -> None:
+    """Advance every active session in `state` to its true current status.
+
+    For each session still in an active status, checks whether its process
+    pid is alive, force-kills one stuck past its stop/pause deadline,
+    sweeps leftover descendant processes, and marks the session stopped,
+    paused or exited with a reason. A session with no pid yet that has
+    missed its launch deadline is marked failed. Mutates `state` in place;
+    there is no return value.
+    """
     for session in state["sessions"].values():
         if session["status"] not in ACTIVE_STATUSES:
             continue
@@ -648,6 +730,7 @@ def sanitize_launch_diagnostic(text: Any) -> str:
 
 
 def _launch_role_label(session: dict[str, Any]) -> str:
+    """Return the human-facing role label for `session` (its own role, the kind's role, or "agent")."""
     return str(session.get("role") or KINDS.get(str(session.get("kind")), {}).get("role") or "agent")
 
 
@@ -949,6 +1032,12 @@ def inheritable_predecessor(root: Path, kind: str) -> str:
 
 
 def _has_undelivered(state: dict[str, Any], session_id: str) -> bool:
+    """Check whether `session_id` still has inbox messages or queued/taken/posted instruction receipts pending.
+
+    Return True when the session's inbox entry in `state` is non-empty or
+    any instruction receipt for it is not yet in a terminal status;
+    otherwise False.
+    """
     if state.get("inbox", {}).get(session_id):
         return True
     return any(receipt.get("session_id") == session_id and receipt.get("status") in {"queued", "taken", "posted"}
@@ -1165,6 +1254,12 @@ def live_session_ids(root: Path) -> set[str]:
 
 
 def cli_session(root: Path, session_id: str) -> dict[str, Any]:
+    """Return the CLI session bookkeeping (cli_session_id, provider, launch counts) for `session_id` under `root`.
+
+    Raises ValueError when `session_id` does not name a known managed
+    session. The result is a plain dict summarizing the session's CLI
+    continuity fields.
+    """
     session = _read_state(root).get("sessions", {}).get(session_id)
     if not session:
         raise ValueError(f"unknown managed session: {session_id}")
@@ -1181,11 +1276,17 @@ def cli_session(root: Path, session_id: str) -> dict[str, Any]:
 
 
 def _launch_store(provider: str) -> str | None:
+    """Return the default cost-center store name for `provider`, or None when it has none."""
     from harness import cost_center
     return cost_center.default_store(provider) or None
 
 
 def record_cli_session(root: Path, session_id: str, cli_session_id: str, provider: str) -> dict[str, Any]:
+    """Persist the CLI's own `cli_session_id` and `provider` against the managed `session_id` under `root`.
+
+    Raises ValueError when `cli_session_id` is blank or `session_id` is
+    unknown. The result is a small dict confirming what was recorded.
+    """
     cli_session_id = str(cli_session_id or "").strip()
     if not cli_session_id:
         raise ValueError("a CLI session id is required")
@@ -1219,6 +1320,13 @@ def clear_cli_session(root: Path, session_id: str, reason: str = "") -> dict[str
 
 
 def note_cli_launch(root: Path, session_id: str, resumed: bool, reason: str = "") -> dict[str, Any]:
+    """Record that `session_id` under `root` just launched its CLI, whether `resumed` or fresh.
+
+    Bumps the launch counter, stamps the launch time, stores `resumed` and
+    the plan's `reason` text, and clears any pending resumed-after-pause
+    marker. Raises ValueError when `session_id` is unknown; the result
+    (via the return below) reports the launch's updated bookkeeping.
+    """
     with locked_state(root) as state:
         session = state.get("sessions", {}).get(session_id)
         if not session:
@@ -1272,6 +1380,14 @@ def note_instruction(root: Path, session_id: str, record: dict[str, Any]) -> dic
 
 
 def attach(root: Path, session_id: str, pid: int) -> dict[str, Any]:
+    """Mark the launching session `session_id` under `root` as now running under terminal process `pid`.
+
+    Reconciles state first, raises ValueError when `pid` is not positive,
+    `session_id` is unknown, or the session was cancelled before attaching.
+    Clears stale launch-failure bookkeeping (moving the previous one to
+    history) and records the tty and pid start token. Return a copy of the
+    updated session.
+    """
     if pid <= 0:
         raise ValueError("pid must be positive")
     with locked_state(root) as state:
@@ -1793,6 +1909,12 @@ def supersede(
 
 
 def fail_launch(root: Path, session_id: str, reason: str) -> dict[str, Any]:
+    """Mark `session_id` under `root` as failed to launch, recording `reason` (truncated to a max length).
+
+    Only a session still in "launching" status is changed; a session that
+    already attached or moved on is left untouched. Raises ValueError when
+    `session_id` is unknown. Return a copy of the session afterward.
+    """
     with locked_state(root) as state:
         session = state["sessions"].get(session_id)
         if not session:
@@ -1805,6 +1927,14 @@ def fail_launch(root: Path, session_id: str, reason: str) -> dict[str, Any]:
 
 
 def stop(root: Path, session_id: str) -> dict[str, Any]:
+    """Request that the active session `session_id` under `root` stop.
+
+    Raises ValueError when `session_id` is unknown. A session that is not
+    currently active is given back unchanged. Otherwise bumps the auth
+    epoch, stamps the stop request, and either signals the live pid
+    (SIGTERM, moving the session to "stopping") or, if there is no live
+    pid, marks it stopped immediately. Return a copy of the session.
+    """
     with locked_state(root) as state:
         _reconcile(state)
         session = state["sessions"].get(session_id)
@@ -2047,6 +2177,13 @@ def queued_instructions(root: Path) -> dict[str, Any]:
 
 
 def snapshot(root: Path) -> dict[str, Any]:
+    """Reconcile and return the full dashboard view of the project's sessions under `root`.
+
+    Reconciles state, then builds the result: every session (newest
+    first), per-kind active counts, the configured limits, any limit
+    notice for a session currently under attention, and the project's
+    agent settings. Return that combined dict.
+    """
     with locked_state(root) as state:
         _reconcile(state)
         sessions = sorted(state["sessions"].values(), key=lambda value: value["created_at"], reverse=True)
@@ -2069,6 +2206,14 @@ def snapshot(root: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run this module's command-line interface, parsing `argv` (or sys.argv when None).
+
+    Builds subcommands for attach, resolve, plan-cli-launch,
+    record-cli-session, note-cli-launch, note-cli-exec, note-instruction,
+    launch-failed and conversation, dispatches to the matching function,
+    and prints its JSON result. The result is the process exit code (0 on
+    success); some subcommands may raise on invalid input.
+    """
     parser = argparse.ArgumentParser(description="Harness local CLI-session lifecycle registry")
     add_context_arguments(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
