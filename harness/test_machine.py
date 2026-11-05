@@ -47,6 +47,7 @@ MACHINE_COMMAND_PREFIX = "TEST_MACHINE_GEN="
 
 
 def _env_seconds(name: str, default: float) -> float:
+    """Read an environment variable named name as a positive number of seconds, falling back to default when it is unset, not a number, or not positive. Return the resolved seconds value."""
     try:
         value = float(os.environ.get(name, "") or default)
     except ValueError:
@@ -68,12 +69,14 @@ class MachineError(ValueError):
     """A refusal or failure whose message is plain English for the owner (never contains a secret)."""
 
     def __init__(self, message: str, code: str = "error", *, needs_password: bool = False):
+        """Build a MachineError carrying the plain-English message, a short code naming the failure class, and needs_password when a fresh Connect password is required to recover. Returns nothing; the effect is to set self.code and self.needs_password and initialize the base exception's message."""
         super().__init__(message)
         self.code = code
         self.needs_password = needs_password
 
 
 def now() -> str:
+    """Give the current UTC time as an ISO 8601 string. Return that timestamp."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -107,15 +110,18 @@ def validate_target(address: Any, user: Any, port: Any = 22) -> tuple[str, str, 
 
 # -- storage --------------------------------------------------------------------
 def machine_dir(root: ProjectRoot) -> Path:
+    """Locate the test-machine storage subdirectory for the project at root. Return its path."""
     return project_context(root).storage_path(SUBDIR)
 
 
 def descriptor_path(root: ProjectRoot) -> Path:
+    """Locate the test-machine descriptor file for the project at root. Return its path."""
     return machine_dir(root) / DESCRIPTOR_NAME
 
 
 @contextmanager
 def _locked(root: ProjectRoot) -> Iterator[None]:
+    """Context manager taking an exclusive flock on the project's test-machine lock file under root. Yields nothing; the effect is to hold the lock for the duration of the with-block so reads and writes of the descriptor never race."""
     directory = machine_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
     with open(directory / ".lock", "a+") as handle:
@@ -131,6 +137,7 @@ class Damaged(MachineError):
 
 
 def _read_unlocked(root: ProjectRoot) -> dict[str, Any] | None:
+    """Read and parse the test-machine descriptor for root without taking the lock (the caller already holds it, or has a reason not to need it). Return the parsed dict, or None if no descriptor exists yet; raise Damaged if the file cannot be read, is not valid JSON, or is not the expected version."""
     path = descriptor_path(root)
     try:
         text = path.read_text(encoding="utf-8")
@@ -153,6 +160,7 @@ def read(root: ProjectRoot) -> dict[str, Any] | None:
 
 
 def _write_unlocked(root: ProjectRoot, value: dict[str, Any]) -> None:
+    """Write value as the test-machine descriptor for root, without taking the lock (the caller already holds it), via a write-then-rename so a reader never observes a partial file. Returns nothing; the effect is the durable descriptor update."""
     path = descriptor_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
@@ -161,6 +169,7 @@ def _write_unlocked(root: ProjectRoot, value: dict[str, Any]) -> None:
 
 
 def _blank(root: ProjectRoot) -> dict[str, Any]:
+    """Build a fresh, never-connected test-machine descriptor for root with every field at its initial default. Return the new descriptor dict."""
     return {
         "version": DESCRIPTOR_VERSION, "connected": False, "address": "", "user": "", "port": 22,
         "host_key": {}, "key_path": "", "known_hosts_path": "", "revision": 0, "auth_epoch": 0,
@@ -188,12 +197,14 @@ def update(root: ProjectRoot, change: Callable[[dict[str, Any]], Any], *, create
 
 
 def machine_id(value: dict[str, Any]) -> str:
+    """Derive a stable short identifier for the machine described by descriptor value, from its address, port and host key fingerprint. Return the first 16 hex characters of the sha256 digest."""
     fingerprint = str((value.get("host_key") or {}).get("fingerprint") or "")
     text = f"{value.get('address','')}|{value.get('port','')}|{fingerprint}"
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def stamp_of(value: dict[str, Any]) -> dict[str, Any]:
+    """Extract the machine identity and revision stamp (machine_id, revision, auth_epoch, tools_revision) that machine-dependent evidence is checked against, from descriptor value. Return that stamp dict."""
     return {
         "machine_id": machine_id(value), "revision": int(value.get("revision", 0)),
         "auth_epoch": int(value.get("auth_epoch", 0)), "tools_revision": int(value.get("tools_revision", 0)),
@@ -230,6 +241,7 @@ def boot_id() -> str:
 
 
 def _start_token(pid: int) -> str:
+    """Look up the platform-specific start token that proves the process identified by pid has not been replaced by a different process reusing the same id. Return the token string, or an empty string if it cannot be determined."""
     from harness import platform_support
     try:
         return str(platform_support.process_identity().start_token(int(pid)) or "")
@@ -272,6 +284,7 @@ def mark_reauth(root: ProjectRoot, cause: str) -> bool:
     changed = {"value": False}
 
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place to require reauthorization for cause, bumping stop_seq always and auth_epoch only on a real transition. Returns nothing; the effect is recorded via the enclosing changed dict."""
         # Every stop request is counted, even when the password is already required: a Connect that started before it must not
         # publish afterwards (it compares this number under the same lock). The epoch below still moves only on a real transition.
         value["stop_seq"] = int(value.get("stop_seq", 0)) + 1
@@ -299,6 +312,7 @@ def mark_resume(root: ProjectRoot) -> str:
     outcome = {"value": "none"}
 
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place for a Resume: keep the existing authorization if it survived the pause, or else require reauthorization. Returns nothing; the result of the decision is recorded via the enclosing outcome dict."""
         connected_after_last_stop = int(value.get("connected_at_stop_seq", -1)) == int(value.get("stop_seq", 0))
         authorized = bool(value.get("connected")) and not value.get("reauth_required") and manager_alive(value.get("authorized_by") or {})
         value["stop_seq"] = int(value.get("stop_seq", 0)) + 1
@@ -323,7 +337,9 @@ def mark_resume(root: ProjectRoot) -> str:
 
 
 def heartbeat(root: ProjectRoot, identity: dict[str, Any]) -> None:
+    """Refresh the authorization heartbeat timestamp for the project at root when identity still owns it, throttled to at most once per HEARTBEAT_WRITE_SECONDS. Returns nothing; the effect is the updated heartbeat_at in the descriptor."""
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place, updating authorized_by's heartbeat_at if the current authorization still belongs to the enclosing identity and the throttle window has elapsed. Returns nothing; the effect is the in-place update of value."""
         auth = value.get("authorized_by") or {}
         if auth.get("instance_id") == identity.get("instance_id"):
             stamp = now()
@@ -408,6 +424,7 @@ def usability(root: ProjectRoot, *, wait: bool = True) -> tuple[bool, str, str]:
 
 
 def machine_dependent(argv: list[str]) -> bool:
+    """Decide whether argv names a machine-dependent command by checking its first word for the TEST_MACHINE_GEN= prefix. Return True if so, False otherwise (including an empty argv)."""
     return bool(argv) and str(argv[0]).startswith(MACHINE_COMMAND_PREFIX)
 
 
@@ -452,6 +469,7 @@ def request_card(root: ProjectRoot, who: str, reason: str, *, task: str = "") ->
     reason = " ".join(str(reason or "").split())[:500]
 
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place, publishing the enclosing request's reason (if it differs from what is already recorded) and adding or refreshing the enclosing who/task as a waiter, capped at MAX_WAITERS. Returns nothing; the effect is the in-place update of value."""
         request = value.get("request") or {}
         if not request.get("reason") or request.get("reason") != reason:
             value["request"] = {"id": uuid.uuid4().hex[:12], "reason": reason, "by": str(who)[:80], "task": str(task)[:120], "at": now()}
@@ -532,11 +550,13 @@ def launch_note(root: ProjectRoot, open_reference: bool = False) -> str:
 
 # -- baseline markers (X2) -----------------------------------------------------------------
 def baseline_begin(root: ProjectRoot, who: str, note: str = "") -> dict[str, Any]:
+    """Mark the start of a tool-install or upgrade step on the machine for root, recording who is doing it and note, and bump the tools revision so stale evidence is invalidated. Return the updated stamp; raise MachineError if the machine is not usable for provisioning or is no longer connected."""
     ok, code, message = usability_for_provisioning(root)
     if not ok:
         raise MachineError(message, code)
 
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place to begin a baseline change, re-checking under the lock that the machine is still connected and recording who and note. Returns nothing; the effect is the in-place update of value, or a raised MachineError if the machine was disconnected meanwhile."""
         if not value.get("connected"):   # decided again under the lock: a Release may have arrived since the check above
             raise MachineError("No test machine is connected. Run `need-test-machine` and wait for the owner's Connect.", "not_connected")
         value["tools_revision"] = int(value.get("tools_revision", 0)) + 1
@@ -548,6 +568,7 @@ def baseline_begin(root: ProjectRoot, who: str, note: str = "") -> dict[str, Any
 
 
 def baseline_done(root: ProjectRoot, who: str, note: str) -> dict[str, Any]:
+    """Close out a baseline change on the machine for root, recording who finished it and a required note of the tools and versions now installed, and mark the machine ready again. Return the updated stamp; raise MachineError if note is too short, the machine is unusable, or there was no open baseline-begin."""
     note = " ".join(str(note or "").split())
     if len(note) < 8:
         raise MachineError("machine-baseline --done needs --note naming the tools and versions now installed on the machine.", "invalid")
@@ -556,6 +577,7 @@ def baseline_done(root: ProjectRoot, who: str, note: str) -> dict[str, Any]:
         raise MachineError(message, code)
 
     def change(value: dict[str, Any]) -> None:
+        """Mutate the descriptor value in place to complete the open baseline change, re-checking under the lock that the machine is still connected and that a baseline-begin is actually open. Returns nothing; the effect is the in-place update of value, or a raised MachineError when those conditions are not met."""
         if not value.get("connected"):
             raise MachineError("No test machine is connected. Run `need-test-machine` and wait for the owner's Connect.", "not_connected")
         if value.get("baseline_state") != "incomplete":
@@ -582,6 +604,7 @@ def usability_for_provisioning(root: ProjectRoot) -> tuple[bool, str, str]:
 
 # -- ssh --------------------------------------------------------------------------------------
 def _redact(text: str, secret: str) -> str:
+    """Strip every occurrence of secret, and its base64 encoding, out of text, replacing each with "***" so a password never reaches a log or event. Return the redacted text; when secret is empty, text is returned unchanged."""
     if secret:
         text = text.replace(secret, "***")
         text = text.replace(base64.b64encode(secret.encode()).decode(), "***")
@@ -589,6 +612,7 @@ def _redact(text: str, secret: str) -> str:
 
 
 def common_ssh_options(known_hosts: Path, port: int, user: str, address: str) -> list[str]:
+    """Build the fixed set of ssh command-line options shared by every connection to port/user/address, pinning known_hosts strictly and disabling agent/X11 forwarding and multiplexing. Return the list of option strings (address itself is not included; the caller appends it)."""
     return [
         "-F", "/dev/null", "-p", str(port), "-l", user,
         "-o", "IdentitiesOnly=yes", "-o", f"UserKnownHostsFile={known_hosts}", "-o", "GlobalKnownHostsFile=/dev/null",
@@ -599,14 +623,17 @@ def common_ssh_options(known_hosts: Path, port: int, user: str, address: str) ->
 
 
 def ssh_program() -> str:
+    """Look up the ssh executable to run, allowing a test override. Return the overridden path, or "ssh" by default."""
     return os.environ.get("HARNESS_TEST_MACHINE_SSH", "") or "ssh"
 
 
 def keygen_program() -> str:
+    """Look up the ssh-keygen executable to run, allowing a test override. Return the overridden path, or "ssh-keygen" by default."""
     return os.environ.get("HARNESS_TEST_MACHINE_SSH_KEYGEN", "") or "ssh-keygen"
 
 
 def keyscan_program() -> str:
+    """Look up the ssh-keyscan executable to run, allowing a test override. Return the overridden path, or "ssh-keyscan" by default."""
     return os.environ.get("HARNESS_TEST_MACHINE_SSH_KEYSCAN", "") or "ssh-keyscan"
 
 
@@ -621,6 +648,7 @@ _OTHER_PROMPT = re.compile(r"(?im)(passphrase|verification code|one-time|authent
 
 class PtyResult:
     def __init__(self, returncode: int, text: str, prompted: bool, answered: bool, other_prompt: bool, timed_out: bool, cancelled: bool):
+        """Store the outcome of one run_with_password call: returncode, the redacted output text, and the prompted/answered/other_prompt/timed_out/cancelled flags describing how the pty session went. Returns nothing; the effect is to set these attributes on self."""
         self.returncode, self.text, self.prompted = returncode, text, prompted
         self.answered, self.other_prompt, self.timed_out, self.cancelled = answered, other_prompt, timed_out, cancelled
 
@@ -721,6 +749,7 @@ def _stop_own(process: subprocess.Popen, force: bool = False) -> None:
 
 
 def run_key_only(argv: list[str], *, timeout: float = STEP_SECONDS) -> tuple[int, str]:
+    """Run argv (an ssh command expected to succeed by key alone, with no pty and no password) with a minimal environment, bounded by timeout. Return a (exit code, combined stdout+stderr text) pair; raise MachineError if the local ssh program is missing."""
     try:
         completed = subprocess.run(
             argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
@@ -806,6 +835,7 @@ def tcp_probe(address: str, port: int) -> None:
 
 
 def fingerprint_of(blob_b64: str) -> str:
+    """Compute the SHA256 fingerprint ssh displays for a base64-encoded host key blob_b64. Return it in the "SHA256:<base64>" form (no padding)."""
     raw = base64.b64decode(blob_b64.encode())
     return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
 
@@ -814,6 +844,7 @@ _KEY_PREFERENCE = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", 
 
 
 def _keyscan(address: str, port: int, kinds: str) -> dict[str, str]:
+    """Run ssh-keyscan against address on port for the given comma-separated key kinds. Return a dict mapping each key type found to its base64 blob, or an empty dict if the local keyscan program is unavailable in time or found nothing; raise MachineError if the keyscan program itself is missing."""
     try:
         completed = subprocess.run(
             [keyscan_program(), "-T", str(int(max(3, PROBE_SECONDS))), "-p", str(port), "-t", kinds, address],
@@ -871,10 +902,12 @@ class Challenges:
     """A password is accepted only for a challenge the manager issued with the exact destination and fingerprint shown."""
 
     def __init__(self) -> None:
+        """Set up an empty in-memory table of outstanding challenges guarded by its own lock. Returns nothing; the effect is to initialize self._items and self._lock."""
         self._items: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def issue(self, project_id: str, address: str, user: str, port: int, host_key: dict[str, str], changed: bool, first_use: bool) -> dict[str, Any]:
+        """Create a new challenge for project_id naming the destination address, user, port and host_key, with changed and first_use recorded and an expiry CHALLENGE_SECONDS away, replacing any earlier unexpired challenge for the same project. Return the new challenge item (including its id)."""
         item = {
             "id": secrets.token_urlsafe(18), "project_id": project_id, "address": address, "user": user, "port": port,
             "host_key": dict(host_key), "changed": changed, "first_use": first_use,
@@ -886,6 +919,7 @@ class Challenges:
         return item
 
     def consume(self, challenge_id: str, project_id: str) -> dict[str, Any]:
+        """Pop and return the challenge identified by challenge_id, checking it belongs to project_id and has not expired. Return the challenge item; raise MachineError if it is missing, belongs to a different project, or expired."""
         with self._lock:
             item = self._items.pop(str(challenge_id or ""), None)
         if not item or item["project_id"] != project_id or item["expires"] <= time.monotonic():
@@ -893,12 +927,14 @@ class Challenges:
         return item
 
     def void(self, project_id: str) -> None:
+        """Discard every outstanding challenge belonging to project_id. Returns nothing; the effect is simply the removal of those entries."""
         with self._lock:
             self._items = {key: value for key, value in self._items.items() if value["project_id"] != project_id}
 
 
 # -- one machine per project (U2/W5) ------------------------------------------------------------------------------
 def _aliases(address: str) -> set[str]:
+    """Resolve address to every name it is known by, including its own resolved IPs, so the same machine reached through different names is detected as one target. Return the set of lowercased alias strings (at least address itself)."""
     names = {address.lower()}
     try:
         for info in socket.getaddrinfo(address, None, type=socket.SOCK_STREAM):
@@ -910,6 +946,7 @@ def _aliases(address: str) -> set[str]:
 
 @contextmanager
 def _registry_lock(home: Path) -> Iterator[None]:
+    """Context manager taking an exclusive flock on the manager-wide test-machine-targets lock file under home. Yields nothing; the effect is to hold the lock for the duration of the with-block so the registry of reserved machines is never read or written concurrently."""
     Path(home).mkdir(parents=True, exist_ok=True)
     with open(Path(home) / ".test_machine_targets.lock", "a+") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -920,6 +957,7 @@ def _registry_lock(home: Path) -> Iterator[None]:
 
 
 def _targets_path(home: Path) -> Path:
+    """Locate the manager-wide file recording which machine each project is reserved against, under home. Return its path."""
     return Path(home) / "test_machine_targets.json"
 
 
@@ -931,6 +969,7 @@ def _entries_of(raw: Any) -> list[dict[str, Any]]:
 
 
 def _load_targets(home: Path) -> dict[str, list[dict[str, Any]]]:
+    """Read and parse the targets registry file under home, normalizing each project's raw entries with _entries_of. Return a dict of project id to its list of entries, or an empty dict if the file is missing or not valid JSON."""
     try:
         value = json.loads(_targets_path(home).read_text())
     except (OSError, ValueError):
@@ -939,6 +978,7 @@ def _load_targets(home: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 def _save_targets(home: Path, targets: dict[str, list[dict[str, Any]]]) -> None:
+    """Write targets back to the registry file under home, dropping any project whose entry list is empty. Returns nothing; the effect is the durable registry update."""
     _targets_path(home).write_text(json.dumps({project: entries for project, entries in targets.items() if entries}, indent=2, sort_keys=True))
 
 
@@ -990,6 +1030,7 @@ def settle_reservation(home: Path, project_id: str, connected: tuple[str, int] |
 
 
 def release_target(home: Path, project_id: str) -> bool:
+    """Remove every reservation entry belonging to project_id from the registry under home. Return True if there was something to remove, False if project_id held no reservation."""
     with _registry_lock(home):
         targets = _load_targets(home)
         existed = bool(targets.pop(project_id, None))
@@ -1015,12 +1056,14 @@ def reconcile_reservation(root: ProjectRoot, home: Path, project_id: str) -> Non
 
 
 def reserved_for(home: Path, project_id: str) -> bool:
+    """Check whether project_id currently holds any machine reservation in the registry under home. Return True if it does, False otherwise."""
     with _registry_lock(home):
         return bool(_load_targets(home).get(project_id))
 
 
 # -- install and verify ------------------------------------------------------------------------------------------
 def posix_install_command(public_key: str) -> str:
+    """Build the idempotent POSIX shell command that installs public_key into ~/.ssh/authorized_keys with correct permissions, appending it only if not already present. Return the command text; raise MachineError if public_key is not a well-formed ssh-ed25519 key line."""
     key = public_key.strip()
     if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [A-Za-z0-9_.\-]+)?", key):
         raise MachineError("The project key is not in the expected form.", "internal")
@@ -1032,6 +1075,7 @@ def posix_install_command(public_key: str) -> str:
 
 
 def windows_install_script(public_key: str) -> str:
+    """Build the idempotent PowerShell script that installs public_key into the right authorized_keys file for an admin or standard Windows account, setting matching ACLs. Return the script text; raise MachineError if public_key is not a well-formed ssh-ed25519 key line."""
     key = public_key.strip()
     if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [A-Za-z0-9_.\-]+)?", key):
         raise MachineError("The project key is not in the expected form.", "internal")
@@ -1058,6 +1102,7 @@ def windows_install_script(public_key: str) -> str:
 
 
 def powershell_command(script: str) -> str:
+    """Wrap script as a base64-encoded, non-interactive PowerShell invocation suitable for passing over ssh. Return the full command-line string."""
     encoded = base64.b64encode(script.encode("utf-16-le")).decode()
     return f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
@@ -1071,6 +1116,7 @@ class Connector:
 
     def __init__(self, root: ProjectRoot, home: Path, project_id: str, manager: dict[str, Any],
                  progress: Callable[[str], None] | None = None, cancel: threading.Event | None = None):
+        """Set up a Connector for project root/project_id, using manager's identity and home's registry, reporting progress through the given callback and honoring cancel if the attempt is stopped. Returns nothing; the effect is to initialize the connector's attributes."""
         self.root, self.home, self.project_id = root, Path(home), project_id
         self.manager, self.progress = manager, progress or (lambda _text: None)
         self.cancel = cancel or threading.Event()
@@ -1078,16 +1124,20 @@ class Connector:
 
     # paths
     def paths(self) -> dict[str, Path]:
+        """Compute the on-disk paths this connector uses: the machine directory, its key pair, the published known_hosts file, and the staging file for an in-progress attempt. Return a dict mapping each name to its Path."""
         directory = machine_dir(self.root)
         return {"dir": directory, "key": directory / "key", "pub": directory / "key.pub", "known_hosts": directory / "known_hosts",
                 "staging": directory / "known_hosts.attempt"}
 
     def _step(self, name: str, state: str) -> None:
+        """Record in the descriptor that the connect step named name has reached state, so a retry after a crash knows what is confirmed. Returns nothing; the effect is the persisted step record."""
         def change(value: dict[str, Any]) -> None:
+            """Mutate the descriptor value in place, setting the enclosing step's name entry to state with a timestamp. Returns nothing; the effect is the in-place update of value."""
             value.setdefault("steps", {})[name] = {"state": state, "at": now()}
         update(self.root, change)
 
     def ensure_key(self) -> str:
+        """Make sure this project's ed25519 key pair exists, generating a fresh pair (discarding any stale half-written one) if either file is missing. Return the public key text; raise MachineError if ssh-keygen is missing or fails."""
         paths = self.paths()
         paths["dir"].mkdir(parents=True, exist_ok=True)
         os.chmod(paths["dir"], 0o755)
@@ -1107,6 +1157,7 @@ class Connector:
         return paths["pub"].read_text().strip()
 
     def run(self, challenge: dict[str, Any], password: str, confirm_changed: bool) -> dict[str, Any]:
+        """Carry out one Connect attempt against the destination named by challenge, signing in with password (refusing a changed host key unless confirm_changed is set), detecting the operating system, and installing this project's public key. Return the attempt's result dict on success; raise MachineError or classify a failure at whatever step it occurred."""
         address, user, port = challenge["address"], challenge["user"], int(challenge["port"])
         host_key = challenge["host_key"]
         if challenge.get("changed") and not confirm_changed:
@@ -1185,6 +1236,7 @@ class Connector:
             raise
 
         def finalize(value: dict[str, Any]) -> None:
+            """Mutate the descriptor value in place to publish this successful Connect attempt (the enclosing address, user, port, host_key, operating_system, account_kind and identity), promoting the staged known_hosts and reservation. Returns nothing; the effect is the in-place update of value, or a raised MachineError if the attempt was stopped meanwhile."""
             # Under the descriptor lock: a stop (pause, close, resume, restart) or a release that arrived while this attempt ran wins.
             if self.cancel.is_set() or int(value.get("stop_seq", 0)) != start_seq:
                 raise MachineError("Connect was stopped (the project was paused, closed or restarted). Nothing was kept.", "cancelled")
@@ -1217,6 +1269,7 @@ class Connector:
             raise MachineError("Connect was stopped (the project was paused, closed or restarted). Nothing was kept.", "cancelled")
 
     def verify(self, address: str, user: str, port: int, operating_system: str, known_hosts: Path | None = None) -> str:
+        """Prove the installed key works by connecting to user at address on port with no password, pinned against known_hosts (or this project's published file), running a tiny identity-echoing command appropriate to operating_system. Return the observed identity text; raise MachineError (classified) if the key-only connection fails."""
         paths = self.paths()
         base = [ssh_program(), *common_ssh_options(known_hosts or paths["known_hosts"], port, user, address),
                 "-o", "BatchMode=yes", "-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no",
@@ -1229,6 +1282,7 @@ class Connector:
         return line.split("NMHPKEY:", 1)[1].strip()
 
     def _check(self, result: PtyResult, address: str, user: str, port: int, stage: str) -> None:
+        """Inspect a password-based step's result and raise a plain classified MachineError for address, user and port at stage if it was cancelled, failed, timed out, or hit an unsupported prompt. Returns nothing; the effect is entirely a raised error, or none when result succeeded cleanly."""
         if result.cancelled:
             raise MachineError("Connect was stopped (the project was paused, closed or restarted). Nothing was kept.", "cancelled")
         if result.returncode != 0 or result.timed_out or result.other_prompt:
@@ -1237,7 +1291,9 @@ class Connector:
                              address, port, stage)
 
     def _fail(self, error: MachineError, pin_replaced_on_a_connected_machine: bool = False) -> None:
+        """Record error as the last failed attempt on the descriptor, and when pin_replaced_on_a_connected_machine is set (a previously connected machine's pin was just overwritten with a new key), force reauthorization so the stale pin is never trusted. Returns nothing; the effect is the recorded last_attempt and possibly a mark_reauth call."""
         def change(value: dict[str, Any]) -> None:
+            """Mutate the descriptor value in place, recording the enclosing error as last_attempt with its code and message. Returns nothing; the effect is the in-place update of value."""
             value["last_attempt"] = {"at": now(), "ok": False, "code": error.code, "message": str(error)[:400]}
         update(self.root, change)
         if pin_replaced_on_a_connected_machine:
@@ -1259,6 +1315,7 @@ def verify_key_login_detail(root: ProjectRoot) -> tuple[bool, str, str]:
 
 
 def verify_key_login(root: ProjectRoot) -> tuple[bool, str]:
+    """Check with a key-only connection whether the machine for root still accepts this project's key, discarding the detailed message. Return a (ok, code) pair."""
     ok, code, _message = verify_key_login_detail(root)
     return ok, code
 

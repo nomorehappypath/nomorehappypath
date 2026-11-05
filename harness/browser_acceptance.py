@@ -35,6 +35,10 @@ _UNSAFE_EXTRA_ARG_PREFIXES = (
 
 
 def _safe_binary(candidate: str | os.PathLike[str] | None) -> str | None:
+    """Check that candidate is an executable file outside a rejected app bundle or snap stub.
+
+    Return: the resolved absolute path string when candidate is safe to launch, otherwise None.
+    """
     if not candidate:
         return None
     path = Path(candidate).expanduser()
@@ -48,6 +52,12 @@ def _safe_binary(candidate: str | os.PathLike[str] | None) -> str | None:
 
 
 def resolve_binary() -> str:
+    """Pick which browser binary to launch, preferring an explicit environment override.
+
+    Checks HARNESS_BROWSER_BIN and CHROME_BIN first, then the host's headless-cache
+    and PATH candidates. Return: the absolute path of the first safe binary found,
+    or raise when none is usable.
+    """
     configured = os.environ.get("HARNESS_BROWSER_BIN", "").strip() or os.environ.get("CHROME_BIN", "").strip()
     if configured:
         selected = _safe_binary(configured)
@@ -89,6 +99,10 @@ def _release_launch_lock(lock_handle) -> None:
 
 
 def _binary_digest(path: Path) -> str:
+    """Compute a sha256 digest of the file at path by streaming it in chunks.
+
+    Return: the digest as a lowercase hex string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
@@ -97,6 +111,11 @@ def _binary_digest(path: Path) -> str:
 
 
 def browser_identity(binary: str) -> dict[str, str]:
+    """Certify binary's identity, caching it by path, size and mtime so repeat calls are cheap.
+
+    Runs binary with --version and hashes its contents to build the record.
+    Return: a dict with the binary's path, sha256, version string, application_id and mode.
+    """
     path = Path(_safe_binary(binary) or "")
     if not path.is_file():
         raise ValueError("acceptance browser identity requires a safe executable")
@@ -131,6 +150,10 @@ SANDBOX_BLOCKED = "HARNESS BROWSER BLOCKED IN SANDBOX"
 
 
 def _report_blocked(reason: str) -> None:
+    """Print the SANDBOX_BLOCKED marker line with reason when the host confines the harness.
+
+    Return: none; the effect is a diagnostic line on stderr so the board can surface reason to the owner.
+    """
     if platform_support.browser_host().confined_by_harness():
         print(f"{SANDBOX_BLOCKED}: {reason}", file=sys.stderr, flush=True)
 
@@ -144,6 +167,10 @@ HOST_BLOCKS_BROWSER_NETWORK = (
 
 
 def _network_denied(text: str) -> bool:
+    """Check whether text contains Chrome's socket-permission-denied message.
+
+    Return: True when text shows the host blocked the browser's network socket, otherwise False.
+    """
     return "CreatePlatformSocket() failed: Permission denied" in str(text or "")
 
 
@@ -188,14 +215,26 @@ def blocked_note(output: str) -> str:
 
 
 def _run_ps(arguments: list[str], *, check: bool) -> subprocess.CompletedProcess:
+    """Delegate to the platform's process identity helper to run `ps` with arguments.
+
+    Return: the completed process, raising when check is true and the command fails.
+    """
     return platform_support.process_identity().run_ps(arguments, check=check)
 
 
 def _start_token(pid: int) -> str:
+    """Look up the immutable start token for process pid via the platform's process identity helper.
+
+    Return: the start token string, used to detect when a pid has been reused by a new process.
+    """
     return platform_support.process_identity().start_token(pid)
 
 
 def _process_table() -> dict[int, dict[str, Any]]:
+    """Snapshot the current operating system process table via the platform's process identity helper.
+
+    Return: a mapping of pid to that process's info dict.
+    """
     return platform_support.process_identity().process_table()
 
 
@@ -296,6 +335,10 @@ def _is_linux_browser_command(value: str) -> bool:
 
 
 def _app_processes(table: dict[int, dict[str, Any]]) -> dict[int, dict[str, str]]:
+    """Filter table down to browser app-bundle processes, keeping their command and start_token.
+
+    Return: a dict keyed by pid with the matching entries from table.
+    """
     return {
         pid: {
             "command": str(value["command"]),
@@ -307,6 +350,10 @@ def _app_processes(table: dict[int, dict[str, Any]]) -> dict[int, dict[str, str]
 
 
 def _default_handlers_digest() -> str:
+    """Hash macOS's default-application handlers so a later change can be detected.
+
+    Return: the sha256 hex digest of the `defaults read` output, or the literal "not-macos" on other platforms.
+    """
     if sys_platform() != "darwin":
         return "not-macos"
     result = subprocess.run(
@@ -336,6 +383,11 @@ def _record_owned(
 def _observe_owned(
     identities: dict[int, dict[str, Any]], stopped: threading.Event, pgid: int,
 ) -> None:
+    """Poll the process table every 20ms, recording processes descended from pgid into identities.
+
+    Runs until the stopped event is set. Return: none; the effect is to keep identities
+    current so the final synchronous scan at close has an authoritative ownership record.
+    """
     while not stopped.wait(0.02):
         try:
             _record_owned(identities, _process_table(), pgid)
@@ -346,11 +398,19 @@ def _observe_owned(
 
 
 def sys_platform() -> str:
+    """Report the running interpreter's platform identifier.
+
+    Return: the sys.platform string, such as "darwin" or "linux".
+    """
     import sys
     return sys.platform
 
 
 def _validate_url(url: str) -> int:
+    """Check that url is loopback HTTP with an explicit, non-harness port.
+
+    Return: the port number, or raise ValueError when url fails scheme, host or port checks.
+    """
     parsed = urlsplit(url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("browser acceptance requires a loopback HTTP URL")
@@ -384,15 +444,31 @@ class BrowserProcess:
     _closed: bool = False
 
     def poll(self):
+        """Check whether the launched browser process has exited.
+
+        Return: the process's exit code, or None while it is still running.
+        """
         return self.process.poll()
 
     def wait(self, timeout: float | None = None):
+        """Block until the launched browser process exits, up to timeout seconds.
+
+        Return: the process's exit code.
+        """
         return self.process.wait(timeout=timeout)
 
     def communicate(self, timeout: float | None = None):
+        """Read the browser process's remaining stdout/stderr, waiting up to timeout seconds.
+
+        Return: the (stdout, stderr) tuple from the underlying subprocess.
+        """
         return self.process.communicate(timeout=timeout)
 
     def _release_serialization(self) -> None:
+        """Release the on-disk launch lock file and the in-process launch lock, if still held.
+
+        Return: none; the effect is to let the next queued browser launch proceed.
+        """
         if not getattr(self.lock_handle, "closed", True):
             fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
             self.lock_handle.close()
@@ -401,6 +477,13 @@ class BrowserProcess:
             self.process_lock_held = False
 
     def close(self, *, validate: bool = True) -> dict[str, Any]:
+        """Terminate the owned browser process group and write an audit of the launch.
+
+        Signals every process this launch still owns, then checks for processes that
+        changed outside the acceptance launch. When validate is true, raises if a new
+        app-bundle process appeared or the default-handler digest changed.
+        Return: the audit dict describing the browser, its spawn, and any signals sent.
+        """
         if self._closed:
             return json.loads((self.runtime / "acceptance-audit.json").read_text(encoding="utf-8"))
         try:
@@ -507,9 +590,20 @@ class BrowserProcess:
             self._release_serialization()
 
     def __enter__(self) -> "BrowserProcess":
+        """Enter the context manager without side effects.
+
+        Return: self, so BrowserProcess can be used in a `with` block.
+        """
         return self
 
     def __exit__(self, exc_type, exc, _traceback) -> None:
+        """Close the browser on context-manager exit, validating only when no exception occurred.
+
+        exc_type and _traceback identify the error alongside exc; when exc is None the
+        block succeeded and close() is allowed to raise on a validation failure, otherwise
+        close() runs without validation so it does not mask the original error.
+        Return: none; the effect is cleaning up the launched browser process.
+        """
         try:
             self.close(validate=exc is None)
         except Exception:
@@ -656,6 +750,11 @@ def validate_url(url: str) -> int:
 
 
 def _one_shot(url: str, runtime: Path, command: str, timeout: float) -> str:
+    """Launch a one-shot headless capture of url under runtime, passing command (e.g. --dump-dom).
+
+    Waits up to timeout seconds for the browser to print its result and exit.
+    Return: the captured stdout text, raising RuntimeError if the browser exits non-zero.
+    """
     session = launch(
         url, runtime, capture_output=True, one_shot=True,
         extra_args=[command, f"--virtual-time-budget={SETTLE_MILLISECONDS}"],
@@ -675,6 +774,12 @@ def dump_dom(url: str, runtime: Path, *, timeout: float = 30) -> str:
 
 
 def _early_exit_message(runtime: Path, process: "subprocess.Popen") -> str:
+    """Build a diagnostic explaining why process exited before finishing its page under runtime.
+
+    Reads the tail of the saved browser-stderr.txt log, if any, and adds a hint when the
+    tail shows the host denied a network socket.
+    Return: the message string.
+    """
     tail = ""
     try:
         tail = (Path(runtime) / "output" / "browser-stderr.txt").read_text(encoding="utf-8", errors="replace").strip()[-400:]
@@ -719,6 +824,11 @@ class _DevToolsSocket:
     """The few WebSocket frames the Chrome DevTools protocol needs; stdlib only."""
 
     def __init__(self, port: int, path: str, timeout: float) -> None:
+        """Open a WebSocket connection to the DevTools endpoint at port and path.
+
+        Completes the HTTP upgrade handshake within timeout seconds.
+        Return: none; the effect is to leave the socket ready for call and evaluate.
+        """
         import base64
         import socket
         self.socket = socket.create_connection(("127.0.0.1", port), timeout=timeout)
@@ -739,6 +849,10 @@ class _DevToolsSocket:
         self.next_id = 0
 
     def _read(self, count: int) -> bytes:
+        """Read exactly count bytes from the socket, buffering any extra bytes received.
+
+        Return: a bytes object of length count.
+        """
         while len(self.buffer) < count:
             chunk = self.socket.recv(max(65536, count - len(self.buffer)))
             if not chunk:
@@ -748,6 +862,10 @@ class _DevToolsSocket:
         return data
 
     def _message(self) -> dict[str, Any]:
+        """Read and reassemble one complete WebSocket frame, decoding its JSON payload.
+
+        Return: the decoded message as a dict.
+        """
         payload = b""
         while True:
             first, second = self._read(2)
@@ -761,6 +879,10 @@ class _DevToolsSocket:
                 return json.loads(payload)
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Send a DevTools protocol method call, with its optional params, and await its reply.
+
+        Return: the response's result dict, or raise RuntimeError when the reply carries an error.
+        """
         self.next_id += 1
         body = json.dumps({"id": self.next_id, "method": method, "params": params or {}}).encode()
         mask = os.urandom(4)
@@ -779,10 +901,18 @@ class _DevToolsSocket:
                 return message.get("result") or {}
 
     def evaluate(self, expression: str) -> Any:
+        """Evaluate expression in the inspected page via Runtime.evaluate.
+
+        Return: the JavaScript value produced, or None when there is none.
+        """
         result = self.call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
         return (result.get("result") or {}).get("value")
 
     def close(self) -> None:
+        """Close the underlying socket, ignoring errors if it is already closed.
+
+        Return: none; the effect is to release the inspection connection.
+        """
         try:
             self.socket.close()
         except OSError:
@@ -809,6 +939,12 @@ VISIBLE_TEXT_EXPRESSION = """(() => {
 
 
 def render_page(url: str, runtime: Path, *, timeout: float = 30) -> dict[str, Any]:
+    """Render url under runtime, reporting a sandbox-blocked marker before any failure propagates.
+
+    Delegates to _render_page and, within timeout seconds, lets any RuntimeError, OSError
+    or ValueError it raises carry through after printing the blocked-browser diagnostic.
+    Return: the same page dict _render_page produces (text, html, png, url).
+    """
     try:
         return _render_page(url, runtime, timeout=timeout)
     except (RuntimeError, OSError, ValueError) as error:

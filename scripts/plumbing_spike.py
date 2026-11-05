@@ -47,6 +47,7 @@ OWNER_FILES = (Path.home() / ".codex" / "config.toml", Path.home() / ".claude" /
 
 
 def _hash(path: Path) -> str:
+    """Compute the sha256 hex digest of the bytes at path. Return "absent" if the file cannot be read."""
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
@@ -54,6 +55,7 @@ def _hash(path: Path) -> str:
 
 
 def _scratch_env(executable: str, scratch: Path) -> dict[str, str]:
+    """Build the environment for running executable with isolated CODEX_HOME and CLAUDE_CONFIG_DIR directories created under scratch. Return the environment dict so the caller's subprocess never touches the owner's real config."""
     environment = global_settings.provider_environment(executable)
     for name, sub in (("CODEX_HOME", "codex-home"), ("CLAUDE_CONFIG_DIR", "claude-config")):
         (scratch / sub).mkdir(parents=True, exist_ok=True)
@@ -142,6 +144,7 @@ def _served_board(scratch: Path):
 
 
 def _selftest_result(path: Path, seconds: float) -> str:
+    """Poll path for up to seconds, waiting for a self-test record file to appear with non-empty content. Return its stripped text once found, or an empty string if the deadline passes first."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if path.is_file() and path.read_text(encoding="utf-8").strip():
@@ -219,6 +222,7 @@ DEFERRED = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Entry point: parse argv, either record previously-proven --record items into the capability cache or run the full set of live probes against the installed codex and claude binaries under --home, printing a JSON report and checking the guarded owner files for unexpected changes. Return 0 on success, 3 if an owner file changed during the spike."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--home", required=True, help="manager home whose capability cache receives the results")
     parser.add_argument("--guard-file", action="append", default=None,

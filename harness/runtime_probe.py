@@ -21,6 +21,15 @@ RUNTIME_COMMIT = re.compile(r'<meta name="harness-runtime-commit" content="([0-9
 
 
 def _json(url: str, *, request: Request | None = None, timeout: float = 35.0) -> dict[str, Any]:
+    """Open request (or url when no request is given), parse the body as JSON, and return the resulting dict.
+
+    Args:
+        url: the loopback address to open when request is not supplied.
+        request: an optional prepared urllib Request to open instead of url.
+        timeout: seconds to wait for the response before giving up.
+
+    Returns: the decoded JSON object. Raises ValueError if the response is not an object.
+    """
     with urlopen(request or url, timeout=timeout) as response:
         value = json.loads(response.read())
     if not isinstance(value, dict):
@@ -67,6 +76,15 @@ def _governed_code_root(root, reviewed_commit: str) -> Path:
 
 
 def _select_registry_entry(manager_url: str, governed_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Fetch the project registry from manager_url and return the single entry whose code_root matches governed_root.
+
+    Args:
+        manager_url: the loopback manager base address to query for its project list.
+        governed_root: the repository path that must match exactly one registry entry's code_root.
+
+    Returns: a tuple of the matching entry and the full list of projects. Raises ValueError when there
+    is not exactly one match or the match has no stable identity.
+    """
     payload = _json(manager_url + "api/projects", timeout=3)
     projects = payload.get("projects")
     if not isinstance(projects, list):
@@ -84,6 +102,14 @@ def _select_registry_entry(manager_url: str, governed_root: Path) -> tuple[dict[
 
 
 def _open_registry_entry(manager_url: str, entry: dict[str, Any]) -> dict[str, Any]:
+    """POST to manager_url's open endpoint for entry's id, then return the manager's resulting ready-status JSON.
+
+    Args:
+        manager_url: the loopback manager base address to send the open request to.
+        entry: the registry entry (with an id) to open as the active project.
+
+    Returns: the decoded JSON response from manager_url after the open request completes.
+    """
     request = Request(
         manager_url + "api/projects/" + quote(str(entry["id"]), safe="") + "/open",
         data=b"{}",

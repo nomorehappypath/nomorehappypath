@@ -681,7 +681,7 @@ globalThis.fetch=async path=>{calls.push(path);return{ok:true,json:async()=>({})
             live_session = control.create(root, "codex_delivery")
             control.attach(root, live_session["id"], live_helper.pid)
             live_agent = board.register(root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=live_session["id"])
-            board.record_owner_direction(root, live_session["id"], direction)
+            board.record_owner_direction(root, live_session["id"], direction, allow_split=True)   # this walk declares chunks: the owner allowed the split
             contract.create_contract(root, task, direction, ["live viewer integration"])
             evidence = root / "integration-evidence.txt"
             evidence.write_text("command: python3 -m unittest\nresult: PASS\n")

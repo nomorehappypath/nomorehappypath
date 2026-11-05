@@ -19,10 +19,17 @@ STRUCTURED_FIELDS = ("harm", "harm_tag", "criterion", "evidence_ref", "letter", 
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_path(value: str) -> str:
+    """Return value normalized to a safe relative POSIX path.
+
+    Rejects an empty value, an absolute path, a ".." component, or a bare
+    "." by raising ValueError, since those could escape the package's own
+    member directory.
+    """
     path = PurePosixPath(str(value or "").strip())
     if not str(path) or path.is_absolute() or ".." in path.parts or str(path) == ".":
         raise ValueError(f"repair member path is unsafe: {value!r}")
@@ -30,6 +37,11 @@ def _safe_path(value: str) -> str:
 
 
 def _digest(value: dict[str, Any]) -> str:
+    """Return the sha256 hex digest of value's contents, excluding any existing sha256 field.
+
+    Serializes value as sorted, compact JSON so the result is deterministic
+    regardless of key order.
+    """
     payload = {key: item for key, item in value.items() if key != "sha256"}
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -37,11 +49,21 @@ def _digest(value: dict[str, Any]) -> str:
 
 
 def refresh_digest(package: dict[str, Any]) -> str:
+    """Recompute and store package's sha256 digest, then return it.
+
+    Mutates package in place by setting its "sha256" key to the digest of
+    its other fields.
+    """
     package["sha256"] = _digest(package)
     return package["sha256"]
 
 
 def required_scope(members: list[dict[str, Any]]) -> str:
+    """Return the test scope a repair package's members require.
+
+    Output is "full" when any member's category is in FULL_DEPTH_CATEGORIES,
+    otherwise "affected".
+    """
     return "full" if any(member["category"] in FULL_DEPTH_CATEGORIES for member in members) else "affected"
 
 
@@ -49,6 +71,16 @@ def _member(
     raw: dict[str, Any], index: int, *, fallback_summary: str,
     fallback_paths: list[str], fallback_surface: str,
 ) -> dict[str, Any]:
+    """Build and validate one normalized repair package member from raw input.
+
+    Uses index to generate a fallback id, and fallback_summary,
+    fallback_paths, fallback_surface to fill in raw's missing summary,
+    affected_paths, and surface fields respectively. Validates the id
+    pattern, summary length, category, surface, and (when raw is non-empty)
+    the regression_check length, raising ValueError on any violation. Also
+    carries over any STRUCTURED_FIELDS present in raw. Return: the
+    normalized member dict.
+    """
     identifier = str(raw.get("id") or f"F-{index:03d}").strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", identifier):
         raise ValueError(f"repair member ID is invalid: {identifier!r}")
@@ -87,6 +119,15 @@ def build(
     task: str, request: dict[str, Any], summary: str,
     members: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Build a new repair package for task from request, summary, and members.
+
+    When members is None or empty, a single fallback member is built from
+    summary and request's reviewed_files. Computes a deterministic
+    package id from task, the reviewed-commit/tree/manifest identity in
+    request, and the normalized members, and stamps the package with a
+    sha256 digest. Raises ValueError if more than 100 members are given or
+    member ids collide. Return: the fully built package dict.
+    """
     explicit = bool(members)
     raw_members = list(members or [{}])
     if len(raw_members) > 100:
@@ -138,6 +179,14 @@ def build(
 def resolve(
     package: dict[str, Any], resolutions: list[dict[str, str]], delivery_id: str,
 ) -> dict[str, Any]:
+    """Apply resolutions to every member of package and mark it ready for review.
+
+    resolutions must cover every member id in package exactly once, each
+    with a resolution and regression_check of at least 8 characters;
+    otherwise raises ValueError. Records delivery_id as the resolver on both
+    the package and each member, and refreshes the sha256 digest. Return:
+    the mutated package.
+    """
     if package.get("status") not in {"open", "ready_for_review"}:
         raise ValueError("only an open repair package may be resolved")
     by_id = {str(row.get("id") or ""): row for row in resolutions}
@@ -170,6 +219,18 @@ def resolve(
 def split(
     package: dict[str, Any], groups: list[list[str]], reviewer_id: str, reason: str,
 ) -> list[dict[str, Any]]:
+    """Split package's members into separate child packages per groups.
+
+    groups must be at least two non-overlapping lists that together name
+    every member id in package exactly once, and reason must be at least 8
+    characters; otherwise raises ValueError. Each child package copies
+    package's fields (other than id/members/required_test_scope/status/
+    sha256), gets its own id, members, and a freshly computed
+    required_test_scope and sha256, and records reviewer_id and reason as
+    the split cause. The parent package is also updated to status "split"
+    with the child ids recorded and its own digest refreshed. Return: the
+    list of child package dicts.
+    """
     reason = str(reason or "").strip()
     if len(groups) < 2 or len(reason) < 8:
         raise ValueError("a repair split requires at least two groups and a concrete reason")

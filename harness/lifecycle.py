@@ -36,10 +36,13 @@ PHASE_PRIORITY = (
 
 
 def now() -> str:
+    """Return the current UTC time as an ISO-8601 string, for stamping records."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _datetime(value: str) -> datetime | None:
+    """Parse value as an ISO-8601 timestamp and give back a timezone-aware UTC
+    datetime; the result is none when value cannot be parsed."""
     try:
         parsed = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -50,6 +53,9 @@ def _datetime(value: str) -> datetime | None:
 
 
 def duration_seconds(started_at: str, finished_at: str) -> float | None:
+    """Compute the elapsed seconds between started_at and finished_at, rounded
+    to microsecond precision. Return none if either timestamp fails to parse
+    or finished_at is earlier than started_at."""
     started = _datetime(started_at)
     finished = _datetime(finished_at)
     if started is None or finished is None or finished < started:
@@ -58,6 +64,9 @@ def duration_seconds(started_at: str, finished_at: str) -> float | None:
 
 
 def phase(started_at: str, finished_at: str) -> dict[str, Any]:
+    """Build a phase record carrying started_at, finished_at, and the duration
+    in seconds between them. Output is an empty dict when the duration cannot
+    be computed from the given timestamps."""
     duration = duration_seconds(started_at, finished_at)
     if duration is None:
         return {}
@@ -76,6 +85,9 @@ def command_measurement(
     exit_code: int,
     cache_decision: str = "executed_no_cache_store",
 ) -> dict[str, Any]:
+    """Build a measurement record for one command execution: start the phase
+    dict from started_at/finished_at, then add command, a sha256 fingerprint
+    of command, exit_code, and cache_decision. Return the combined dict."""
     measured = phase(started_at, finished_at)
     measured.update({
         "command": command,
@@ -87,6 +99,9 @@ def command_measurement(
 
 
 def _requests(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Collect every qa request belonging to task from state, merging the
+    live qa_requests entries with archived ones, deduplicated by id. The
+    result is a list of request dicts for that task."""
     values = [
         request for request in state.get("qa_requests", {}).values()
         if request.get("task") == task
@@ -101,6 +116,8 @@ def _requests(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
 
 
 def _task_events(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return the events in state belonging to task, sorted chronologically by
+    their at timestamp and then by sequence number."""
     return sorted(
         (event for event in state.get("events", []) if event.get("task") == task),
         key=lambda event: (str(event.get("at", "")), int(event.get("sequence", 0))),
@@ -108,6 +125,10 @@ def _task_events(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
 
 
 def _event_time(events: Iterable[dict[str, Any]], *kinds: str, last: bool = False) -> str:
+    """Find the timestamp of a matching event among events whose kind is one
+    of kinds and that parses as a valid datetime. Return the first match's
+    at value, or the last one when last is true; give an empty string if none
+    match."""
     matches = [str(event.get("at", "")) for event in events if event.get("kind") in kinds and _datetime(str(event.get("at", "")))]
     if not matches:
         return ""
@@ -131,6 +152,11 @@ def _fallback_review_phases(request: dict[str, Any]) -> dict[str, dict[str, Any]
 
 
 def _intervals(state: dict[str, Any], task: str) -> tuple[list[tuple[str, datetime, datetime]], list[dict[str, Any]]]:
+    """Gather all phase intervals and command executions recorded for task in
+    state, combining each qa request's lifecycle (falling back to
+    _fallback_review_phases where boundaries are missing) with command
+    executions, plus the task's release lifecycle. Return a tuple of the
+    interval list (phase name, start, end) and the command dict list."""
     intervals: list[tuple[str, datetime, datetime]] = []
     commands: list[dict[str, Any]] = []
     for request in _requests(state, task):
@@ -162,6 +188,13 @@ def _intervals(state: dict[str, Any], task: str) -> tuple[list[tuple[str, dateti
 def task_summary(
     state: dict[str, Any], task: str, *, tolerance_seconds: float = DEFAULT_TOLERANCE_SECONDS,
 ) -> dict[str, Any]:
+    """Derive a critical-path summary for task from state: find its start and
+    end timestamps, clip and attribute overlapping phase intervals by
+    PHASE_PRIORITY into exclusive per-phase totals, and tally command
+    execution and cache_decision counts. Return a dict with status
+    (insufficient_history or measured), wall_clock_seconds,
+    phase_totals_seconds, and a reconciliation report comparing the exclusive
+    total against wall-clock time within tolerance_seconds."""
     events = _task_events(state, task)
     release = state.get("releases", {}).get(task, {})
     started_at = _event_time(events, "task_begun")
@@ -236,6 +269,9 @@ def task_summary(
 
 
 def summaries(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build task_summary results for every task mentioned anywhere in state
+    (events, qa_requests, or releases). Return a dict mapping each task name,
+    sorted, to its summary."""
     tasks = {
         str(event.get("task")) for event in state.get("events", []) if event.get("task")
     }

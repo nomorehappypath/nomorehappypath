@@ -9,6 +9,7 @@ Spec: board/tasks/2026-10-23_contract-first-checks_SPEC.md (v2).
 from __future__ import annotations
 
 import json
+import ast
 import re
 from pathlib import PurePosixPath
 from typing import Any
@@ -25,6 +26,41 @@ MAX_OPTIONS = 4
 MAX_CRITERIA = 30
 MAX_CHECKS = 12
 MAX_FILES_PER_CHECK = 20
+# Functions that run a command: a call to one of these whose first argument starts with "git" is a git invocation. Words in
+# strings, assertion data or comments ("the README documents git diff --stat") are not (round 1 of 2026-11-04_checks-no-git).
+COMMAND_RUNNERS = {"run", "call", "check_call", "check_output", "Popen", "system", "popen", "getoutput", "getstatusoutput",
+                   "execv", "execvp", "execve", "execvpe", "execl", "execlp", "spawnv", "spawnvp", "spawnl", "spawnlp"}
+SHELL_GIT_LINE = re.compile(r"^\s*(sudo\s+|env\s+\S+=\S+\s+)*git\s")
+
+
+def _starts_with_git(node: Any) -> bool:
+    """The command argument of a runner call begins with git: "git …", ["git", …], ("git", …) or an f-string starting with git."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value == "git" or node.value.startswith("git ")
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+        return _starts_with_git(node.elts[0])
+    if isinstance(node, ast.JoinedStr) and node.values:
+        first = node.values[0]
+        return isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value.startswith("git ")
+    return False
+
+
+def runs_git(relative: str, body: str) -> bool:
+    """True when a check file would run git: a runner call with a git command (Python), or a shell line that starts with git."""
+    if relative.endswith(".py"):
+        try:
+            tree = ast.parse(body)
+        except SyntaxError:
+            return False      # not this check's concern; the file fails on its own when the board runs it
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+            if name in COMMAND_RUNNERS and node.args and _starts_with_git(node.args[0]):
+                return True
+        return False
+    return any(SHELL_GIT_LINE.match(line) for line in body.splitlines())
 MAX_TOTAL_BYTES = 512 * 1024
 QUESTION_CHARS = 200
 OPTION_CHARS = 150
@@ -150,10 +186,12 @@ def configure(seconds: Any) -> None:
 
 
 def wait_seconds() -> int:
+    """Give the wait the owner configured, or WAIT_DEFAULT_SECONDS when configure() set none. Returns the wait in seconds."""
     return _configured.get("seconds", WAIT_DEFAULT_SECONDS)
 
 
 def _text(value: Any, label: str, limit: int, *, minimum: int = 1) -> str:
+    """Collapse value's whitespace and check it is a string of at least minimum and at most limit characters, raising ValueError naming label if not. Return the cleaned value."""
     if not isinstance(value, str) or len(" ".join(value.split())) < minimum:
         raise ValueError(f"{label} is required")
     value = " ".join(value.split())
@@ -163,6 +201,7 @@ def _text(value: Any, label: str, limit: int, *, minimum: int = 1) -> str:
 
 
 def _relative_path(value: Any) -> str:
+    """Check that value is a plain forward-slash relative path, with no backslash, null byte, absolute prefix or `.`/`..` segment that could escape the check's own folder. Return the normalised path as a string."""
     if not isinstance(value, str) or not value.strip() or "\\" in value or "\0" in value:
         raise ValueError("a check file needs a plain relative path with forward slashes")
     path = PurePosixPath(value.strip())
@@ -202,6 +241,12 @@ def parse_checks(checks_raw: Any, label: str) -> tuple[list[dict[str, Any]], int
             files[relative] = body
             total_bytes += len(body.encode("utf-8"))
         total_bytes += len(ledger.encode("utf-8"))
+        # Checks run in a copy of the project that has no git (the disposable checkout), so a check that runs git can never pass,
+        # whatever the work is. Refused here, when it is written, not weeks later at final acceptance (2026-11-04).
+        for relative, body in files.items():
+            if runs_git(relative, body):
+                raise ValueError(f"{where}: file {relative} runs git; checks run in a copy of the project with no git. Compare against "
+                                 "the stored baseline copy (the files as they were) instead, never through git commands")
         entry = {"coverage": coverage, "ledger": ledger, "files": files}
         if "covers" in check:
             covers = check["covers"]
@@ -258,6 +303,7 @@ def apply_coverage(criteria: list[dict[str, Any]]) -> list[int]:
 
 
 def coverage_request(task: str, numbers: list[int], criteria: list[dict[str, Any]]) -> str:
+    """Build the message asking the Reviewer of task to close coverage gaps, naming each requirement in numbers (matched against criteria) with its current coverage line. Return the instruction text to send."""
     named = "; ".join(f"{item['n']}. {item['text']} ({item['coverage_line']})" for item in criteria if item["n"] in numbers)
     return (
         f"CONTRACT CHECK COVERAGE: task {task}. The board matched your checks to the requirements and found gaps: {named}. "
@@ -377,6 +423,7 @@ def resolve_answers(questions: list[dict[str, Any]], answers: Any) -> tuple[list
 
 
 def append_decided(text: str, resolved: list[dict[str, Any]]) -> str:
+    """Append a "Decided before coding" section to text, listing each resolved answer's question text and chosen answer, marking the recommended ones. Return the combined text with the section appended."""
     lines = [f"- {item['text']} -> {item['answer']}{' (recommended)' if item['recommended'] else ''}" for item in resolved]
     return text.rstrip() + "\n\n" + DECIDED_HEADING + "\n" + "\n".join(lines)
 
@@ -396,6 +443,7 @@ def criterion_label(criterion: dict[str, Any]) -> str:
 
 
 def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build the owner-facing record for each requirement in criteria: its text, plain sentence, checked/partly/not-checked label, note, reason and coverage line, counting checks other requirements also cover it with. Return the list of per-requirement records."""
     counts = covered_by_others(criteria)
     return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", ""), "reason": item.get("why_not_checked", ""), "kind": item.get("kind", ""),
              "coverage": coverage_line(item, counts.get(item["n"], 0))} for item in criteria]
@@ -406,11 +454,13 @@ def existing_code_note(repository: str) -> str:
     if not str(repository or "").strip():
         return ""
     return (f" The project already has code, at {repository}. Read it (read only; change nothing there) to find the real commands, functions, files and pages "
-            "each requirement is about, and write each check so that it calls them. A check for a defect must fail on that code today. Never guess an interface "
+            "each requirement is about, and write each check so that it calls them. A check for a defect must fail on that code today. Checks run in a copy "
+            "of the project that has no git: compare against the stored baseline copy, never run git commands (the board refuses such a check). Never guess an interface "
             "you can find by reading. Leave a requirement unchecked only when, after reading the code, no test can show it, and say in why_not_checked what you read.")
 
 
 def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "") -> str:
+    """Build the message routing a Reviewer to write contract checks for task at the given requirements version, carrying the owner's original direction, the requirements text, a repository note when repository is given, and the minutes allowed before a late submission is refused. Return the instruction text to send."""
     return (
         f"CONTRACT CHECK ROUTED: task {task}, requirements version {version}. This is advisory preparation, not a review round: "
         "do not reserve, claim or review anything for it, and the work for this task is not built yet. Read the owner's original direction and the "
@@ -425,6 +475,7 @@ def reviewer_instruction(task: str, version: int, requirements: str, direction: 
 
 
 def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], changed: list[int], criteria: list[dict[str, Any]], minutes: int, repository: str = "") -> str:
+    """Build the message telling a Reviewer of task at the given requirements version which answers the owner gave, restating each of answers, naming the requirements in changed (matched against criteria), noting repository when given, and stating minutes before a late submission is refused. Return the instruction text to send."""
     said = "; ".join(f"{item['text']} -> {item['answer']}" for item in answers)
     names = "; ".join(f"{item['n']}. {item['text']}" for item in criteria if item["n"] in changed)
     return (

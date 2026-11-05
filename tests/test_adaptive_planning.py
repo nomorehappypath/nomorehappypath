@@ -30,7 +30,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
             vendor="OpenAI", session_id=session["id"],
         )
         objective = f"OWNER DIRECTION — {task}"
-        board.record_owner_direction(self.root, session["id"], objective)
+        board.record_owner_direction(self.root, session["id"], objective, allow_split=True)   # these tests exercise split plans: the owner allowed the split
         board.begin_task(self.root, agent["id"], task)
         contract.create_contract(self.root, task, objective, ["delivery"])
         agreed_requirements(self.root, agent["id"], f"Final agreed requirements for {task}: deliver the requested objective and verify all relevant scenarios.")
@@ -117,7 +117,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
         session = control.create(self.root, "codex_delivery")
         agent = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
         direction = "OWNER DIRECTION — WAIT-FOR-GO-AHEAD"
-        board.record_owner_direction(self.root, session["id"], direction)
+        board.record_owner_direction(self.root, session["id"], direction, allow_split=True)
         board.begin_task(self.root, agent["id"], "WAIT-FOR-GO-AHEAD")
         contract.create_contract(self.root, "WAIT-FOR-GO-AHEAD", direction, ["delivery"])
         with self.assertRaisesRegex(ValueError, "final requirements confirmation"):

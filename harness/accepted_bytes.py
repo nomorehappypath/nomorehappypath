@@ -49,6 +49,11 @@ def commit_manifest_arguments(commit: str, nul: bool = False) -> list[str]:
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run git with a clean, hook-free environment against repo and the given args.
+
+    Return: the completed process with its captured stdout and stderr, after
+    raising ValueError if git is missing from PATH or the command exits nonzero.
+    """
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
     executable = shutil.which("git", path=environment.get("PATH"))
@@ -65,6 +70,10 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _safe_path(value: str) -> str:
+    """Reject an empty, absolute, or parent-escaping value and return its normalized form.
+
+    Return: the str(path) form of value, or raise ValueError when value is unsafe.
+    """
     path = PurePosixPath(str(value))
     if not value or path.is_absolute() or ".." in path.parts or str(path) in {"", "."}:
         raise ValueError(f"accepted-byte path is unsafe: {value!r}")
@@ -72,15 +81,28 @@ def _safe_path(value: str) -> str:
 
 
 def _tree(repo: Path, revision: str) -> str:
+    """Resolve revision inside repo to the object id of its root tree.
+
+    Return: the tree object id as a stripped string.
+    """
     return _git(repo, "rev-parse", f"{revision}^{{tree}}").stdout.decode().strip()
 
 
 def _changed_paths(repo: Path, base: str, reviewed: str) -> list[str]:
+    """List the paths that differ between base and reviewed in repo under the rename rule.
+
+    Return: a sorted list of unique, safety-checked path strings.
+    """
     output = _git(repo, *name_only_arguments(base, reviewed, nul=True)).stdout
     return sorted({_safe_path(value.decode("utf-8", errors="strict")) for value in output.split(b"\0") if value})
 
 
 def tree_entry(repo: Path, revision: str, path: str) -> dict[str, str]:
+    """Look up the mode, type, and object id of path inside revision's tree in repo.
+
+    Return: a dict describing the entry as present (with mode/type/oid) or
+    deleted, after validating path and raising ValueError on ambiguous results.
+    """
     safe = _safe_path(path)
     output = _git(repo, "ls-tree", "-z", revision, "--", safe).stdout
     rows = [row for row in output.split(b"\0") if row]
@@ -118,6 +140,10 @@ def tree_delta(repo: Path, base_commit: str, reviewed_commit: str) -> dict[str, 
 
 
 def _payload_digest(value: dict[str, Any]) -> str:
+    """Hash value as canonical JSON, excluding any existing "sha256" key, so the digest covers only the payload.
+
+    Return: the hex sha256 digest string.
+    """
     payload = {key: item for key, item in value.items() if key != "sha256"}
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -128,6 +154,12 @@ def build_manifest(
     repo: Path, base_commit: str, reviewed_commit: str,
     expected_paths: Iterable[str] | None = None,
 ) -> dict[str, Any]:
+    """Build a signed manifest of the exact tree entries changed between base_commit and reviewed_commit in repo.
+
+    If expected_paths is given, the changed paths must match it exactly or a
+    ValueError listing the missing and unexpected paths is raised.
+    Return: the manifest dict (version, commits, tree, paths, entries, sha256).
+    """
     repository = Path(repo).resolve()
     base = _git(repository, "rev-parse", f"{base_commit}^{{commit}}").stdout.decode().strip()
     reviewed = _git(repository, "rev-parse", f"{reviewed_commit}^{{commit}}").stdout.decode().strip()
@@ -156,6 +188,11 @@ def build_manifest(
 
 
 def verify_manifest(repo: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Check that manifest is well-formed, its digest matches, and it rebuilds identically against repo.
+
+    Return: the rebuilt manifest, after raising ValueError on any version,
+    digest, structure, or rebuild mismatch.
+    """
     if not isinstance(manifest, dict) or manifest.get("version") != MANIFEST_VERSION:
         raise ValueError("accepted-byte manifest is missing or uses an unsupported version")
     if manifest.get("sha256") != _payload_digest(manifest):
@@ -177,6 +214,11 @@ def verify_manifest(repo: Path, manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def verify_entries(repo: Path, revision: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Confirm that revision in repo contains every tree entry listed in manifest, unchanged.
+
+    Return: a status dict with the verified tree and manifest digest, after
+    raising ValueError naming any path whose actual entry no longer matches.
+    """
     verify_manifest(repo, manifest)
     repository = Path(repo).resolve()
     mismatches = []
@@ -197,6 +239,11 @@ def verify_entries(repo: Path, revision: str, manifest: dict[str, Any]) -> dict[
 
 
 def verify_planned_tree(repo: Path, revision: str, planned_tree: str) -> str:
+    """Confirm that revision's root tree in repo matches the expected planned_tree id.
+
+    Return: the actual tree id, after raising ValueError if planned_tree is
+    empty or does not equal the actual tree.
+    """
     actual = _tree(Path(repo).resolve(), revision)
     if not planned_tree or actual != planned_tree:
         raise ValueError(

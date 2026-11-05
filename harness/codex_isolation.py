@@ -31,12 +31,24 @@ class IsolationError(Exception):
 
 
 def config_path(environment: dict[str, str] | None = None) -> Path:
+    """Return the owner's global Codex config.toml path.
+
+    Reads CODEX_HOME from environment (falling back to os.environ when
+    environment is None), or else uses ~/.codex. Output is the resolved
+    config.toml path under that home directory.
+    """
     env = os.environ if environment is None else environment
     home = env.get("CODEX_HOME") or str(Path(env.get("HOME", "~")).expanduser() / ".codex")
     return Path(home).expanduser() / "config.toml"
 
 
 def _name(match: re.Match) -> str:
+    """Return the first non-empty captured group name from a regex match.
+
+    The HEADER/DOTTED/INLINE_TABLE_ENTRY patterns each capture a server name
+    in one of several alternative groups depending on quoting; match holds
+    whichever one actually matched.
+    """
     return next(group for group in match.groups() if group)
 
 
@@ -53,6 +65,16 @@ def config_files(environment: dict[str, str] | None = None, cwd: str | None = No
 
 
 def _scan(config: Path) -> dict[str, list[str]]:
+    """Parse one Codex config.toml and group its lines by mcp_servers entry name.
+
+    Reads config as text and walks it line by line, tracking which
+    `[mcp_servers.NAME...]` header, dotted key, or inline table entry each
+    line belongs to. Output is a dict mapping each server name to the list
+    of raw lines (header, dotted keys, env sub-table, inline fields) that
+    define it, so risky_servers can search those lines for risky patterns.
+    Returns an empty dict when config does not exist, and raises
+    IsolationError if the file exists but cannot be read.
+    """
     if not config.exists():
         return {}
     try:

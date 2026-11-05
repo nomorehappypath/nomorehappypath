@@ -37,6 +37,7 @@ IDLE = "idle_at_prompt"
 
 
 def delivery_marker(client_id: str) -> str:
+    """Return the marker text embedded in a delivered message, naming client_id so its transcript entry is found later."""
     return f"(harness delivery {client_id})"
 
 
@@ -107,6 +108,10 @@ class GeminiInbox:
         turn_state: Callable[[], tuple[str, float]] = lambda: ("", 0.0), busy_wait: float = 900.0,
         transcript_hint: Callable[[], str] = lambda: "",
     ) -> None:
+        """Store socket_path, session_id, the is_cli, peer_pid, and command_of lookups, the on_event callback,
+        turn_state query, busy_wait timeout, and transcript_hint supplier, and set up the empty pending/offered/
+        awaiting state. Returns none; the effect is initializing instance attributes used by start and deliver.
+        """
         self.transcript_hint = transcript_hint     # the recorded conversation's transcript, known before any hook has run
         self.socket_path = socket_path
         self.session_id = session_id
@@ -127,6 +132,10 @@ class GeminiInbox:
 
     # -- lifecycle --
     def start(self) -> None:
+        """Bind and listen on the inbox's Unix socket, replacing any stale socket file, then launch the
+        background accept thread. Returns none; the effect is that the inbox becomes ready to accept hook
+        connections.
+        """
         if os.path.lexists(self.socket_path):
             os.unlink(self.socket_path)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -141,6 +150,9 @@ class GeminiInbox:
         threading.Thread(target=self._accept_loop, daemon=True).start()
 
     def stop(self) -> None:
+        """Mark the inbox stopped, close the listener socket, and remove the socket file. Returns none; the
+        effect is that no further hook connections are accepted.
+        """
         with self.lock:
             self.stopped = True
             self.lock.notify_all()
@@ -156,9 +168,13 @@ class GeminiInbox:
             pass
 
     def alive(self) -> bool:
+        """Whether the inbox has not been stopped. Return: True unless stop was called."""
         return not self.stopped
 
     def ready(self) -> bool:
+        """Whether the inbox is running and has already learned the transcript path from a hook call.
+        Return: True when the inbox is ready to accept a delivery.
+        """
         with self.lock:
             return not self.stopped and bool(self.transcript)
 
@@ -171,6 +187,9 @@ class GeminiInbox:
 
     # -- admission --
     def _accept_loop(self) -> None:
+        """Accept incoming connections on the listener socket in a loop, spawning a handler thread for each
+        one, until stopped. Returns none; the effect is continuously serving new hook connections.
+        """
         while not self.stopped:
             try:
                 connection, _ = self.listener.accept()
@@ -179,6 +198,10 @@ class GeminiInbox:
             threading.Thread(target=self._serve, args=(connection,), daemon=True).start()
 
     def _serve(self, connection: socket.socket) -> None:
+        """Validate that connection comes from this session's own hook process, read its request, answer it,
+        and take the message back if sending the reply failed. Returns none; the effect is either refusing
+        the connection or completing one delivery exchange.
+        """
         try:
             try:
                 pid = self.peer_pid(connection)
@@ -211,6 +234,10 @@ class GeminiInbox:
                 pass
 
     def _answer(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Build the reply for one hook request: record the transcript and conversation ids it carries, and
+        if request is a PreInvocation event with pending work, pop one pending message to inject.
+        Return: a dict with the inject text and the client_id it belongs to.
+        """
         client_id = ""
         with self.lock:
             if request.get("transcript"):
@@ -228,6 +255,10 @@ class GeminiInbox:
         return {"inject": inject, "client_id": client_id}
 
     def _take_back(self, client_id: str, text: str) -> None:
+        """Restore an unsent message to the front of the pending queue after delivery failed, un-offering
+        client_id so it can be offered again. Returns none; the effect is that text is retried on the next
+        hook call.
+        """
         if not client_id or not text:
             return
         with self.lock:
@@ -237,6 +268,9 @@ class GeminiInbox:
 
     # -- delivery --
     def _in_transcript(self, marker: str) -> bool:
+        """Whether marker appears in a line of the session's transcript file that the CLI counted as a
+        consumed user turn. Return: True when the transcript records that marker was delivered.
+        """
         with self.lock:
             path = self.transcript or self.transcript_hint()
         try:
@@ -246,6 +280,10 @@ class GeminiInbox:
             return False
 
     def already_delivered(self, client_id: str, timeout: float) -> bool:
+        """Whether the delivery marker for client_id is already present in the transcript. timeout is
+        accepted for interface compatibility but does not bound the check. Return: True if the message
+        for client_id was already consumed.
+        """
         return self._in_transcript(delivery_marker(client_id))
 
     def deliver(self, client_id: str, text: str, *, response_timeout: float, receipt_timeout: float) -> str:
@@ -286,6 +324,10 @@ class GeminiInbox:
             self.awaiting[client_id] = (delivery_marker(client_id), time.time())
 
     def take_receipts(self) -> tuple[list[str], list[str]]:
+        """Check every awaiting delivery against the transcript, separating those now confirmed from those
+        overdue past busy_wait, and drop both groups from the awaiting set.
+        Return: a tuple of (seen, overdue) client id lists.
+        """
         with self.lock:
             awaiting = dict(self.awaiting)
         seen, overdue = [], []

@@ -58,10 +58,12 @@ _WAKE = threading.Event()
 
 
 def wake() -> None:
+    """Set the shared wake event so a pending preview tick runs immediately instead of waiting for the next tick cycle. Return: none; the effect is waking the supervisor thread."""
     _WAKE.set()
 
 
 def preview_root(root: Any) -> Path:
+    """Build the preview directory path for a given project root. Return: the board's preview subdirectory, derived from root, as a Path."""
     return board.board_dir(root) / "preview"
 
 
@@ -92,12 +94,14 @@ def preview_environment(source, extra=None):
 
 
 def _free_port() -> int:
+    """Bind a loopback socket to port 0 so the OS picks an unused port, then close the socket. Return: the free port number."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
 
 
 def _git(cwd: Path, *arguments: str) -> str:
+    """Run a git command with the given arguments in cwd, raising ValueError if it exits non-zero. Return: the command's stripped stdout output."""
     result = git_process.run(
         ["git", *arguments], cwd=cwd, capture_output=True, text=True, timeout=120,
     )
@@ -107,6 +111,7 @@ def _git(cwd: Path, *arguments: str) -> str:
 
 
 def _log_tail(path: Path) -> str:
+    """Read the file at path and decode its last LOG_TAIL_BYTES as text, or give an empty string if it cannot be read. Return: the tail of the log output."""
     try:
         data = path.read_bytes()
     except OSError:
@@ -126,6 +131,8 @@ APP_BUNDLE_GLOBS = (
 def suggest_command(workspace: str) -> dict[str, str]:
     """Offer a one-click preview command ONLY when it executes no candidate code.
 
+    workspace names the candidate checkout to look for a static index.html in.
+
     Review finding: suggesting `npm run dev` or `python3 app.py` puts the
     candidate's own scripts behind a single endorsed click - a destructive
     dev script would run with the owner's blessing. The suggestion is now
@@ -133,6 +140,8 @@ def suggest_command(workspace: str) -> dict[str, str]:
     which executes nothing from the candidate. Projects that need their own
     process keep the deliberate type-it-yourself path, where the owner writes
     the command they are choosing to trust.
+
+    Return: a dict with the suggested command and reason, or empty if none applies.
     """
     root = Path(workspace or "")
     if not workspace or not root.is_dir():
@@ -267,6 +276,7 @@ class Preview:
     """One running (or attempted) candidate preview process."""
 
     def __init__(self, task: str, head_commit: str, directory: Path) -> None:
+        """Initialize a Preview for task at head_commit, rooted at directory, with no process, port, url, command or requested state yet. Return: none; the effect is only setting instance attributes."""
         self.task = task
         self.head_commit = head_commit
         self.directory = directory
@@ -280,17 +290,21 @@ class Preview:
 
     @property
     def source(self) -> Path:
+        """The checked-out candidate source directory. Return: directory's source subdirectory as a Path."""
         return self.directory / "source"
 
     @property
     def state_dir(self) -> Path:
+        """The directory holding this preview's runtime state. Return: directory's state subdirectory as a Path."""
         return self.directory / "state"
 
     @property
     def log_path(self) -> Path:
+        """The path to this preview's log file. Return: directory's preview.log file as a Path."""
         return self.directory / "preview.log"
 
     def alive(self) -> bool:
+        """Check whether this preview's process is still running. Return: True if process is set and has not exited, False otherwise."""
         return bool(self.process and self.process.poll() is None)
 
     SAMPLE_SECONDS = 3.0         # sampled this fast right after launch...
@@ -303,6 +317,8 @@ class Preview:
         A group number cannot pass to another program while one of its members lives, so what is seen while the
         leader lives is ours. After the leader has exited, a process carrying its number could belong to anyone,
         so nothing more is recorded: the members seen earlier are all that can be proven.
+
+        Return: none; the effect is updating self.members in place.
         """
         process = self.process
         if process is None or process.poll() is not None:
@@ -321,6 +337,7 @@ class Preview:
     def watch_group(self) -> None:
         """Sample the group many times a second right after launch (a start script that daemonizes and exits at once), then twice a second while the leader lives."""
         def sample() -> None:
+            """Poll the process group repeatedly: densely for SAMPLE_SECONDS after launch, then at the slower STEADY_INTERVAL while the leader lives. Return: none; the effect is looping, calling remember_group, until the process exits."""
             started = time.monotonic()
             while True:
                 process = self.process
@@ -331,6 +348,7 @@ class Preview:
         threading.Thread(target=sample, name="harness-preview-group", daemon=True).start()
 
     def stop(self) -> None:
+        """Terminate the preview's process group and any remembered members, giving STOP_GRACE_SECONDS for a SIGTERM exit before escalating to SIGKILL. Return: none; the effect is stopping the running process."""
         process = self.process
         self.process = None
         if process is None:
@@ -352,6 +370,7 @@ class Preview:
         self._stop_remembered_members()
 
     def _stop_remembered_members(self) -> None:
+        """Signal each still-live remembered member process, first SIGTERM then SIGKILL for whatever remains after a short grace period. Return: none; the effect is terminating the remembered members."""
         for sig in (signal.SIGTERM, signal.SIGKILL):
             members = self._live_remembered_members()
             if not members:
@@ -367,6 +386,7 @@ class Preview:
                     time.sleep(0.1)
 
     def _live_remembered_members(self) -> list[int]:
+        """Filter the remembered members to those still present in the process table with a matching start token. Return: the list of pids that are still provably ours."""
         if not self.members:
             return []
         try:
@@ -380,6 +400,7 @@ class ReleasePreviewSupervisor:
     """Keep one healthy preview per release that awaits the owner's test."""
 
     def __init__(self, root: Any, *, tick_seconds: float = TICK_SECONDS) -> None:
+        """Initialize the supervisor for root, ticking every tick_seconds, with no previews tracked yet and its own lock and stop event. Return: none; the effect is setting up the supervisor's state."""
         self.root = root
         self.tick_seconds = tick_seconds
         self.previews: dict[str, Preview] = {}
@@ -391,6 +412,7 @@ class ReleasePreviewSupervisor:
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
+        """Start the supervisor's background tick thread, raising ValueError if it is already started. Return: none; the effect is launching the worker thread."""
         if self.thread is not None:
             raise ValueError("release preview supervisor is already started")
         self.thread = threading.Thread(
@@ -399,6 +421,7 @@ class ReleasePreviewSupervisor:
         self.thread.start()
 
     def _run(self) -> None:
+        """Loop until stop_event is set, waking on the wake event or the tick_seconds timeout to run one tick, recording any tick failure without letting it kill the thread. Return: none; the effect runs until shutdown."""
         while not self.stop_event.is_set():
             _WAKE.wait(self.tick_seconds)
             _WAKE.clear()
@@ -423,6 +446,7 @@ class ReleasePreviewSupervisor:
             print(f"HARNESS RELEASE PREVIEW | could not record the failure on the board: {str(recording_error)[:200]}", flush=True)
 
     def shutdown(self) -> None:
+        """Stop the background thread, wait for it to join, then stop and clear every tracked preview. Return: none; the effect is a full supervisor shutdown."""
         self.stop_event.set()
         _WAKE.set()
         if self.thread is not None:
@@ -434,10 +458,12 @@ class ReleasePreviewSupervisor:
 
     # -- one pass ----------------------------------------------------------
     def tick(self) -> dict[str, Any]:
+        """Run one supervisor pass under the lock. Return: the report dict produced by _tick_locked."""
         with self.lock:
             return self._tick_locked()
 
     def _tick_locked(self) -> dict[str, Any]:
+        """Reconcile pending releases needing a preview: stop previews for closed, disappeared or changed-commit releases, then launch or update previews for the rest, honoring a paused project. Return: a report dict with the pending, stopped and paused state."""
         report: dict[str, Any] = {"pending": [], "stopped": [], "paused": False}
         paused = board.pause_state(self.root).get("status") != "active"
         report["paused"] = paused
@@ -493,6 +519,7 @@ class ReleasePreviewSupervisor:
                     pass
 
     def _record(self, task: str, preview_value: dict[str, Any]) -> None:
+        """Record preview_value on the board for task, logging (but not raising) if the write fails. Return: none; the effect is a board write or a printed failure."""
         try:
             board.record_release_preview(self.root, task, preview_value)
         except (OSError, ValueError) as error:
@@ -502,6 +529,7 @@ class ReleasePreviewSupervisor:
         self, task: str, release: dict[str, Any], settings: dict[str, Any],
         state: dict[str, Any],
     ) -> None:
+        """Make sure task's preview matches release's head_commit and settings: skip program-only releases, honor an owner's skip, suggest or detect a start command, or launch/update a running preview using state. Return: none; the effect is a preview launch, record update or stop."""
         head_commit = str(release.get("head_commit") or "")
         recorded = release.get("preview") or {}
         workspace = str((state.get("task_workspaces") or {}).get(task) or "")
@@ -605,6 +633,7 @@ class ReleasePreviewSupervisor:
         self._launch(task, head_commit, command, settings, workspace, branch, requested=requested)
 
     def _ready_value(self, preview: Preview, workspace: str, branch: str) -> dict[str, Any]:
+        """Build the board record for a preview that is ready and serving, using its workspace and branch. Return: a dict describing the ready preview, including its url, command, pid and start token."""
         return {
             "status": "ready",
             "requested": preview.requested or None,
@@ -622,6 +651,7 @@ class ReleasePreviewSupervisor:
         self, task: str, head_commit: str, command: str, settings: dict[str, Any],
         workspace: str, branch: str, *, requested: str = "",
     ) -> None:
+        """Materialize the candidate checkout at workspace, detect or use command, start its process under settings, wait for it to answer, and record the outcome as ready or failed for task at head_commit on branch, tagged with requested. Return: none; the effect is launching the preview process and recording its result."""
         directory = preview_root(self.root) / task
         preview = Preview(task, head_commit, directory)
         preview.requested = requested
@@ -716,6 +746,7 @@ class ReleasePreviewSupervisor:
         _git(source, "checkout", "--detach", preview.head_commit)
 
     def _await_health(self, preview: Preview, settings: dict[str, Any], *, find_listener: bool = False) -> str:
+        """Poll preview's url until it answers, its process dies, or settings' startup_timeout_seconds elapses, optionally using find_listener to search the process group's own listening ports. Return: an empty string on success or a failure message explaining why health never arrived."""
         timeout = float(settings.get("startup_timeout_seconds") or 45)
         deadline = time.monotonic() + max(5.0, min(300.0, timeout))
         while time.monotonic() < deadline:
@@ -740,6 +771,7 @@ class ReleasePreviewSupervisor:
 
 
 def _answers(url: str) -> bool:
+    """Check whether url responds to an HTTP GET without a server error. Return: True if the response status is below 500, False otherwise, including on any OSError."""
     try:
         with urlopen(url, timeout=3) as response:
             return response.status < 500
@@ -761,6 +793,10 @@ def _group_listening_urls(process: subprocess.Popen | None) -> list[str]:
 
 
 def _port_in_use(log_path: Path) -> bool:
+    """Check whether the most recent preview launch recorded in log_path failed because its port was already in use.
+
+    Return: True if the log's latest launch section mentions an address-in-use error, False otherwise.
+    """
     try:
         tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
     except OSError:

@@ -28,6 +28,7 @@ CLAUDE_RULE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\(.*\))?$")
 
 
 def settings_path(root: ProjectRoot) -> Path:
+    """Return the path to the workspace_settings.json file stored under this project root."""
     return project_context(root).storage_path("control", "workspace_settings.json")
 
 
@@ -49,6 +50,7 @@ DEFAULT_PREVIEW = {
 
 
 def _default(root: ProjectRoot) -> dict[str, Any]:
+    """Build and return the default settings dict for root, with claude/codex sections and preview defaults."""
     root = project_context(root).code_root
     return {
         "workspace_root": str(root),
@@ -74,6 +76,7 @@ def _default(root: ProjectRoot) -> dict[str, Any]:
 
 
 def _validated_preview(value: Any) -> dict[str, Any]:
+    """Validate the preview section carried in value and return a sanitized copy; raise ValueError on bad input."""
     section = value if isinstance(value, dict) else {}
     command = str(section.get("command") or "").strip()
     if len(command) > 2000:
@@ -109,6 +112,7 @@ def _validated_preview(value: Any) -> dict[str, Any]:
 
 
 def _save(path: Path, value: dict[str, Any]) -> dict[str, Any]:
+    """Write value as JSON to path via a temp file and atomic rename, then return value unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -117,6 +121,7 @@ def _save(path: Path, value: dict[str, Any]) -> dict[str, Any]:
 
 
 def load(root: ProjectRoot) -> dict[str, Any]:
+    """Load settings for root from disk, merging in defaults and the authoritative execution root; return the merged dict."""
     path = settings_path(root)
     if not path.is_file():
         return _default(root)
@@ -170,6 +175,7 @@ def update_preview(root: ProjectRoot, section: dict[str, Any]) -> dict[str, Any]
 
 
 def validate_workspace(value: str) -> Path:
+    """Validate that value is a non-empty absolute path to an existing directory; return its resolved Path or raise ValueError."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError("choose a workspace folder")
     path = Path(value).expanduser()
@@ -181,10 +187,12 @@ def validate_workspace(value: str) -> Path:
 
 
 def update(root: ProjectRoot, workspace_root: str) -> dict[str, Any]:
+    """Reject any attempt to change the workspace_root for root; this entry point always raises ValueError and never returns a result."""
     raise ValueError("the project folder is managed from Projects and cannot be changed here")
 
 
 def _temporary_workspace_in_owner_codex_config(workspace: Path, config: Path) -> bool:
+    """Return True if config is the owner's own codex config and workspace sits inside a temporary root."""
     try:
         owner_config = (Path.home() / ".codex" / "config.toml").resolve()
         if config.resolve() != owner_config:
@@ -196,6 +204,7 @@ def _temporary_workspace_in_owner_codex_config(workspace: Path, config: Path) ->
 
 
 def _temporary_roots() -> set[Path]:
+    """Return the set of resolved filesystem roots treated as temporary (system temp dir, /tmp, /var/tmp)."""
     return {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve(), Path("/var/tmp").resolve()}
 
 
@@ -243,6 +252,7 @@ def _exclusive_lock(path: Path):
 
     @contextlib.contextmanager
     def held():
+        """Open (or create) the .lock file beside path, hold an exclusive flock for the duration of the with-block, and yield; produces no return value."""
         descriptor = os.open(str(path.with_name(path.name + ".lock")), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -275,6 +285,7 @@ def _replace_text(path: Path, text: str) -> None:
 
 
 def _apply_codex_trust(path: Path, workspace: Path, provider: str) -> dict[str, str]:
+    """Rewrite the codex config.toml at path so workspace is trusted per-project, stripping any global approval_policy/sandbox_mode lines; return a summary dict for provider."""
     original = path.read_text(encoding="utf-8") if path.is_file() else ""
     lines = original.splitlines()
     first_table = next((index for index, line in enumerate(lines) if line.strip().startswith("[")), len(lines))

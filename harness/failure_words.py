@@ -51,6 +51,14 @@ _HARNESS_REASON = re.compile(r"\A\s*(?:\w+Error: )?['\"]?[\w.-]+['\"]? codec can
 
 
 def first_sentence(text: Any, limit: int = 160) -> str:
+    """Return the first sentence found in text, truncated with an ellipsis so it never exceeds limit characters.
+
+    Args:
+        text: the raw value to extract a sentence from (coerced to a string).
+        limit: the maximum length of the returned sentence.
+
+    Returns: the first sentence, or "" when text has no content.
+    """
     text = " ".join(str(text or "").split())
     if not text:
         return ""
@@ -76,6 +84,13 @@ def describe(text: Any, redact: Callable[[Any], str] | None = None) -> dict[str,
 
 
 def _when(value: Any) -> datetime | None:
+    """Parse value as an ISO-8601 timestamp.
+
+    Args:
+        value: the raw recorded timestamp (any value, coerced to a string).
+
+    Returns: the parsed datetime, or None when value is missing or not a valid ISO timestamp.
+    """
     try:
         parsed = datetime.fromisoformat(str(value or ""))
     except ValueError:
@@ -84,6 +99,13 @@ def _when(value: Any) -> datetime | None:
 
 
 def _scope(request: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Build the (task, phase, chunk, subtask) identity tuple used to match a failure to its later passes.
+
+    Args:
+        request: the recorded failure or QA request to read the scope fields from.
+
+    Return: a 4-tuple of strings, with "" standing in for any field request does not have.
+    """
     return tuple(str(request.get(key) or "") for key in ("task", "phase", "chunk", "subtask"))  # type: ignore[return-value]
 
 
@@ -179,6 +201,13 @@ def failures_for_state(
                         {"text": request.get("result_summary") or "", "at": at})
 
     def finish(rows: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+        """Turn per-task lists of failure items into per-task summaries.
+
+        Args:
+            rows: a dict mapping each task to its oldest-first list of failure items.
+
+        Returns: a dict mapping task to its summarize() result, omitting any task with nothing to show.
+        """
         out = {}
         for task, items in rows.items():
             items.sort(key=lambda row: str(row.get("at") or ""))

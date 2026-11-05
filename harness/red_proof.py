@@ -25,6 +25,7 @@ PLAIN = {
 
 
 def plain(label: str) -> str:
+    """Return the owner-facing plain-words sentence for label, or an empty string if label is not one of the known LABELS."""
     return PLAIN.get(label, "")
 
 
@@ -96,6 +97,7 @@ def reason_min_chars() -> int:
 
 
 def is_test_file(path: str) -> bool:
+    """Return True if path sits in a test directory, or its file name matches the test-name or test-setup patterns."""
     parts = PurePosixPath(str(path).replace("\\", "/")).parts
     if not parts:
         return False
@@ -119,6 +121,7 @@ def reasons_for(note: str, paths: list[str]) -> tuple[dict[str, str], list[str]]
 
 
 def refusal(missing: list[str]) -> str:
+    """Return the message that refuses a repair touching the test files named in missing, asking for either a reasoned Test changed line or a restore."""
     shown = ", ".join(missing)
     return (
         f"This repair changes test file(s), test setup or the test command that were part of the work already judged: {shown}. A test may not be changed just to make the work pass. "
@@ -134,6 +137,7 @@ def unnamed_in_verdict(changed: list[dict[str, Any]], summary: str) -> list[str]
 
 
 def verdict_refusal(changed: list[dict[str, Any]], missing: list[str]) -> str:
+    """Return the message asking the Reviewer to resubmit a verdict naming each test in missing that changed, picked out of changed."""
     said = "; ".join(f"{item['path']} (Delivery's reason: {item['reason']})" for item in changed if item["path"] in missing)
     return (
         f"Delivery changed test file(s) during this repair: {said}. Name each one in your verdict and say whether the change is fair "

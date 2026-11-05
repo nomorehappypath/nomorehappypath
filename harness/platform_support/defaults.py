@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from harness.terminal_titles import role_title
+from harness.terminal_titles import role_title, window_title
 
 
 class _Discovery:
@@ -96,9 +96,11 @@ class _Discovery:
         )
 
     def trusted_tool_search_path(self) -> str:
+        """Return the colon-separated search path used for trusted tool lookups such as git."""
         return self.TRUSTED_TOOL_SEARCH_PATH
 
     def trusted_git_candidates(self) -> tuple[Path, ...]:
+        """Return the ordered candidate paths checked for a trusted git executable."""
         return self.TRUSTED_GIT_CANDIDATES
 
     def governed_execution_path(self, source: Mapping[str, str]) -> str:
@@ -147,9 +149,12 @@ class _Libproc:
     CTL_KERN, KERN_ARGMAX, KERN_PROCARGS2 = 1, 8, 49
 
     def __init__(self) -> None:
+        """Initialize the instance with no library loaded yet; the effect is a fresh lazy-load state."""
         self._library = None
 
     def _load(self):
+        """Load and cache the ctypes handles for libproc and libc, raising ProcessTableUnavailable off macOS
+        or when loading fails; return the cached tuple of (ctypes, libproc, libc, BsdInfo)."""
         if self._library is None:
             if sys.platform != "darwin":
                 raise ProcessTableUnavailable("cannot read the process table: libproc exists only on macOS")
@@ -176,6 +181,7 @@ class _Libproc:
         return self._library
 
     def _info(self, pid: int):
+        """Return the raw proc_bsdinfo structure for pid via libproc, or None if the lookup failed."""
         ctypes, libproc, _libc, BsdInfo = self._load()
         info = BsdInfo()
         size = libproc.proc_pidinfo(int(pid), self.PROC_PIDTBSDINFO, ctypes.c_uint64(0),
@@ -184,9 +190,11 @@ class _Libproc:
 
     @staticmethod
     def _token(info) -> str:
+        """Return a normalized start-time token derived from info's start_tvsec field."""
         return _normal_token(time.strftime("%a %b %e %H:%M:%S %Y", time.localtime(int(info.start_tvsec))))
 
     def _command(self, pid: int, info) -> str:
+        """Return the best-effort command line or executable path for pid, falling back to info's comm field."""
         ctypes, libproc, libc, _BsdInfo = self._load()
         argmax, width = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
         mib = (ctypes.c_int * 2)(self.CTL_KERN, self.KERN_ARGMAX)
@@ -206,6 +214,7 @@ class _Libproc:
         return "(" + info.comm.decode("utf-8", "replace") + ")"
 
     def start_token(self, pid: int) -> str:
+        """Return the normalized start token for pid, or an empty string if no matching process info exists."""
         info = self._info(pid)
         return self._token(info) if info is not None and int(info.pid) == int(pid) else ""
 
@@ -236,6 +245,8 @@ class _Libproc:
         return found
 
     def process_table(self) -> dict[int, dict[str, Any]]:
+        """Return a mapping of pid to process details collected via libproc, raising ProcessTableUnavailable
+        when this process itself is not found in the listing."""
         ctypes, libproc, _libc, _BsdInfo = self._load()
         count = libproc.proc_listallpids(None, 0)
         pids = (ctypes.c_int * (max(count, 0) + 256))()
@@ -268,6 +279,8 @@ class _ProcessIdentity:
     """
 
     def run_ps(self, arguments: list[str], *, check: bool) -> subprocess.CompletedProcess:
+        """Run ps with arguments, honoring check, and raise ProcessTableUnavailable if ps cannot be executed
+        or fails; return the completed process result."""
         try:
             return subprocess.run(
                 ["ps", *arguments], capture_output=True, text=True, check=check,
@@ -302,6 +315,7 @@ class _ProcessIdentity:
         return None if found is None else found.get(name, "")
 
     def start_token(self, pid: int) -> str:
+        """Return the normalized ps-derived start token for pid, falling back to libproc when ps cannot run."""
         # A non-zero exit means that pid is gone, which is an ANSWER, not a
         # failure - it stays an empty token exactly as before.
         try:
@@ -463,6 +477,8 @@ class Grant:
     __slots__ = ("readable", "writable", "network", "starts_helper_programs")
 
     def __init__(self, *, readable, writable, network: bool, starts_helper_programs: bool):
+        """Store the readable and writable path lists plus the network and starts_helper_programs flags
+        that define this grant; the effect is to initialize the instance's state, with no return value."""
         self.readable = list(readable)
         self.writable = list(writable)
         self.network = bool(network)
@@ -483,6 +499,8 @@ class Confined:
     __slots__ = ("argv", "enforced", "profile")
 
     def __init__(self, argv, *, enforced: bool, profile=None):
+        """Store the argv to run along with whether it is enforced and its sandbox profile; the effect is
+        to initialize the instance, with no return value."""
         self.argv = list(argv)
         self.enforced = bool(enforced)
         self.profile = profile
@@ -492,6 +510,7 @@ class _Confinement:
     """OS-level confinement for a command the harness runs on the owner's behalf."""
 
     def available(self) -> bool:
+        """Return whether OS-level sandboxing is available on this platform (darwin with sandbox-exec present)."""
         return sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
 
     def wrap(self, argv, grant: Grant, *, store: Path, enabled: bool = True) -> Confined:
@@ -521,6 +540,13 @@ class _Confinement:
         immediately; the bytes are grafted from the original for that reason.
         """
         def literal(path: Path) -> str:
+            """Resolve path and escape it for use inside a sandbox profile's quoted literal string.
+
+            Args:
+                path: the filesystem path to resolve and escape.
+
+            Return: the resolved path string with backslashes and double quotes escaped.
+            """
             return str(path.resolve()).replace("\\", "\\\\").replace('"', '\\"')
         # Deny by default, then allow immutable OS/runtime reads plus the exact
         # board-derived operation paths.  This keeps repository-controlled
@@ -592,6 +618,7 @@ class _BrowserHost:
                     "chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell")
 
     def cache_layout(self):
+        """Return this platform's headless browser cache layout, selecting the macOS or Linux location."""
         return self.MACOS_LAYOUT if sys.platform == "darwin" else self.LINUX_LAYOUT
 
     CONFINED_MARKER = "HARNESS_OS_SANDBOX"
@@ -624,6 +651,7 @@ class _BrowserHost:
         return False
 
     def confined_browser_args(self) -> list[str]:
+        """Return the browser command-line flags to use when launched under this platform's own confinement."""
         return ["--no-sandbox", "--single-process"] if sys.platform == "darwin" else ["--no-sandbox"]
 
     def inside_os_sandbox(self) -> bool:
@@ -660,6 +688,7 @@ class _BrowserHost:
         return sorted(home.joinpath(*parts).glob(pattern), reverse=True)
 
     def path_candidate_names(self) -> tuple[str, ...]:
+        """Return the candidate executable names to search the PATH for a headless browser."""
         return self.PATH_NAMES
 
     def rejects_resolved(self, resolved: Path) -> bool:
@@ -681,6 +710,7 @@ class _BrowserHost:
         return parts[-1:] == ["snap"] or "snap" in parts[:-1] and "bin" in parts[:-1]
 
     def is_snap_stub_script(self, path: Path) -> bool:
+        """Return whether path is a shell stub script that only asks the owner to install chromium via snap."""
         try:
             head = Path(path).read_bytes()[:4096]
         except OSError:
@@ -721,6 +751,14 @@ class _FolderChooser:
     TIMEOUT_SECONDS = 120
 
     def choose(self, prompt: str) -> str:
+        """Show a native macOS folder picker with prompt as its message and return the chosen path.
+
+        Args:
+            prompt: the message text shown in the folder-choosing dialog.
+
+        Return: the POSIX path of the folder the person picked. Raises UnsupportedPlatformOperation
+        off macOS, or FolderSelectionTimeout if the dialog is not answered within TIMEOUT_SECONDS.
+        """
         # Stage 0 selects this module on EVERY platform (see the selector), so
         # the macOS-only refusal has to live here. Routing it through the
         # selector alone would have turned a named refusal into a
@@ -775,6 +813,8 @@ class _TerminalHost:
         return "{" + ", ".join(str(round(channel * 65535 / 255)) for channel in color_rgb) + "}"
 
     def _open_script(self, color_rgb, title: str = "") -> str:
+        """Build and return the AppleScript source that opens a new Terminal tab colored with color_rgb and
+        titled with title."""
         rgb = self._colour_literal(color_rgb)
         return f'''on run argv
  tell application "Terminal"
@@ -791,6 +831,8 @@ class _TerminalHost:
 end run'''
 
     def open_session(self, session_id: str, argv, *, color_rgb) -> SessionSurface:
+        """Open a visible terminal session running argv under session_id with the given color_rgb; return
+        the resulting SessionSurface."""
         if sys.platform != "darwin":
             raise UnsupportedPlatformOperation(
                 "central CLI launch currently requires macOS Terminal"
@@ -833,21 +875,26 @@ end run'''
 
     @staticmethod
     def _screen_name(session_id):
+        """Validate session_id and return the GNU screen session name derived from it."""
         if not session_id or any(not (character.isalnum() or character in '_-') for character in session_id):
             raise ValueError('Invalid managed session identity.')
         return 'nmhp-' + session_id
 
     @staticmethod
     def _note_viewer_failure(directory, session_id, error):
+        """Best-effort log of a failed Terminal viewer open for session_id under directory, recording error;
+        the effect is none when the logging itself fails."""
         try:
             from harness.platform_support import agent_window
-            agent_window._log(str(Path(directory).parent / 'terminal-close.log'), role_title(session_id) + ' [' + session_id + ']',
+            agent_window._log(str(Path(directory).parent / 'terminal-close.log'), window_title(session_id),
                               '', f'the Terminal window could not be opened: {error}')
         except Exception:
             pass
 
     def _open_screen_view(self, directory, session_id, color_rgb):
-        title = role_title(session_id) + ' [' + session_id + ']'
+        """Open a Terminal window that reattaches to the screen session for session_id stored under directory,
+        colored with color_rgb; the effect is a new window, with no return value."""
+        title = window_title(session_id)
         # Not `exec screen -r`: when screen returns, the window runs harness/agent_window.py, which closes
         # THIS window (see that file). /bin/sh keeps the command independent of the owner's login shell.
         script = ('env "SCREENDIR=$1" /usr/bin/screen -c /dev/null -r "$2"; code=$?; '
@@ -879,16 +926,23 @@ end run'''
 end run'''
 
     def view_session(self, session: dict, *, root=None) -> dict:
+        """Focus or reopen the Terminal window for session, using root to locate its screen socket when the
+        session is screen-backed; return a dict describing the focused session."""
         if root is not None:
             from harness.project_context import project_context
             directory = project_context(root).storage_path('control', 'terminal-sockets')
             name = self._screen_name(session['id'])
             if directory.is_dir() and list(directory.glob('*.' + name)):
-                title = role_title(session['id']) + ' [' + session['id'] + ']'
-                # A live attachment only: a finished or closing window keeps its title but is not busy.
+                title = window_title(session['id'])
+                # A live attachment only: its tab still runs `screen -r`. Not `busy`: Terminal never counts
+                # sh or screen as busy, so a live view read as not busy and View agent opened a duplicate
+                # (owner 2026-11-04). A finished window no longer runs screen, and a closing one is renamed.
+                # Item 2 is the title windows had before 2026-11-04 (role + full session id): a window opened
+                # before an update keeps it, and must still be found rather than duplicated.
                 script = self.FOCUS_SCRIPT.replace('if tty of terminalTab is item 1 of argv then',
-                                                   'if (custom title of terminalTab is item 1 of argv) and (busy of terminalTab) then')
-                focused = subprocess.run(['/usr/bin/osascript', '-e', script, title],
+                                                   'if ((custom title of terminalTab is item 1 of argv) or (custom title of terminalTab is item 2 of argv)) and ((processes of terminalTab) contains "screen") then')
+                legacy = role_title(session['id']) + ' [' + session['id'] + ']'
+                focused = subprocess.run(['/usr/bin/osascript', '-e', script, title, legacy],
                                          check=True, capture_output=True, text=True, timeout=30)
                 if focused.stdout.strip() != 'focused':
                     from harness import control
@@ -942,6 +996,8 @@ end run'''
         return directory
 
     def input_session(self, session_id: str, data: bytes, *, root=None) -> None:
+        """Send data as raw keystrokes to the live screen session for session_id located under root; the
+        effect is none returned."""
         # `stuff` takes its argument as raw bytes (no escape processing), so arrow keys, paste, Enter and
         # Ctrl+C arrive exactly as typed. A NUL byte cannot travel in a command line and is refused.
         if b'\x00' in data:
@@ -949,6 +1005,8 @@ end run'''
         self._screen_command(session_id, root, 'stuff', data)
 
     def capture_session(self, session_id: str, *, root=None) -> dict:
+        """Capture the current screen contents of the live session for session_id under root; return a dict
+        with the screen text, size and cursor position."""
         import tempfile
         if root is None:
             raise ValueError("This agent's live terminal is unavailable.")
@@ -1076,14 +1134,17 @@ class _AgentConfinement:
         return ["/private/tmp", "/private/var/folders"]
 
     def available(self) -> bool:
+        """Return whether sandbox-exec is present on this machine so agent confinement can be enforced."""
         return Path("/usr/bin/sandbox-exec").is_file()
 
     @staticmethod
     def _real(path) -> str:
+        """Return the fully expanded and resolved absolute form of path."""
         return str(Path(path).expanduser().resolve())
 
     @staticmethod
     def _quote(path: str) -> str:
+        """Return path with backslashes and double quotes escaped for embedding in a Seatbelt profile literal."""
         return path.replace("\\", "\\\\").replace('"', '\\"')
 
     def login_file_paths(self, home, claude_config_dir=None) -> list[str]:
@@ -1192,6 +1253,8 @@ class _ClaudeCredentials:
     uses_keychain = True
 
     def read_token(self, environment) -> str:
+        """Return the Claude OAuth token from environment, falling back to the macOS Keychain when
+        environment does not provide one directly."""
         token = environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
         if environment.get("HARNESS_CLAUDE_TOKEN_SOURCE") == "keychain":
             token = ""
@@ -1208,6 +1271,7 @@ class _ClaudeCredentials:
         return token
 
     def instructions(self) -> str:
+        """Return the plain-words instructions for the owner to create a new Claude setup token when login fails."""
         return ("Run claude setup-token in your own Terminal. Save the new token in the login Keychain item "
                 "claude-cli-oauth using Keychain Access, then retry the agent. Unlock your login Keychain if needed. "
                 "Do not run /login inside a harness agent.")

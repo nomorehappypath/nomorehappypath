@@ -25,6 +25,7 @@ def configure(plumbing: Any) -> None:
 
 
 def max_chars() -> int:
+    """Return the owner's configured note length limit, or MAX_CHARS_DEFAULT when none was configured."""
     return _configured.get("chars", MAX_CHARS_DEFAULT)
 
 
@@ -48,6 +49,7 @@ def record(state: dict[str, Any], agent: dict[str, Any] | None, task: str, step:
 
 
 def latest(state: dict[str, Any], task: str) -> dict[str, dict[str, Any]]:
+    """Return the most recent non-empty note per role for task, read from state's difficulty_notes."""
     out: dict[str, dict[str, Any]] = {}
     for note in (state.get("difficulty_notes") or {}).get(task) or []:
         if isinstance(note, dict) and note.get("role") in ROLE_LABELS and str(note.get("text") or "").strip():

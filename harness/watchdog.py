@@ -15,10 +15,25 @@ from harness.project_context import add_context_arguments, context_from_args
 
 
 def tick(root: Path, stale_after: int) -> list[dict]:
+    """Mark agents under root as stalled when idle past stale_after seconds.
+
+    Args:
+        root: the project root whose board heartbeats are checked.
+        stale_after: seconds of inactivity after which an agent is marked stalled.
+
+    Return: the list of stalled-agent event dicts produced by board.mark_stalled.
+    """
     return board.mark_stalled(root, stale_after)
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the watchdog loop (or a single pass) and print each stall event.
+
+    Args:
+        argv: command-line arguments to parse, or None to use sys.argv.
+
+    Returns: 0 on a normal exit from the watchdog loop.
+    """
     parser = argparse.ArgumentParser(description="Mark agents stale when their board heartbeat stops")
     add_context_arguments(parser)
     parser.add_argument("--interval", type=int, default=board.WATCHDOG_INTERVAL_SECONDS)

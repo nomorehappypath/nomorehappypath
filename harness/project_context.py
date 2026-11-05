@@ -15,6 +15,10 @@ from typing import Union
 
 
 def _canonical(path: str | os.PathLike[str]) -> Path:
+    """Resolve path to an absolute, symlink-free form, rejecting a leading '~'.
+
+    Return: the canonical Path for path.
+    """
     value = Path(path)
     if value.parts and value.parts[0].startswith("~"):
         raise ValueError("project roots must not depend on HOME; expand '~' before the boundary")
@@ -35,6 +39,10 @@ class ProjectContext:
     workspace_root: Path
 
     def __post_init__(self) -> None:
+        """Canonicalize code_root, data_root, and workspace_root in place.
+
+        Return: none; the effect is replacing each field with its resolved Path.
+        """
         object.__setattr__(self, "code_root", _canonical(self.code_root))
         object.__setattr__(self, "data_root", _canonical(self.data_root))
         object.__setattr__(self, "workspace_root", _canonical(self.workspace_root))
@@ -66,6 +74,7 @@ class ProjectContext:
 
     @property
     def is_compatibility(self) -> bool:
+        """Return whether this context's roots match the legacy compatibility layout."""
         return (
             self.data_root == self.code_root / ".harness"
             and self.workspace_root == self.code_root.parent / ".harness-task-workspaces"
@@ -108,12 +117,23 @@ def context_from_roots(
 
 
 def add_context_arguments(parser, *, root_required: bool = False, root_default: str = ".") -> None:
+    """Register --root, --data-root, and --workspace-root on parser.
+
+    root_required controls whether --root is mandatory, and root_default supplies
+    its fallback value when it is optional. Return: none; the effect is mutating
+    parser with the three new arguments.
+    """
     parser.add_argument("--root", required=root_required, default=None if root_required else root_default)
     parser.add_argument("--data-root", default="")
     parser.add_argument("--workspace-root", default="")
 
 
 def context_from_args(args) -> ProjectContext:
+    """Build a ProjectContext from parsed command-line args.
+
+    Return: the ProjectContext derived from args.root, args.data_root, and
+    args.workspace_root.
+    """
     return context_from_roots(args.root, args.data_root, args.workspace_root)
 
 
@@ -128,6 +148,10 @@ def context_environment(context: ProjectRoot) -> dict[str, str]:
 
 
 def context_cli_arguments(context: ProjectRoot) -> list[str]:
+    """Render context as the --root/--data-root/--workspace-root CLI flags.
+
+    Return: a list of strings giving the flag/value pairs for context.
+    """
     value = project_context(context)
     return [
         "--root", str(value.code_root),

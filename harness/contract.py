@@ -64,16 +64,31 @@ OWNER_DESCRIPTION_STOP_WORDS = {
     "of", "on", "or", "the", "this", "to", "was", "with",
 }
 
+# Takes no arguments. Return: the current UTC time as an ISO-8601 string, used to timestamp contract records.
 def _now(): return datetime.now(timezone.utc).isoformat()
+# Takes root, a ProjectRoot. Return: root's code_root path, the project's checked-out source tree.
 def _root(root: ProjectRoot): return project_context(root).code_root
+# Takes root (a ProjectRoot) and task (a task id). Return: the storage path of task's Completion Contract JSON file under root's tasks folder.
 def _task_path(root: ProjectRoot, task): return project_context(root).storage_path("tasks", f"{task}.json")
+# Takes path, the file to read. Return: path's text, read as UTF-8 and parsed as JSON.
 def _load(path): return json.loads(path.read_text(encoding="utf-8"))
 def _save(path, value):
+    """Write value to path as indented JSON, atomically via a same-directory temp file.
+
+    Returns nothing; the effect is that path either holds the new content or
+    is left untouched (the temp file is written and renamed into place, so a
+    crash mid-write never leaves a partial file at path).
+    """
     import os, secrets
     path.parent.mkdir(parents=True, exist_ok=True); temp=path.with_name(f"{path.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True)+"\n", encoding="utf-8"); temp.replace(path)
 
 def _immutable_projection(value):
+    """Return the subset of value (objective, exclusions, deliverable name/proof, build) that must never change.
+
+    This projection is stored as a contract's immutable_scope and compared
+    against the current contract to detect any attempt to rewrite it.
+    """
     projection={"objective":value.get("objective"),"exclusions":json.loads(json.dumps(value.get("exclusions",[]))),"deliverables":[{"name":item.get("name"),"acceptance_proof":item.get("acceptance_proof")} for item in value.get("deliverables",[])]}
     # A program build declaration is part of what a review certifies; contracts without one hash exactly as before.
     if value.get("build"): projection["build"]=json.loads(json.dumps(value["build"]))
@@ -113,6 +128,12 @@ def effective_exclusions(value):
     return result
 
 def _immutable_problems(value):
+    """Return reasons value's immutable scope was violated, or amendments are malformed.
+
+    Output is an empty list when value has no immutable_scope recorded yet,
+    or when the current projection matches it and every exclusion amendment
+    is valid; otherwise each problem is a human-readable string.
+    """
     immutable=value.get("immutable_scope")
     if not immutable: return []
     current=_immutable_projection(value)
@@ -172,10 +193,24 @@ def contract_preflight(root, task):
     return not problems, problems
 
 def validate_profile(path: Path):
+    """Load the project profile JSON at path and report any missing required fields.
+
+    Output is a dict with "valid" (true when nothing from REQUIRED_PROFILE is
+    missing), "missing" (the sorted list of absent keys), and the loaded
+    "profile" itself.
+    """
     profile=_load(path); missing=sorted(k for k in REQUIRED_PROFILE if not profile.get(k))
     return {"valid": not missing, "missing": missing, "profile": profile}
 
 def create_contract(root, task, objective, deliverables, exclusions=None):
+    """Create and save a brand-new Completion Contract for task under root.
+
+    objective must be non-empty and deliverables must be a non-empty list of
+    names; each becomes a deliverable with a generated acceptance_proof.
+    exclusions, when given, are stored as-is. Raises ValueError if objective
+    or deliverables is missing, or if a contract already exists for task.
+    Return: the newly created contract dict.
+    """
     if not objective.strip() or not deliverables: raise ValueError("objective and at least one deliverable are required")
     path=_task_path(root, task)
     if path.exists(): raise ValueError("task contract already exists")
@@ -198,6 +233,13 @@ def declare_build(root, task, declaration):
     value["updated_at"]=_now(); _save(path,value); return value
 
 def migrate_legacy_scope(root, task):
+    """Give task's contract an immutable_scope projection if it lacks one.
+
+    root locates the project and task names the contract file. When the
+    contract already has an immutable_scope, it is given back unchanged;
+    otherwise one is computed from the current contract, stamped with a
+    migration timestamp, and saved. Return: the resulting contract dict.
+    """
     path=_task_path(root,task); value=_load(path)
     if value.get("immutable_scope"):
         return value
@@ -232,6 +274,10 @@ def _wholly_waived(item):
     return isinstance(waiver,dict) and bool(waiver.get("owner_words")) and not str(waiver.get("part") or "").strip()
 
 def _remaining(value):
+    """Return the names of value's deliverables that are neither verified nor wholly waived.
+
+    Output is the list stored as a contract's remaining_work field.
+    """
     return [d["name"] for d in value.get("deliverables",[]) if not d.get("verified") and not _wholly_waived(d)]
 
 def waive_deliverable(root, task, deliverable, waiver):
@@ -348,10 +394,20 @@ def mark_owner_file(root, task, deliverable, evidence_path, document=""):
 
 
 def _document_name(item, entry):
+    """Return entry's document name, falling back to item's deliverable name.
+
+    Output is entry's "document" field when set, else item's "name", else
+    an empty string.
+    """
     return str(entry.get("document") or item.get("name") or "")
 
 
 def retired_documents(item):
+    """Return the set of document names item has retired.
+
+    item is a deliverable dict; its "retired_documents" list (or none) is
+    read. Output: that list as a set.
+    """
     return set(item.get("retired_documents") or [])
 
 
@@ -385,6 +441,11 @@ def owner_documents(item, document=None):
 
 
 def current_owner_document(item, document=None):
+    """Return item's newest owner-marked file, optionally narrowed to document.
+
+    document, when given, selects only entries under that document name.
+    Output is the newest matching entry, or None if there is none.
+    """
     documents=owner_documents(item, document)
     return documents[0] if documents else None
 
@@ -480,6 +541,14 @@ def readable_document(path_value, sha256, roots):
     return True, "", payload
 
 def contract_complete(root, task):
+    """Check whether task's contract under root is fully complete.
+
+    Verifies required fields are present, remaining_work is empty, every
+    non-waived deliverable has verified evidence, every exclusion has an
+    approver and reason, and the immutable scope is intact. Return: a tuple
+    of (whether it is complete, the list of problems found, the loaded
+    contract value).
+    """
     value=_load(_task_path(root,task)); problems=[]
     if not REQUIRED_CONTRACT.issubset(value): problems.append("contract fields missing")
     if value.get("remaining_work"): problems.append("remaining work is not empty")
@@ -525,6 +594,12 @@ def owner_test_steps(root, task, limit=8):
     return [f"Verify {step}." for step in steps]
 
 def _ledger_cells(line):
+    """Split one Markdown table line into its trimmed cell values.
+
+    Strips a leading and trailing "|" from line, then splits on "|"
+    characters that are not inside a backtick-quoted code span. Return: the
+    list of cell strings.
+    """
     value = line.strip()
     if value.startswith("|"):
         value = value[1:]
@@ -763,6 +838,15 @@ def scenario_fingerprints(path: Path):
     return fingerprints
 
 def lint_handoff(root, task, text):
+    """Validate a handoff message's text against task's contract under root.
+
+    Checks that text's first four lines are the required OBJECTIVE
+    STATUS/Completed/Remaining/Evidence headers, that the status is one of
+    HANDOFF_STATUSES, that a COMPLETE claim matches an actually complete
+    contract and states no remaining work, and that completion language is
+    not used before the contract is complete. Return: a dict with "valid",
+    "problems", and "contract_complete".
+    """
     complete, problems, _ = contract_complete(root,task)
     first=text.splitlines()[:4]
     required=["OBJECTIVE STATUS:","Completed:","Remaining:","Evidence:"]
@@ -776,6 +860,13 @@ def lint_handoff(root, task, text):
     return {"valid":not problems,"problems":problems,"contract_complete":complete}
 
 def main(argv=None):
+    """Run the contract CLI: parse argv and dispatch to the matching subcommand.
+
+    Supports validate-profile, create, evidence, expand, migrate-scope, and
+    lint subcommands, printing the resulting JSON output. Return: 0 on
+    success (or when the command's own "valid" field is true), 1 when it is
+    false, or 2 if a ValueError/FileNotFoundError/JSONDecodeError is raised.
+    """
     p=argparse.ArgumentParser(); add_context_arguments(p); s=p.add_subparsers(dest="cmd",required=True)
     q=s.add_parser("validate-profile"); q.add_argument("--profile",required=True)
     q=s.add_parser("create"); q.add_argument("--task",required=True); q.add_argument("--objective",required=True); q.add_argument("--deliverable",action="append",required=True)

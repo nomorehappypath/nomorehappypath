@@ -160,10 +160,12 @@ class ChatCancelled(ChatError):
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _bounded_text(value: Any, limit: int = MAX_FACT_VALUE_BYTES) -> str:
+    """Return value as a trimmed string truncated to limit bytes, decoding safely at multi-byte boundaries."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -180,6 +182,7 @@ def _bounded_text(value: Any, limit: int = MAX_FACT_VALUE_BYTES) -> str:
 
 
 def _board_sequence(state: dict[str, Any]) -> int:
+    """Return the highest known event sequence number found in state, from next_event and the events list."""
     values = []
     try:
         values.append(max(0, int(state.get("next_event", 1)) - 1))
@@ -196,11 +199,13 @@ def _board_sequence(state: dict[str, Any]) -> int:
 
 
 def _source_id(kind: str, identity: str, field: str) -> str:
+    """Produce a stable source id by hashing kind, identity, and field together."""
     digest = hashlib.sha256(f"{kind}\0{identity}\0{field}".encode()).hexdigest()[:16]
     return f"{kind}:{digest}"
 
 
 def _parse_time(value: Any) -> tuple[int, str]:
+    """Parse value as an ISO timestamp and return a (valid, normalized UTC iso string) tuple; it is (0, "") when value cannot be parsed."""
     text = str(value or "")
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -212,6 +217,7 @@ def _parse_time(value: Any) -> tuple[int, str]:
 
 
 def _known_tasks(state: dict[str, Any]) -> list[str]:
+    """Return the sorted list of task ids found in state's task_owner_directions that match the TASK_ID pattern."""
     directions = state.get("task_owner_directions")
     if not isinstance(directions, dict):
         return []
@@ -219,6 +225,7 @@ def _known_tasks(state: dict[str, Any]) -> list[str]:
 
 
 def _last_task(state: dict[str, Any]) -> str:
+    """Return the id of the most recently active task in state, chosen by latest event timestamp and sequence, with task id as a deterministic tiebreaker."""
     tasks = _known_tasks(state)
     if not tasks:
         return ""
@@ -247,6 +254,7 @@ def _last_task(state: dict[str, Any]) -> str:
 
 
 def _task_reviews(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return the qa review records for task found in state's qa_requests and qa_request_index, sorted by request time, cycle, and id."""
     requests = state.get("qa_requests")
     values = [
         value for value in (requests.values() if isinstance(requests, dict) else [])
@@ -271,12 +279,14 @@ def _task_reviews(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
 
 
 def _task_agents(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return the list of agent records in state whose task field equals task."""
     agents = state.get("agents")
     values = agents.values() if isinstance(agents, dict) else []
     return [value for value in values if isinstance(value, dict) and value.get("task") == task]
 
 
 def _task_status(state: dict[str, Any], task: str) -> str:
+    """Give the current status label for task by inspecting state's pause, cancellation, release decision, repair, review, and agent records."""
     pause = state.get("project_pause")
     pause_status = str((pause or {}).get("status", "active")) if isinstance(pause, dict) else "active"
     if pause_status in {"draining", "paused"}:
@@ -342,6 +352,7 @@ def _task_status(state: dict[str, Any], task: str) -> str:
 
 
 def _contract(root: ProjectRoot, task: str) -> dict[str, Any]:
+    """Return the parsed contract record for task from storage under root, or an empty dict when the task id or file is invalid."""
     if not TASK_ID.fullmatch(task):
         return {}
     path = project_context(root).storage_path("tasks", f"{task}.json")
@@ -407,6 +418,7 @@ def _remaining_work(root: ProjectRoot, state: dict[str, Any], tasks: list[str]) 
 
 
 def question_targets(question: str) -> list[str]:
+    """Return the list of fact ids that question's wording targets, after validating question's type, non-emptiness, and size."""
     if not isinstance(question, str):
         raise ValueError("question must be text")
     if not question.strip():
@@ -468,12 +480,14 @@ def _ordered_tasks(state: dict[str, Any]) -> list[str]:
 
 
 def _task_objective_text(state: dict[str, Any], task: str) -> str:
+    """Return the bounded text of the owner's direction for task as recorded in state."""
     direction = (state.get("task_owner_directions") or {}).get(task)
     value = direction.get("text") if isinstance(direction, dict) else direction
     return _bounded_text(value, 600)
 
 
 def _task_review_summary(state: dict[str, Any], task: str) -> str:
+    """Produce a human-readable summary of the review cycles recorded for task in state, including counts and the latest completed cycle's detail."""
     reviews = _task_reviews(state, task)
     if not reviews:
         return ""
@@ -498,6 +512,7 @@ def _task_review_summary(state: dict[str, Any], task: str) -> str:
 
 
 def _task_outcome_line(state: dict[str, Any], task: str) -> str:
+    """Return a one-line description of task's outcome (accepted, rejected, or awaiting visual test) based on state."""
     decision = (state.get("release_decisions") or {}).get(task) or {}
     release = (state.get("releases") or {}).get(task) or {}
     if board.owner_accept_is_real(state, task, decision):
@@ -531,6 +546,7 @@ def _task_summary_text(root: ProjectRoot, state: dict[str, Any], task: str) -> s
 
 
 def _task_state_phrase(state: dict[str, Any], task: str) -> str:
+    """Give a short phrase describing task's current state in state, including the acceptance date when accepted."""
     status = _task_status(state, task)
     decision = (state.get("release_decisions") or {}).get(task) or {}
     if status == "accepted":
@@ -571,6 +587,7 @@ def _history_order(state: dict[str, Any], ordered_tasks: list[str]) -> list[str]
     rank = {task: index for index, task in enumerate(ordered_tasks)}
 
     def key(task: str) -> tuple[int, tuple[int, str], int]:
+        """Return the sort key tuple for task, ordering closed tasks last, accepted tasks by acceptance date descending, and others first."""
         status = _task_status(state, task)
         if status == "closed":
             return (2, (0, ""), rank[task])
@@ -589,6 +606,7 @@ def _descending(text: str) -> str:
 
 
 def _first_sentence(text: str, limit: int = 240) -> str:
+    """Return the first sentence of text, bounded to limit characters."""
     match = re.match(r"(.+?[.!?])(?:\s|$)", text, re.S)
     sentence = (match.group(1) if match else text).strip()
     return _bounded_text(sentence, limit)
@@ -608,6 +626,7 @@ def _task_list_text(state: dict[str, Any], tasks: list[str]) -> str:
 
 
 def _owner_action_rows(state: dict[str, Any]) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """Return the list of (message, pointers) rows describing visual tests still pending the owner's action in state."""
     rows: list[tuple[str, list[tuple[str, str, str]]]] = []
     for task, release in sorted((state.get("releases") or {}).items()):
         if not isinstance(release, dict) or release.get("status") != "VISUAL_TEST_REQUIRED":
@@ -658,6 +677,7 @@ def build_fact_package(
     order: list[str] = []
 
     def add_fact(fact_id: str, value: str, pointers: list[tuple[str, str, str]]) -> None:
+        """Record fact_id's bounded value and the sources derived from pointers into the enclosing facts and sources dicts; return nothing, the effect is only those writes."""
         value = _bounded_text(value)
         if not value:
             return
@@ -679,6 +699,7 @@ def build_fact_package(
     last_task = ordered_tasks[0] if ordered_tasks else ""
 
     def build_project_about() -> None:
+        """Build and add the project_about fact from the project description, task count, last outcome, and pending owner action; return nothing, the effect is add_fact's write."""
         parts: list[str] = []
         pointers: list[tuple[str, str, str]] = []
         description = _bounded_text(project.get("description"))
@@ -703,6 +724,7 @@ def build_fact_package(
             add_fact("project_about", " ".join(parts), pointers)
 
     def build_current_status() -> None:
+        """Build and add the current_status fact describing whether the project is paused, resuming, or active with the last task; return nothing, the effect is add_fact's write."""
         pause = state.get("project_pause")
         pause_status = str((pause or {}).get("status", "active")) if isinstance(pause, dict) else "active"
         if pause_status in {"draining", "paused"}:
@@ -719,6 +741,7 @@ def build_fact_package(
             add_fact("current_status", value, [("board", last_task, "status")])
 
     def build_last_task_result() -> None:
+        """Build and add the last_task_result fact combining the last task's status and outcome line; return nothing, the effect is add_fact's write."""
         if last_task:
             value = f"{last_task}: {_task_status(state, last_task)}."
             outcome = _task_outcome_line(state, last_task)
@@ -727,11 +750,13 @@ def build_fact_package(
             add_fact("last_task_result", value, [("board", last_task, "last-task-status")])
 
     def build_remaining_work() -> None:
+        """Build and add the remaining_work fact from _remaining_work's computed rows; return nothing, the effect is add_fact's write."""
         remaining, pointers = _remaining_work(context, state, tasks)
         if remaining:
             add_fact("remaining_work", remaining, pointers)
 
     def build_owner_action() -> None:
+        """Build and add the owner_action fact from pending owner-action rows, or a no-action message when none exist; return nothing, the effect is add_fact's write."""
         rows = _owner_action_rows(state)
         if rows:
             value = " ".join(row for row, _ in rows)
@@ -741,12 +766,14 @@ def build_fact_package(
             add_fact("owner_action", "No owner action is pending.", [("board", str(sequence), "owner_action")])
 
     def build_task_list() -> None:
+        """Build and add the task_list fact describing all ordered tasks, or a message when none exist; return nothing, the effect is add_fact's write."""
         if ordered_tasks:
             add_fact("task_list", _task_list_text(state, ordered_tasks), [("board", "tasks", "list")])
         else:
             add_fact("task_list", "No tasks have been recorded in this project yet.", [("board", "tasks", "empty")])
 
     def build_task_overview() -> None:
+        """Build and add the task_overview fact describing the last task's status, objective, reviews, and outcome; return nothing, the effect is add_fact's write."""
         if not last_task:
             return
         parts = [f"The current task is {last_task}; it is {_task_status(state, last_task)}."]
@@ -916,6 +943,7 @@ def build_fact_package(
     }
 
     def rendered_bytes() -> int:
+        """Return the byte length of the package serialized as sorted, compact JSON."""
         return len(json.dumps(package, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
     if rendered_bytes() > MAX_PACKAGE_BYTES:
@@ -939,6 +967,7 @@ def build_fact_package(
 
 
 def _output_schema(package: dict[str, Any]) -> dict[str, Any]:
+    """Build the JSON schema for the provider's structured output, listing package's fact ids as the allowed claims enum; return the schema dict."""
     fact_ids = sorted((package.get("facts") or {}).keys()) or ["task_list"]
     return {
         "type": "object",
@@ -1022,12 +1051,14 @@ def _openai_request(
     api_key: str, payload: dict[str, Any], *, timeout: float,
     cancel_event: threading.Event | None,
 ) -> dict[str, Any]:
+    """Send payload to the OpenAI endpoint using api_key, polling a worker thread until it responds, timeout elapses, or cancel_event is set; return the parsed JSON envelope or raise a ChatError on failure."""
     connection_type, host, port, path = _openai_transport()
     bounded_timeout = max(0.1, float(timeout))
     connection = connection_type(host, port=port, timeout=bounded_timeout)
     outcome: queue.Queue[tuple[int, bytes] | BaseException] = queue.Queue(maxsize=1)
 
     def perform() -> None:
+        """Perform the blocking HTTP POST request and push its status and body, or any exception, onto the outcome queue; return nothing, the effect is only the queued result."""
         try:
             connection.request(
                 "POST", path,
@@ -1094,6 +1125,7 @@ def _openai_request(
 
 
 def _openai_output(envelope: dict[str, Any]) -> str:
+    """Extract and return the single output_text string from envelope, raising a ProviderFailure or ProviderMalformedOutput when the response is incomplete, refused, or malformed."""
     if envelope.get("status") != "completed" or envelope.get("incomplete_details"):
         raise ProviderFailure("The OpenAI API did not complete the project chat response")
     texts = []
@@ -1271,6 +1303,7 @@ def _dates(text: str) -> tuple[list[tuple[int, int | None, int | None]], str]:
     found: list[tuple[int, int | None, int | None]] = []
     for pattern, fields in DATE_FORMS:
         def take(match: re.Match[str]) -> str:
+            """Record the (month, day, year) parsed from match's groups into the enclosing found list and return a placeholder separator string in its place."""
             parts = dict(zip(fields, match.groups()))
             month_text = str(parts.get("month") or "")
             month = int(month_text) if month_text.isdigit() else MONTHS[month_text.casefold()]
@@ -1371,6 +1404,7 @@ def render_claims(package: dict[str, Any], fact_ids: list[str]) -> dict[str, Any
         return {"answer": UNKNOWN_ANSWER, "claims": [], "source_ids": []}
 
     def bullet(item: dict[str, Any]) -> str:
+        """Return a bullet line combining item's fact label and text."""
         return f"• {fact_label(item['fact_id'])}: {item['text']}"
 
     if len(claims) == 1:

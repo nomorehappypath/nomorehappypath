@@ -25,6 +25,7 @@ EXIT_RESTART_DEFERRED = 3
 
 
 def _blocks_restart(project: Any) -> bool:
+    """Return True when the given project is active and not in a steady paused state, meaning it still blocks a restart."""
     if not isinstance(project, dict) or project.get("active") is not True:
         return False
     # A steady paused board has no terminals and nothing in flight; it
@@ -43,11 +44,13 @@ def restart_allowed(projects_payload: Any) -> bool:
 
 
 def fetch_projects(manager_url: str, timeout: float = 30.0) -> Any:
+    """Fetch the projects payload from manager_url's /api/projects endpoint, waiting up to timeout seconds. Return the parsed JSON body."""
     with urlopen(manager_url.rstrip("/") + "/api/projects", timeout=timeout) as response:
         return json.loads(response.read())
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse argv for a manager URL, fetch its projects, and print whether a restart is allowed. Return the process exit code."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Harness update gate")

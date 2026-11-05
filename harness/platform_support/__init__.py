@@ -93,6 +93,11 @@ def terminal_host():
 
 
 def launch_problem() -> str:
+    """Check for a platform-specific reason this machine cannot launch agents.
+
+    Return: the platform module's own problem description, or "" when the selected platform
+    module declares no launch_problem check or that check finds nothing wrong.
+    """
     check = getattr(_selected(), "launch_problem", None)
     return check() if check else ""
 

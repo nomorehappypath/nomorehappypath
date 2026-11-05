@@ -51,7 +51,7 @@ ROLES = {
     "dev_ops", "ux_design",
 }
 DEVELOPER_ROLES = {"development", "engineering"}
-TERMINAL_QA = {"passed", "failed", "cancelled"}
+TERMINAL_QA = {"passed", "failed", "cancelled", "withdrawn"}   # withdrawn: the board closed it after its stored evidence was lost (2026-11-04)
 DEVELOPMENT_QA = "development_qa"
 INDEPENDENT_REVIEW = "independent_review"
 AWAITING_OWNER_DIRECTION = "AWAITING_OWNER_DIRECTION"
@@ -137,6 +137,7 @@ class ProjectPausedError(ValueError):
 
 
 def now() -> str:
+    """Return the current UTC time as an ISO 8601 timestamp string."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -169,10 +170,12 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
 
 
 def board_dir(root: ProjectRoot) -> Path:
+    """Return the board storage directory path for the given project root."""
     return project_context(root).storage_path("board")
 
 
 def _state_path(root: Path) -> Path:
+    """Return the path to the board's state.json file under root."""
     return board_dir(root) / "state.json"
 
 
@@ -334,18 +337,24 @@ def _snapshot_board(root: Path, state: dict[str, Any]) -> None:
 
 
 def _initial_state() -> dict[str, Any]:
+    """Return a fresh, empty board state dict with all expected top-level keys."""
     return {"next_event": 1, "role_counters": {}, "agents": {}, "qa_requests": {}, "qa_request_index": {}, "repair_packages": {}, "control_plane_holds": {}, "delivery_attempt_failures": [], "task_chunks": {}, "delivery_plans": {}, "task_briefs": {}, "task_baselines": {}, "task_workspaces": {}, "task_owner_directions": {}, "task_lineage": {}, "owner_directions": {}, "owner_messages": [], "owner_clarifications": {}, "pending_owner_clarifications": {}, "requirement_confirmations": {}, "releases": {}, "release_lifecycle": {}, "release_attempts": [], "release_decisions": {}, "release_repairs": {}, "deferred_findings": {}, "deliverable_waivers": {}, "cancelled_tasks": {}, "reviewer_needed": None, "project_pause": {"status": "active"}, "events": [], "archive": [], "last_event_exported": 0}
 
 
 def _cold_dir(root: Path) -> Path:
+    """Return the archive directory path, under root, used for cold storage."""
     return board_dir(root) / "archive"
 
 
 def _cold_path(root: Path, kind: str) -> Path:
+    """Return the archive file path, under root, for the given record kind."""
     return _cold_dir(root) / f"{kind}.jsonl"
 
 
 def _cold_identity(kind: str, value: dict[str, Any]) -> str:
+    """Return a stable identity string for value, used to dedupe cold-storage
+    records of the given kind; falls back to a content hash. The result is
+    produced from the record's id field when the kind is a known entity kind."""
     if kind in {"qa_request", "qa_requests"}:
         return str(value.get("id", ""))
     if kind == "agent":
@@ -354,6 +363,8 @@ def _cold_identity(kind: str, value: dict[str, Any]) -> str:
 
 
 def _read_cold(root: Path, kind: str) -> list[dict[str, Any]]:
+    """Return the list of archived dict records of the given kind stored under
+    root, skipping any line that is not valid JSON or not a dict."""
     path = _cold_path(root, kind)
     if not path.is_file():
         return []
@@ -401,6 +412,9 @@ def _rewrite_cold(root: Path, kind: str, values: list[dict[str, Any]]) -> None:
 
 
 def _extract_cold_state(root: Path, state: dict[str, Any]) -> None:
+    """Mutate state in place, moving terminal-history agents and qa requests out
+    of hot state into cold archive storage under root. Also rebuilds the
+    owner-direction and lineage indexes from events. Return value: none."""
     # A stopped Delivery terminal with unconsumed owner input is not terminal
     # history: it is the durable recovery source for the next Delivery launch.
     for cold_agent in _read_cold(root, "agents"):
@@ -547,6 +561,9 @@ def _render_board(state: dict[str, Any]) -> str:
 
 
 def _persist_visible_board(root: Path, state: dict[str, Any]) -> None:
+    """Write the human-readable BOARD.md and append new durable events for
+    state under root, then archive cold records and trim the in-memory hot
+    event window. Mutates state in place. Return value: none."""
     directory = board_dir(root)
     _atomic_write_text(directory / "BOARD.md", _render_board(state))
     last_exported = int(state.get("last_event_exported", 0))
@@ -700,6 +717,10 @@ def historical_snapshot(root: Path) -> dict[str, Any]:
 
 
 def _event(state: dict[str, Any], kind: str, agent: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
+    """Record a new event of the given kind for agent (or "system" when None)
+    into state, merging in payload, and run every side effect that kind
+    triggers (route obligations, owner actions, hold resolution, cost
+    tracking, liveness updates). Return value: the newly appended event dict."""
     sequence = state["next_event"]
     state["next_event"] += 1
     event = {
@@ -1192,6 +1213,8 @@ def finish_project_resume(root: ProjectRoot, resume_id: str) -> dict[str, Any]:
 
 
 def _require_agent(state: dict[str, Any], agent_id: str) -> dict[str, Any]:
+    """Return the agent record with agent_id from state, raising ValueError
+    when no such agent exists."""
     agent = state["agents"].get(agent_id)
     if not agent:
         raise ValueError(f"unknown agent: {agent_id}")
@@ -1208,6 +1231,8 @@ def _require_writable_agent(state: dict[str, Any], agent_id: str) -> dict[str, A
 
 
 def _finding_text(value: Any, label: str) -> str:
+    """Return value as a stripped string, raising ValueError (naming label) if
+    it is empty or exceeds the maximum allowed finding text length."""
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"finding {label} is required")
@@ -1217,6 +1242,9 @@ def _finding_text(value: Any, label: str) -> str:
 
 
 def _finding_fingerprint(title: str, description: str) -> str:
+    """Return a stable sha256 hex digest fingerprint for a finding, computed
+    from its normalized (case-folded, whitespace-collapsed) title and
+    description, so near-identical duplicates hash the same."""
     normalized = " ".join(f"{title} {description}".casefold().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -1234,6 +1262,9 @@ FINDING_REPEAT_CANDIDATE_LIMIT = 3
 
 
 def _finding_tokens(title: str, description: str) -> set[str]:
+    """Return the set of significant lowercase word tokens from title and
+    description, dropping short words and common stopwords, for similarity
+    scoring between findings."""
     words = re.findall(r"[a-z0-9_]+", f"{title} {description}".casefold())
     return {w for w in words if len(w) > 2 and w not in _FINDING_STOPWORDS}
 
@@ -1860,6 +1891,10 @@ def review_execution_finish(root: Path, agent_id: str, request_id: str, result: 
 def _reset_interrupted_repair_package(
     state: dict[str, Any], request: dict[str, Any], reason: str,
 ) -> None:
+    """If request's repair package is still waiting on this exact review
+    request, in state, roll it back to open (or ready_for_review when every
+    member already resolved), clearing the stale review fields and recording
+    reason for why the review was interrupted. Return value: none."""
     package_id = str(request.get("repair_package_id") or "")
     package = state.get("repair_packages", {}).get(package_id)
     if not package or package.get("review_request_id") != request.get("id"):
@@ -2052,6 +2087,9 @@ def review_execution_lease(root: Path, agent_id: str, request_id: str, command: 
     stop = threading.Event()
 
     def heartbeat_loop() -> None:
+        """Run on a background thread, periodically renewing the review
+        execution heartbeat until stop is set or the heartbeat is refused.
+        Return value: none."""
         while not stop.wait(REVIEW_EXECUTION_HEARTBEAT_SECONDS):
             try:
                 if not review_execution_heartbeat(root, agent_id, request_id):
@@ -2081,6 +2119,8 @@ CONTRACT_EVIDENCE_GUIDANCE = (
 
 
 def _require_contract_preflight(root: Path, task: str) -> None:
+    """Raise ValueError naming every Completion Contract problem for task
+    under root when the contract preflight check fails. Return value: none."""
     valid, problems = contract.contract_preflight(root, task)
     if not valid:
         # The refusal names the remedy: an agent resumed on an older directive
@@ -2170,6 +2210,8 @@ def _broker_refusal_kind(error: BaseException) -> str:
 
 
 def _clear_broker_refusal(state: dict[str, Any], agent: dict[str, Any]) -> None:
+    """Remove any recorded broker_refusal from agent in state, and if the
+    agent was blocked on it, unblock it back to working. Return value: none."""
     refusal = agent.pop("broker_refusal", None)
     if not refusal:
         return
@@ -2585,6 +2627,9 @@ def owner_direction_for_task(state: dict[str, Any], agent_id: str, task: str) ->
     agents = state.get("agents", {})
 
     def resolve(current_id: str, current_task: str, visited: set[str]) -> str:
+        """Return the owner direction text for current_task as held by the
+        agent current_id, following task_resumed lineage backward while
+        avoiding cycles via visited. Empty string when nothing is found."""
         if current_id in visited:
             return ""
         visited.add(current_id)
@@ -2636,6 +2681,8 @@ def owner_direction_for_task(state: dict[str, Any], agent_id: str, task: str) ->
 
 
 def _role_label(agent: dict[str, Any]) -> str:
+    """Return a human-readable role label (CTO, Reviewer, or Delivery Agent)
+    for agent, based on its role field."""
     role = agent.get("role")
     return "The CTO" if role == "cto" else "The Reviewer" if role == "qa" else "The Delivery Agent"
 
@@ -2660,6 +2707,8 @@ def stall_settings(environ: dict[str, str] | None = None) -> tuple[int, int]:
     source = os.environ if environ is None else environ
 
     def read(name: str, default: int, minimum: int) -> int:
+        """Return the integer environment value for name, falling back to
+        default when it is missing, non-numeric, or below minimum."""
         try:
             value = int(str(source.get(name, "")).strip())
         except ValueError:
@@ -2735,6 +2784,9 @@ def request_agent_restart(root: Path, agent_id: str, reason: str) -> dict[str, A
 
 
 def register(root: Path, role: str, task: str, display_name: str = "", vendor: str = "", session_id: str = "") -> dict[str, Any]:
+    """Register a new agent (or reattach an existing one matching session_id)
+    under root for role and task, recording display_name and vendor, and
+    persist it to board state. Return value: the registered agent record."""
     if role not in ROLES:
         raise ValueError(f"invalid role {role!r}; choose one of: {', '.join(sorted(ROLES))}")
     if not task.strip():
@@ -2986,6 +3038,8 @@ def _task_has_review_history(state: dict[str, Any], task: str) -> bool:
     index archival keeps, and Delivery attempts whose evidence failed.
     """
     def is_review(request: Any) -> bool:
+        """Return True when request is a dict for this task whose stage is
+        the independent review stage."""
         return isinstance(request, dict) and request.get("task") == task and request.get("stage") == INDEPENDENT_REVIEW
     if any(is_review(r) for r in (state.get("qa_requests") or {}).values()):
         return True
@@ -3211,6 +3265,8 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
 
 
 def _agent_context_bundle(state: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any]:
+    """Return a context bundle dict for agent (its relevant task contexts plus
+    any untriaged findings), derived from state."""
     tasks = _context_task_names(state, agent)
     return {
         "scope": "global" if agent.get("role") == "cto" else "task",
@@ -3230,6 +3286,9 @@ def _agent_context_bundle(state: dict[str, Any], agent: dict[str, Any]) -> dict[
 
 
 def poll(root: Path, agent_id: str) -> dict[str, Any]:
+    """Process a liveness/work poll from agent_id under root: validate the
+    agent is active, reconcile its managed-terminal status, and return the
+    poll result payload describing its next action."""
     rejection = ""
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
@@ -3399,6 +3458,8 @@ def unfinished_merge_targets(chunks: dict[str, Any]) -> list[str]:
 
 
 def merge_next_action(targets: list[str]) -> str:
+    """Return instruction text telling the agent to declare the combined
+    chunk covering targets, or an empty string when targets is empty."""
     return (
         "the merge is not finished: declare the combined chunk " + ", ".join(targets)
         + " with declare-chunks --chunk NAME:DESCRIPTION --reason \"<why>\""
@@ -3657,6 +3718,8 @@ def _repeated_failure_note(state: dict[str, Any] | None) -> str:
 
 
 def _open_verification_gaps(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the verification gaps in state that are still open (not yet in
+    a could_not_finish escalation), for reporting to the CTO."""
     ended = {k for k, e in ((state or {}).get("review_escalations") or {}).items() if e.get("status") == "could_not_finish"}
     return [g for g in ((state or {}).get("verification_gaps") or {}).values()
             if g.get("state") in {"diagnosing", "owner_decision", "answered"} and g.get("scope_key") not in ended]
@@ -3717,6 +3780,9 @@ def _build_collection_note(state: dict[str, Any] | None) -> str:
 
 
 def _automatic_recovery_instruction(agent: dict[str, Any], state: dict[str, Any] | None = None, wake_items: list[dict[str, Any]] | None = None) -> str:
+    """Return the wake-up instruction text to give agent after an automatic
+    recovery, built from state and wake_items; CTOs get merge/wake text,
+    other roles get a role-appropriate resume message."""
     role = agent.get("role")
     task = agent.get("task", "current work")
     if role == "cto":
@@ -3848,6 +3914,8 @@ def sign_in_message(agent: dict[str, Any]) -> str:
 
 
 def _terminal_is_working(session: dict[str, Any] | None, current: datetime, silence_seconds: float, woken: bool = False) -> bool:
+    """Return whether session counts as actively working at current time,
+    given silence_seconds of allowed quiet and whether it was recently woken."""
     from harness import agent_activity
     return bool(session) and agent_activity.is_working(session, current, silence_seconds, woken)
 
@@ -4206,8 +4274,11 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
     return stalled
 
 
-def record_owner_direction(root: Path, session_id: str, text: str) -> dict[str, Any]:
-    """Record the owner's actual terminal input for a managed Delivery session."""
+def record_owner_direction(root: Path, session_id: str, text: str, allow_split: bool = False) -> dict[str, Any]:
+    """Record the owner's actual terminal input for a managed Delivery session.
+
+    allow_split: the owner allowed this task to be split into separately reviewed parts; a terminal direction never sets it
+    (the box is on Mission Control's Give direction), so the plan stays atomic unless the board command passes --allow-split."""
     session_id = session_id.strip()
     text = contract.normalize_owner_direction(text)
     if not session_id or not text:
@@ -4230,12 +4301,15 @@ def record_owner_direction(root: Path, session_id: str, text: str) -> dict[str, 
         _archive_consumed_direction(state, session_id)
         if state.get("owner_directions", {}).get(session_id):
             raise ValueError("this Delivery session already has an owner direction")
-        direction = {"session_id": session_id, "text": text, "received_at": now(), "consumed": False}
+        direction = {"session_id": session_id, "text": text, "received_at": now(), "consumed": False, "allow_split": bool(allow_split)}
         state.setdefault("owner_directions", {})[session_id] = direction
         return _event(state, "owner_direction_received", agent, {"task": agent["task"], "message": "owner direction recorded for Product Management", "owner_direction": text})
 
 
 def _prepare_owner_message_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate attachments (count, content type, size), raising ValueError on
+    any violation, and return the prepared list with sanitized display names
+    and resolved file extensions ready to be written to disk."""
     if len(attachments) > MAX_ATTACHMENTS:
         raise ValueError(f"you can attach up to {MAX_ATTACHMENTS} files")
     prepared: list[dict[str, Any]] = []
@@ -4260,6 +4334,9 @@ def _prepare_owner_message_attachments(attachments: list[dict[str, Any]]) -> lis
 
 
 def _store_owner_message_attachments(root: Path, message_id: str, prepared: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Write each prepared attachment to durable storage under root, keyed by
+    message_id, rolling back any partial writes on failure. Return value: the
+    list of stored attachment metadata dicts."""
     if not prepared:
         return []
     storage_dir = board_dir(root) / "owner-messages" / message_id
@@ -4296,7 +4373,7 @@ def _display_storage_path(root: ProjectRoot, path: Path) -> str:
         return str(path.resolve())
 
 
-def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "") -> dict[str, Any]:
+def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False) -> dict[str, Any]:
     """Record one atomic owner message and route it to a Delivery terminal.
 
     Initial direction messages authorize a waiting Delivery Agent. Clarifications
@@ -4384,6 +4461,7 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
                 "consumed": False, "message_id": message_id, "attachments": metadata,
                 "task_kind": normalize_task_kind(task_kind, document_only),
                 "document_only": normalize_task_kind(task_kind, document_only) == "spec",
+                "allow_split": bool(allow_split),    # owner 2026-11-04: only the owner's direction can allow a split into reviewed parts
             }
             # P6: the event log's own copy is redacted; state["owner_directions"][session_id]["text"]
             # above (what begin_task later copies into task_begun's "owner_direction" and what is
@@ -4462,6 +4540,9 @@ def _contract_check_reviewer(state: dict[str, Any], sessions: list[dict[str, Any
 
 
 def _new_contract_check(version: int, reviewer: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+    """Return a new contract-check record for version: "reading" with a
+    deadline when reviewer is assigned, otherwise "not_checked" carrying
+    reason."""
     started = now()
     return {
         "status": "reading" if reviewer else "not_checked", "token": secrets.token_hex(4), "version": version,
@@ -4482,6 +4563,10 @@ def _contract_check_readers(state: dict[str, Any]) -> set[str]:
 
 
 def _send_contract_check_wake(root: Path, wake: dict[str, Any]) -> None:
+    """Try to enqueue wake's instruction text to its session under root, then
+    record the outcome on the matching contract check in board state,
+    falling back to a not-checked/ready status when delivery fails. Return
+    value: none."""
     from harness import control
     queued: dict[str, Any] | None = None
     try:
@@ -4821,6 +4906,8 @@ def record_requirements_decision(
 
 
 def _checks_digest(checks: list[dict[str, Any]]) -> str:
+    """Return a sha256 hex digest over checks' names and hashes, or an empty
+    string when checks is empty."""
     return hashlib.sha256("\n".join(f"{item['n']}:{item['sha256']}" for item in checks).encode("utf-8")).hexdigest() if checks else ""
 
 
@@ -4902,6 +4989,8 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
 
 
 def _contract_check_folder(root: Path, task: str, tag: str) -> Path:
+    """Return the evidence storage directory path, under root, for contract
+    checks of task under the given tag (a sanitized, hash-suffixed subpath)."""
     safe = re.sub(r"[^A-Za-z0-9._-]", "-", task)[:60] + "-" + hashlib.sha256(task.encode("utf-8")).hexdigest()[:8]
     return project_context(root).storage_path("evidence", "contract-checks", safe, tag)
 
@@ -4926,6 +5015,9 @@ def _validate_contract_check_files(criteria: list[dict[str, Any]]) -> None:
 
 
 def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
+    """Write check's ledger and files for criterion as a JSON file named name
+    inside folder, atomically. Return value: metadata (coverage, file path,
+    sha256) describing the stored record."""
     data = json.dumps({
         "criterion": criterion["n"], "criterion_text": criterion["text"], "coverage": check["coverage"],
         "ledger": check["ledger"], "files": check["files"],
@@ -5222,7 +5314,9 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
         if not entries:
             raise ValueError("that requirement has no stored check to skip")
         if (block.get("results") or {}).get(str(number)) != "did_not_run":
-            raise ValueError("only a check the board reported as 'did not run' can be skipped; a check that ran and failed must be fixed or corrected")
+            raise ValueError("only a check the board reported as 'did not run' can be skipped; a check that ran and failed must be fixed or corrected: "
+                             "if the check's assumption does not hold in reality, file check-deviation (what it assumes vs what is real, with evidence) "
+                             "and the Reviewer answers once; otherwise repair the work and request the review again")
         if _task_closed_for_checks(state, str(task)):
             raise ValueError("the task is finished (accepted, cancelled, or released with no repair under way)")
         block["checks"] = [item for item in block["checks"] if item["criterion_index"] != number]
@@ -5366,6 +5460,8 @@ def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, st
 
 
 def _lockfiles_identity(certification: dict[str, Any]) -> str:
+    """Return a sha256 hex digest fingerprinting certification's lockfile
+    digests, used to tell whether two runs used the same dependencies."""
     return hashlib.sha256(json.dumps(certification.get("lockfile_digests") or {}, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -5628,11 +5724,16 @@ def _measure_revert_proof(root: Path, task: str, request: dict[str, Any], certif
 
 
 def _store_revert_proof(state: dict[str, Any], task: str, result: dict[str, Any] | None) -> None:
+    """Save result as the revert proof for task in state when both are
+    truthy. Return value: none."""
     if result and task:
         state.setdefault("revert_proofs", {})[task] = result
 
 
 def _apply_contract_check_run(request: dict[str, Any], run: dict[str, Any] | None) -> None:
+    """Append run's run record and checks_sha256 onto request, and update its
+    contract_check_simulations when run carries a bundle. No-op when run is
+    falsy. Return value: none."""
     if not run:
         return
     request.setdefault("contract_check_runs", []).append(run["run"])
@@ -5682,6 +5783,8 @@ def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | Non
     found: dict[str, dict[str, str]] = {}
 
     def settle(item: dict[str, Any], outcome: str, reason: str = "") -> None:
+        """Record outcome and reason for item's check number into found, under
+        its stored sha256. Return value: none."""
         found[item["n"]] = {"outcome": outcome, "sha256": item["sha256"], "reason": reason}
 
     if not base:
@@ -5948,6 +6051,9 @@ def _note_too_long_message(kind: str, length: int) -> str:
 
 
 def status(root: Path, agent_id: str, note: str, state_name: str = "working") -> dict[str, Any]:
+    """Record a status update note (and optional OWNER ACTION card) for
+    agent_id under root, setting its board state_name. Return value: the
+    resulting status update payload."""
     note = note.strip()
     if not note:
         raise ValueError(STATUS_NOTE_REQUIRED_MESSAGE)
@@ -6172,6 +6278,9 @@ def configure_owner_questions(section: dict[str, Any] | None) -> None:
 
 
 def owner_question_rules() -> dict[str, Any]:
+    """Return the currently configured owner-question detection rules
+    (markers and authority patterns), falling back to the module defaults for
+    anything not overridden."""
     rules = _OWNER_QUESTION_RULES
     return {
         "default_minutes": int(rules.get("default_minutes") or OWNER_QUESTION_DEFAULT_MINUTES),
@@ -6183,6 +6292,8 @@ def owner_question_rules() -> dict[str, Any]:
 
 
 def _phrase_in(text: str, phrases: tuple[str, ...]) -> str:
+    """Return the first phrase from phrases that appears as a whole word/
+    sequence in text, or an empty string when none match."""
     for phrase in phrases:
         if phrase and re.search(rf"(?<![\w/-]){re.escape(phrase)}(?![\w-])", text):
             return phrase
@@ -6358,6 +6469,8 @@ READY_PENDING = re.compile(r"\b(?:until|once|after|before|pending|awaiting|block
 
 
 def _is_ready_claim(clause: str) -> bool:
+    """Return True when clause genuinely asserts readiness, rejecting matches
+    preceded by a negation or followed/preceded by pending wording."""
     for found in READY_CLAIM.finditer(clause):
         before = clause[max(0, found.start() - 30):found.start()]
         if READY_NEGATION_BEFORE.search(before) or READY_PENDING.search(clause[found.end():]) or READY_PENDING.search(clause[:found.start()]):
@@ -6465,6 +6578,8 @@ def _track_review_block(state: dict[str, Any], event: dict[str, Any], agent: dic
 
 
 def _open_review_blocks(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return copies of the review blocks in state whose task has not been
+    cancelled."""
     cancelled = state.get("cancelled_tasks") or {}
     return [dict(block) for task, block in (state.get("review_blocks") or {}).items() if task not in cancelled]
 
@@ -6510,6 +6625,8 @@ def _track_route_obligation(state: dict[str, Any], event: dict[str, Any], agent:
 
 
 def _unrouted_failures(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the combined list of state's open route obligations and its
+    blocked-without-action reviews, as the CTO's unrouted failures."""
     return [dict(open_one) for open_one in state.get("route_obligations") or []] + _blocked_reviews_without_action(state)
 
 
@@ -6573,6 +6690,8 @@ def _note_is_inaction_about(note: str, state_name: str, blocked: list[dict[str, 
 
 
 def _waiting_refusal(failures: list[dict[str, Any]]) -> str:
+    """Return a refusal message describing the first unrouted failure in
+    failures and telling the CTO what action to take instead of waiting."""
     first = failures[0]
     at = _parsed_timestamp(first.get("at"))
     when = at.strftime("%H:%M UTC") if at else "just now"
@@ -6610,6 +6729,7 @@ def _question_key(text: str) -> str:
 
 
 def _mentions(text: str, name: str) -> bool:
+    """Return whether name appears as a whole word within text."""
     return bool(name) and re.search(rf"(?<![\w-]){re.escape(name.lower())}(?![\w-])", text) is not None
 
 
@@ -6630,6 +6750,8 @@ def _owner_action_target(state: dict[str, Any], text: str, task: str, for_agent:
 
 
 def _owner_action_kind(text: str, task: str, for_agent: str) -> str:
+    """Return the owner-action kind ("reviewer", "decision", "agent", "task",
+    or "other") classified from text, task, and for_agent."""
     if "reviewer" in text and ("start" in text or "no reviewer" in text):
         return "reviewer"
     if "requirements" in text and any(word in text for word in ("decision", "go ahead", "modify")):
@@ -6697,6 +6819,9 @@ def owner_action_clears_when(action: dict[str, Any], current: datetime | None = 
 
 
 def _resolve_owner_action(state: dict[str, Any], action: dict[str, Any], outcome: str, cause: str) -> None:
+    """Mark action as done with outcome in state, caused by cause; close any
+    linked verification gap still open, and record an owner_action_cleared
+    event. Return value: none."""
     action.update({"status": "done", "outcome": outcome, "done_at": now(), "resolved_by": cause})
     gap = (state.get("verification_gaps") or {}).get(action.get("gap_id", ""))
     if gap and gap.get("state") in {"diagnosing", "owner_decision", "answered"}:
@@ -6948,6 +7073,8 @@ def project_owner_card_links(root: Path, state: dict[str, Any], card: dict[str, 
 
 
 def _links_identity(links: list[dict[str, Any]] | None) -> tuple:
+    """Return a sorted tuple of (path, sha256) pairs from links, usable as a
+    comparable identity for whether two link lists show the same documents."""
     return tuple(sorted((str(l.get("path")), str(l.get("sha256"))) for l in (links or [])))
 
 
@@ -6957,6 +7084,11 @@ def _record_owner_action(
     links: list[dict[str, Any]] | None = None, location: dict[str, Any] | None = None,
     hold_task: str = "",
 ) -> dict[str, Any]:
+    """Create or reuse an owner-action card in state for agent, naming title,
+    command, why, task, kind, for_agent, default_action/default_minutes,
+    links, location, and hold_task; merges into an existing matching open
+    card instead of duplicating it when one matches the same target or
+    question. Return value: the card dict (new or the reused existing one)."""
     actions = state.setdefault("owner_actions", {})
     card = _classify_owner_action(state, {
         "title": title, "command": command, "why": why,
@@ -7192,11 +7324,18 @@ def _current_documents(root: Path, state: dict[str, Any], links: list[dict[str, 
 
 
 def _require_same_documents(root: Path, state: dict[str, Any], links: list[dict[str, Any]], manifest_before: tuple) -> None:
+    """Raise ValueError when links' current documents, resolved from root and
+    state, no longer match the manifest_before identity captured earlier, so
+    a card never points at content that changed while it was being pinned.
+    Return value: none."""
     if links and _links_identity(_current_documents(root, state, links)) != manifest_before:
         raise ValueError("give the owner a link they can open: the document marks changed while the card was being pinned; pin it again")
 
 
 def _hand_back_owner_question(state: dict[str, Any], agent: dict[str, Any], question: str) -> None:
+    """Record question as handed back to agent in state and emit a
+    cto_question_handed_back event telling it to act and report. Return
+    value: none."""
     agent["handed_back_question"] = {"text": question, "at": now()}
     _event(state, "cto_question_handed_back", agent, {
         "task": agent.get("task", ""), "question": question,
@@ -7232,6 +7371,8 @@ def _still_claimed(action: dict[str, Any] | None, card: dict[str, Any]) -> bool:
 
 
 def _default_instruction_marker(card_id: str) -> str:
+    """Return the bracketed marker text used to tag the instruction sent for
+    the default action of the owner-action card card_id."""
     return f"[default {card_id}]"
 
 
@@ -7453,6 +7594,9 @@ def _screen_check_listener(port: int, roots: list[Path]) -> dict[str, Any]:
 
 
 def _screen_check_candidate(roots: list[Path], excludes: list[str]) -> dict[str, Any]:
+    """Return a candidate descriptor fingerprinting each folder in roots
+    (skipping excludes), marked bound when at least one folder fingerprinted
+    successfully, otherwise unverified with the reasons joined."""
     entries, reasons = [], []
     for folder in roots:
         fingerprint, reason = _tree_fingerprint(folder, excludes)
@@ -7527,6 +7671,10 @@ def _candidate_problem(
 
 
 def _screen_check_problems(root: Path, task: str, check_id: str) -> tuple[dict[str, Any] | None, str]:
+    """Validate the stored screen-check record check_id under root against
+    task (freshness, matching task, passing evidence hashes). Return value: a
+    (record, problem) pair — record is None and problem names the issue when
+    invalid, otherwise record is the loaded capture and problem is empty."""
     path = board_dir(root) / "evidence" / "screen-checks" / f"{check_id}.json"
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -7598,6 +7746,8 @@ def _cited_screen_checks(
 
 
 def _verify_recorded_screen_checks(root: Path, task: str, recorded: list[dict[str, Any]]) -> None:
+    """Raise ValueError naming any recorded screen-check item for task under
+    root that is no longer valid. Return value: none."""
     problems = [problem for item in recorded or [] for _, problem in [_screen_check_problems(root, task, item.get("id", ""))] if problem]
     if problems:
         raise ValueError("cited screen-check evidence changed after it was accepted: " + " | ".join(problems))
@@ -7625,6 +7775,9 @@ def _screen_stability_check(
 
 
 def _browser_failure_advice(error: Exception, url: str) -> ValueError:
+    """Return a ValueError with advice tailored to error's message about
+    trying to load url (connection refused, timeout, busy browser, or
+    missing browser), for the caller to raise."""
     detail = str(error)[:300]
     lowered = detail.lower()
     if "refused" in lowered or "connection" in lowered or "unreachable" in lowered:
@@ -7763,6 +7916,8 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
     candidate["served_root"] = listener.get("served_root", "")
 
     def still_allowed() -> bool:
+        """Return whether agent_id still actively owns task with write
+        authority, re-checked live against current board state."""
         with locked_state(root) as current:
             who = (current.get("agents") or {}).get(agent_id) or {}
             return (
@@ -7851,6 +8006,8 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
 
 
 def _machine_agent(root: Path, agent_id: str, roles: tuple[str, ...]) -> dict[str, Any]:
+    """Return a copy of the agent record for agent_id under root, raising
+    ValueError when its role is not in roles. Runs even while paused."""
     # These commands never write board state (the machine's own record is separate), so they keep working while the project is
     # paused: status, the card request and recovery provisioning must not be blocked by the very stop that requires the password again.
     with locked_state(root, allow_paused=True) as state:
@@ -8204,6 +8361,8 @@ def mark_deliverable_file(root: Path, agent_id: str, task: str, deliverable: str
 
 
 def _project_ref(root: Path) -> str:
+    """Return the project id for root, used in document links, falling back
+    to "local" when it cannot be determined."""
     from harness import board_surface
     try:
         return board_surface.project_id(root)
@@ -8212,6 +8371,9 @@ def _project_ref(root: Path) -> str:
 
 
 def _document_roots(root: Path, state: dict[str, Any], task: str) -> list[Path]:
+    """Return the candidate directories (data root, code root, and task's
+    workspace when one is recorded in state) to resolve task's document
+    links against, under root."""
     context = project_context(root)
     roots = [context.data_root, context.code_root]
     workspace = str((state.get("task_workspaces") or {}).get(task) or "")
@@ -8221,6 +8383,8 @@ def _document_roots(root: Path, state: dict[str, Any], task: str) -> list[Path]:
 
 
 def document_link_url(project_ref: str, task: str, deliverable_index: int, evidence_index: int) -> str:
+    """Return the API URL path serving the evidence_index'th evidence file of
+    deliverable_index for task within project_ref."""
     return f"/api/deliverables/{quote(project_ref, safe='')}/{quote(task, safe='')}/{int(deliverable_index)}/{int(evidence_index)}"
 
 
@@ -8330,6 +8494,8 @@ def migrate_contract_scope(root: Path, agent_id: str) -> dict[str, Any]:
 
 
 def _collapse_words(text: Any) -> str:
+    """Return text as a single whitespace-collapsed, case-folded string, for
+    loose text comparisons."""
     return " ".join(str(text or "").split()).casefold()
 
 
@@ -8593,6 +8759,7 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         kind = normalize_task_kind(direction.get("task_kind"), bool(direction.get("document_only"))) if agent.get("session_id") else "development"
         state.setdefault("task_kinds", {})[task] = kind
         state.setdefault("task_document_only", {})[task] = kind == "spec"
+        state.setdefault("task_split_allowed", {})[task] = bool(direction.get("allow_split")) if agent.get("session_id") else False
         if workspace:
             state.setdefault("task_workspaces", {})[task] = str(workspace)
         inherited_count = len(baseline.get("dirty_files", []))
@@ -8762,6 +8929,9 @@ def attach_task_workspace(root: Path, agent_id: str, workspace_value: str) -> di
             raise ValueError("task workspace must be a Git worktree")
 
         def resolved_common(repo: Path, value: str) -> Path:
+            """Return the absolute path for value, resolving it relative to
+            repo when it is not already absolute. Return value: the resolved
+            path."""
             path = Path(value.strip())
             return (path if path.is_absolute() else repo / path).resolve()
 
@@ -8865,6 +9035,8 @@ def bind_task_repository(root: Path, agent_id: str, repository_value: str, basel
 
 
 def _task_requests(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return every review request for task from state, combining archived
+    and currently live requests without duplicates."""
     archived = [
         entry["value"] for entry in state.get("archive", [])
         if entry.get("kind") == "qa_request" and entry.get("value", {}).get("task") == task
@@ -9344,6 +9516,9 @@ def _review_chapters(request: dict[str, Any]) -> list[str]:
 
 
 def _delivery_succeeded_instruction(request_id: str, task: str) -> str:
+    """Return the wake-up instruction text telling a Reviewer that request_id
+    for task now has passing Delivery evidence and it should finish its
+    review. Return value: the instruction string."""
     return (
         f"DELIVERY SUCCEEDED: review {request_id} for task {task} now has passing Delivery "
         "evidence. Continue the review you reserved: finish and attach your distinct Challenge Ledger, claim "
@@ -9353,6 +9528,8 @@ def _delivery_succeeded_instruction(request_id: str, task: str) -> str:
 
 
 def _ledger_path(root: Path, value: str) -> Path:
+    """Return value resolved to an absolute path, relative to root's code
+    root when it is not already absolute."""
     path = Path(value)
     return (path if path.is_absolute() else project_context(root).code_root / path).resolve()
 
@@ -9387,6 +9564,10 @@ def _hand_in_refusal(root: Path, summary: str, ledger: str) -> str:
 def _require_ledger_scenarios(
     root: Path, value: str, label: str, *, owner_readable: bool = False,
 ) -> Path:
+    """Validate that value (under root, named label in errors) exists and
+    contains concrete ledger scenarios, raising ValueError with the problems
+    and format help when it does not; owner_readable selects the stricter
+    submission validator. Return value: the resolved ledger path."""
     path = _ledger_path(root, value)
     validator = contract.scenario_submission_exists if owner_readable else contract.scenario_ledger_exists
     valid, problems = validator(path)
@@ -9398,6 +9579,9 @@ def _require_ledger_scenarios(
 def _require_completed_ledger(
     root: Path, value: str, label: str, *, owner_readable: bool = False,
 ) -> None:
+    """Raise ValueError naming label's incomplete scenarios when value (under
+    root) is not a fully completed ledger; owner_readable selects the
+    stricter submission validator. Return value: none."""
     validator = contract.scenario_submission_complete if owner_readable else contract.scenario_ledger_complete
     valid, problems = validator(_ledger_path(root, value))
     if not valid:
@@ -9426,6 +9610,10 @@ def _is_evidence_command_line(line: str) -> bool:
 
 
 def _require_evidence_file(root: Path, value: str, label: str) -> str:
+    """Validate that value (under root, named label in errors) is a readable
+    evidence file of at least 20 characters containing both an executed
+    command line and a result line, and that it carries no login-token-shaped
+    text, raising ValueError otherwise. Return value: the file's path string."""
     path = _ledger_path(root, value)
     if not value.strip() or not path.is_file():
         raise ValueError(f"{label} file is missing: {path}")
@@ -9744,6 +9932,10 @@ REVIEW_CHECKOUT_LINKED_DEPENDENCIES = ("node_modules",)
 
 
 def _link_build_dependencies(workspace: Path, checkout: Path) -> list[str]:
+    """Symlink each known dependency directory (e.g. node_modules) found
+    beside a package.json in workspace into the matching location under
+    checkout, so the build needs no network, and record what it linked in a
+    marker file. Return value: the list of linked relative paths."""
     linked: list[str] = []
     for manifest in sorted(workspace.rglob("package.json")):
         relative_parent = manifest.parent.relative_to(workspace)
@@ -9862,6 +10054,9 @@ def _store_internal_qa_evidence(root: Path, command: str, output: str, simulatio
 
 
 def _simulation_bundle(root: Path, label: str, simulations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Store simulations as evidence under root labeled label, and return a
+    bundle summarizing scenario ids, how many passed, and the evidence file's
+    path and sha256."""
     evidence = _store_internal_qa_evidence(
         root, f"{label} per-scenario commands",
         f"Executed {len(simulations)} scenario simulations.", simulations,
@@ -10263,6 +10458,8 @@ def _stale_machine_evidence(root: ProjectRoot, request: dict[str, Any]) -> list[
 
 
 def _require_fresh_machine_evidence(root: ProjectRoot, request: dict[str, Any]) -> None:
+    """Raise ValueError when request's test-machine evidence under root is
+    stale, naming what to do instead. Return value: none."""
     stale = _stale_machine_evidence(root, request)
     if stale:
         raise ValueError(
@@ -10428,6 +10625,8 @@ def _pass_reuse_identity(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _review_scope_identity(request: dict[str, Any]) -> dict[str, Any]:
+    """Return a dict with request's review scope fields (task, structure
+    revision, phase, subtask, chunk) and a sha256 digest fingerprinting them."""
     fields = {
         "task": str(request.get("task", "")),
         "structure_revision": int(request.get("structure_revision", 0)),
@@ -10444,6 +10643,8 @@ def _review_scope_identity(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reuse_check(name: str, expected: str, actual: str) -> dict[str, Any]:
+    """Return a dict reporting whether actual matches the expected value for
+    identity name, usable as an evidence-reuse check result."""
     matched = bool(expected) and expected == actual
     return {
         "identity": name,
@@ -10458,6 +10659,8 @@ def _reuse_check(name: str, expected: str, actual: str) -> dict[str, Any]:
 
 
 def _incomplete_identity_check(label: str, problem: str) -> dict[str, Any]:
+    """Return a failing reuse-check dict reporting that the manifest for
+    label could not be identified, giving problem as the reason."""
     return {
         "identity": "identity_incomplete",
         "artifact": label,
@@ -11180,14 +11383,21 @@ def _not_tested_declaration(summary: Any) -> str:
 
 
 def _gap_class(text: str) -> str:
+    """Return a short failure class label for text, after stripping any
+    leading "not tested" prefix, truncated to 100 characters."""
     return _failure_class(re.sub(r"(?i)^\s*not tested\s*[—:-]*\s*", "", text))[:100]
 
 
 def _gap_scope_key(request: dict[str, Any]) -> str:
+    """Return a stable key string identifying request's review scope (task,
+    phase, subtask, chunk, structure revision), used to group verification
+    gaps by scope."""
     return "|".join(str(request.get(key) or "") for key in ("task", "phase", "subtask", "chunk")) + "|" + str(request.get("structure_revision") or 0)
 
 
 def _gap_candidate(request: dict[str, Any]) -> dict[str, str]:
+    """Return the commit and tree hash identifying the reviewed candidate for
+    request, used to tell whether a later review ran on the same code."""
     return {"commit": str(request.get("reviewed_commit") or ""), "tree": str(request.get("reviewed_tree_hash") or request.get("reviewed_worktree_digest") or "")}
 
 
@@ -11325,6 +11535,9 @@ def test_env_set(root: ProjectRoot, declaration: str, who: str = "owner") -> dic
 
 
 def _test_env_candidate(root: ProjectRoot, task: str) -> Path:
+    """Return the directory to run test-environment checks against for task:
+    its recorded workspace under root when one exists and is a directory,
+    otherwise the project's code root."""
     state = snapshot(root)
     workspace = str((state.get("task_workspaces") or {}).get(task, "")) if task else ""
     return Path(workspace) if workspace and Path(workspace).is_dir() else Path(project_context(root).code_root)
@@ -11462,8 +11675,15 @@ def define_delivery_plan(root: Path, agent_id: str, mode: str, rationale: str) -
         if developer["role"] not in DEVELOPER_ROLES or developer["task"] == AWAITING_OWNER_DIRECTION or not developer.get("active"):
             raise ValueError("only an active Delivery Agent with owner direction may define the delivery plan")
         _require_contract_preflight(root, developer["task"])
-        if not state.get("requirement_confirmations", {}).get(developer["task"]):
+        confirmation = state.get("requirement_confirmations", {}).get(developer["task"])
+        if not confirmation:
             raise ValueError("final requirements confirmation is required before defining the delivery plan")
+        if mode != "atomic" and not state.get("task_split_allowed", {}).get(developer["task"]):
+            # Owner 2026-11-04: the app never splits a task on its own. A split into chunks or subtasks, each with its own paid
+            # review round, happens only when the owner's direction allowed it (the "Allow splitting" box on Give direction).
+            # That day a documentation-only task had been split into 14 parts.
+            raise ValueError("the owner did not ask for this task to be split: define the plan as atomic (one build, one independent "
+                             "review). Chunks and subtasks are allowed only when the owner's direction allowed a split")
         existing = state.setdefault("delivery_plans", {}).get(developer["task"])
         if existing:
             if existing.get("mode") != mode:
@@ -11485,6 +11705,8 @@ def define_delivery_plan(root: Path, agent_id: str, mode: str, rationale: str) -
 
 
 def _validate_subtask_graph(subtasks: dict[str, dict[str, Any]]) -> None:
+    """Raise ValueError when subtasks declares an unknown dependency, a
+    self-dependency, or a dependency cycle. Return value: none."""
     names = set(subtasks)
     for name, subtask in subtasks.items():
         dependencies = subtask.get("dependencies", [])
@@ -11497,6 +11719,8 @@ def _validate_subtask_graph(subtasks: dict[str, dict[str, Any]]) -> None:
     visited: set[str] = set()
 
     def visit(name: str) -> None:
+        """Depth-first traverse subtask name's dependencies, raising
+        ValueError on a cycle. Return value: none."""
         if name in visiting:
             raise ValueError("subtask dependencies must not contain a cycle")
         if name in visited:
@@ -11556,6 +11780,8 @@ def _normalize_owned_surfaces(values: Any) -> list[str]:
 
 
 def _path_scopes_overlap(left: str, right: str) -> bool:
+    """Return whether path scopes left and right overlap: True when either is
+    the global "*" scope or one's path segments are a prefix of the other's."""
     if "*" in {left, right}:
         return True
     left_parts = PurePosixPath(left).parts
@@ -11606,6 +11832,9 @@ def _base_carried_accepted_paths(
 
 
 def _subtask_ownership_overlaps(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Return whether subtasks left and right overlap in ownership, either
+    through overlapping owned_paths (effective scopes) or a shared/global
+    owned surface."""
     # Effective scopes: two subtasks editing one app's src both rebuild its dist.
     left_paths = git_broker.effective_owned_paths(left.get("owned_paths") or ["*"])
     right_paths = git_broker.effective_owned_paths(right.get("owned_paths") or ["*"])
@@ -11636,6 +11865,8 @@ def _effective_subtask_pipeline_status(
 
 
 def _path_is_owned(path: str, owned_paths: list[str]) -> bool:
+    """Return whether path falls within one of the owned_paths scopes (or
+    owned_paths includes the global "*" scope)."""
     normalized = _normalize_owned_paths([path])
     if not normalized:
         return False
@@ -11648,6 +11879,8 @@ def _path_is_owned(path: str, owned_paths: list[str]) -> bool:
 
 
 def _require_owned_files(item: dict[str, Any], paths: list[str], label: str) -> None:
+    """Raise ValueError naming label and the offending paths when any path in
+    paths falls outside item's owned scope. Return value: none."""
     owned_paths = git_broker.effective_owned_paths(item.get("owned_paths") or ["*"])
     outside = sorted(path for path in paths if not _path_is_owned(path, owned_paths))
     if outside:
@@ -11978,6 +12211,8 @@ def close_released_administratively(
                 raise ValueError(f"the project repository for {task} is not reachable at {repository}")
 
             def resolve(reference: str) -> str:
+                """Return the full commit hash reference resolves to in
+                repository, or an empty string when it cannot be verified."""
                 probe = git_process.run(
                     ["git", "rev-parse", "--verify", "--quiet", reference + "^{commit}"],
                     cwd=repository, capture_output=True, text=True, timeout=30,
@@ -11985,6 +12220,8 @@ def close_released_administratively(
                 return probe.stdout.strip() if probe.returncode == 0 else ""
 
             def contains(ancestor: str, descendant: str) -> bool:
+                """Return whether ancestor is a Git ancestor of descendant in
+                repository."""
                 return git_process.run(
                     ["git", "merge-base", "--is-ancestor", ancestor, descendant],
                     cwd=repository, capture_output=True, text=True, timeout=30,
@@ -12645,6 +12882,9 @@ def retire_chunk(
 
 
 def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: str = "") -> dict[str, Any]:
+    """Record a legacy atomic-plan development QA request for agent_id under
+    root, citing ledger, summary, and (on a re-test cycle) changes; validates
+    the ledger and task state first. Return value: the created request dict."""
     if not ledger.strip() or not summary.strip():
         raise ValueError("ledger and summary are required")
     _require_ledger_scenarios(root, ledger, "Scenario Ledger", owner_readable=True)
@@ -12720,6 +12960,8 @@ def _report_only_allowed(documents: list[dict[str, Any]], execution_root: Path, 
 
 
 def _contract_deliverable_names(root: Path, task: str) -> list[str]:
+    """Return the list of deliverable names declared in task's Completion
+    Contract under root, or an empty list when it cannot be loaded."""
     try:
         value = contract._load(contract._task_path(root, task))
     except (OSError, json.JSONDecodeError, TypeError):
@@ -13004,6 +13246,8 @@ def _application_finalization_diff(
     ]
 
     def _present_identity(entry: dict[str, Any] | None) -> tuple[str, str, str] | None:
+        """Return entry's (mode, type, oid) identity tuple when it is present
+        and fully described, or None when deleted, missing, or incomplete."""
         # The exact identity of a present blob: mode, type and object id. A
         # deleted or missing entry has no identity and matches nothing.
         if not isinstance(entry, dict) or entry.get("state") != "present":
@@ -13013,11 +13257,17 @@ def _application_finalization_diff(
         return (str(entry["mode"]), str(entry["type"]), str(entry["oid"]))
 
     def _acceptance_order(request: dict[str, Any]) -> tuple[str, int, str]:
+        """Return a sort key tuple (completed_at, cycle, id) for request,
+        giving acceptances a deterministic strict ordering."""
         # "Later" is a strictly later completion; equal timestamps break on
         # cycle, then id, so the order never depends on wall-clock alone.
         return (str(request.get("completed_at") or ""), int(request.get("cycle") or 0), str(request.get("id") or ""))
 
     def _superseding_acceptance(accepted: dict[str, Any], path: str) -> dict[str, Any] | None:
+        """Return the later passed acceptance whose own reviewed commit
+        already certified path's exact final bytes, superseding accepted, or
+        None when no such later acceptance exists or path is no longer
+        present."""
         # A later independent subtask acceptance whose reviewed commit already
         # carried the exact final bytes certified them - whether its manifest
         # lists the path (a governed re-certification) or not (the repair sat
@@ -13043,6 +13293,9 @@ def _application_finalization_diff(
         return None
 
     def _restoring_acceptance(accepted: dict[str, Any], path: str) -> dict[str, Any] | None:
+        """Return another passed acceptance (not accepted itself) whose own
+        manifest certified path's final bytes exactly, meaning that other
+        acceptance covers path's restoration; None when none match."""
         # Backlog #16: a path deleted by one acceptance and put back exactly
         # as another acceptance's own manifest certified it. The final bytes
         # are byte-identical to independently reviewed ones, so that
@@ -13180,6 +13433,9 @@ def _application_finalization_diff(
 def _repair_packages_for_scope(
     state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str,
 ) -> list[dict[str, Any]]:
+    """Return the still-open repair packages in state matching task, phase,
+    subtask, and chunk at the delivery plan's current structure revision,
+    sorted oldest first."""
     revision = int(((state.get("delivery_plans") or {}).get(task) or {}).get("structure_revision", 0) or 0)
     return sorted([
         package for package in state.get("repair_packages", {}).values()
@@ -13369,6 +13625,9 @@ def _evidence_file_problem(path_text: str, recorded_sha256: str) -> str:
         return "earlier reads of unavailable storage are still waiting; check that the storage is available and try again"
 
     def read() -> None:
+        """Run on a background thread: append the computed evidence-file
+        problem (if any) for the enclosing path_text and recorded_sha256 to
+        outcome. Return value: none."""
         try:
             outcome.append(_evidence_file_problem_unbounded(path_text, recorded_sha256))
         finally:
@@ -13493,6 +13752,9 @@ def _no_product_code_evidence(root: Path, task: str, pins: list[dict[str, Any]] 
     deadline = time.monotonic() + EVIDENCE_TOTAL_SECONDS
 
     def check(path_text: str, recorded: str) -> str:
+        """Return the evidence-file problem for path_text against recorded's
+        sha256, or a time-limit message once the overall verification
+        deadline has passed."""
         if time.monotonic() > deadline:
             return f"not checked: the {int(EVIDENCE_TOTAL_SECONDS)}-second limit for verifying the proof files was reached"
         return _evidence_file_problem(path_text, recorded)
@@ -13522,6 +13784,8 @@ def _no_product_code_evidence(root: Path, task: str, pins: list[dict[str, Any]] 
 
 
 def _no_product_code_message(problems: list[str]) -> str:
+    """Return the explanatory refusal message for a no-product-code task,
+    listing problems and telling Delivery how to reattach proof."""
     return (
         "This task changes no product code (no tracked file outside the harness's own storage), so its proof is "
         "the files attached to its deliverables, and they must exist, not be empty and still match what was "
@@ -13559,6 +13823,8 @@ def _task_changes_no_product_code(root: Path, review_artifact: dict[str, Any], b
 
 
 def _last_final_pass(state: dict[str, Any], task: str) -> dict[str, Any] | None:
+    """Return task's latest passed final-acceptance (or legacy) independent
+    review request from state, by highest cycle, or None if none passed."""
     passes = [
         request for request in _task_requests(state, task)
         if request.get("stage") == INDEPENDENT_REVIEW
@@ -14332,9 +14598,69 @@ def review_brief(
         return json.loads(json.dumps(result))
 
 
+LOST_EVIDENCE_PREFIX = "independent review requires intact Delivery scenario evidence: "
+
+
+def _withdraw_for_lost_evidence(root: Path, request_id: str, problems: str) -> tuple[str, str]:
+    """Close a review request whose stored Delivery evidence is gone and tell Delivery the one repair.
+
+    The board itself stored that evidence when the request was filed, so a missing file is not something the Reviewer
+    can mend and not something a re-route will find (2026-11-04: ten re-routes, a CTO asking the owner to restart the
+    Reviewer, and no verdict). The request is withdrawn so the scope is free again, and Delivery is told to file
+    request-review again with its Scenario Ledger. Returns the Delivery session to tell and the instruction text.
+    """
+    with locked_state(root) as state:
+        request = (state.get("qa_requests") or {}).get(request_id)
+        if not request or request.get("status") not in {"authoring", "open"}:
+            return "", ""
+        developer = (state.get("agents") or {}).get(str(request.get("developer_id") or "")) or {}
+        scope = str(request.get("subtask") or request.get("chunk") or request.get("phase") or "the task")
+        withdrawn_at = now()
+        request.update({"status": "withdrawn", "withdrawn_at": withdrawn_at,
+                        "withdrawn_reason": f"the board's stored copy of Delivery's evidence is gone ({problems})"})
+        # The scope must be free again (round 1: an application subtask stayed "in_review" pointing at the withdrawn request, so
+        # the replacement request-review and start-subtask were both refused). Back to in_progress, pointer cleared, candidate kept.
+        subtask = str(request.get("subtask") or "")
+        item = (((state.get("delivery_plans") or {}).get(str(request.get("task") or "")) or {}).get("subtasks") or {}).get(subtask)
+        if isinstance(item, dict) and item.get("active_review_request") == request_id:
+            item.pop("active_review_request", None)
+            if item.get("pipeline_status") == "in_review":
+                item["pipeline_status"] = "in_progress"
+            item["pipeline_updated_at"] = withdrawn_at
+        _event(state, "review_withdrawn_evidence_lost", developer or {"id": str(request.get("developer_id") or ""), "role": "development", "task": request.get("task", "")}, {
+            "task": request.get("task", ""), "request_id": request_id,
+            "message": f"review request {request_id} withdrawn: {problems}; Delivery must file request-review again for {scope} with its Scenario Ledger",
+        })
+        text = (f"[SYSTEM CONTROL review-evidence-lost] REVIEW EVIDENCE LOST: request {request_id} for task {request.get('task', '')} "
+                f"({scope}) was withdrawn because the board's stored copy of your Scenario Ledger is gone ({problems}). "
+                f"Repair: run request-review again for the same scope with --ledger <your Scenario Ledger file> and --changes "
+                f"\"same work; evidence attached again\". Nothing else is needed; "
+                f"the scope is free again and the Reviewer will be routed to the new request.")
+        return str(developer.get("session_id") or ""), text
+
+
 def reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any]:
     """Immediately reserve an independent review before ledger authoring."""
-    result = _reserve_qa(root, agent_id, request_id)
+    try:
+        result = _reserve_qa(root, agent_id, request_id)
+    except ValueError as refusal:
+        message = str(refusal)
+        if message.startswith(LOST_EVIDENCE_PREFIX) and "missing" in message:
+            problems = message[len(LOST_EVIDENCE_PREFIX):]
+            with locked_state(root) as state:
+                target = request_id or next((r["id"] for r in sorted(
+                    (r for r in (state.get("qa_requests") or {}).values() if r.get("status") in {"authoring", "open"}),
+                    key=lambda r: r.get("requested_at", ""))), "")
+            session, text = _withdraw_for_lost_evidence(root, target, problems)
+            if session:
+                from harness import control  # local, as everywhere in this module (import cycle)
+                try:
+                    control.enqueue_instruction(root, session, text, source="review-evidence-lost")
+                except (ValueError, OSError):
+                    pass  # the board event and the withdrawn request still carry the repair
+            raise ValueError(message + f". The board withdrew request {target} and told Delivery to file request-review again "
+                             "with its Scenario Ledger; nothing is needed from the Reviewer or the CTO") from refusal
+        raise
     session = result.pop("_delivery_wake_session", "")
     if session:
         # The Reviewer was told to wait for Delivery success, but Delivery had already succeeded
@@ -14351,6 +14677,10 @@ def reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any
 
 
 def _reserve_qa(root: Path, agent_id: str, request_id: str = "") -> dict[str, Any]:
+    """Reserve an open or authoring QA request under root for the Reviewer
+    agent_id, picking request_id when given, raising ValueError when the
+    agent already holds one or none is available. Return value: the reserved
+    request dict."""
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         if qa["role"] != "qa":
@@ -14467,6 +14797,9 @@ def _analysis_context(state: dict[str, Any], agent: dict[str, Any], task: str) -
 
 
 def _analysis_session(state: dict[str, Any], record: dict[str, Any], side: str) -> str:
+    """Return the terminal session id for side of record's code analysis
+    (the reviewer's own, or the task's active developer's), from state, or an
+    empty string when none is found."""
     if side == "reviewer":
         return str((state.get("agents", {}).get(record.get("reviewer_id") or "") or {}).get("session_id") or "")
     task = str(record.get("task") or "")
@@ -14475,6 +14808,9 @@ def _analysis_session(state: dict[str, Any], record: dict[str, Any], side: str) 
 
 
 def _enqueue_analysis(root: Path, notes: list[tuple[str, str]], source: str) -> None:
+    """Best-effort enqueue each (session_id, text) pair in notes as an
+    instruction under root tagged with source, silently skipping failures
+    since board state already holds the data. Return value: none."""
     from harness import control
     for session_id, text in notes:
         if session_id:
@@ -14555,6 +14891,8 @@ def _analysis_merge_text(state: dict[str, Any], record: dict[str, Any], task: st
     sides = record["sides"]
 
     def block(side: str) -> str:
+        """Return the formatted merge-text block for side's list, including
+        the checker's marks, from the enclosing sides dict."""
         checker = analysis_pass.other(side)
         rows = [f"{i['id']} {i['location']}: {i['wrong']} -- "
                 + ("found while checking, not marked" if i.get("found_while_checking") else sides[checker]['marks'][i['id']]['mark']
@@ -15415,6 +15753,9 @@ def review_recovery_settle(root: Path, key: str, reason: str, closed: bool = Fal
 
 
 def review_recovery_mark_retired(root: Path, key: str, at: str) -> None:
+    """If the review escalation key under root has already stopped
+    ("could_not_finish"), mark it retired at the given time and clear any
+    pending restart request on its agent. Return value: none."""
     with locked_state(root) as state:
         entry = (state.get("review_escalations") or {}).get(key)
         if entry and entry.get("status") == "could_not_finish":
@@ -15427,6 +15768,8 @@ def review_recovery_mark_retired(root: Path, key: str, at: str) -> None:
 
 
 def request_recovery_wake_text(entry: dict[str, Any]) -> str:
+    """Return the wake-up instruction text for the one fresh Delivery attempt
+    recovering entry's stalled review."""
     return (f"REVIEW RECOVERY: you are the one fresh Delivery attempt for {entry['task']}. Poll the board once now: your poll shows review_recovery with the precise brief. "
             "Fix every open finding in one repair, then request review. Do not ask the owner anything. USER ACTION: None.")
 
@@ -15458,6 +15801,9 @@ def _frozen_scope_context(state: dict[str, Any], request: dict[str, Any], reques
 
 def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, summary: str,
                   failure_members: list[dict[str, Any]] | None, early_fail: bool) -> dict[str, Any]:
+    """Judge request's verdict (result, summary, failure_members) against its
+    prior rounds and frozen scope from state, honoring early_fail. Return
+    value: the review_rounds judgment dict."""
     requests = _task_requests(state, str(request.get("task") or ""))
     prior = review_rounds.prior_judgments(requests, request)
     return review_rounds.judge(
@@ -15493,6 +15839,10 @@ def qa_result(
     failure_members: list[dict[str, Any]] | None = None,
     code_quality_notes: Any = None,
 ) -> dict[str, Any]:
+    """Record the Reviewer agent_id's formal verdict (result, summary,
+    evidence, finalization_classification, failure_members,
+    code_quality_notes) on request_id under root, judging it against prior
+    review rounds. Return value: the updated request/outcome dict."""
     if result not in {"passed", "failed"}:
         raise ValueError("QA result must be passed or failed")
     if not summary.strip():
@@ -15669,6 +16019,10 @@ def qa_result(
                 broker = _broker_for_state(root, state, request["task"])
 
                 def record_integration(record: dict[str, Any]) -> None:
+                    """Callback for broker.integrate_subtask: copy record's
+                    commit, tree hash, transaction id, candidate commit, and
+                    accepted-byte verification onto the enclosing request.
+                    Return value: none."""
                     request.update({
                         "integrated_commit": record.get("commit", ""),
                         "integrated_tree_hash": record.get("tree", ""),
@@ -16059,6 +16413,10 @@ def _unit_test_build_source(root: Path, request: dict[str, Any]) -> tuple[str, d
 
 
 def _note_build_collection(root: Path, task: str, request: dict[str, Any], digest: str, stamp: dict[str, Any], ok: bool, klass: str = "", message: str = "", manifest_id: str = "") -> None:
+    """Record the outcome (ok, klass, message, manifest_id) of task's build
+    collection attempt for request, digest, and stamp under root, emitting a
+    build_collected or build_collection_failed event when it changed. Return
+    value: none."""
     with locked_state(root) as state:
         previous = (state.setdefault("build_collection", {})).get(task) or {}
         record = {"request_id": str(request.get("id") or ""), "declaration_sha256": digest, "machine_stamp": stamp, "status": "collected" if ok else "failed",
@@ -16151,6 +16509,10 @@ def collect_build(root: Path, task: str, agent_id: str = "") -> dict[str, Any]:
         final: dict[str, Any] = {}
 
         def commit(manifest: dict[str, Any]) -> None:
+            """Callback for build_collection.collect: under the board lock,
+            re-verify task's review, declaration, scope, and machine stamp
+            are still current, then record manifest as the collected build.
+            Return value: none."""
             # Under the collection lock, immediately before the record: nothing may have moved while the files were copying.
             with locked_state(root) as live:
                 if task in (live.get("cancelled_tasks") or {}):
@@ -16176,6 +16538,8 @@ def collect_build(root: Path, task: str, agent_id: str = "") -> dict[str, Any]:
                 final.update(record)
 
         def known() -> list[str]:
+            """Return the manifest ids already present in the board's build
+            index under root, so build_collection.collect avoids duplicates."""
             return list((snapshot(root).get("build_index") or {}).keys())
 
         smoke = build_collection.launch_checks(output, declaration)
@@ -17009,6 +17373,9 @@ def confirm_remote_push(root: ProjectRoot, task: str, instruction_id: str) -> di
     # already durable; the callback below commits the broker's outcome in its
     # own atomic board transaction before ``remote_push`` returns or raises.
     def persist_outcome(record: dict[str, Any]) -> None:
+        """Callback for broker.remote_push: atomically persist record as
+        task's push outcome under root, raising ValueError if the push
+        instruction changed since this call began. Return value: none."""
         with locked_state(root) as current:
             current_instruction = current.get("remote_push_instructions", {}).get(task, {})
             if current_instruction.get("id") != instruction_id:
@@ -17047,6 +17414,8 @@ def _safe_attachment_name(value: str) -> str:
 
 
 def _write_attachment(path: Path, data: bytes) -> None:
+    """Write data to path exclusively (failing if it already exists),
+    creating parent directories first. Return value: none."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:
         stream.write(data)
@@ -17279,6 +17648,10 @@ def route_owner_repairs(root: Path) -> list[dict[str, Any]]:
 
 
 def snapshot(root: Path) -> dict[str, Any]:
+    """Return a read-only projected view of root's board state: invalidating
+    any passed review whose certified evidence integrity no longer checks
+    out, adding critical-path summaries, and redacting each side's unread
+    code-analysis list items."""
     projected = _read_state(root)
     if projected.get("integrity_migration_complete"):
         for request in projected.get("qa_requests", {}).values():
@@ -17403,6 +17776,8 @@ def accept_is_owed(state: dict[str, Any], task: str) -> bool:
 
 
 def _accepted_task_ids(state: dict[str, Any]) -> set[str]:
+    """Return the set of task ids in state that are genuinely owner-accepted
+    or already have a recorded Git acceptance."""
     return {
         task for task, decision in (state.get("release_decisions") or {}).items()
         if owner_accept_is_real(state, task, decision)
@@ -17567,7 +17942,7 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
         for key in (
             "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
             "task_workspaces", "subtask_workspaces", "subtask_branches",
-            "task_owner_directions", "task_lineage", "task_security", "task_document_only", "task_kinds",
+            "task_owner_directions", "task_lineage", "task_security", "task_document_only", "task_kinds", "task_split_allowed",
             "owner_clarifications", "requirement_confirmations", "releases",
             "release_decisions", "release_repairs",
             # 2026-10-28: a cancelled task's waiting proposal still showed a decision card, and its repository binding stayed
@@ -17764,6 +18139,10 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
             nonce_drift.extend(_reconcile_broker_nonces(state, broker, task))
 
             def record(outcome: dict[str, Any]) -> None:
+                """Callback applying a recovered broker transaction's
+                outcome for the enclosing task onto board state: finishes an
+                idempotently completed accept-merge release or updates the
+                matching subtask-fold review request. Return value: none."""
                 if outcome.get("operation") == "accept-merge" and outcome.get("status") == "completed_idempotently":
                     state.setdefault("git_acceptances", {})[task] = {
                         **outcome, "accepted_at": now(), "recovered": True,
@@ -17863,6 +18242,8 @@ def recover_git_transactions(root: ProjectRoot) -> dict[str, Any]:
 
 
 def _root(value: str) -> Path:
+    """Return value resolved to an absolute Path, for parsing a --root
+    command-line argument."""
     return Path(value).resolve()
 
 
@@ -17899,7 +18280,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("test-env-set"); p.description = "Declare the project's test environment (owner or CTO): the prepared interpreter, the working folder and the variables governed commands need."; p.add_argument("--declaration", required=True, help="a JSON object"); p.add_argument("--agent", default="")
     p = sub.add_parser("test-env-status"); p.description = "Say whether the project declared a test environment and whether it is ready for a task's code."; p.add_argument("--task", default=""); p.add_argument("--agent", default="")
     p = sub.add_parser("test-env-run"); p.description = "Run one command under the project's test environment (the Reviewer's or the CTO's own capture; not certified evidence)."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--cmd", required=True, help="the command to run (no shell operators)")
-    p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True)
+    p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True); p.add_argument("--allow-split", action="store_true", help="the owner allowed this task to be split into separately reviewed parts")
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
     p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
@@ -17979,6 +18360,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the board CLI with argv (or sys.argv when omitted): route the
+    command to the managed worker client when a live board client is
+    expected, otherwise parse args and dispatch locally. Return value: the
+    process exit code."""
     from harness import board_client
     client_state = board_client.environment_state()
     requested = list(sys.argv[1:] if argv is None else argv)
@@ -18030,7 +18415,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "test-env-set": out = test_env_set(root, args.declaration, who=(args.agent or "the owner"))
         elif args.command == "test-env-status": out = test_env_status(root, args.task)
         elif args.command == "test-env-run": out = test_env_run(root, args.agent, args.task, args.cmd)
-        elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text)
+        elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text, allow_split=args.allow_split)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
         elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)

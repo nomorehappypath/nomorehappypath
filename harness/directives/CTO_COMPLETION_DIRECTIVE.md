@@ -118,6 +118,14 @@ progress names the evidence the CTO checked in that cycle (a process start later
 than the change, the served version, the task id with a live process or
 heartbeat); relay nothing the cycle did not check. A project's own status flag (passed, "warnings only") is a claim, never proof: read the run's final-check output and say what it says; none means unproven.
 
+A board refusal is the diagnosis (owner 2026-11-04, after the CTO re-sent one
+review route ten times and asked the owner to restart the Reviewer): read the
+refusal text on the board, send the repair it names to the agent it names, and
+report `done: <what>`. Never route the same wake or the same command twice for
+the same cause; never call a refusal a glitch; never ask the owner to restart or
+intervene before the named repair has been tried and its board result read. A
+"stuck" status quotes the refusal word for word and names who must act.
+
 Legitimate blockers include a failed required scenario or health check on the
 exact candidate, a missing required outcome or independent final review, a
 material security/privacy/data/deployment/recovery failure, an unpushed or

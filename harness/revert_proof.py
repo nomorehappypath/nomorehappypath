@@ -37,10 +37,12 @@ def configure(plumbing: Any) -> None:
 
 
 def max_files() -> int:
+    """Return the owner's configured file cap for the revert proof, or MAX_FILES_DEFAULT when none was configured."""
     return _configured.get("files", MAX_FILES_DEFAULT)
 
 
 def budget_seconds() -> int:
+    """Return the owner's configured time budget in seconds for the revert proof, or BUDGET_DEFAULT when none was configured."""
     return _configured.get("seconds", BUDGET_DEFAULT)
 
 
@@ -69,6 +71,7 @@ def classify(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
 
 
 def _count(number: int, singular: str, plural: str) -> str:
+    """Return number followed by singular when number is 1, otherwise by plural, as one text like "3 files"."""
     return f"{number} {singular if number == 1 else plural}"
 
 
@@ -124,4 +127,5 @@ def brief(result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def tree_of(request: dict[str, Any]) -> str:
+    """Return request's reviewed tree hash, falling back to its reviewed commit, or "" when neither is set."""
     return str(request.get("reviewed_tree_hash") or request.get("reviewed_commit") or "")

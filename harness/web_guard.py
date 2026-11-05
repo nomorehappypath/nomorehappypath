@@ -16,6 +16,18 @@ BODY_MEDIA_TYPES = ("application/json", "multipart/form-data")
 
 
 def _host_name(value: str) -> str:
+    """Normalize a Host header value into a bare host name, dropping any port.
+
+    Lowercases and strips the input value first. A bracketed IPv6 literal
+    (e.g. "[::1]:8000") keeps its brackets and loses the trailing port; any
+    other value loses a single trailing ":<port>" segment.
+
+    Args:
+        value: the raw Host header text (or host string) to normalize.
+
+    Return:
+        The lowercased host name, with any port suffix removed.
+    """
     value = str(value or "").strip().lower()
     if value.startswith("["):
         return value[: value.find("]") + 1] if "]" in value else value
@@ -23,6 +35,17 @@ def _host_name(value: str) -> str:
 
 
 def _is_ip_literal(name: str) -> bool:
+    """Check whether a host name is an IP address literal rather than a DNS name.
+
+    Strips any surrounding "[" "]" brackets (as used for IPv6 host names)
+    before attempting to parse the result as an IPv4 or IPv6 address.
+
+    Args:
+        name: the host name text to check.
+
+    Returns:
+        True if name parses as an IP address literal, False otherwise.
+    """
     try:
         ipaddress.ip_address(name.strip("[]"))
         return True

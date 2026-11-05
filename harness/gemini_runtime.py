@@ -36,6 +36,7 @@ RULES_LIMIT_BYTES = 24000
 
 
 def _inside_any(path: str, roots: list[str]) -> bool:
+    """Return whether the resolved path is equal to, or nested under, any of the roots."""
     real = os.path.realpath(path)
     return any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in roots)
 
@@ -45,6 +46,7 @@ def hooks_document(python: str, harness_root: str, timeout: int, *, guard: bool)
     gate = " ".join(shlex.quote(part) for part in (python, "-E", os.path.join(harness_root, "harness", "hook_gate.py"), "gemini"))
 
     def command(event: str) -> dict[str, Any]:
+        """Build the hook-gate command entry for the given event. Return: its JSON-ready dict."""
         return {"type": "command", "command": f"{gate} {event}", "timeout": timeout + 5}
     group: dict[str, Any] = {"PreInvocation": [command("PreInvocation")], "Stop": [command("Stop")]}
     if guard:
@@ -53,6 +55,11 @@ def hooks_document(python: str, harness_root: str, timeout: int, *, guard: bool)
 
 
 def mcp_document(python: str, harness_root: str, role: str, agent: str) -> dict[str, Any]:
+    """Build the mcp_config.json document that launches the harness_board MCP server for this role and agent.
+
+    The python interpreter and harness_root locate the server script; role and agent are passed through as
+    command-line arguments. Return: the JSON-ready mcpServers dict.
+    """
     server = os.path.join(harness_root, "harness", "board_mcp.py")
     return {"mcpServers": {"harness_board": {"command": python, "args": ["-E", server, "--role", role, "--agent", agent]}}}
 
@@ -129,6 +136,9 @@ def prepare(home: Path, project: str, session: str, *, harness_root: str, python
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse argv, call prepare() with the resulting arguments and the directive read from stdin, then print the
+    resulting JSON to stdout and any notes to stderr. Return: the process exit code (always 0 on success).
+    """
     parser = argparse.ArgumentParser(description="Prepare one Gemini session's harness runtime directory; prints JSON")
     parser.add_argument("--manager-home", required=True)
     parser.add_argument("--project", required=True)

@@ -61,20 +61,27 @@ STALE_OUTPUT_SECONDS = 240
 
 
 def step_title(number: int) -> str:
+    """Return the plain-language title of step number from the 26-step list, or "" if unknown."""
     return STEPS.get(number, ("", ""))[0]
 
 
 def step_who(number: int) -> str:
+    """Return who acts at step number from the 26-step list, or "" if unknown."""
     return STEPS.get(number, ("", ""))[1]
 
 
 # ---- small helpers ------------------------------------------------------------------------------------------------------------
 
 def _now() -> datetime:
+    """Return the current time as a timezone-aware UTC datetime."""
     return datetime.now(timezone.utc)
 
 
 def _parsed(value: Any) -> datetime | None:
+    """Return value parsed as an ISO datetime, defaulting to UTC when it carries no timezone.
+
+    Output is None when value is not a valid ISO timestamp.
+    """
     try:
         moment = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -83,20 +90,27 @@ def _parsed(value: Any) -> datetime | None:
 
 
 def _dict(value: Any) -> dict[str, Any]:
+    """Return value unchanged if it is a dict, else an empty dict."""
     return value if isinstance(value, dict) else {}
 
 
 def _title_case(value: Any) -> str:
+    """Return value as a readable title: underscores/dashes become spaces, each word capitalized.
+
+    Output falls back to "Delivery task" when value is empty.
+    """
     text = str(value or "Delivery task").replace("_", " ").replace("-", " ").lower()
     return " ".join(word[:1].upper() + word[1:] for word in text.split(" ") if word) or "Delivery task"
 
 
 def _short(value: Any, limit: int = 240) -> str:
+    """Return value as whitespace-collapsed text, truncated with an ellipsis past limit characters."""
     text = " ".join(str(value or "").split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _plural(count: int, one: str, many: str | None = None) -> str:
+    """Return "<count> <word>" using one for a count of 1 and many (or one+'s') otherwise."""
     return f"{count} {one if count == 1 else (many or one + 's')}"
 
 
@@ -131,10 +145,21 @@ def visible_agents(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def ordered_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return reviews sorted oldest first by their best-available timestamp.
+
+    Each review is ordered by completed_at, falling back to claimed_at,
+    reserved_at, then requested_at, whichever is first present.
+    """
     return sorted(reviews, key=lambda r: str(r.get("completed_at") or r.get("claimed_at") or r.get("reserved_at") or r.get("requested_at") or ""))
 
 
 def review_scope(review: dict[str, Any] | None) -> str:
+    """Return a plain-language description of what review covers.
+
+    Output is "current work" when review is falsy, "the complete task" for
+    a final_acceptance review, or the title-cased subtask/chunk name
+    otherwise.
+    """
     if not review:
         return "current work"
     if review.get("phase") == "final_acceptance":
@@ -145,6 +170,14 @@ def review_scope(review: dict[str, Any] | None) -> str:
 
 
 def task_facts(state: dict[str, Any], task: str, agents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Compute task's basic facts (mode, plan, reviews, assigned agent, progress) from board state.
+
+    agents, when given, is the agent pool to search instead of recomputing
+    visible_agents(state). Progress ("done" of "total") is counted in
+    chunks for atomic/chunked tasks and fractionally per subtask for
+    "application" mode. Return: a dict with mode, plan, reviews, agent,
+    done, total, subtasks, and passed_subtasks.
+    """
     all_chunks = list(_dict(_dict(state.get("task_chunks")).get(task)).values())
     chunks = [c for c in all_chunks if _dict(c).get("status") != "retired"]   # work Delivery removed is not unfinished work
     plan = _dict(_dict(state.get("delivery_plans")).get(task))
@@ -186,6 +219,12 @@ def stopped_tasks(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def recent_output_active(agent: dict[str, Any] | None, now: datetime | None = None) -> bool:
+    """Return whether agent appears to be actively producing output right now.
+
+    now defaults to the current UTC time. False when turn_state is
+    idle_at_prompt or session_ended, true when it is working, and otherwise
+    true only if recent_output_at is within STALE_OUTPUT_SECONDS of now.
+    """
     agent = agent or {}
     if agent.get("turn_state") in ("idle_at_prompt", "session_ended"):
         return False
@@ -236,6 +275,10 @@ def gate(state: dict[str, Any], task: str, facts: dict[str, Any], *, runtime_com
     confirmed = bool(_dict(_dict(state.get("requirement_confirmations")).get(task)).get("text"))
 
     def out(status: str, nxt: str, tone: str = "active", review: dict[str, Any] | None = None, kind: str = "") -> dict[str, Any]:
+        """Package one gate() verdict: status, nxt (the next-step sentence), tone, review, and kind.
+
+        Output is the plain dict gate() returns.
+        """
         return {"status": status, "next": nxt, "tone": tone, "review": review, "kind": kind}
 
     if decision == "accepted" and _dict(row.get("git_acceptance")).get("status") == "failed" and "git" not in skip:
@@ -302,6 +345,7 @@ def review_round(state: dict[str, Any], review: dict[str, Any] | None) -> int:
 
 
 def _confirmation_check(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """Return task's recorded contract_check from state's requirement confirmation, or {} if none."""
     return _dict(_dict(_dict(state.get("requirement_confirmations")).get(task)).get("contract_check"))
 
 
@@ -322,6 +366,11 @@ def _early_step(state: dict[str, Any], task: str) -> int:
 
 
 def current_step(state: dict[str, Any], task: str, g: dict[str, Any], facts: dict[str, Any]) -> int:
+    """Return task's current numbered step (1-26) given its gate verdict g and facts.
+
+    state is read for proposal/review/release details needed to refine a
+    gate status into a specific step number.
+    """
     status = g["status"]
     proposal = _dict(_dict(state.get("requirement_proposals")).get(task))
     if status == "AWAITING FINAL REQUIREMENTS":
@@ -392,6 +441,11 @@ def _round_line(state: dict[str, Any], task: str) -> str:
 
 
 def _blockers(state: dict[str, Any], task: str) -> int:
+    """Return the number of structured findings on task's most recently completed failed review in state.
+
+    Output is 0 when task has no failed review, or that review recorded no
+    structured_findings list.
+    """
     failed = [r for r in _dict(state.get("qa_requests")).values() if isinstance(r, dict) and r.get("task") == task and r.get("status") == "failed"]
     if not failed:
         return 0
@@ -401,6 +455,11 @@ def _blockers(state: dict[str, Any], task: str) -> int:
 
 
 def _area(facts: dict[str, Any]) -> str:
+    """Return " (work area N of total)" for an application-mode task, else "".
+
+    facts supplies mode, total, and passed_subtasks to compute N as the
+    next unfinished work area (capped at total).
+    """
     if facts["mode"] != "application" or not facts["total"]:
         return ""
     return f" (work area {min(facts['total'], facts['passed_subtasks'] + 1)} of {facts['total']})"
@@ -455,6 +514,11 @@ def sentences(state: dict[str, Any], task: str, step: int, g: dict[str, Any], fa
 
 
 def _accepted_sentence(state: dict[str, Any], task: str) -> str:
+    """Return the plain "Accepted" sentence for task, noting the main merge when it is a governed repository.
+
+    Output mentions the project's main branch only if task appears in
+    state's git_acceptances.
+    """
     governed = task in _dict(state.get("git_acceptances"))
     return "Accepted. It is on your project's main." if governed else "Accepted."
 
@@ -462,11 +526,21 @@ def _accepted_sentence(state: dict[str, Any], task: str) -> str:
 # ---- exceptions outrank progress (spec 12.6) -----------------------------------------------------------------------------------
 
 def _role_of_agent(agent: dict[str, Any]) -> str:
+    """Return agent's story role ("builder", "reviewer", or "cto") from its board role.
+
+    Output defaults to "builder" for any role not recognized as reviewer
+    ("qa") or cto.
+    """
     role = str(agent.get("role") or "")
     return "builder" if role in DEVELOPER_ROLES else "reviewer" if role == "qa" else "cto" if role == "cto" else "builder"
 
 
 def _role_of_kind(kind: Any) -> str:
+    """Return the story role ("reviewer", "cto", or "builder") implied by a session kind string.
+
+    kind is matched by substring; output defaults to "builder" when neither
+    "reviewer" nor "cto" appears in it.
+    """
     kind = str(kind or "")
     return "reviewer" if "reviewer" in kind else "cto" if "cto" in kind else "builder"
 
@@ -587,6 +661,11 @@ def money_line(cost: dict[str, Any] | None, task: str) -> dict[str, Any]:
 
 
 def _task_started(state: dict[str, Any], task: str) -> str:
+    """Return task's earliest recorded start timestamp from state.
+
+    Prefers the earliest "task_begun" event's "at" time; falls back to the
+    earliest qa_request's requested_at, or "" if neither is recorded.
+    """
     begun = [e.get("at") for e in state.get("events") or [] if isinstance(e, dict) and e.get("task") == task and e.get("kind") == "task_begun" and e.get("at")]
     if begun:
         return str(min(begun))
@@ -686,12 +765,23 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
 # ---- the agent strip -----------------------------------------------------------------------------------------------------------
 
 def _session_for(agent: dict[str, Any] | None, sessions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the session in sessions whose id matches agent's session_id, or None.
+
+    Output is also None when agent itself is falsy.
+    """
     if not agent:
         return None
     return next((s for s in sessions if s.get("id") == agent.get("session_id")), None)
 
 
 def _role_cost(cost: dict[str, Any] | None, task: str, role: str) -> str:
+    """Return the plain-text cost line for role on task.
+
+    When task has no recorded cost for role, falls back to the role's most
+    recently costed task (labelled "last task") for a builder or reviewer;
+    "cto" always uses project overhead. Output is "Cost: not measured yet"
+    when cost is unavailable.
+    """
     if not cost or not cost.get("available"):
         return "Cost: not measured yet"
     key = {"builder": "delivery", "reviewer": "reviewer", "cto": "cto"}[role]
@@ -711,6 +801,12 @@ def _role_cost(cost: dict[str, Any] | None, task: str, role: str) -> str:
 
 
 def _reviewer_assignment(state: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the newest qa_request in state currently assigned to agent, or None if it has none.
+
+    A request counts as agent's when it is claimed/suspended and
+    claimed_by agent, reserved by agent, or authoring/open and routed_to
+    agent.
+    """
     mine = [r for r in _dict(state.get("qa_requests")).values() if isinstance(r, dict) and (
         (r.get("status") in ("claimed", "suspended") and r.get("claimed_by") == agent.get("id"))
         or (r.get("status") == "reserved" and r.get("reserved_by") == agent.get("id"))
@@ -760,6 +856,12 @@ def agent_strip(state: dict[str, Any], task: str, *, agents: list[dict[str, Any]
 
 
 def _difficulty_latest(state: dict[str, Any], task: str) -> dict[str, dict[str, Any]]:
+    """Return task's latest non-empty difficulty note per role ("builder", "reviewer").
+
+    Later notes in state's difficulty_notes list for task overwrite earlier
+    ones, so each role's entry ends up being its newest note. Output is a
+    dict keyed by role.
+    """
     out: dict[str, dict[str, Any]] = {}
     for note in _dict(state.get("difficulty_notes")).get(task) or []:
         if isinstance(note, dict) and note.get("role") in ("builder", "reviewer") and str(note.get("text") or "").strip():
@@ -768,6 +870,13 @@ def _difficulty_latest(state: dict[str, Any], task: str) -> dict[str, dict[str, 
 
 
 def _doing(state: dict[str, Any], task: str, role: str, agent: dict[str, Any] | None, story: dict[str, Any] | None, now: datetime | None) -> tuple[str, str]:
+    """Return (doing, detail) text describing what role's agent is currently doing on task, from state.
+
+    story supplies the task's own narrative (now text, builder_note,
+    exception) when available, and now is the current time used by any
+    nested elapsed-time computation. Output is a fixed "No <role> is
+    running." message, with an empty detail, when agent is None.
+    """
     if not agent:
         return {"builder": "No builder is running.", "reviewer": "No reviewer is running.", "cto": "No CTO is running."}[role], ""
     if role == "builder":
@@ -816,6 +925,13 @@ def _message(role: str, agent: dict[str, Any] | None, session: dict[str, Any] | 
 
 
 def _no_view_note(role: str, agent: dict[str, Any] | None, session: dict[str, Any] | None) -> str:
+    """Return the plain reason role's View-its-screen button is disabled.
+
+    Output explains, in order of priority, that no agent is running, that
+    session is absent so its window is not connected, that session's
+    window is read-only (superseded), or otherwise that its window is not
+    running.
+    """
     word = ROLE_WORD[role]
     if not agent:
         return f"No {word} is running right now."
@@ -829,6 +945,13 @@ def _no_view_note(role: str, agent: dict[str, Any] | None, session: dict[str, An
 # ---- the whole page ------------------------------------------------------------------------------------------------------------
 
 def _priority(item: dict[str, Any]) -> tuple:
+    """Return a sort key ranking item for lead-task selection.
+
+    Tasks needing the owner sort first, then those with an exception, then
+    unaccepted tasks, then accepted ones; within each group, a later step
+    (more progress) sorts first. Output is the (group, -step) tuple used by
+    sorted().
+    """
     exc = item.get("exception") or {}
     return (0 if item.get("needs_owner") else 1 if exc else 2 if not item.get("accepted") else 3, -int(item.get("step") or 0))
 
@@ -928,10 +1051,21 @@ def project_now(state: dict[str, Any], task: str, *, paused: bool = False, accep
 
 
 def _need_from_exception(exc: dict[str, Any]) -> dict[str, Any]:
+    """Return a project card's "needs_you" block built from an exception dict exc.
+
+    Output has kind, title (exc's reason), an empty detail, and exc's
+    action.
+    """
     return {"kind": exc["kind"], "title": exc["reason"], "detail": "", "action": exc["action"]}
 
 
 def _need_for(story: dict[str, Any], state: dict[str, Any], task: str) -> dict[str, Any]:
+    """Return the project card's "needs_you" block for task's own story (no exception in play).
+
+    state is read for details ready_summary needs. Output is a dict with
+    kind, title, detail and action tailored to story's gate and step
+    ("ready", "accept_retry", "go_ahead", or the generic "task").
+    """
     if story["gate"] == "READY FOR YOUR TEST":
         return {"kind": "ready", "title": f"{story['title']} is ready for you to try", "detail": ready_summary(state, task, story), "action": "Try it, then press Accept or Not accepted."}
     if story["gate"] == "ACCEPT SAVED, NOT IN MAIN YET":
@@ -1014,6 +1148,12 @@ def help_phases() -> list[dict[str, Any]]:
 
 
 def _ctx(state: dict[str, Any], task: str, facts: dict[str, Any]) -> dict[str, Any]:
+    """Gather task's requirement confirmation/proposal, release, decision, reviews and plan into one context dict.
+
+    facts supplies the already-computed reviews and plan. This bundle is
+    passed around the timeline-building helpers so each need not re-derive
+    it from state. Return: the assembled context dict.
+    """
     conf = _dict(_dict(state.get("requirement_confirmations")).get(task))
     prop = _dict(_dict(state.get("requirement_proposals")).get(task))
     cc, pcc = _dict(conf.get("contract_check")), _dict(prop.get("contract_check"))
@@ -1024,21 +1164,38 @@ def _ctx(state: dict[str, Any], task: str, facts: dict[str, Any]) -> dict[str, A
 
 
 def _direction(state: dict[str, Any], task: str) -> str:
+    """Return the owner's original whitespace-collapsed direction text for task.
+
+    Prefers the owner_direction recorded on task's task_begun event, and
+    falls back to state's task_owner_directions entry for task.
+    """
     begun = [e for e in state.get("events") or [] if isinstance(e, dict) and e.get("task") == task and e.get("kind") == "task_begun" and e.get("owner_direction")]
     text = begun[0].get("owner_direction") if begun else _dict(state.get("task_owner_directions")).get(task)
     return " ".join(str(text or "").split())
 
 
 def _company_of_agent(state: dict[str, Any], agent_id: Any) -> str:
+    """Return the company name (via company_of) for the vendor of the agent identified by agent_id in state.
+
+    Output is "" when agent_id is unknown or the agent has no vendor
+    recorded.
+    """
     agent = _dict(_dict(state.get("agents")).get(str(agent_id or "")))
     return company_of("", agent.get("vendor") or "")
 
 
 def _is_final(review: dict[str, Any]) -> bool:
+    """Return whether review's phase is "final_acceptance" (a whole-task review, not a chunk review)."""
     return review.get("phase") == "final_acceptance"
 
 
 def _fresh_structure(c: dict[str, Any], review: dict[str, Any]) -> bool:
+    """Return whether review still belongs to context c's current structure revision.
+
+    Output is true when c has no recorded structure revision at all, or
+    when review's own structure_revision matches it; false means the task's
+    shape changed after review ran.
+    """
     return not c["structure"] or int(review.get("structure_revision") or 0) == c["structure"]
 
 
@@ -1054,6 +1211,12 @@ def _judged_text(review: dict[str, Any]) -> str:
 
 
 def _early_facts(c: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
+    """Build the timeline rows for steps 1-11 (describe, requirements, tests-first) from context c.
+
+    c is the bundle built by _ctx. Return: a dict mapping step number to
+    (tag, headline, detail lines), covering only the steps for which a
+    board fact was actually found.
+    """
     state, task, cc, pcc = c["state"], c["task"], c["cc"], c["pcc"]
     confirmed = bool(c["conf"].get("text"))
     labels = [x for x in cc.get("labels") or [] if isinstance(x, dict)]
@@ -1144,11 +1307,24 @@ def _early_facts(c: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
 
 
 def _deviation_line(item: dict[str, Any]) -> str:
+    """Return a plain-language description of one builder-questioned test deviation item.
+
+    Output names the questioned check, the builder's stated reason, and
+    the reviewer's resolution (replaced the test, kept it with a reason, or
+    not yet answered).
+    """
     answer = "changed the test" if item.get("status") == "replaced" else f"kept it: {item.get('answer_reason') or ''}" if item.get("status") == "kept" else "has not answered yet"
     return f"The builder said test {item.get('check')} did not match reality: {item.get('why')}. The reviewer {answer}."
 
 
 def _late_facts(c: dict[str, Any], real: bool, rejected: bool) -> dict[int, tuple[str, str, list[str]]]:
+    """Build the timeline rows for steps 22-26 (final review through acceptance) from context c.
+
+    real marks whether the owner's acceptance is a real, governed one and
+    rejected marks whether the owner rejected the release; both shape how
+    step 26 is described. Return: a dict mapping step number to (tag,
+    headline, detail lines).
+    """
     state, task, release, decision = c["state"], c["task"], c["release"], c["decision"]
     out: dict[int, tuple[str, str, list[str]]] = {}
     finals = [r for r in c["reviews"] if _is_final(r)]
@@ -1191,6 +1367,12 @@ def _late_facts(c: dict[str, Any], real: bool, rejected: bool) -> dict[int, tupl
 
 
 def _areas(c: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return context c's work areas (subtasks, chunks, or one single area) with their own reviews.
+
+    Output is a list of dicts with id, title, done, kind, and reviews; a
+    task with neither subtasks nor more than one chunk produces one
+    unlabeled area holding every non-final review.
+    """
     facts, state = c["facts"], c["state"]
     plain = [r for r in c["reviews"] if not _is_final(r)]
     plan, mode = c["plan"], facts["mode"]
@@ -1207,6 +1389,13 @@ def _areas(c: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _cycle_facts(c: dict[str, Any], area: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
+    """Build the timeline rows for one work cycle (steps 12-21: build, review rounds, repair) for area.
+
+    c is the context from _ctx; area is one entry from _areas, supplying
+    the reviews scoped to that work area. Return: a dict mapping step
+    number to (tag, headline, detail lines) for the steps this area has
+    evidence for.
+    """
     state, task = c["state"], c["task"]
     reviews = area["reviews"]
     judged = [r for r in reviews if r.get("status") in ("passed", "failed")]
@@ -1276,7 +1465,7 @@ def timeline(state: dict[str, Any], task: str, st: dict[str, Any], facts: dict[s
     """The 26 steps as a list of rows in display order (work cycles repeated per work area). Exactly one row is Now unless the task is finished.
 
     Row: key, n, title, who, status (done/now/next/skipped/gap/earlier/not_recorded), tag, text (one plain line), detail (what happened,
-    plain sentences), area (the band it sits in), fold ('' shown, 'skipped' or 'later' collapsed), owner (this Now row needs you)."""
+    plain sentences), area (the band it sits in), fold ('' shown; 'skipped', 'later' or 'if_needed' collapsed), owner (this Now row needs you)."""
     c = _ctx(state, task, facts)
     cur = int(st["step"])
     status = g["status"]
@@ -1299,6 +1488,17 @@ def timeline(state: dict[str, Any], task: str, st: dict[str, Any], facts: dict[s
     rows: list[dict[str, Any]] = []
 
     def add(n: int, key: str, fact: tuple[str, str, list[str]] | None, state_now: int | None, area_label: str, title: str | None = None) -> None:
+        """Append one timeline row for step n to the enclosing rows list.
+
+        key uniquely identifies the row (plain step number, or area-prefixed
+        for a repeated work cycle); fact is the (tag, headline, detail) tuple
+        from the early/late/cycle facts, or None when nothing was found;
+        state_now is the step currently considered "Now" (or None if the
+        task is finished); area_label names which work-area band the row
+        belongs to; title overrides the default step_title(n) when given.
+        Returns nothing; the effect is that one more row dict is added to
+        rows.
+        """
         row_status = _status_for(n, fact, state_now, rejected)
         if row_status == "next" and n == 26 and title == "Accepted":
             text, detail = "Your approval is recorded.", ["Your approval is recorded."]
@@ -1333,17 +1533,28 @@ def timeline(state: dict[str, Any], task: str, st: dict[str, Any], facts: dict[s
         governed = bool(_dict(state.get("task_repositories")).get(task)) or task in _dict(state.get("git_acceptances"))
         title = ("Accepted, not in main yet" if status == "ACCEPT SAVED, NOT IN MAIN YET" or (status == "OWNER ACCEPTED" and not real) else None if governed else "Accepted") if n == 26 else None
         add(n, str(n), late.get(n), now_step, "", title)
-    # collapse: skipped steps under one line; only the next two steps stay open
+    # collapse: skipped steps under one line; repair, the second round and the last retry (19-21) only happen after a failed
+    # round 1, so until that round has a result they fold as "if needed" and are not counted as steps to come (owner 2026-11-04:
+    # a 14-part task showed "128 more steps to come"); of the real next steps only the first two stay open
+    by_area: dict[str, dict[int, dict[str, Any]]] = {}
+    for row in rows:
+        by_area.setdefault(row["area"], {})[row["n"]] = row
     shown_next = 0
     for row in rows:
         if row["status"] == "skipped":
             row["fold"] = "skipped"
         elif row["status"] == "next":
+            if row["n"] in (19, 20, 21) and by_area[row["area"]].get(18, {}).get("status") == "next":
+                row["fold"] = "if_needed"
+                continue
             shown_next += 1
             if shown_next > 2:
                 row["fold"] = "later"
+    # parts (chunks or work areas) nothing has started on: their build-test-review steps (13-21; 12, the plan, is one for all) are real steps to come
+    parts_left = sum(1 for label, here in by_area.items() if label and all(here[n]["status"] == "next" for n in range(13, 22) if n in here))
     counts = {"done": sum(1 for r in rows if r["status"] in ("done", "earlier")), "skipped": sum(1 for r in rows if r["fold"] == "skipped"),
-              "later": sum(1 for r in rows if r["fold"] == "later")}
+              "later": sum(1 for r in rows if r["fold"] == "later"), "if_needed": sum(1 for r in rows if r["fold"] == "if_needed"),
+              "parts_left": parts_left}
     return {"steps": rows, "counts": counts, "earlier": rejected, "areas": len(areas) if len(areas) > 1 else 0, "finished": finished,
             "now_step": None if finished else cur}
 
@@ -1355,6 +1566,11 @@ RED_WORDS = {"fails_before": ("Failed before the work (good)", "good"), "passes_
 
 
 def _candidate(c: dict[str, Any]) -> dict[str, Any] | None:
+    """Return context c's newest review that recorded a reviewed_commit, or None if none did.
+
+    This is the review whose saved version is used as "the newest saved
+    version" for the Proof tab's "passing now" comparison.
+    """
     saved = [r for r in c["reviews"] if r.get("reviewed_commit")]
     return saved[-1] if saved else None
 

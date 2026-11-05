@@ -61,11 +61,20 @@ class Resolved:
 
 
 def declaration_path(root: Any) -> Path:
+    """Return the path to this project's test environment declaration.json file, under root's test-env storage."""
     from harness.project_context import project_context
     return project_context(root).storage_path("test-env") / DECLARATION_NAME
 
 
 def load(root: Any) -> dict[str, Any] | None:
+    """Read root's test environment declaration file and return it as a dict, or None when nothing was declared.
+
+    Args:
+        root: the project whose declaration file (declaration_path) is read.
+
+    Returns: the parsed declaration dict, or None if the file does not exist. Raises TestEnvError if the
+    file exists but cannot be read or parsed.
+    """
     try:
         value = json.loads(declaration_path(root).read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -76,6 +85,15 @@ def load(root: Any) -> dict[str, Any] | None:
 
 
 def _relative(value: Any, label: str) -> str:
+    """Normalise value to a project-relative path and return it, using label to name the field in any refusal.
+
+    Args:
+        value: the raw path text to check and normalise.
+        label: the human-readable field name used in the TestEnvError message.
+
+    Returns: the normalised relative path ("." when value is empty). Raises TestEnvError when value is
+    absolute, a drive path, or contains "..".
+    """
     text = str(value or "").strip().replace("\\", "/")
     if not text or text.startswith("/") or re.match(r"^[A-Za-z]:", text) or ".." in Path(text).parts:
         raise TestEnvError(f"{label} must be a folder path relative to the code, without \"..\" (got {text[:80]!r})")
@@ -106,6 +124,14 @@ def validate(raw: Any) -> dict[str, Any]:
 
 
 def save(root: Any, raw: Any) -> dict[str, Any]:
+    """Validate raw and atomically write it as root's test environment declaration, then return its public view.
+
+    Args:
+        root: the project whose declaration file is written.
+        raw: the unvalidated declaration data to normalise and persist.
+
+    Returns: the saved declaration as shown by public() (file-sourced secrets replaced by their source).
+    """
     declared = validate(raw)
     path = declaration_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +150,16 @@ def public(declared: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _file_value(path: str, key: str, name: str) -> str:
+    """Read the file at path and return the single value assigned to key on a `key=value` line, using name in refusals.
+
+    Args:
+        path: the absolute file path to read lines from.
+        key: the variable name to find on a `key=value` (optionally `export key=value`) line.
+        name: the declared environment variable's name, used only in TestEnvError messages.
+
+    Returns: the unquoted value found for key. Raises TestEnvError when the file cannot be read or key
+    does not appear exactly once with a value.
+    """
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -142,6 +178,13 @@ def _file_value(path: str, key: str, name: str) -> str:
 
 
 def _secret_parts(value: str) -> list[str]:
+    """Return the substrings of value worth scrubbing from output: value itself and, when value is a URL, its password.
+
+    Args:
+        value: the declared variable's resolved text to inspect for a URL password.
+
+    Returns: a list of value (and the URL password, if any) that are at least 4 characters long.
+    """
     parts = [value]
     if "://" in value:
         try:
@@ -209,6 +252,7 @@ def apply(environment: Mapping[str, str], resolved: Resolved | None) -> dict[str
 
 
 def workdir_of(resolved: Resolved | None) -> str:
+    """Return resolved's declared working folder, or "." when resolved is None (nothing declared)."""
     return resolved.workdir if resolved is not None else "."
 
 

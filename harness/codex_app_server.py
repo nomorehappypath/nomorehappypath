@@ -207,11 +207,20 @@ class WebSocketConnection:
     """The server side of one RFC 6455 connection: text frames in and out."""
 
     def __init__(self, connection: socket.socket) -> None:
+        """Wrap connection as a WebSocket peer, with a send lock and closed flag.
+
+        Return: none; the effect is initializing connection, send_lock, and closed.
+        """
         self.connection = connection
         self.send_lock = threading.Lock()
         self.closed = False
 
     def handshake(self, timeout: float = 10.0) -> None:
+        """Read the HTTP upgrade request and reply with the RFC 6455 accept handshake.
+
+        timeout bounds how long to wait for the request. Return: none; the effect
+        is sending the 101 Switching Protocols response, or raising ProtocolError.
+        """
         self.connection.settimeout(timeout)
         request = b""
         while b"\r\n\r\n" not in request:
@@ -234,6 +243,7 @@ class WebSocketConnection:
         self.connection.settimeout(None)
 
     def _exact(self, count: int) -> bytes:
+        """Read and return exactly count bytes from connection, raising EOFError if it closes first."""
         data = b""
         while len(data) < count:
             chunk = self.connection.recv(count - len(data))
@@ -277,6 +287,10 @@ class WebSocketConnection:
             raise ProtocolError(f"unsupported WebSocket opcode {opcode}")
 
     def _send(self, opcode: int, payload: bytes) -> None:
+        """Frame payload with opcode and write it to connection under send_lock.
+
+        Return: none; the effect is sending one WebSocket frame.
+        """
         length = len(payload)
         if length < 126:
             header = bytes([0x80 | opcode, length])
@@ -288,9 +302,14 @@ class WebSocketConnection:
             self.connection.sendall(header + payload)
 
     def send_text(self, text: str) -> None:
+        """Send text to the peer as one WebSocket text frame. Return: none."""
         self._send(0x1, text.encode("utf-8"))
 
     def close(self) -> None:
+        """Close the connection, sending a close frame first if not already closed.
+
+        Return: none; the effect is marking closed and shutting down connection.
+        """
         if self.closed:
             return
         self.closed = True
@@ -318,6 +337,16 @@ class CodexMultiplexer:
         expected_policy: dict[str, Any] | None = None,
         launch_settings: dict[str, Any] | None = None,
     ) -> None:
+        """Configure the multiplexer; start() does the actual process and socket setup.
+
+        socket_path is the Unix socket the TUI connects to; app_server_argv starts
+        the Codex app-server; environment and cwd set its process environment and
+        working directory; admit decides whether a connecting pid is this session's
+        TUI; peer_pid resolves a connection's pid; on_event reports lifecycle and
+        error events; expected_policy is the sandbox/approval policy a thread must
+        report to be handed to the TUI; launch_settings gives the session's model
+        and effort. Return: none; the effect is initializing all instance state.
+        """
         self.socket_path = socket_path
         self.expected_policy = expected_policy
         self.launch_settings = dict(launch_settings) if launch_settings else None   # {"model", "effort"} of this session
@@ -352,6 +381,11 @@ class CodexMultiplexer:
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
+        """Launch the Codex app-server, bind the Unix socket listener, and start the relay threads.
+
+        Return: none; the effect is populating server, listener, and the
+        background accept/server-loop threads.
+        """
         # Its own process group, so stop() ends the node wrapper AND the native
         # binary it starts. HARNESS_MANAGED_SESSION in its environment still
         # lets the session sweep find it if the supervisor itself is killed.
@@ -379,6 +413,11 @@ class CodexMultiplexer:
             self._threads.append(thread)
 
     def stop(self) -> None:
+        """Shut down the multiplexer: close the TUI connection, the listener, and the app-server.
+
+        Return: none; the effect is terminating the app-server process group and
+        removing the socket file.
+        """
         with self.lock:
             self.stopped = True
             self.lock.notify_all()
@@ -406,10 +445,16 @@ class CodexMultiplexer:
                 pass
 
     def alive(self) -> bool:
+        """Return whether the app-server process is still running and not stopped."""
         return not self.stopped and self.server is not None and self.server.poll() is None
 
     # -- relay ---------------------------------------------------------------
     def _accept_loop(self) -> None:
+        """Accept incoming socket connections, admitting only this session's TUI.
+
+        Return: none; the effect is handing each admitted connection its own
+        TUI relay thread, and closing every other connection.
+        """
         while not self.stopped:
             try:
                 connection, _ = self.listener.accept()
@@ -439,6 +484,10 @@ class CodexMultiplexer:
             self._threads.append(thread)
 
     def _write_server(self, message: dict[str, Any]) -> None:
+        """Encode message as a JSON line and write it to the app-server's stdin.
+
+        Return: none; raises OSError when the app-server is not running.
+        """
         server = self.server
         if server is None or server.poll() is not None:
             raise OSError("the Codex app-server is not running")
@@ -448,6 +497,12 @@ class CodexMultiplexer:
             server.stdin.flush()
 
     def _tui_loop(self, peer: WebSocketConnection) -> None:
+        """Relay messages from the TUI connection peer to the app-server.
+
+        Policy-bearing parameters are stripped before forwarding, and the harness's
+        own request ids are never let through for the TUI to answer. Return: none;
+        the effect runs until peer closes or the app-server write fails.
+        """
         while True:
             try:
                 text = peer.receive()
@@ -476,6 +531,11 @@ class CodexMultiplexer:
                 return
 
     def _server_loop(self) -> None:
+        """Read the app-server's stdout, route each message, and relay it to the TUI.
+
+        Return: none; the effect runs until the app-server's stdout ends, then
+        fires the "ended" event.
+        """
         server = self.server
         for raw in server.stdout:
             try:
@@ -512,6 +572,10 @@ class CodexMultiplexer:
         self.on_event("ended", "the Codex app-server exited")
 
     def _to_tui(self, message: dict[str, Any]) -> None:
+        """Forward message to the connected TUI, if any, as a text frame.
+
+        Return: none; a closed or missing TUI silently drops message.
+        """
         peer = self.tui
         if peer is None or peer.closed:
             return
@@ -522,6 +586,11 @@ class CodexMultiplexer:
 
     # -- observation ---------------------------------------------------------
     def _observe_response(self, method: str, message: dict[str, Any]) -> None:
+        """Update initialized/thread_id/policy state from an app-server response to method.
+
+        Return: none; the effect is recording initialize/thread/start/resume results
+        from message and firing the "thread" event when a new thread id is seen.
+        """
         result = message.get("result")
         if not isinstance(result, dict):
             return
@@ -535,6 +604,11 @@ class CodexMultiplexer:
             self.lock.notify_all()
 
     def _observe_notification(self, message: dict[str, Any]) -> None:
+        """Track thread/turn lifecycle and steered-message delivery from a server notification.
+
+        Return: none; the effect is updating thread_id, active_turn, thread_busy,
+        ended_turns, steered, steer_seen, and steer_dropped from message.
+        """
         method, params = message.get("method"), message.get("params") or {}
         with self.lock:
             if method == "thread/started" and _session_thread(params.get("thread")):
@@ -566,6 +640,11 @@ class CodexMultiplexer:
 
     # -- the harness's own requests -------------------------------------------
     def request(self, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
+        """Send a harness-tagged JSON-RPC request (method, params) and wait for its response.
+
+        Return: the response message. Raises TimeoutError when no answer arrives
+        within timeout seconds or the app-server stops.
+        """
         with self.lock:
             self.next_id += 1
             identifier = f"{HARNESS_ID_PREFIX}{self.next_id}"
@@ -689,6 +768,11 @@ class DeliveryWorker:
     """
 
     def __init__(self, multiplexer: CodexMultiplexer, *, response_timeout: float, receipt_timeout: float) -> None:
+        """Set up a worker that delivers through multiplexer with the given timeouts.
+
+        response_timeout and receipt_timeout are passed through to each delivery.
+        Return: none; the effect is initializing current, outcome, and lock.
+        """
         self.multiplexer = multiplexer
         self.response_timeout = response_timeout
         self.receipt_timeout = receipt_timeout
@@ -697,15 +781,26 @@ class DeliveryWorker:
         self.lock = threading.Lock()
 
     def busy(self) -> bool:
+        """Return whether a delivery is currently in progress."""
         with self.lock:
             return self.current is not None
 
     def submit(self, item: dict[str, Any], text: str, *, retry: bool = False) -> None:
+        """Start delivering text for item on a background thread.
+
+        retry marks this as a retry, so already_delivered is checked first.
+        Return: none; the effect is starting the delivery thread and marking current.
+        """
         with self.lock:
             self.current = item
         threading.Thread(target=self._run, args=(item, text, retry), daemon=True).start()
 
     def _run(self, item: dict[str, Any], text: str, retry: bool) -> None:
+        """Deliver text for item through the multiplexer and record the outcome.
+
+        retry, when true, first checks already_delivered before sending again.
+        Return: none; the effect is storing (item, result) in outcome.
+        """
         client = f"harness-{item['id']}"
         if retry and self.multiplexer.already_delivered(client, self.response_timeout):
             result = "delivered"
@@ -717,6 +812,7 @@ class DeliveryWorker:
             self.current = None
 
     def take_outcome(self) -> tuple[dict[str, Any], str] | None:
+        """Return and clear the last recorded delivery outcome, or None if none is pending."""
         with self.lock:
             outcome, self.outcome = self.outcome, None
             return outcome

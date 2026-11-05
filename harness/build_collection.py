@@ -55,12 +55,14 @@ RETRY_SECONDS = 300
 
 class BuildError(ValueError):
     def __init__(self, message: str, klass: str = "output"):
+        """Build a ValueError carrying message as the text and klass as the failure class (falling back to "output" when klass is not one of CLASSES). Return: none."""
         super().__init__(message)
         self.klass = klass if klass in CLASSES else "output"
 
 
 # -- declaration -------------------------------------------------------------------------------------
 def valid_name(name: Any) -> str:
+    """Check that name is a usable output file name (no folders, no Windows device stem, not manifest.json) and return it as a plain string."""
     value = str(name or "")
     stem = value.split(".", 1)[0].lower()
     if not NAME_PATTERN.fullmatch(value) or value.endswith(".") or stem in WINDOWS_RESERVED or value.lower() == MANIFEST_NAME:
@@ -71,6 +73,7 @@ def valid_name(name: Any) -> str:
 
 
 def _text(label: str, value: Any) -> str:
+    """Collapse value's whitespace into a single-spaced string, raising when it is empty or longer than TEXT_LIMIT, using label to name the field in the error. Return the cleaned text."""
     text = " ".join(str(value or "").split())
     if not text:
         raise BuildError(f"The build declaration needs {label}.", "declaration")
@@ -80,6 +83,7 @@ def _text(label: str, value: Any) -> str:
 
 
 def validate_declaration(outputs: list[Any], platform: Any, requirements: Any, steps: list[Any], expect: Any, with_web_app: bool = False) -> dict[str, Any]:
+    """Validate a build declaration: outputs (at most MAX_OUTPUTS distinct names), platform, requirements, at most MAX_STEPS steps, and what the owner should expect, plus whether with_web_app applies. Return the cleaned declaration dict."""
     names = [valid_name(item) for item in outputs or []]
     if not names:
         raise BuildError("The build declaration needs at least one --output <file name>.", "declaration")
@@ -101,10 +105,12 @@ def validate_declaration(outputs: list[Any], platform: Any, requirements: Any, s
 
 
 def declaration_digest(declaration: dict[str, Any]) -> str:
+    """Return the SHA-256 hex digest of declaration's canonical (sorted, compact) JSON encoding."""
     return hashlib.sha256(json.dumps(declaration, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def declared_names(declaration: dict[str, Any]) -> list[str]:
+    """Return the list of output names recorded in declaration's "outputs" entries, in their declared order."""
     return [str(item.get("name") or "") for item in declaration.get("outputs") or []]
 
 
@@ -152,12 +158,14 @@ def task_component(task: str) -> str:
 
 
 def _remote_dir(task: str, sha256: str) -> str:
+    """Build the remote folder path (under REMOTE_ROOT) that holds task's build keyed by sha256, after checking sha256 looks like a SHA-256. Return the path string."""
     if not re.fullmatch(r"[0-9a-f]{64}", str(sha256)):
         raise BuildError("The certified digest is not a SHA-256.", "output")
     return f"{REMOTE_ROOT}/{task_component(task)}/{sha256}"
 
 
 def _posix_script(task: str, name: str, sha256: str) -> str:
+    """Build the POSIX shell command that checks, on a Unix test machine, that output name of task/sha256 is a real file in real (non-link) folders and prints its hash and size with a MARKER line. Return the shell command string."""
     directory = _remote_dir(task, sha256)
     task_dir = f"{REMOTE_ROOT}/{task_component(task)}"
     root, file = shlex.quote(REMOTE_ROOT), shlex.quote(f"{directory}/{name}")
@@ -172,6 +180,7 @@ def _posix_script(task: str, name: str, sha256: str) -> str:
 
 
 def _windows_script(task: str, name: str, sha256: str) -> str:
+    """Build the PowerShell script that checks, on a Windows test machine, that output name of task/sha256 is a real file in real (non-reparse-point) folders and prints its hash and size with a MARKER line. Return the script string."""
     root = REMOTE_ROOT
     directory = _remote_dir(task, sha256).replace("/", "\\")
     parent = f"{REMOTE_ROOT}\\{task_component(task)}"
@@ -188,15 +197,18 @@ def _windows_script(task: str, name: str, sha256: str) -> str:
 
 
 def scp_program() -> str:
+    """Return the scp executable to run: the HARNESS_TEST_MACHINE_SCP override if set, otherwise plain "scp"."""
     return os.environ.get("HARNESS_TEST_MACHINE_SCP", "") or "scp"
 
 
 def _paths(root) -> dict[str, Path]:
+    """Return the project root's test-machine "key" and "known_hosts" file paths as a dict."""
     directory = test_machine.machine_dir(root)
     return {"key": directory / "key", "known_hosts": directory / "known_hosts"}
 
 
 def _key_options(known_hosts: Path, key: Path) -> list[str]:
+    """Build the list of scp/ssh option flags that pin the connection to known_hosts and key alone (no agent, no X11, no password). Return the option list."""
     return [
         "-o", "IdentitiesOnly=yes", "-o", f"UserKnownHostsFile={known_hosts}", "-o", "GlobalKnownHostsFile=/dev/null",
         "-o", "StrictHostKeyChecking=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ForwardAgent=no",
@@ -207,6 +219,7 @@ def _key_options(known_hosts: Path, key: Path) -> list[str]:
 
 
 def _usable(root) -> dict[str, Any]:
+    """Check that the project root's test machine is usable, raising a machine-class BuildError if not. Return the machine's recorded facts dict."""
     ok, code, message = test_machine.usability(root)
     if not ok:
         raise BuildError(message or "The test machine is not usable.", "machine")
@@ -214,6 +227,7 @@ def _usable(root) -> dict[str, Any]:
 
 
 def _remaining(deadline: float | None, limit: float) -> float:
+    """Return the smaller of limit and the seconds left before deadline (or limit itself when deadline is None), raising a machine-class BuildError once deadline has passed."""
     if deadline is None:
         return limit
     left = deadline - time.monotonic()
@@ -307,6 +321,7 @@ def fetch(root, task: str, name: str, sha256: str, destination: Path, size_cap: 
 
 
 def _kill(process: subprocess.Popen) -> None:
+    """Send SIGTERM to process's whole process group, escalating to SIGKILL if it has not exited within 5 seconds. Returns nothing; the effect is on process's state."""
     try:
         os.killpg(process.pid, 15)
     except OSError:
@@ -322,6 +337,7 @@ def _kill(process: subprocess.Popen) -> None:
 
 
 def _hash_file(path: Path) -> tuple[str, int]:
+    """Read path in chunks and compute its SHA-256. Return a (hex digest, byte count) tuple."""
     digest, total = hashlib.sha256(), 0
     with path.open("rb") as handle:
         while True:
@@ -335,6 +351,7 @@ def _hash_file(path: Path) -> tuple[str, int]:
 
 # -- the store ------------------------------------------------------------------------------------------
 def store_root(root) -> Path:
+    """Look up the manager-owned, agent-unwritable builds store for the project at root, raising a storage-class BuildError if none exists. Return the store's path."""
     store = project_registry.trusted_project_store(root, namespace="builds")
     if store is None:
         raise BuildError("This project has no manager-owned store for builds (it is not registered with Mission Control, or the store would lie inside "
@@ -343,15 +360,18 @@ def store_root(root) -> Path:
 
 
 def _task_folder(root, task: str) -> Path:
+    """Return the build store's per-task folder for task under root, built from the task's trusted record name with the ".json" suffix stripped."""
     return store_root(root) / project_registry.trusted_record_name(task)[:-5]
 
 
 def manifest_digest(manifest: dict[str, Any]) -> str:
+    """Return the SHA-256 hex digest of manifest's canonical (sorted, compact) JSON encoding."""
     return hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 @contextlib.contextmanager
 def _collection_lock(folder: Path) -> Iterator[None]:
+    """Context manager that takes an exclusive file lock on folder's ".lock" file, waiting up to 60 seconds and raising a machine-class BuildError on timeout. Yields control to the caller's block; the effect is released when the block exits."""
     descriptor = os.open(folder / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         deadline = time.monotonic() + 60
@@ -443,12 +463,14 @@ def collect(root, task: str, expected: dict[str, dict[str, Any]], metadata: dict
 
 
 def manifest_path(root, task: str, manifest_id: str) -> Path:
+    """Check that manifest_id has the collected-build id shape, then return the path to task's MANIFEST_NAME file under root's store for that manifest_id."""
     if not re.fullmatch(r"b-[0-9a-f]{16}", str(manifest_id)):
         raise BuildError("That is not a build id.", "declaration")
     return _task_folder(root, task) / manifest_id / MANIFEST_NAME
 
 
 def read_manifest(root, task: str, manifest_id: str, expected_digest: str) -> dict[str, Any]:
+    """Load task's manifest_id manifest from the store under root, checking its digest matches expected_digest (the board's recorded value). Return the parsed manifest dict."""
     path = manifest_path(root, task, manifest_id)
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))

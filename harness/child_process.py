@@ -92,6 +92,14 @@ LIVE_BOARD_ENV = "HARNESS_CERTIFIED_BOARD"
 
 
 def with_live_board(environment: Mapping[str, str], live_root: object) -> dict[str, str]:
+    """Copy environment and add the resolved live board data root under LIVE_BOARD_ENV.
+
+    Args:
+        environment: The source mapping of environment variables to copy.
+        live_root: The live board root passed to project_context to resolve its data_root.
+
+    Return: A new dict containing environment's entries plus the LIVE_BOARD_ENV key.
+    """
     from harness.project_context import project_context
     values = dict(environment)
     values[LIVE_BOARD_ENV] = str(Path(project_context(live_root).data_root).resolve())

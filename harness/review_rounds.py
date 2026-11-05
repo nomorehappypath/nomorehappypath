@@ -31,6 +31,11 @@ FINDING_EXAMPLE = (
 
 
 def _env_number(name: str, default: int, minimum: int) -> int:
+    """Read an integer environment variable named name, clamped to at least minimum.
+
+    Return: the parsed value, or default when the variable is unset, unparsable,
+    or below minimum.
+    """
     try:
         return max(minimum, int(os.environ.get(name, str(default))))
     except ValueError:
@@ -47,6 +52,7 @@ ANALYSIS_ROUND_LIMIT = 2
 
 
 def limit_for(kind: str) -> int:
+    """Return the round limit that applies for task kind: analysis gets the lower cap."""
     return min(ANALYSIS_ROUND_LIMIT, round_limit()) if kind == "analysis" else round_limit()
 
 
@@ -66,6 +72,7 @@ def recovery_wait_seconds() -> int:
 
 
 def lineage_key(request: dict[str, Any]) -> str:
+    """Return the scope-lineage key for request: its task, phase, subtask, chunk, and structure revision joined."""
     return "|".join(str(request.get(key) or "") for key in ("task", "phase", "subtask", "chunk")) + "|" + str(int(request.get("structure_revision", 0) or 0))
 
 
@@ -96,12 +103,21 @@ def baseline(prior: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def round_number(prior: list[dict[str, Any]], base: dict[str, Any] | None) -> int:
+    """Return the current review round number, counting failures of prior since base.
+
+    When base is falsy, this is round 1; otherwise it is one plus the failed
+    judgments in prior from the base's position onward.
+    """
     if not base:
         return 1
     return 1 + sum(1 for row in prior[base["position"]:] if row.get("status") == "failed")
 
 
 def declaration(summary: Any) -> str:
+    """Extract the text after 'TASK DONE:' from summary.
+
+    Return: the declared text, or "" when summary has no such declaration.
+    """
     found = _DECLARATION.search(str(summary or ""))
     return found.group("what").strip() if found else ""
 
@@ -120,6 +136,7 @@ _ENVIRONMENT_GAP = re.compile(
 
 
 def is_environment_gap(summary: Any) -> bool:
+    """Return whether summary is a testing gap caused by the reviewer's own environment."""
     return is_testing_gap(summary) and bool(_ENVIRONMENT_GAP.search(str(summary or "")))
 
 
@@ -129,19 +146,26 @@ ENVIRONMENT_GAP_MESSAGE = ("{task}: the review could not run one check because t
 
 
 def _first_line_says_yes(summary: Any) -> bool:
+    """Return whether summary's first non-blank line declares TASK DONE: YES."""
     text = str(summary or "").lstrip(" \t\r\n>*-#`\"'")
     return text.upper().startswith("TASK DONE: YES")
 
 
 def _words(text: Any) -> str:
+    """Return text lower-cased with runs of whitespace collapsed to single spaces."""
     return " ".join(str(text or "").lower().split())
 
 
 def _correction(problem: str, fix: str) -> ValueError:
+    """Build a ValueError describing problem and the fix for it.
+
+    Return: the ValueError, left for the caller to raise.
+    """
     return ValueError(f"the review verdict was not recorded: {problem}. To fix it: {fix}")
 
 
 def _tag(raw: dict[str, Any], label: str) -> str:
+    """Validate and return raw's harm_tag, using label to name it in any correction raised."""
     tag = str(raw.get("harm_tag") or "").strip().lower()
     if tag in {"", "none"}:
         return ""
@@ -151,6 +175,12 @@ def _tag(raw: dict[str, Any], label: str) -> str:
 
 
 def _paired_ok(paired: Any, context: dict[str, Any], request: dict[str, Any]) -> bool:
+    """Check that paired names a valid earlier-failing / now-passing evidence pair.
+
+    paired must carry command, earlier_commit, earlier_result, repaired_commit, and
+    repaired_result; context supplies the set of known commits and request gives the
+    reviewed commit the repair is checked against. Return: whether the pair is valid.
+    """
     if not isinstance(paired, dict):
         return False
     need = ("command", "earlier_commit", "earlier_result", "repaired_commit", "repaired_result")
@@ -162,6 +192,16 @@ def _paired_ok(paired: Any, context: dict[str, Any], request: dict[str, Any]) ->
 
 
 def _normalize(raw: Any, number: int, base: dict[str, Any] | None, context: dict[str, Any], request: dict[str, Any], summary: str) -> dict[str, Any]:
+    """Validate and normalize one submitted finding, raising a correction if malformed.
+
+    raw is the finding's own-numbered JSON (number identifying its position in the
+    submitted list); base is the round-1 baseline, if any; context carries the round
+    number plus the known passing checks, criteria, requirements text, and waivers;
+    request is the review request being judged; summary is the reviewer's full verdict
+    text, used to fill a missing harm/summary line for a tagged finding.
+    Return: the normalized finding dict, with id, harm_tag, category, summary, harm,
+    regression_check, evidence_ref, and letter filled in.
+    """
     if not isinstance(raw, dict):
         raise _correction(f"finding {number} is not an object", f"send it as JSON like {FINDING_EXAMPLE}")
     identifier = str(raw.get("id") or "").strip()
@@ -320,6 +360,13 @@ def request_fields(decision: dict[str, Any], summary: str, submitted: list[dict[
 
 # ---- the escalation record: derived from completed judgments, durable, per scope lineage -------------------------------------
 def recovery_brief(entry: dict[str, Any], blockers: list[dict[str, Any]], summary: str, resolutions: dict[str, str]) -> str:
+    """Build the one-shot repair brief for the fresh Delivery attempt on entry.
+
+    blockers are the still-open findings to list; summary is the reviewer's last
+    verdict text, quoted as data; resolutions maps a finding id to what the last
+    repair claimed to have fixed, when the reviewer still found it failing.
+    Return: the brief text, as lines joined with newlines.
+    """
     lines = [f"This part of {entry['task']} has failed independent review {entry['failed_judgments']} times. You are the one fresh attempt: you have none of the earlier conversation, so read this once and fix everything below in a single repair."]
     for member in blockers:
         line = f"- {member.get('id', '')}: {member.get('summary', '')} | harm: {member.get('harm', '')} | reproduce: {member.get('regression_check', '')}"
@@ -332,6 +379,7 @@ def recovery_brief(entry: dict[str, Any], blockers: list[dict[str, Any]], summar
 
 
 def outcome_text(entry: dict[str, Any], reason: str = "") -> str:
+    """Return the plain could-not-finish message for entry, naming reason if given."""
     if entry.get("who") == "reviewer":
         return (f"Could not finish: this part could not be fully tested, even after one fresh Reviewer on the model chosen in Settings tried{(' (' + reason + ')') if reason else ''}. "
                 "Nothing from this part was released and the harness will not retry it by itself. Other work continues.")
@@ -341,6 +389,7 @@ def outcome_text(entry: dict[str, Any], reason: str = "") -> str:
 
 
 def analysis_outcome_text(entry: dict[str, Any]) -> str:
+    """Return the plain could-not-finish message for a Code analysis entry."""
     ids = ", ".join(entry.get("open_ids") or []) or "the reviewer's last findings"
     return (f"Could not finish: this Code analysis failed {entry.get('failed_judgments', 0)} independent reviews and an analysis gets no more. The report is kept "
             f"in the task's work copy with the reviewer's unresolved findings ({ids}); it is NOT independently verified and nothing was released. "
@@ -445,6 +494,7 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def terminal_for(escalations: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return escalations entries for task whose status is could_not_finish."""
     return [e for e in (escalations or {}).values() if e.get("task") == task and e.get("status") == "could_not_finish"]
 
 

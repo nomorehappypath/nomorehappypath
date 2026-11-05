@@ -37,6 +37,7 @@ LIVENESS_SECONDS = 2.0
 
 
 def _running(pid: int) -> bool:
+    """Check whether the process identified by pid is still alive. Return True if it is running or if permission is denied (which implies it exists), and False if it has exited."""
     try:
         os.kill(pid, 0)
         return True
@@ -47,6 +48,7 @@ def _running(pid: int) -> bool:
 
 
 def _peer_pid(connection: socket.socket) -> int:
+    """Look up the process id of the peer on the other end of connection. Return 0 if the platform lookup raises an OSError."""
     from harness import platform_support
     try:
         return platform_support.process_identity().peer_process_id(connection)
@@ -105,6 +107,7 @@ def _is_ancestor(candidate: int, pid: int, hops: int = 32) -> bool:
 
 
 def serve(handover: str, inbox: str, token: str, transcript: str) -> int:
+    """Run the relay loop: connect to the supervisor over handover, verify it is an ancestor of whoever is listening on inbox, then forward each request the supervisor sends as a message posted with token, replying over the transcript-tagged connection until the supervisor or the inbox listener goes away. Return an exit code: 0 for a clean end, 2 if the supervisor fails the ancestor check."""
     probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         probe.settimeout(5)

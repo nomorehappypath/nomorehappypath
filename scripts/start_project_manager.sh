@@ -13,6 +13,7 @@ worker_port="8741"
 migrate_root=""
 open_browser=1
 
+# Takes no arguments. Prints the command's usage text to stdout.
 usage() {
   cat <<'EOF'
 Usage: start_project_manager.sh [--home HARNESS_HOME] [--port PORT]
@@ -24,6 +25,8 @@ separate private loopback port but is exposed only below /project/ on this app.
 EOF
 }
 
+# Takes one argument, a candidate port string. Exit status 0 when it is a number from 1 to
+# 65535; no stdout output.
 valid_port() {
   [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1 && "$1" -le 65535 ]]
 }
@@ -54,6 +57,8 @@ chmod 700 "$home"
 url="http://127.0.0.1:${port}/"
 manager_pid=""
 
+# Takes no arguments (reads $harness_root). Prints a string combining the git commit and a
+# hash of harness/'s source bytes to stdout, used to detect when a restart is needed.
 source_revision() {
   local source_digest git_commit
   source_digest="$(python3 -E - "$harness_root" <<'PY'
@@ -81,6 +86,8 @@ PY
   printf '%s:%s' "$git_commit" "$source_digest"
 }
 
+# Takes no arguments (reads $home, $port, $worker_port, $migrate_root). Launches project_manager.py
+# in the background and records its pid in $manager_pid; no stdout output of its own.
 start_manager() {
   local arguments=(--home "$home" --port "$port" --board-port "$worker_port")
   if [[ -n "$migrate_root" ]]; then
@@ -90,6 +97,8 @@ start_manager() {
   manager_pid=$!
 }
 
+# Takes no arguments (reads $manager_pid). Kills the running manager process and waits for it to
+# exit; no stdout output.
 cleanup() {
   trap - EXIT INT TERM
   if [[ -n "$manager_pid" ]]; then
@@ -99,12 +108,17 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Takes no arguments (reads $url). Exit status 0 when the manager answers an HTTP request with
+# its expected page content; no stdout output.
 manager_ready() {
   local page
   page="$(curl --disable --noproxy '*' --silent --fail --connect-timeout 2 --max-time 10 "$url" 2>/dev/null)" || return 1
   [[ "$page" == *"NoMoreHappyPath"* ]]
 }
 
+# Takes no arguments (reads $manager_pid, $HARNESS_MANAGER_START_TIMEOUT). Polls manager_ready
+# until it succeeds or the timeout elapses. Exit status 0 if it became ready, 1 on timeout or
+# an early process exit; no stdout output.
 wait_for_manager() {
   # The manager reads every project's board before it answers; a big board on a
   # busy machine needs far more than a few seconds (2026-10-15). Wall-clock

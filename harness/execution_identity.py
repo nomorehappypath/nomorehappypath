@@ -63,12 +63,14 @@ def accepted_success_policy_versions() -> tuple[int, ...]:
 
 
 def _sha(value: Any) -> str:
+    """Hash value as canonical sorted-key, separator-stripped JSON with sha256. Return the hex digest."""
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
 def _file_sha(path: Path) -> str:
+    """Hash the bytes of path with sha256 if it is a regular file. Return the hex digest, or an empty string when path does not exist as a file."""
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
 
 
@@ -76,6 +78,7 @@ def candidate_evidence_identity(
     commit: str, tree: str, contract_revision: str,
     artifact_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Build the CandidateEvidenceIdentity for commit, tree, contract_revision and artifact_digests. Return a dict with kind, the canonical fields and their sha256 identity digest."""
     fields = {
         "commit": str(commit), "tree": str(tree),
         "contract_revision": str(contract_revision),
@@ -95,6 +98,7 @@ def run_candidate_identity(commit: str, tree: str, artifact_digests: dict[str, s
 
 
 def runtime_versions() -> dict[str, str]:
+    """Collect the interpreter and platform details that make a command run environment-specific. Return a dict of python version, implementation, system, machine and the agent read paths setting."""
     return {
         "python": ".".join(str(v) for v in sys.version_info[:3]),
         "implementation": sys.implementation.name,
@@ -118,6 +122,7 @@ def command_run_identity(
     browser: dict[str, str] | None = None,
     machine: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build the CommandRunIdentity for candidate, the structured argv run in cwd with environment_sha256, lockfile_digests, runtime, role, gate, browser and machine. Return a dict with kind, the canonical fields and their sha256 identity digest; raise ValueError if argv is not a list of strings."""
     if not isinstance(argv, (list, tuple)) or not all(isinstance(a, str) for a in argv):
         raise ValueError("argv must be a structured list of strings, never a shell string")
     fields = {
@@ -141,6 +146,7 @@ def command_run_identity(
 def scenario_certification(
     run: dict[str, Any], ledger_sha256: str, scenario_id: str,
 ) -> dict[str, Any]:
+    """Build the ScenarioCertification linking a command run to ledger_sha256 and scenario_id. Return a dict with kind, the canonical fields and their sha256 identity digest."""
     fields = {
         "command_run_sha256": str(run.get("sha256", "")),
         "ledger_sha256": str(ledger_sha256),
@@ -150,10 +156,12 @@ def scenario_certification(
 
 
 def _store_path(root: Path) -> Path:
+    """Locate the execution store file inside the board directory under root. Return its path."""
     return board.board_dir(root) / STORE_NAME
 
 
 def _store_output(root: Path, payload: bytes, digest: str) -> str:
+    """Persist payload as a content-addressed execution artifact under root, named by digest, verifying payload actually hashes to digest and that an existing file with that name is byte-identical. Return the string path of the stored artifact."""
     if hashlib.sha256(payload).hexdigest() != digest:
         raise ValueError("execution output digest does not match the supplied bytes")
     directory = board.board_dir(root) / "execution-artifacts"
@@ -170,6 +178,7 @@ def _store_output(root: Path, payload: bytes, digest: str) -> str:
 
 
 def load_output(entry: dict[str, Any]) -> str:
+    """Read back the stored output artifact referenced by a certified execution store entry, verifying its digest and that it decodes as UTF-8. Return the output text; raise ValueError if the artifact is missing, unreadable, corrupt or not valid UTF-8."""
     path_value = str(entry.get("output_path") or "")
     if not path_value:
         raise ValueError("certified execution has no reusable output artifact")
@@ -187,6 +196,7 @@ def load_output(entry: dict[str, Any]) -> str:
 
 
 def _read_entries(path: Path) -> list[dict[str, Any]]:
+    """Read and parse every JSON line record out of the execution store at path, checking that the file is not torn, is valid UTF-8, and each record is complete JSON with an identity_sha256. Return the list of parsed entries, or an empty list if path does not exist; raise ValueError on any corruption."""
     if not path.is_file():
         return []
     try:
@@ -213,6 +223,7 @@ def _read_entries(path: Path) -> list[dict[str, Any]]:
 
 @contextmanager
 def _store_lock(root: Path, *, exclusive: bool) -> Iterator[Path]:
+    """Context manager that takes an flock on the execution store's lock file under root, exclusive or shared as exclusive says, waiting up to STORE_LOCK_WAIT_SECONDS before giving up. Yield the store's path while held; raise ValueError if the wait times out."""
     directory = board.board_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".execution-store.lock").open("a+", encoding="utf-8") as handle:
@@ -236,6 +247,7 @@ def _store_lock(root: Path, *, exclusive: bool) -> Iterator[Path]:
 
 
 def _entries(root: Path) -> list[dict[str, Any]]:
+    """Read all entries from the execution store under root while holding a shared lock. Return the list of entries."""
     with _store_lock(root, exclusive=False) as path:
         return _read_entries(path)
 
@@ -243,6 +255,7 @@ def _entries(root: Path) -> list[dict[str, Any]]:
 def _lookup_entries(
     entries: list[dict[str, Any]], identity: dict[str, Any], *, any_result: bool,
 ) -> dict[str, Any]:
+    """Search entries for an exact match of identity's kind and sha256, honoring any_result to decide whether a failed exact match still counts as a hit, and otherwise track the nearest same-kind entry by field overlap to explain a miss. Return a dict describing a "hit" with its entry, or a "miss" with the reason and diverged_fields."""
     target_fields = identity["fields"]
     nearest: tuple[int, dict[str, Any] | None] = (-1, None)
     exact_failure = False

@@ -43,10 +43,12 @@ class InjectedCrash(RuntimeError):
 
 
 def _journal_path(root: Path) -> Path:
+    """Locate the coordinator's append-only journal file inside the board directory under root. Return its path."""
     return board.board_dir(root) / JOURNAL_NAME
 
 
 def _journal(root: Path, record: dict[str, Any]) -> None:
+    """Append record, stamped with the current time, as one JSON line to the coordinator journal under root. Returns nothing; the effect is the durable journal entry."""
     path = _journal_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"at": board.now(), **record}
@@ -55,6 +57,7 @@ def _journal(root: Path, record: dict[str, Any]) -> None:
 
 
 def _journal_records(root: Path, task: str, commit: str) -> list[dict[str, Any]]:
+    """Read the coordinator journal under root and filter it down to the records matching task and commit, skipping any unparseable line. Return the matching records in file order, or an empty list if the journal does not exist."""
     path = _journal_path(root)
     if not path.is_file():
         return []
@@ -86,6 +89,7 @@ def _incident(root: Path, task: str, step: str, error: str) -> None:
 
 @contextmanager
 def _coordination_lock(root: Path) -> Iterator[None]:
+    """Context manager giving single-flight, cross-process mutual exclusion over coordinator passes under root via an flock on a lock file. Yields nothing; the effect is simply holding the exclusive lock for the duration of the with-block."""
     path = board.board_dir(root) / ".release-coordinator.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+", encoding="utf-8") as handle:
@@ -97,6 +101,7 @@ def _coordination_lock(root: Path) -> Iterator[None]:
 
 
 def _file_digest(value: str) -> str:
+    """Hash the file named by value with sha256 if it exists and is readable. Return the hex digest, or an empty string if value is blank, the path is not a file, or reading it raises OSError."""
     path = Path(str(value or ""))
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
@@ -107,6 +112,7 @@ def _file_digest(value: str) -> str:
 def _coordination_identity(
     state: dict[str, Any], task: str, request: dict[str, Any], repo: Path,
 ) -> str:
+    """Compute a stable identity digest for the current coordination round of task, combining the board state, request, repo and the coordinator's own code so any relevant change forces re-coordination. Return the sha256 hex digest of the canonicalized fields."""
     repository_value = str(state.get("task_repositories", {}).get(task) or "")
     repository = Path(repository_value) if repository_value else repo
     fields = {
@@ -144,6 +150,7 @@ def _route_prepared(
     root: Path, state: dict[str, Any], task: str, commit: str,
     checks_path: Path, coordination_key: str,
 ) -> bool:
+    """Notify the active CTO agent that the release for task at commit is prepared, using root and state to find the live CTO session, and checks_path plus coordination_key to avoid repeating the same instruction while the CTO is already working it. Return True if an active CTO was found and notified (or already notified under this key), False if there is no active CTO session to route to or sending the instruction failed."""
     cto_agent = next((
         agent for agent in state.get("agents", {}).values()
         if agent.get("role") == "cto" and agent.get("active") and agent.get("session_id")
@@ -253,6 +260,7 @@ def _collect_declared_build(root: Path, state: dict[str, Any], task: str, reques
 
 
 def _coordinatable_tasks(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Scan state for tasks that passed final acceptance, are not cancelled, and whose development is complete (either a development_complete event after the pass, or no developer agent still active on the task). Return the list of (task, request) pairs eligible for this coordination pass."""
     cancelled = state.get("cancelled_tasks") or {}
     found: list[tuple[str, dict[str, Any]]] = []
     for task, request in board.unreleased_final_passes(state):
