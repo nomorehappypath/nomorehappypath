@@ -2418,6 +2418,7 @@ function openDirectionStart(launched){
   el('#owner-message-submit').textContent='Send direction and start the agents';
   const saved=readPendingDirection();
   {const kind=saved&&(saved.taskKind||(saved.documentOnly?'spec':''));if(kind)storeTaskKind(kind);setTaskKindField(true);}
+  {const split=el('#owner-message-split');if(split){split.hidden=false;el('#owner-message-allow-split').checked=!!(saved&&saved.allowSplit===true);}}   // the first direction may allow a split too (stranger run 2026-11-05: the box was hidden here)
   el('#owner-message-text').value=saved?saved.text:''; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
   el('#owner-message-dialog').showModal();
 }

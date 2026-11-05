@@ -83,6 +83,9 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "create-contract", "contract-evidence",
     # Owner 2026-10-21: a program built on the test machine reaches the owner; Delivery declares it and may collect it.
     "declare-build", "collect-build",
+    # 2026-11-05 (stranger run): Delivery declares the project's test environment itself; it built the virtual environment the tests
+    # need and waited four hours for a CTO that never came. One person on one computer has no separate environment keeper.
+    "test-env-set",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
     "contract-checks", "ask-owner", "contract-check-skip",
@@ -116,7 +119,8 @@ REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "screen-check", "screen-script",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
-    # 2026-10-28: only the CTO (and the owner at the terminal) declares the project's test environment; the Reviewer may run a capture in it.
+    # 2026-10-28: the CTO (and the owner at the terminal) declares the project's test environment; the Reviewer may run a capture in it.
+    # Since 2026-11-05 Delivery declares it too (see DELIVERY_OPERATIONS).
     "test-env-set", "test-env-run",
     "contract-checks", "ask-owner", "contract-check-skip",   # contract-checks is read-only: the CTO can see what a failing early check says
     "analysis-merge",   # 2026-10-29: the CTO only groups the duplicates of a Code analysis; the board builds the clean list

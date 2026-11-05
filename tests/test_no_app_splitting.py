@@ -72,6 +72,17 @@ class FormFieldTests(unittest.TestCase):
         self.assertEqual(fields["allow_split"], "1")
         self.assertEqual(fields["task_kind"], "development")
 
+class FirstDirectionDialogTests(unittest.TestCase):
+    def test_the_first_direction_dialog_shows_the_split_box_too(self):
+        # Stranger run 2026-11-05: "Send direction and start the agents" opened the dialog with the box hidden.
+        from harness import board_viewer
+        source = board_viewer.PAGE if hasattr(board_viewer, "PAGE") else open(board_viewer.__file__, encoding="utf-8").read()
+        start = source.index("function openDirectionStart(")
+        body = source[start:source.index("el('#owner-message-dialog').showModal();", start)]
+        self.assertIn("split.hidden=false", body)
+        self.assertIn("saved.allowSplit===true", body)
+
+
 class RouteAndBrowserTests(unittest.TestCase):
     """The owner's box reaches the board through the real form route and the real dialog (round 1: the parser dropped it)."""
     from tests.test_long_directive_ui import LongDirectiveUITests as _Long

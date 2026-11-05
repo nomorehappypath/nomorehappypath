@@ -142,7 +142,7 @@ def is_environment_gap(summary: Any) -> bool:
 
 ENVIRONMENT_GAP_MESSAGE = ("{task}: the review could not run one check because the reviewer's own environment lacks what the project's tests need "
                            "(its libraries or its test database). That is not a finding about the work and a stronger model would not help, so none is started. "
-                           "The CTO prepares the project's test environment (test-env-set); then Delivery asks for the review again.")
+                           "Delivery prepares the project's test environment (a virtual environment outside the code, recorded with test-env-set); then it asks for the review again.")
 
 
 def _first_line_says_yes(summary: Any) -> bool:
@@ -485,7 +485,7 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
                                if entry.get("who") == "reviewer" else
                                "The harness is starting one fresh Delivery attempt on the model chosen in Settings; nothing to do and the owner is not asked.")
                               if entry["status"] == "recovery" else
-                              "The reviewer could not run a check for want of the project's test environment; no stronger model is started. The CTO prepares it with test-env-set and Delivery asks for the review again; do not repair anything."
+                              "The reviewer could not run a check for want of the project's test environment; no stronger model is started. Delivery prepares it (a virtual environment outside the code, recorded with test-env-set) and asks for the review again; do not repair anything."
                               if entry["status"] == "needs_environment" else
                               "Automatic repair of this part has stopped and nothing of it will be released. Note it in one plain line, keep other work moving, and do not ask the owner."),
                 "outcome": entry.get("outcome", ""),
