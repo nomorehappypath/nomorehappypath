@@ -90,6 +90,19 @@ class WindowCommandTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.open(run_side_effect=side_effect)
 
+    def test_the_screen_session_is_named_by_role_and_an_old_name_is_still_found(self):
+        # Owner 2026-11-05: Terminal's title bar shows the running command, so "screen -r nmhp-claude_reviewer-…" kept naming a vendor.
+        self.assertEqual(defaults.TERMINAL_HOST._screen_name("claude_reviewer-4a21ad3f0a"), "nmhp-reviewer-4a21ad3f0a")
+        self.assertEqual(defaults.TERMINAL_HOST._screen_name("codex_delivery-abc"), "nmhp-developer-abc")
+        self.assertEqual(defaults.TERMINAL_HOST._screen_name("claude_cto-1"), "nmhp-cto-1")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.assertIsNone(defaults.TERMINAL_HOST._live_screen_name(directory, "claude_reviewer-x"))
+            (directory / "7.nmhp-claude_reviewer-x").touch()     # a session started before the change
+            self.assertEqual(defaults.TERMINAL_HOST._live_screen_name(directory, "claude_reviewer-x"), "nmhp-claude_reviewer-x")
+            (directory / "8.nmhp-reviewer-x").touch()
+            self.assertEqual(defaults.TERMINAL_HOST._live_screen_name(directory, "claude_reviewer-x"), "nmhp-reviewer-x", "the new name wins")
+
     def test_view_agent_focuses_only_a_live_attachment(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -370,7 +383,7 @@ class RealTerminalWindowTests(unittest.TestCase):
         sockets = self.data / "control" / "terminal-sockets"
         result = subprocess.run(["/usr/bin/screen", "-ls"], env={**os.environ, "SCREENDIR": str(sockets)}, capture_output=True, text=True, timeout=10)
         for line in result.stdout.splitlines():
-            if "nmhp-" + session_id in line:
+            if defaults.TERMINAL_HOST._screen_name(session_id) in line:
                 return "(Attached)" if "(Attached)" in line else "(Detached)" if "(Detached)" in line else "dead"
         return ""
 
@@ -417,7 +430,7 @@ class RealTerminalWindowTests(unittest.TestCase):
         self.assertTrue(window)
         sockets = self.data / "control" / "terminal-sockets"
         self.wait_screen(session_id, "(Attached)")
-        subprocess.run(["/usr/bin/screen", "-S", "nmhp-" + session_id, "-X", "detach"], env={**os.environ, "SCREENDIR": str(sockets)}, capture_output=True, timeout=10)
+        subprocess.run(["/usr/bin/screen", "-S", defaults.TERMINAL_HOST._screen_name(session_id), "-X", "detach"], env={**os.environ, "SCREENDIR": str(sockets)}, capture_output=True, timeout=10)
         self.assertTrue(self.wait_gone(window), "the detached viewer window stayed open")
         self.assertTrue(self.screen_alive(session_id), "detaching must not end the agent")
         defaults.TERMINAL_HOST._open_screen_view(sockets, session_id, (0, 0, 0))
@@ -435,7 +448,7 @@ class RealTerminalWindowTests(unittest.TestCase):
         first = self.wait_window(title)
         self.assertTrue(first)
         self.wait_screen(session_id, "(Attached)")
-        subprocess.run(["/usr/bin/screen", "-S", "nmhp-" + session_id, "-X", "quit"], env={**os.environ, "SCREENDIR": str(sockets)}, capture_output=True, timeout=10)
+        subprocess.run(["/usr/bin/screen", "-S", defaults.TERMINAL_HOST._screen_name(session_id), "-X", "quit"], env={**os.environ, "SCREENDIR": str(sockets)}, capture_output=True, timeout=10)
         self.assertTrue(self.wait_gone(first), "a stopped agent's window stayed open")
         defaults.TERMINAL_HOST._open_screen_view(sockets, session_id, (0, 0, 0))  # no screen to resume: ends at once
         again = self.wait_window(title, timeout=3)

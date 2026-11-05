@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from harness import board, git_process, workspace_settings
+from harness import board, git_process, test_env, workspace_settings
 from harness.project_context import project_context
 from harness import platform_support
 from harness import browser_acceptance
@@ -163,6 +163,10 @@ def detect_start(source: Path) -> dict[str, str]:
     Runs only when the owner clicks View app: that click is the owner's
     decision to run this candidate. Every command receives its port in PORT.
     """
+    if (source / "start.sh").is_file():
+        # 2026-11-05 (stranger run): a project that ships its own start script is started the way it says (a Streamlit app is
+        # `streamlit run app.py`, not `python3 app.py`); the script receives its port in PORT like every other command.
+        return {"command": "sh start.sh", "reason": "start.sh starts this project"}
     for name in ("app.py", "server.py", "main.py"):
         if (source / name).is_file():
             return {"command": f"python3 {name}", "reason": f"{name} starts this project"}
@@ -656,6 +660,7 @@ class ReleasePreviewSupervisor:
         preview = Preview(task, head_commit, directory)
         preview.requested = requested
         environment = None
+        declared = None
         failure = ""
         run_yourself = ""
         try:
@@ -693,11 +698,21 @@ class ReleasePreviewSupervisor:
             environment = preview_environment(
                 os.environ, {"PORT": str(preview.port), "BROWSER": "true"} if detected else None,
             )
+            if detected:
+                # 2026-11-05 (stranger run): the owner's try-it runs in the project's declared test environment (its interpreter
+                # first on PATH, its variables), the one the review ran in; before, a Streamlit app was started with the computer's
+                # plain Python and died on "No module named streamlit". An unready declaration never stops the try-it.
+                try:
+                    declared = test_env.resolve(self.root, preview.source)
+                except test_env.TestEnvError:
+                    declared = None
+                environment = test_env.apply(environment, declared)
             # Owner, 2026-09-28 14:07: "if running the app crashes, let the
             # mission control give the full command ... the user will run it in
             # the shell." The clean checkout stays until the release closes.
             run_yourself = f"cd {shlex.quote(str(preview.source))} && " + (
-                f"PORT={preview.port} {rendered}" if detected else rendered
+                (f"PATH={shlex.quote(declared.python_dir)}:$PATH " if declared else "") + f"PORT={preview.port} {rendered}"
+                if detected else rendered
             )
             with preview.log_path.open("ab") as log:
                 log.write(f"\n=== preview launch {board.now()} | {rendered}\n".encode())
@@ -712,10 +727,12 @@ class ReleasePreviewSupervisor:
             failure = str(error)[:300]
         if failure:
             preview.stop()
+            # A declared variable may come from a file outside the code (a URL with a password): the candidate's own output can
+            # repeat it, and the board record is read by agents. Scrubbed before it is stored (Codex R1-1, 2026-11-05).
             self._record(task, {
                 "status": "failed", "command": command, "head_commit": head_commit,
-                "workspace": workspace, "branch": branch, "error": failure,
-                "log_tail": _log_tail(preview.log_path), "requested": requested or None,
+                "workspace": workspace, "branch": branch, "error": test_env.scrub(failure, declared),
+                "log_tail": test_env.scrub(_log_tail(preview.log_path), declared), "requested": requested or None,
                 "run_yourself": run_yourself or None,
             })
             return

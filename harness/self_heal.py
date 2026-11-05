@@ -33,6 +33,7 @@ has ended. Deciding is separate from acting so both can be tested directly.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +47,8 @@ REVIEWER_WAIT_SECONDS = 5 * 60
 # terminals that closed days ago).
 ENDED_RECENT_SECONDS = 30 * 60
 MAX_ACTIONS_PER_HOUR = 3
+# Owner 2026-11-05: wake-ups answered with nothing new at the same gate before the ladder stops (the builder's stall pauses the project).
+WAKES_WITHOUT_PROGRESS = 2
 SIGN_IN_WORDS = ("login", "log in", "sign in", "signed out", "logged out", "401", "out of quota")
 STALL_ROLES = set(board.DEVELOPER_ROLES) | {"qa", "cto"}
 # A long executable check keeps its owner exempt from the ladder only this long
@@ -590,8 +593,18 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
                 continue
             if role != "cto" and agent_activity.is_working(session, current, (current - beat).total_seconds(), woken=woken is not None):
                 continue   # the terminal is working (recent output or a growing session file): busy, not silent
+            gate = _progress_gate(agent, resumed)
+            counter = (state.get("stall_wake_counts") or {}).get(key) or {}
+            if counter.get("gate") == gate and int(counter.get("count") or 0) >= WAKES_WITHOUT_PROGRESS:
+                # Owner 2026-11-05 (stranger run): no wake loops. An agent that answers each wake with one poll and nothing new was woken
+                # 82 times in four hours. After two such wakes at the same gate the builder's stall pauses the project with one card;
+                # a quiet Reviewer or CTO is simply left alone until something is routed to it.
+                if not counter.get("stopped_at"):
+                    actions.append({**base, "action": "stall_pause" if role in board.DEVELOPER_ROLES else "stall_stop_waking",
+                                    "gate": gate, "silence": int((current - beat).total_seconds())})
+                continue
             actions.append({**base, "action": "stall_wake", "silence": int((current - beat).total_seconds()),
-                            "since": real.isoformat() if real else "",
+                            "since": real.isoformat() if real else "", "gate": gate,
                             "already_woken_at": woken.isoformat() if woken and (role == "cto" or woken > beat) else ""})
             continue
         # ---- a ladder is in progress ----
@@ -800,6 +813,43 @@ def execute(root: Path, action: dict[str, Any], launch: Callable[[dict[str, Any]
     raise ValueError(f"unknown self-heal action {action['action']!r}")
 
 
+def _progress_gate(agent: dict[str, Any], resumed: datetime | None) -> str:
+    """The point this agent last moved past: its last progress record (or its spawn), or the owner's last Resume when that is later.
+    Wake-ups are counted per gate; a gate that moves means the agent is working and the count starts over."""
+    marks = [_parsed(agent.get("last_progress_at")), _parsed(agent.get("spawned_at")), resumed]
+    latest = max((mark for mark in marks if mark is not None), default=None)
+    return latest.isoformat() if latest else ""
+
+
+def _cost_line(root: Path) -> str:
+    """The project's cost line for the pause card (API-equivalent, information only), or '' when it cannot be computed."""
+    try:
+        from harness import cost_center
+        return cost_center.project_line(cost_center.summarize(board.board_dir(root)))
+    except Exception:
+        return ""
+
+
+def _pause_project(root: Path) -> None:
+    """The owner's Pause, done by the board: quiesce, tell every live terminal, close the write gate, stop the terminals as paused
+    (the same steps as the project manager's pause_project, which this process cannot call)."""
+    pause = board.begin_project_pause(root, 1.0)
+    session_ids = [str(item["id"]) for item in control.snapshot(root).get("sessions", []) if item.get("status") in control.ACTIVE_STATUSES]
+    for session_id in session_ids:
+        try:
+            control.enqueue_instruction(
+                root, session_id,
+                "[SYSTEM CONTROL — project-pause] Project pause requested. Finish the current board write and preserve your saved next action; "
+                "the terminal will stop after the bounded drain window.", source=control.PAUSE_NOTICE_SOURCE)
+        except ValueError:
+            pass   # a session that exits during signalling is reconciled below
+    deadline = _parsed(pause.get("drain_deadline"))
+    if deadline is not None:
+        time.sleep(max(0.0, (deadline - _now()).total_seconds()))
+    board.finish_project_pause(root)
+    control.pause_sessions(root, session_ids, timeout=3.0)
+
+
 def _minutes(seconds: Any) -> str:
     """Format seconds as a human-readable minute count, never less than one minute. Return: a string like '5 minutes'."""
     minutes = max(int(seconds or 0) // 60, 1)
@@ -898,11 +948,43 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
                     board.count_cto_wake(root, "recovery", task)
             except (OSError, ValueError) as error:
                 tried = f"the wake-up could not be delivered ({str(error)[:120]})"
+        gate = str(action.get("gate") or "")
+        with board.locked_state(root) as state:
+            counts = state.setdefault("stall_wake_counts", {})
+            before = counts.get(key) or {}
+            counts[key] = {"gate": gate, "count": (int(before.get("count") or 0) + 1) if before.get("gate") == gate else 1}
         _ladder_event(root, action, "wake",
                       f"{agent_words[0].upper() + agent_words[1:]} has not checked the board for {_minutes(silence)}. Step 1 of 3: {tried}. "
                       "The CTO does not need to do its work and the owner does not need to act.",
                       task=task, silence_seconds=silence)
         return {"action": name, "stall_key": key, "step": "wake"}
+    if name in {"stall_pause", "stall_stop_waking"}:
+        gate = str(action.get("gate") or "")
+        with board.locked_state(root) as state:
+            counts = state.setdefault("stall_wake_counts", {})
+            if (counts.get(key) or {}).get("stopped_at"):
+                return {"action": name, "stall_key": key, "duplicate": True}
+            counts[key] = {**(counts.get(key) or {}), "gate": gate, "stopped_at": at}
+            last_word = " ".join(str(((state.get("agents") or {}).get(action.get("agent_id", "")) or {}).get("status_note") or "").split())[:300]
+        who = agent_words[0].upper() + agent_words[1:]
+        quiet = f"since {gate[:16].replace('T', ' ')} UTC" if gate else "for a while"
+        if name == "stall_stop_waking":
+            _ladder_event(root, action, "stop_waking",
+                          f"{who} answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new ({quiet}; its last word: {last_word or 'none'}). "
+                          "The harness stops waking it; the next request routed to it wakes it, and nothing is lost.", task=task)
+            return {"action": name, "stall_key": key, "step": "stop_waking"}
+        cost = _cost_line(root)
+        message = (f"{who} has made no progress {quiet} and answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new. "
+                   f"Its last word: {last_word or 'none'}. The project is paused so nothing more is spent"
+                   f"{' (' + cost + ')' if cost else ''}. Open its terminal or tell the CTO what to do, then press Resume.")
+        with board.locked_state(root) as state:
+            live = (state.get("agents") or {}).get(action.get("agent_id", ""))
+            board._event(state, "stall_paused", live, {"task": task, "self_heal_key": action["self_heal_key"], "message": message})
+            if live is not None:
+                board._record_owner_action(state, live, f"{who} is stuck: the project is paused to stop spending"[:240], "",
+                                           message[:800], task, kind="agent", for_agent=str(live.get("id")))
+        _pause_project(root)
+        return {"action": name, "stall_key": key, "step": "paused"}
     steps = list(entry.get("steps") or [])
     if name == "stall_relaunch_resume":
         try:

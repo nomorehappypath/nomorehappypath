@@ -6150,6 +6150,10 @@ def _store_status(state: dict[str, Any], agent: dict[str, Any], note: str, state
         agent.update({"status": state_name, "status_note": stored_note, "last_status_at": now()})
         wake_pending = agent.get("role") == "cto" and agent.get("recovery_state") in CTO_WAKE_ANSWERED_STATES
         event = _event(state, "status_update", agent, {"task": agent["task"], "state": state_name, "message": stored_note})
+        if state_name == "blocked" and agent.get("role") in DEVELOPER_ROLES:
+            # 2026-11-05 (stranger run): a blocked builder's words reach the CTO as a stuck item (cto_wakes.EVENT_REASONS);
+            # before, they sat in the status line while the stall ladder woke the builder every five minutes for four hours.
+            _event(state, "delivery_blocked", agent, {"task": agent["task"], "message": f"Delivery is blocked: {stored_note}"[:600]})
         _flag_ready_claim(state, agent, note)
         if wake_pending:
             # A board write from the CTO refutes "not responding": it is alive and logged in, and the wake is answered.
@@ -11521,7 +11525,7 @@ def _close_gaps_for(state: dict[str, Any], task: str, outcome: str, scope_key: s
 
 
 def test_env_set(root: ProjectRoot, declaration: str, who: str = "owner") -> dict[str, Any]:
-    """Declare the project's test environment (the owner or the CTO; never Delivery or the Reviewer). See harness/test_env.py."""
+    """Declare the project's test environment (Delivery, the CTO or the owner; never the Reviewer). See harness/test_env.py."""
     try:
         raw = json.loads(declaration)
     except (TypeError, ValueError) as error:
@@ -16147,7 +16151,8 @@ def qa_result(
                                "Request review again for the same scope with a changes summary that says so, and wait. Nobody asks the owner anything.")
             elif escalation.get("status") == "needs_environment":
                 routed_text = (f"Independent review {request_id} could not run one check because the reviewer's environment lacks the project's libraries or test database. "
-                               "That is not a finding about your work: do not repair anything. The CTO prepares the project's test environment; request review again for the same scope when it is ready.")
+                               "That is not a finding about your work: do not repair anything. Prepare the project's test environment yourself (a virtual environment outside the code "
+                               "with the project's libraries, recorded with test-env-set --agent <your id>), then request review again for the same scope.")
             elif escalation.get("status") == "recovery":
                 routed_text = (f"Independent review {request_id} FAILED for the {escalation.get('failed_judgments')}th time. The harness is starting one fresh Delivery attempt "
                                "for this part with a precise brief; do not start another repair of it. Nobody asks the owner anything.")

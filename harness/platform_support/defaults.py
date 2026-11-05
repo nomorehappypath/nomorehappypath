@@ -875,10 +875,32 @@ end run'''
 
     @staticmethod
     def _screen_name(session_id):
-        """Validate session_id and return the GNU screen session name derived from it."""
+        """Validate session_id and return the GNU screen session name for a new session: nmhp-<role>-<unique part>.
+
+        macOS Terminal shows the running command in its title bar, so the name is role-based ("nmhp-reviewer-4a21ad3f0a"), never
+        the old slot name that named a vendor ("nmhp-claude_reviewer-…"; owner 2026-11-05). Role words: developer, reviewer, cto.
+        """
         if not session_id or any(not (character.isalnum() or character in '_-') for character in session_id):
             raise ValueError('Invalid managed session identity.')
-        return 'nmhp-' + session_id
+        role = role_title(session_id).lower()
+        return 'nmhp-' + (role + '-' + session_id.split('-', 1)[-1] if role and '-' in session_id else session_id)
+
+    @classmethod
+    def _screen_names(cls, session_id):
+        """Every name this session's screen may have: the role-based one, then the pre-change one (nmhp-<session id>)."""
+        new = cls._screen_name(session_id)
+        legacy = 'nmhp-' + session_id
+        return [new] if new == legacy else [new, legacy]
+
+    @classmethod
+    def _live_screen_name(cls, directory, session_id):
+        """The name of this session's existing screen socket under directory, or None when none is live."""
+        if not directory.is_dir():
+            return None
+        for name in cls._screen_names(session_id):
+            if list(directory.glob('*.' + name)):
+                return name
+        return None
 
     @staticmethod
     def _note_viewer_failure(directory, session_id, error):
@@ -901,7 +923,7 @@ end run'''
                   'exec "$3" "$4" --log "$5" --title "$6" --exit-code "$code"')
         helper = Path(__file__).resolve().parent / 'agent_window.py'
         command = 'exec ' + shlex.join([
-            '/bin/sh', '-c', script, 'nmhp-view', str(directory), self._screen_name(session_id),
+            '/bin/sh', '-c', script, 'nmhp-view', str(directory), self._live_screen_name(directory, session_id) or self._screen_name(session_id),
             sys.executable, str(helper), str(Path(directory).parent / 'terminal-close.log'), title,
         ])
         subprocess.run(['/usr/bin/osascript', '-e', self._open_script(color_rgb, title), command],
@@ -931,8 +953,8 @@ end run'''
         if root is not None:
             from harness.project_context import project_context
             directory = project_context(root).storage_path('control', 'terminal-sockets')
-            name = self._screen_name(session['id'])
-            if directory.is_dir() and list(directory.glob('*.' + name)):
+            name = self._live_screen_name(directory, session['id'])
+            if name:
                 title = window_title(session['id'])
                 # A live attachment only: its tab still runs `screen -r`. Not `busy`: Terminal never counts
                 # sh or screen as busy, so a live view read as not busy and View agent opened a duplicate
@@ -981,8 +1003,8 @@ end run'''
             raise ValueError(self._SCREEN_GONE)
         from harness.project_context import project_context
         directory = project_context(root).storage_path('control', 'terminal-sockets')
-        name = self._screen_name(session_id)
-        if not directory.is_dir() or not list(directory.glob('*.' + name)):
+        name = self._live_screen_name(directory, session_id)
+        if not name:
             raise ValueError(self._SCREEN_GONE)
         try:
             # -p 0: a detached session has no current window, so -X needs the window named.

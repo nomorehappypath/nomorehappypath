@@ -58,7 +58,7 @@ class ViewAgentInputTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def cleanup(self):
-        subprocess.run(["/usr/bin/screen", "-S", "nmhp-" + self.session_id, "-X", "quit"],
+        subprocess.run(["/usr/bin/screen", "-S", defaults.TERMINAL_HOST._screen_name(self.session_id), "-X", "quit"],
                        env={**os.environ, "SCREENDIR": str(self.sockets)}, capture_output=True, timeout=10)
         shutil.rmtree(self.base, ignore_errors=True)
 
@@ -94,9 +94,9 @@ class ViewAgentInputTests(unittest.TestCase):
         native.assert_called_once()
 
     def test_input_that_cannot_be_delivered_is_a_plain_error_not_a_crash(self):
-        subprocess.run(["/usr/bin/screen", "-S", "nmhp-" + self.session_id, "-X", "quit"],
+        subprocess.run(["/usr/bin/screen", "-S", defaults.TERMINAL_HOST._screen_name(self.session_id), "-X", "quit"],
                        env={**os.environ, "SCREENDIR": str(self.sockets)}, capture_output=True, timeout=10)
-        self.assertTrue(self.wait_for(lambda: not list(self.sockets.glob("*." + "nmhp-" + self.session_id))))
+        self.assertTrue(self.wait_for(lambda: not list(self.sockets.glob("*." + defaults.TERMINAL_HOST._screen_name(self.session_id)))))
         with self.assertRaisesRegex(ValueError, "live terminal is unavailable"):
             agent_view.send_input(self.root, self.session_id, "x")
         with self.assertRaisesRegex(ValueError, "live terminal is unavailable"):

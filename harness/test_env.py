@@ -5,8 +5,9 @@ Delivery's ledger, the Reviewer's ledger and the release check ran the project's
 libraries (Acremuse: sqlmodel, fastapi, psycopg) could not be tested by the Reviewer at all, and the builder pasted the test-database password
 into its files to make a test run.
 
-The owner or the CTO prepares an environment with ordinary tools (a virtual environment holding the project's third-party libraries) and declares
-it once with `test-env-set`: the interpreter, the working folder inside the code, and the variables the tests need (a value may come from a file
+Delivery, the CTO or the owner prepares an environment with ordinary tools (a virtual environment holding the project's third-party libraries)
+and declares it once with `test-env-set` (Delivery since 2026-11-05: it builds that environment anyway, and one person on one computer has no
+separate environment keeper): the interpreter, the working folder inside the code, and the variables the tests need (a value may come from a file
 outside the code, so it is never written anywhere). For each governed run the harness puts that interpreter first on PATH, sets the variables,
 runs from the working folder, adds the environment to the run's identity (so a stored pass is not reused after the environment, the
 declaration or a value changes) and hides the secret values from the output it shows. A project that declares nothing is untouched.
@@ -30,13 +31,16 @@ RESERVED_NAMES = {"PATH", "HOME", "ENV", "SHELL", "IFS", "CDPATH", "VIRTUAL_ENV"
 RESERVED_PREFIXES = ("PYTHON", "LD_", "DYLD_", "BASH_", "ZDOTDIR", "GIT_", "HARNESS_", "NMHP_")
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 SCRUBBED = "[hidden]"
-HOW_TO_PREPARE = ("ask the CTO to prepare it: create a virtual environment outside the project's code folders with the project's libraries "
-                  "(for example `uv sync --frozen --no-install-project`), then record it with `test-env-set`")
+HOW_TO_PREPARE = ("prepare it (Delivery, the CTO or the owner): create a virtual environment outside the project's code folders with the project's "
+                  "libraries (for example `uv venv <folder> && uv pip install --python <folder>/bin/python -r requirements.txt`), then record it with "
+                  "`test-env-set --declaration '{\"python\": \"<folder>/bin/python\"}'`")
 
 
 MISSING_LIBRARY = re.compile(r"No module named|ModuleNotFoundError")
 MISSING_LIBRARY_ADVICE = (" The tests ran with the computer's plain Python and a library they need is not installed there (a project's own libraries live in a prepared "
-                          "test environment). The CTO prepares it with test-env-set, then Delivery asks for the review again; this is not a failure of the tests themselves.")
+                          "test environment). Delivery prepares it: a virtual environment outside the code with the project's libraries, recorded with "
+                          "test-env-set --agent <its id> --declaration '{\"python\": \"<the environment's python>\"}'; then it asks for the review again. "
+                          "This is not a failure of the tests themselves.")
 
 
 def missing_library_advice(output: Any) -> str:

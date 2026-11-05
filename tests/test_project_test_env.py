@@ -120,7 +120,7 @@ class ResolutionTests(Fixture):
 
     def test_a_missing_interpreter_is_one_plain_sentence_naming_what_to_do(self):
         self.declare(python=str(self.base / "nowhere" / "bin" / "python3"))
-        with self.assertRaisesRegex(test_env.TestEnvError, "not ready.*ask the CTO to prepare it"):
+        with self.assertRaisesRegex(test_env.TestEnvError, "not ready.*prepare it \(Delivery, the CTO or the owner\)"):
             self.resolve()
 
 
@@ -137,7 +137,7 @@ class LibraryTests(Fixture):
         (empty / "bin").mkdir(parents=True)
         (empty / "bin" / "python3").symlink_to(sys.executable)
         self.declare(python=str(empty / "bin" / "python3"))
-        with self.assertRaisesRegex(test_env.TestEnvError, "not ready.*ask the CTO to prepare it"):
+        with self.assertRaisesRegex(test_env.TestEnvError, "not ready.*prepare it \(Delivery, the CTO or the owner\)"):
             self.resolve()
 
 
@@ -241,7 +241,7 @@ class BoardIntegrationTests(Fixture):
     def test_an_unready_environment_is_refused_in_plain_words_before_anything_runs(self):
         from harness import board
         self.declare_here(python=str(self.base / "nowhere" / "bin" / "python3"))
-        with self.assertRaisesRegex(ValueError, "not ready.*ask the CTO to prepare it"):
+        with self.assertRaisesRegex(ValueError, "not ready.*prepare it \(Delivery, the CTO or the owner\)"):
             board._execute_internal_qa("python3 -m unittest tests.test_probe", self.root)
 
     def test_a_declaration_changed_after_the_request_is_not_run_against_the_old_identity(self):
