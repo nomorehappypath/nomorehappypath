@@ -643,8 +643,13 @@ def launch(
         "HOME": str(runtime / "home"), "TMPDIR": str(runtime / "tmp"),
         "XDG_CACHE_HOME": str(runtime / "cache"), "XDG_CONFIG_HOME": str(runtime / "home" / ".config"),
     })
+    confined = platform_support.browser_host().confined_by_harness()
     args = [
-        binary, "--headless=new", "--disable-gpu", "--no-first-run",
+        # Graphics (2026-11-05, second stranger run): with graphics off a page's WebGL drawing (a deck.gl or Mapbox map, a
+        # 3-D chart) is a blank rectangle, and three review rounds ended "not tested" because the Reviewer could not see a
+        # map the owner would see. The browser draws WebGL in software (SwiftShader: no GPU, same picture on every machine).
+        # Software WebGL needs Chrome's own sandbox, so inside the harness's confinement (sandbox off) graphics stay off.
+        binary, "--headless=new", "--disable-gpu" if confined else "--enable-unsafe-swiftshader", "--no-first-run",
         "--no-default-browser-check", "--disable-extensions", "--disable-sync",
         "--disable-background-networking", "--password-store=basic", "--use-mock-keychain",
         f"--user-data-dir={runtime / 'profile'}", f"--disk-cache-dir={runtime / 'cache'}",
@@ -655,7 +660,7 @@ def launch(
         # confines it, and the URL is already limited to loopback. Codex's
         # sandbox also refuses the Mach service Chrome's child processes meet
         # through (review 2026-09-28 B1), so the renderer stays in-process.
-        *(platform_support.browser_host().confined_browser_args() if platform_support.browser_host().confined_by_harness() else []),
+        *(platform_support.browser_host().confined_browser_args() if confined else []),
         *extra_args, url,
     ]
     # Everything from here to the successful return holds two locks. Any escape

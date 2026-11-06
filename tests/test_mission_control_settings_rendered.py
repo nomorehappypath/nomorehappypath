@@ -57,7 +57,7 @@ class RenderedSettingsTests(RenderedCase):
         home.mkdir()
         body = PAGE.replace("${OLD_IDS}", json.dumps(OLD_IDS)).replace("${ROLE_IDS}", json.dumps(ROLE_IDS))
         result = self.run_probe(self.manager_url(home), body, path="/?page=settings", height=1400)
-        self.assertEqual(result["sections"], ["Who does the work", "Safety nets", "Costs", "Project chat key", "Advanced (time limits, review input limits, check-in timing)"])
+        self.assertEqual(result["sections"], ["Who does the work", "Safety nets", "Costs", "Project chat key", "Warning email", "Advanced (time limits, review input limits, check-in timing)"])
         self.assertEqual(result["roleHeadings"], ["Builder", "Independent reviewer", "CTO"])
         self.assertTrue(all(present for _s, present in result["ids"]["old"]), result["ids"]["old"])
         self.assertTrue(all(present for _s, present in result["ids"]["roles"]), result["ids"]["roles"])
@@ -83,6 +83,34 @@ class RenderedSettingsTests(RenderedCase):
         self.assertIn("different AI company", result["swap"]["note"])
         self.assertIn("must be different AI companies", result["refused"])
         self.assertIn("Not saved.", result["refused"])
+
+    def test_the_warning_email_card_saves_and_never_shows_the_password(self):
+        home = self.base / "home"
+        home.mkdir()
+        body = r"""
+await until(() => document.querySelector('#email-card') && document.querySelector('#email-badge').textContent === 'Off');
+const set = (id, value) => { const node = document.querySelector(id); node.value = value; node.dispatchEvent(new Event('input', {bubbles: true})); };
+set('#email-to', 'owner@example.com'); set('#email-host', 'smtp.example.com'); set('#email-port', '587'); set('#email-user', 'owner@example.com'); set('#email-password', 'pw-never-shown-123');
+document.querySelector('#email-save').click();
+await until(() => document.querySelector('#email-badge').textContent === 'On');
+out.badge = document.querySelector('#email-badge').textContent;
+out.detail = document.querySelector('#email-detail').textContent;
+out.result = document.querySelector('#email-result').textContent;
+out.passwordField = {value: document.querySelector('#email-password').value, placeholder: document.querySelector('#email-password').placeholder};
+out.to = document.querySelector('#email-to').value;
+const copy = document.documentElement.cloneNode(true); copy.querySelectorAll('script').forEach(node => node.remove());
+out.html = copy.outerHTML.includes('pw-never' + '-shown-123');
+"""
+        result = self.run_probe(self.manager_url(home), body, path="/?page=settings", height=1400)
+        self.assertEqual(result["badge"], "On")
+        self.assertIn("owner@example.com", result["detail"])
+        self.assertIn("password is saved", result["detail"])
+        self.assertIn("Saved", result["result"])
+        self.assertEqual(result["passwordField"]["value"], "")
+        self.assertIn("A password is saved", result["passwordField"]["placeholder"])
+        self.assertEqual(result["to"], "owner@example.com")
+        self.assertFalse(result["html"], "the page must never hold the password")
+        self.assertEqual(global_settings.warning_email_password(home), "pw-never-shown-123")
 
     def test_phone_width_has_no_sideways_scroll(self):
         home = self.base / "home"
