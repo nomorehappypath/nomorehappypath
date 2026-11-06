@@ -958,6 +958,19 @@ class ManagerTests(unittest.TestCase):
                 self.connect_other(manager, self.other_project("third"), machine)
             self.assertEqual(caught.exception.code, "machine_in_use")
 
+    def test_the_owner_can_finish_a_setup_an_agent_left_unfinished(self):
+        with self.served() as (base, manager):
+            manager._machine_reconcile_once(self.entry)   # the manager's start-up check runs first, as in the app
+            connected_descriptor(self.context)
+            test_machine.baseline_begin(self.context, "Delivery")
+            self.assertEqual(manager.machine_status(self.entry["id"])["state"], "baseline_incomplete")
+            code, status = self.post(base, self.api(base, "finish-setup"))
+            self.assertEqual(code, 200)
+            self.assertTrue(status["usable"] and status["connected"])
+            self.assertEqual(test_machine.read(self.context)["baseline"]["by"], "owner")
+            code, refused = self.post(base, self.api(base, "finish-setup"))
+            self.assertNotEqual(code, 200, "nothing is left open to finish")
+
     def test_a_machine_held_for_a_project_that_is_not_connected_can_be_released_from_its_status(self):
         with self.served() as (base, manager):
             test_machine.reserve_target(manager.home, self.entry["id"], "10.9.9.9", 22)     # e.g. left by a Connect the app died in

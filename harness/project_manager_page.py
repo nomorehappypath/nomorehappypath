@@ -962,7 +962,7 @@ PAGE = r'''<!doctype html>
       <div class="machine-identity" id="machine-identity" hidden></div>
       <div class="machine-busy" id="machine-busy" hidden><div class="spinner" aria-hidden="true"></div><span id="machine-busy-text"></span></div>
       <p class="form-error" id="machine-error" role="alert" aria-live="polite"></p>
-      <div class="dialog-actions"><button class="button ghost" type="button" id="machine-release" hidden>Release this machine</button><button class="button secondary" type="button" id="machine-check" hidden>Check the machine</button><button class="button secondary" type="button" id="machine-close">Close</button><button class="button" type="submit" id="machine-connect">Connect</button></div>
+      <div class="dialog-actions"><button class="button ghost" type="button" id="machine-release" hidden>Release this machine</button><button class="button secondary" type="button" id="machine-finish" hidden>Mark setup finished</button><button class="button secondary" type="button" id="machine-check" hidden>Check the machine</button><button class="button secondary" type="button" id="machine-close">Close</button><button class="button" type="submit" id="machine-connect">Connect</button></div>
     </form>
   </dialog>
 
@@ -1009,7 +1009,7 @@ PAGE = r'''<!doctype html>
       const where = m.connected ? `${esc(m.user)}@${esc(m.address)}` : '';
       let text;
       if (m.request && m.request.reason && !m.usable) text = `<strong>An agent needs the test machine.</strong> ${esc(m.request.by || 'An agent')} said: ${esc(m.request.reason)}`;
-      else if (m.connected && !m.usable && m.state === 'baseline_incomplete') text = `<strong>Test machine ${where}: tools are being changed.</strong> The agents finish this themselves; nothing for you to do.`;
+      else if (m.connected && !m.usable && m.state === 'baseline_incomplete') text = `<strong>Test machine ${where}: a setup was left unfinished.</strong> A running task finishes it by itself. If nothing is running, open this machine and press Mark setup finished.`;
       else if (m.connected && !m.usable) text = `<strong>Test machine ${where} needs you.</strong> ${esc(m.cause_text || m.message)}`;
       else if (m.connected) text = `<strong>Test machine connected: ${where}</strong>, ${m.ready ? 'ready for testing' : 'agents are still setting it up'}.`;
       else if (m.state === 'not_connected' && !(m.request && m.request.reason)) return {html: '', needs: false};
@@ -2059,7 +2059,7 @@ PAGE = r'''<!doctype html>
         ? `<ul class="machine-steps">${[['scanned', 'Machine identity read'], ['key_published', 'Automatic sign-in set up'], ['verified', 'Automatic sign-in checked']].map(([k, label]) => `<li class="${esc(steps[k] || 'unknown')}">${label}: ${machineStepText[steps[k] || 'unknown']}</li>`).join('')}</ul>` : '';
       let html;
       if (m.connected && m.usable) html = `<strong>Connected: ${esc(m.user)}@${esc(m.address)}</strong>${m.os ? ' (' + esc(m.os) + (m.account_kind ? ', ' + esc(m.account_kind) + ' account' : '') + ')' : ''}.<small>Machine identity ${esc(m.fingerprint)}. ${m.ready ? 'Ready: ' + esc(m.ready_note) : 'Not ready yet: the agents install the tools they need and record them.'}</small><small class="machine-next" id="machine-next">${esc(machineNextStep(machineProject))}</small>`;
-      else if (m.connected && m.state === 'baseline_incomplete') html = `<strong>The agents are changing this machine.</strong><small>They are installing or changing tools on it. There is nothing for you to do while they work; it becomes ready by itself. Do not press Connect now: reconnecting would mean the earlier tests have to be run again. If this stays for a long time, ask Delivery in the project to finish or redo the setup.</small>`;
+      else if (m.connected && m.state === 'baseline_incomplete') html = `<strong>A setup on this machine was left unfinished.</strong><small>An agent started installing or changing tools here and did not mark it finished. If a task is running in the project, it finishes this by itself. If nothing is running, for example because the project is paused, press "Mark setup finished": the tools already on the machine are used as they are. Do not press Connect: it would not fix this and the earlier tests would have to be run again.</small>`;
       else if (m.connected) html = `<strong>${esc(m.cause_text || m.message || 'This machine needs you.')}</strong><small>Enter the password again below and press Connect. Everything else keeps running meanwhile.</small>`;
       else html = `<strong>No machine connected yet.</strong><small>${m.request && m.request.reason ? esc((m.request.by || 'An agent') + ' needs it: ' + m.request.reason) : 'Fill in the three fields below and press Connect.'}</small>`;
       const failed = m.last_attempt && m.last_attempt.ok === false ? `<small><strong>Last attempt:</strong> ${esc(m.last_attempt.message || '')}</small>` : '';
@@ -2069,6 +2069,7 @@ PAGE = r'''<!doctype html>
       q('#machine-prereq').innerHTML = (m.prerequisites || []).map((item) => `<li>${esc(item)}</li>`).join('');
       q('#machine-release').hidden = !(m.connected || m.reserved);   // a machine held for this project can always be let go, connected or not
       q('#machine-check').hidden = !m.connected;
+      q('#machine-finish').hidden = !(m.connected && m.state === 'baseline_incomplete');
       q('#machine-connect').textContent = m.connected ? 'Connect again' : 'Connect';
       if (!onThisComputer) {
         q('#machine-password').disabled = true; q('#machine-connect').disabled = true;
@@ -2157,6 +2158,12 @@ PAGE = r'''<!doctype html>
       }
     }
     q('#machine-form').addEventListener('submit', (event) => { event.preventDefault(); machineConnect(false); });
+    q('#machine-finish').onclick = async () => {
+      q('#machine-error').textContent = ''; machineBusy(true, 'Marking the setup finished');
+      try { renderMachineDialog(await machinePost('finish-setup')); await refresh(); }
+      catch (problem) { q('#machine-error').textContent = problem.message; }
+      finally { machineBusy(false); }
+    };
     q('#machine-check').onclick = async () => {
       q('#machine-error').textContent = ''; machineBusy(true, 'Checking the machine');
       try { const result = await machinePost('check'); q('#machine-error').textContent = result.message; renderMachineDialog(await machinePost('status')); }

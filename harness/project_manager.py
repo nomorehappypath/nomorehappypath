@@ -50,6 +50,7 @@ MANAGER_PORT = 8740
 BOARD_PORT = 8741
 PROJECT_ROUTE = "/project/"
 PROXY_HEADER = "X-Harness-Manager-Proxy"
+MACHINE_SETUP_FINISHED_NOTE = "Setup marked finished by the owner; the tools already on the machine are used as they are."
 PROXY_TOKEN_ENV = "HARNESS_MANAGER_PROXY_TOKEN"
 PROXY_BODY_LIMIT = board.MAX_TOTAL_ATTACHMENT_BYTES + 512 * 1024
 # Studio's board (45 MB of state, ~35k events) needs ~6 s to start on a busy Mac;
@@ -1602,6 +1603,18 @@ class ProjectManager:
         """
         return test_machine.diagnose(self._machine_context(project_id))
 
+    def machine_finish_setup(self, project_id: str) -> dict[str, Any]:
+        """Mark a tool setup that an agent left unfinished as finished, on the owner's word.
+
+        Args:
+            project_id: the id of the project whose machine setup is closed.
+
+        Return: the machine's public status after the change. Raises MachineError
+        when the machine is not connected or no setup is open.
+        """
+        test_machine.baseline_done(self._machine_context(project_id), "owner", MACHINE_SETUP_FINISHED_NOTE)
+        return self.machine_status(project_id)
+
     def machine_release(self, project_id: str) -> dict[str, Any]:
         """Release a project's test machine reservation, cancelling any
         Connect still running and voiding its open scan challenge.
@@ -2277,6 +2290,8 @@ def make_handler(manager: ProjectManager):
                             project_id, value, loopback=peer in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}))
                     if action == "check":
                         return self._send(200, manager.machine_check(project_id))
+                    if action == "finish-setup":
+                        return self._send(200, manager.machine_finish_setup(project_id))
                     if action == "release":
                         return self._send(200, manager.machine_release(project_id))
                     if action == "status":

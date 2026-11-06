@@ -181,15 +181,17 @@ class TestMachineRenderedTests(unittest.TestCase):
             self.assertNotIn("Enter the account password", run["final_text"])
             self.assertNotEqual(test_machine.read(self.context)["host_key"]["fingerprint"], "SHA256:somethingelse")
 
-    def test_while_the_agents_set_the_machine_up_the_dialog_says_there_is_nothing_to_do(self):
+    def test_a_setup_left_unfinished_is_said_plainly_and_the_owner_can_finish_it(self):
         url, manager = self.serve()
         connected_descriptor(self.context, identity=manager.machine_identity, baseline_state="incomplete")
         run = self.walk(url, [
-            {"expect": "tools are being changed"},
+            {"expect": "a setup was left unfinished"},
             {"click": {"text": "Advanced"}},
             {"click": {"selector": "button[data-act='machine']"}},
-            {"expect": "The agents are changing this machine."},
-            {"expect": "nothing for you to do while they work"},
+            {"expect": "A setup on this machine was left unfinished."},
+            {"expect": "Mark setup finished"},
+            {"click": {"text": "Mark setup finished"}},
+            {"expect": "Ready"},
         ])
         self.assert_passed(run)
         self.assertNotIn("Enter the password again below", run["final_text"])
@@ -226,7 +228,7 @@ class TestMachineRenderedTests(unittest.TestCase):
             {"click": {"text": "Advanced"}},
             {"click": {"text": "Manage"}},
             {"expect": "Connected: u@127.0.0.1"},
-            {"expect": "The agents are changing this machine."},
+            {"expect": "A setup on this machine was left unfinished."},
         ])
         self.assert_passed(run)
 
