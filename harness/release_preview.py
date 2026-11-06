@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import ast
 import shlex
 import shutil
 import signal
@@ -157,6 +158,39 @@ def suggest_command(workspace: str) -> dict[str, str]:
     return {}
 
 
+def _imports_streamlit(text: str) -> bool:
+    """Whether Python source really imports streamlit, in any import form.
+
+    Takes the file's text. Reads the import statements themselves (`import streamlit`, `import os, streamlit as st`,
+    `from streamlit import x`, `import streamlit.components.v1`), so the word in a comment or a string does not count.
+    A file that does not parse is not a page the board can start: False."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(alias.name.split(".")[0] == "streamlit" for alias in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] == "streamlit":
+            return True
+    return False
+
+
+def _streamlit_page(source: Path) -> str:
+    """The Streamlit page of a candidate checkout, or '' when it is not a Streamlit project.
+
+    Takes the checkout folder. A project is Streamlit when one of its usual entry files (streamlit_app.py, app.py, main.py)
+    imports streamlit; the first such file is returned by name. Unreadable files are skipped."""
+    for name in ("streamlit_app.py", "app.py", "main.py"):
+        try:
+            text = (source / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _imports_streamlit(text):
+            return name
+    return ""
+
+
 def detect_start(source: Path) -> dict[str, str]:
     """How to start a candidate checkout, found from its own files (backlog #12).
 
@@ -167,6 +201,13 @@ def detect_start(source: Path) -> dict[str, str]:
         # 2026-11-05 (stranger run): a project that ships its own start script is started the way it says (a Streamlit app is
         # `streamlit run app.py`, not `python3 app.py`); the script receives its port in PORT like every other command.
         return {"command": "sh start.sh", "reason": "start.sh starts this project"}
+    streamlit_page = _streamlit_page(source)
+    if streamlit_page:
+        # 2026-11-05 (second stranger run): a Streamlit page is not started by `python3 app.py` (it runs once in "bare mode" and
+        # exits, so View app failed on an accepted app). It is served by Streamlit itself, on the port in PORT, on this computer only.
+        return {"command": f"python3 -m streamlit run {shlex.quote(streamlit_page)} --server.port $PORT --server.address 127.0.0.1 "
+                           "--server.headless true --browser.gatherUsageStats false",
+                "reason": f"{streamlit_page} is a Streamlit page"}
     for name in ("app.py", "server.py", "main.py"):
         if (source / name).is_file():
             return {"command": f"python3 {name}", "reason": f"{name} starts this project"}

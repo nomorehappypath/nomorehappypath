@@ -108,6 +108,33 @@ class StartScriptAndTestEnvironment(PreviewFixture):
         self.assertNotIn("preview-user:review-only", stored)
         self.assertIn("[hidden]", preview["log_tail"])
 
+    def test_a_streamlit_page_is_started_by_streamlit_on_its_port(self):
+        """Second stranger run 2026-11-05: View app ran `python3 app.py` on an accepted Streamlit app and it exited at once."""
+        (self.workspace / "app.py").write_text('"""The page."""\nimport streamlit as st\nst.title("Weather")\n')
+        (self.workspace / "serve.py").write_text("print('an optional launcher the board does not know')\n")
+        found = release_preview.detect_start(self.workspace)
+        self.assertEqual(found["command"], "python3 -m streamlit run app.py --server.port $PORT --server.address 127.0.0.1 "
+                                           "--server.headless true --browser.gatherUsageStats false")
+        self.assertEqual(found["reason"], "app.py is a Streamlit page")
+        (self.workspace / "start.sh").write_text("#!/bin/sh\nexec python3 serve.py\n")
+        self.assertEqual(release_preview.detect_start(self.workspace)["command"], "sh start.sh", "the project's own script still wins")
+
+    def test_every_ordinary_way_of_importing_streamlit_is_recognised(self):
+        """Codex R1-1: `import os, streamlit as st` was missed and the page was started as plain Python."""
+        for line in ("import os, streamlit as st", "import streamlit", "from streamlit import title", "import streamlit.components.v1 as components",
+                     "import json\nimport os\nif True:\n    import streamlit as st"):
+            with self.subTest(line=line):
+                (self.workspace / "app.py").write_text('"""The page."""\n' + line + "\nprint('x')\n")
+                self.assertTrue(release_preview.detect_start(self.workspace)["command"].startswith("python3 -m streamlit run app.py "), line)
+        for line in ("import streamlit_extras", "from . import streamlit", "import os  # import streamlit", 'TEXT = """\nimport streamlit\n"""'):
+            with self.subTest(not_streamlit=line):
+                (self.workspace / "app.py").write_text(line + "\nprint('x')\n")
+                self.assertEqual(release_preview.detect_start(self.workspace)["command"], "python3 app.py", line)
+
+    def test_a_plain_python_app_that_only_mentions_streamlit_is_not_one(self):
+        (self.workspace / "app.py").write_text("# not import streamlit here\nTEXT = 'import streamlit'\nprint(TEXT)\n")
+        self.assertEqual(release_preview.detect_start(self.workspace)["command"], "python3 app.py")
+
     def test_an_unready_declaration_leaves_the_plain_environment(self):
         test_env.save(self.root, {"python": str(Path(self.temporary.name) / "gone" / "bin" / "python3"), "workdir": "."})
         preview = self.start()

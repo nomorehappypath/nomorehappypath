@@ -203,7 +203,20 @@ class _Driver(ba._DevToolsSocket):
             if self._allowed(url):
                 self._write("Fetch.continueRequest", {"requestId": params["requestId"]})
             else:
-                self.violations.append(f"the page tried to reach {urlsplit(url).netloc or url[:60]}, which is not its own server")
+                # Every request to another server is refused, always. What differs is what the refusal means for the proof
+                # (2026-11-05, Codex R1-1 on review-browser-draws-graphics): a page that LEAVES its server (a navigation) or
+                # SENDS something out (any method but GET/HEAD) fails the step; a picture, map tile, font, style or data
+                # file it only tried to fetch from elsewhere is a limit of the capture, noted once per server, and the
+                # step is judged on what the page shows without it.
+                host = urlsplit(url).netloc or url[:60]
+                request = params.get("request") or {}
+                leaving = params.get("resourceType") == "Document" or str(request.get("method") or "GET").upper() not in {"GET", "HEAD"}
+                if leaving:
+                    self.violations.append(f"the page tried to reach {host}, which is not its own server")
+                else:
+                    note = f"not shown in this capture: the page asked {host} for a file (the harness browser loads nothing from other servers)"
+                    if note not in self.notes:
+                        self.notes.append(note)
                 self._write("Fetch.failRequest", {"requestId": params["requestId"], "errorReason": "BlockedByClient"})
         elif method == "Page.fileChooserOpened":
             self.violations.append("the page tried to open a file chooser; file upload is not allowed in a screen script")

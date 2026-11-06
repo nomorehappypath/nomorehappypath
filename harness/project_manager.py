@@ -39,7 +39,7 @@ from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from harness import board, board_surface, cli_capabilities, control, cost_center, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check
+from harness import board, board_surface, cli_capabilities, control, cost_center, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check, warning_email
 from harness.project_context import context_cli_arguments
 from harness import story, upload_on_accept, workspace_settings
 from harness import test_machine
@@ -819,6 +819,7 @@ class ProjectManager:
             "provider_model_descriptions": control.PROVIDER_MODEL_DESCRIPTIONS,
             "provider_availability": {name: cli_capabilities.provider_availability(self.home, name) for name in control.PROVIDERS},
             "openai": global_settings.openai_status(self.home),
+            "warning_email": global_settings.warning_email_status(self.home),
             "chat_model": global_settings.chat_settings(self.home)["model"],
             "plumbing_view": self._plumbing_view(value),
         }
@@ -901,6 +902,25 @@ class ProjectManager:
         """
         global_settings.remove_openai_api_key(self.home)
         return self.settings_payload()
+
+    # -- Warning email -----------------------------------------------------
+    def save_warning_email(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Save the Settings page's warning-email card.
+
+        Args:
+            value: the posted fields: to, host, port, user, and password ("" keeps the saved password).
+
+        Return: the refreshed settings payload (it says whether a password is saved, never what it is); raises
+        ValueError with a plain sentence if a field is refused.
+        """
+        global_settings.save_warning_email(
+            self.home, {name: value.get(name) for name in ("to", "host", "port", "user")}, str(value.get("password") or ""),
+        )
+        return self.settings_payload()
+
+    def test_warning_email(self) -> dict[str, Any]:
+        """Send a test email with the saved settings. Return: {"sent": bool, "error": plain sentence}; nothing is changed."""
+        return warning_email.send_test(self.home)
 
     # -- lifecycle ---------------------------------------------------------
     def worker_argv(self, entry: dict[str, Any], ready_token: str = "") -> list[str]:
@@ -2166,7 +2186,9 @@ def make_handler(manager: ProjectManager):
                     updated = global_settings.update_agent_settings(
                         manager.home, value.get("agent_settings", value), value.get("recovery_models"), value.get("reviewer_retry_models"),
                     )
-                    return self._send(200, {**manager.settings_payload(), **updated})
+                    payload = manager.settings_payload()
+                    # `updated` carries the raw saved document; the page needs the card's status view (with password_saved) instead.
+                    return self._send(200, {**payload, **updated, "warning_email": payload["warning_email"]})
                 if self.path == "/api/update/check":
                     return self._send(200, update_check.check(manager.installation_root))
                 if self.path == "/api/update/apply":
@@ -2180,6 +2202,10 @@ def make_handler(manager: ProjectManager):
                     return self._send(200, manager.save_openai_api_key(self._body().get("key", "")))
                 if self.path == "/api/settings/openai-key/test":
                     return self._send(200, manager.test_openai_api_key())
+                if self.path == "/api/settings/warning-email":
+                    return self._send(200, manager.save_warning_email(self._body()))
+                if self.path == "/api/settings/warning-email/test":
+                    return self._send(200, manager.test_warning_email())
                 if self.path == "/api/settings/connect":
                     value = self._body()
                     result = global_settings.test_connection(

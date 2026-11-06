@@ -27,6 +27,16 @@ PROJECT_CHAT_MODEL = "gpt-5.6-luna"
 SECRETS_DIRECTORY = "secrets"
 OPENAI_API_KEY_FILENAME = "openai_api_key"
 OPENAI_PROVIDER = "openai"
+# The warning email (a mail account the owner lends the app so it can say "a project is blocked"). The password
+# lives beside the OpenAI key in the secrets directory; everything else is in settings.json under one key.
+WARNING_EMAIL_KEY = "warning_email"
+WARNING_EMAIL_PASSWORD_FILENAME = "warning_email_password"
+WARNING_EMAIL_DEFAULT_PORT = 587
+WARNING_EMAIL_ADDRESS_MAX = 254
+WARNING_EMAIL_HOST_MAX = 253
+WARNING_EMAIL_USER_MAX = 254
+WARNING_EMAIL_PASSWORD_MAX = 256
+WARNING_EMAIL_HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 SECRET_MAX_BYTES = 512
 CONNECTION_TEST_TIMEOUT_SECONDS = 90.0
 CONNECTION_TEST_PROMPT = "Reply with the single word: ready"
@@ -243,6 +253,7 @@ def _default() -> dict[str, Any]:
         "connectivity": {},
         "plumbing": default_plumbing(),
         "owner_questions": default_owner_questions(),
+        WARNING_EMAIL_KEY: default_warning_email(),
         "notices": [],
     }
 
@@ -290,6 +301,7 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
         "connectivity": connectivity,
         "plumbing": _validated_plumbing(value.get("plumbing")),
         "owner_questions": _validated_owner_questions(value.get("owner_questions")),
+        WARNING_EMAIL_KEY: _tolerant_warning_email(value.get(WARNING_EMAIL_KEY)),
         "notices": notices,
     }
 
@@ -437,6 +449,163 @@ def chat_settings(
         "model": model,
         "effort": "low",
     }
+
+
+# -- Warning email ---------------------------------------------------------
+def default_warning_email() -> dict[str, Any]:
+    """Return the "feature is off" warning-email settings: no address, no server, the usual port, no user name."""
+    return {"to": "", "host": "", "port": WARNING_EMAIL_DEFAULT_PORT, "user": ""}
+
+
+def _validated_warning_email(value: Any) -> dict[str, Any]:
+    """Return value as clean warning-email settings (to, host, port, user), or raise ValueError with a plain sentence.
+
+    Takes the raw object from the page or the settings file. Blank fields are allowed (blank address and server means
+    the feature is off). Anything that could break out of a mail header (a line break) or is not one address, one server
+    name and a real port is refused.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("The warning email settings are not in the expected form.")
+    to = str(value.get("to") or "").strip()
+    host = str(value.get("host") or "").strip()
+    user = str(value.get("user") or "").strip()
+    raw_port = value.get("port")
+    if raw_port in (None, ""):
+        raw_port = WARNING_EMAIL_DEFAULT_PORT
+    try:
+        if isinstance(raw_port, bool):
+            raise ValueError
+        port = int(str(raw_port).strip())
+    except ValueError:
+        raise ValueError("The mail server port must be a number between 1 and 65535.") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("The mail server port must be a number between 1 and 65535.")
+    if to:
+        local, _, domain = to.partition("@")
+        if (len(to) > WARNING_EMAIL_ADDRESS_MAX or not local or not domain or "@" in domain
+                or any(c.isspace() or ord(c) < 32 or c in ",;<>()\"" for c in to)):
+            raise ValueError("Enter one email address, like you@example.com.")
+    if host and (len(host) > WARNING_EMAIL_HOST_MAX or not WARNING_EMAIL_HOST.fullmatch(host)):
+        raise ValueError("Enter the mail server name only, like smtp.gmail.com (no spaces and no http://).")
+    if len(user) > WARNING_EMAIL_USER_MAX or any(ord(c) < 32 or ord(c) == 127 for c in user):
+        raise ValueError("The mail user name is too long or has a line break in it.")
+    return {"to": to, "host": host, "port": port, "user": user}
+
+
+def _tolerant_warning_email(value: Any) -> dict[str, Any]:
+    """Return value validated as warning-email settings, or the "off" defaults when it is missing (an older settings file) or unusable."""
+    try:
+        return _validated_warning_email(value if value is not None else default_warning_email())
+    except ValueError:
+        return default_warning_email()
+
+
+def warning_email_password_path(home: Path) -> Path:
+    """Return the path of the stored warning-email password file under home."""
+    return Path(home) / SECRETS_DIRECTORY / WARNING_EMAIL_PASSWORD_FILENAME
+
+
+def _validated_warning_email_password(value: Any) -> str:
+    """Return the mail password as typed, or raise ValueError: it must be 1-256 characters with no line break or control character."""
+    text = str(value or "")
+    if not text or len(text.encode("utf-8")) > WARNING_EMAIL_PASSWORD_MAX or any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise ValueError("The mail password is too long or has a line break in it.")
+    return text
+
+
+def _store_warning_email_password(home: Path, password: str) -> None:
+    """Atomically write the mail password to its own file (mode 0600, in the 0700 secrets directory), never into settings.json."""
+    directory = Path(home) / SECRETS_DIRECTORY
+    if directory.is_symlink():
+        raise ValueError("Harness secrets directory must not be a symlink")
+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    path = warning_email_password_path(home)
+    if path.is_symlink():
+        raise ValueError("The mail password file must not be a symlink")
+    temporary = directory / f".{WARNING_EMAIL_PASSWORD_FILENAME}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(password.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _remove_warning_email_password(home: Path) -> None:
+    """Delete the stored mail password file if there is one."""
+    try:
+        warning_email_password_path(home).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def warning_email_password(home: Path) -> str:
+    """Return the saved mail password, or "" when none is saved.
+
+    Raises ValueError (a plain sentence, never the password) when the file exists but is not safe to trust: not a plain
+    file, not owned by this user, or readable by anyone else. Only the sender calls this; no page or event ever does.
+    """
+    path = warning_email_password_path(home)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return ""
+    if (stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077 or metadata.st_size > WARNING_EMAIL_PASSWORD_MAX * 4):
+        raise ValueError("The saved mail password file is not safe to use. Save the password again in Settings.")
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise ValueError("The saved mail password file could not be read. Save the password again in Settings.") from None
+
+
+def warning_email_settings(home: Path) -> dict[str, Any]:
+    """Return the saved non-secret warning-email settings (to, host, port, user) without touching the settings file."""
+    return dict(load(home).get(WARNING_EMAIL_KEY) or default_warning_email())
+
+
+def warning_email_is_on(settings: dict[str, Any]) -> bool:
+    """True when both an address and a mail server are saved; that is the whole on/off rule."""
+    return bool(settings.get("to") and settings.get("host"))
+
+
+def warning_email_status(home: Path) -> dict[str, Any]:
+    """Return what the Settings page may know: to, host, port, user, on, and password_saved (true/false). Never the password."""
+    settings = warning_email_settings(home)
+    return {**settings, "on": warning_email_is_on(settings), "password_saved": warning_email_password_path(home).exists()}
+
+
+def save_warning_email(home: Path, value: Any, password: str = "") -> dict[str, Any]:
+    """Validate and save the warning-email settings, and the password when one is given.
+
+    Takes the page's fields (to, host, port, user) and the typed password; an empty password keeps the saved one.
+    Saving a blank address and a blank server switches the feature off and deletes the saved password.
+    Returns warning_email_status(home); raises ValueError with a plain sentence when a field is refused (nothing is saved then).
+    """
+    validated = _validated_warning_email(value)
+    typed = _validated_warning_email_password(password) if password else ""
+    with _locked(home):
+        current = _default()
+        path = _path(home)
+        if path.exists():
+            try:
+                current = _validate_document(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                # Same rule as saving agent settings: keep a recoverable copy of a damaged file before replacing it.
+                _preserve_broken(path)
+        current[WARNING_EMAIL_KEY] = validated
+        if not validated["to"] and not validated["host"]:
+            _remove_warning_email_password(home)
+        elif typed:
+            _store_warning_email_password(home, typed)
+        _write(home, current)
+    return warning_email_status(home)
 
 
 def _validated_openai_api_key(value: str) -> str:

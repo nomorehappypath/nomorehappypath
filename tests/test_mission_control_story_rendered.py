@@ -100,7 +100,7 @@ out.tabs = [...document.querySelectorAll('[role=tab]')].map(b => b.textContent.t
         self.assertEqual(shown[20], ("next", "Next"))
         self.assertEqual(result["tabs"], ["Story", "Proof", "Advanced"])
         self.assertEqual(result["step10"], "Tests checked on the empty project")
-        self.assertIn("1 of 3 are covered", result["step8"])
+        self.assertIn("1 of 3 requirements have a test so far", result["step8"])
         self.assertIn("The builder is fixing the 2 problems", result["nowText"])
         self.assertTrue(result["nowOpen"], "the step that is happening is open")
         self.assertEqual(result["nowAria"], "step")

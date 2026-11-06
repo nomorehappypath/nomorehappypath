@@ -32,6 +32,8 @@ PAGE = b"""<!doctype html><html><head><title>Todo</title></head><body>
 <a href="http://203.0.113.9/leave" id="ext">External link</a>
 <button id="call" onclick="fetch('http://203.0.113.9/data').catch(()=>{document.querySelector('#msg').textContent='call failed'})">Call out</button>
 <button id="pop" onclick="window.open('/other')">Open window</button>
+<button id="send" onclick="fetch('http://203.0.113.9/collect',{method:'POST',body:'x'}).catch(()=>{})">Send out</button>
+<button id="tile" onclick="const i=new Image();i.onerror=()=>{document.querySelector('#msg').textContent='tile missing'};i.src='http://203.0.113.9/tiles/1/2/3.png'">Load a map tile</button>
 <select id="pick"><option>a</option></select>
 <script>
 document.querySelector('#add').onclick=()=>{const li=document.createElement('li');li.textContent=document.querySelector('#name').value;document.querySelector('#list').append(li)};
@@ -201,13 +203,24 @@ class ScreenScriptBrowserTests(ScreenScriptFixture):
     def test_the_page_cannot_leave_its_own_server_by_link_request_or_new_window(self):
         for step, words in (
             ({"click": {"text": "External link"}}, "203.0.113.9"),
-            ({"click": {"text": "Call out"}}, "203.0.113.9"),
+            ({"click": {"text": "Send out"}}, "203.0.113.9"),
             ({"click": {"text": "Open window"}}, "new window"),
         ):
             with self.subTest(step=step):
                 result = self.go([step, {"expect": "Todo list"}])
                 self.assertFalse(result["all_passed"], result)
                 self.assertRegex(result["steps"][0]["reason"], words)
+
+    def test_a_file_the_page_only_asks_another_server_for_is_refused_and_noted_and_the_run_can_still_be_cited(self):
+        """2026-11-05: a map's tiles or a picture from another site are never loaded; that is a limit of the capture, not a
+        failed step. The page's own fallback shows, the run passes, and the record says what could not be shown."""
+        for button, shown in (("Load a map tile", "tile missing"), ("Call out", "call failed")):
+            with self.subTest(button=button):
+                result = self.go([{"click": {"text": button}}, {"expect": shown}])
+                self.assertTrue(result["all_passed"], result)
+                notes = self.record(result["id"])["notes"]
+                self.assertEqual([n for n in notes if "203.0.113.9" in n],
+                                 ["not shown in this capture: the page asked 203.0.113.9 for a file (the harness browser loads nothing from other servers)"])
 
     def test_open_may_only_go_to_the_same_server(self):
         ok = self.go([{"open": "/deliverables"}, {"expect": "Deliverables ready"}])

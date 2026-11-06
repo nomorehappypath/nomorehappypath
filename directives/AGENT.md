@@ -535,6 +535,10 @@ the cap; running out of time means you are writing procedural rows.
   Control's View app starts the delivered app with a free port in the `PORT`
   environment variable. When `PORT` is set, serve on it, bound to
   127.0.0.1; keep your own default port only for when it is absent.
+  View app starts a project by its own `start.sh` when it has one, a Streamlit
+  page with Streamlit, and otherwise `python3 app.py`, `server.py` or `main.py`,
+  or `npm start`. If your app is started any other way, ship a `start.sh` at
+  the project root that starts it on `$PORT`: the owner's View app runs it.
 
 ## own-tool-limits
 
@@ -765,6 +769,14 @@ the cap; running out of time means you are writing procedural rows.
   "<the command that starts your app>" --port <port> -- <the screen-check or
   screen-script command>`. It starts the app, waits until the port answers, runs
   the check and always stops the app afterwards.
+  The harness browser loads nothing from outside this computer: map tiles,
+  web fonts and pictures served by other sites come out blank in a capture,
+  while what the page draws itself (text, tables, charts, a map's own WebGL
+  layers and labels) is drawn. A blank background from another site is the
+  harness's limit, not the app's defect and not a reason for NOT TESTED:
+  judge what the page itself draws and its data, and say in one line what
+  the capture could not show (2026-11-05: three review rounds ended NOT
+  TESTED over map tiles the review browser never loads).
   A screen-check shows one page at one moment from a loopback server; it does
   not prove clicking, typing or a sequence of steps. The board records which
   folder the server runs from and fingerprints your work folder at capture, and

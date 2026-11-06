@@ -428,6 +428,9 @@ def _round_line(state: dict[str, Any], task: str) -> str:
     if not judged:
         return ""
     last = sorted(judged, key=lambda r: (int(r.get("cycle", 0) or 0), str(r.get("completed_at") or "")))[-1]
+    if _not_tested(last):
+        number = review_round(state, last) if last.get("review_round") else 0
+        return f"{f'Round {number}' if number else 'Last review'}: could not be fully tested."   # not "0 blockers", not "found problems"
     blockers = last.get("structured_findings")
     notes = _dict(last.get("board_decision")).get("notes") if isinstance(last.get("board_decision"), dict) else None
     number = review_round(state, last) if last.get("review_round") else 0
@@ -1199,8 +1202,33 @@ def _fresh_structure(c: dict[str, Any], review: dict[str, Any]) -> bool:
     return not c["structure"] or int(review.get("structure_revision") or 0) == c["structure"]
 
 
+def _not_tested(review: dict[str, Any] | None) -> bool:
+    """Whether a judged review ended "not tested": the Reviewer could not look, which is not the same as finding a problem.
+    Takes one review record (or None); returns True only for a verdict that starts TASK DONE: NOT TESTED."""
+    return bool(review) and str(review.get("result_summary") or review.get("verdict_summary") or "").startswith("TASK DONE: NOT TESTED")
+
+
+def _earlier_final_attempts(earlier: list[dict[str, Any]]) -> list[str]:
+    """The detail lines about final-review attempts before the one that passed (Codex R2-1, 2026-11-05).
+
+    Takes the earlier attempts that did not pass. An attempt that ended "not tested" found no problem and is counted apart
+    from one that did, so a retry on unchanged work never reads as "found problems". Returns zero, one or two sentences."""
+    untested = sum(1 for r in earlier if _not_tested(r))
+    failed = len(earlier) - untested
+    lines = []
+    if failed:
+        lines.append(f"Final review: {_plural(failed, 'earlier attempt')} found problems.")
+    if untested:
+        lines.append(f"Final review: {_plural(untested, 'earlier attempt')} could not be fully tested; no problem was found in {'it' if untested == 1 else 'them'}.")
+    return lines
+
+
 def _judged_text(review: dict[str, Any]) -> str:
     """'2 blockers, 3 notes' / 'passed' for one judged review, only from what the review record holds."""
+    if _not_tested(review):
+        return "could not be fully tested"   # a review that could not look is not a review that found problems
+    if review.get("status") == "passed":
+        return "passed"   # "0 blockers, 0 notes" on a pass reads like a count of faults
     blockers = review.get("structured_findings")
     decision = review.get("board_decision")
     notes = decision.get("notes") if isinstance(decision, dict) else None
@@ -1278,9 +1306,16 @@ def _early_facts(c: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
             out[8] = ("done", f"Every requirement ({len(labels)}) has a test, with a failure case.", ["Each requirement is covered by at least one test that can fail."])
         else:
             missing = [str(x.get("n")) for x in labels if x not in covered]
-            out[8] = ("gap", f"Not covered: {_plural(len(missing), 'requirement')} ({', '.join(missing)}). {len(covered)} of {len(labels)} are covered.",
-                      ["These requirements have no test with a failure case yet. The reviewer was asked to add them."] +
-                      [f"{x.get('n')}. {_short(x.get('plain') or x.get('criterion'), 140)}: {str(x.get('coverage') or '').replace('gap: ', '').replace('not mapped: ', '')}" for x in labels if x not in covered])
+            head = f"{len(covered)} of {len(labels)} requirements have a test written in advance; {_plural(len(missing), 'requirement')} ({', '.join(missing)}) did not get one"
+            lines = [f"{x.get('n')}. {_short(x.get('plain') or x.get('criterion'), 140)}: {str(x.get('coverage') or '').replace('gap: ', '').replace('not mapped: ', '')}" for x in labels if x not in covered]
+            # The data can truly still hold uncovered requirements at the end; what matters is whether the work was judged anyway.
+            # Once a final whole-app review passed, say so; until then say "not yet", never a bare failure.
+            if any(_is_final(r) and r.get("status") == "passed" and _fresh_structure(c, r) for r in c["reviews"]):
+                out[8] = ("done", head + ". The final whole-app review judged the finished work against them instead.",
+                          ["These requirements had no test written in advance. The independent reviewer's final review of the finished app, which passed, judged the work as a whole."] + lines)
+            else:
+                out[8] = ("gap", f"{len(covered)} of {len(labels)} requirements have a test so far; {_plural(len(missing), 'requirement')} ({', '.join(missing)}) not yet.",
+                          ["These requirements have no test written in advance yet. The reviewer can still add them, and the finished work is judged by the independent reviewer."] + lines)
     if 9 not in out and cc.get("checks_sha256"):
         out[9] = ("done", "The tests are locked. The builder cannot change them.", ["The board keeps the tests and refuses edits from the builder."])
     red = _dict(cc.get("red_proof"))
@@ -1290,7 +1325,13 @@ def _early_facts(c: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
         idle = sum(1 for r in recorded.values() if r.get("label") == "passes_on_nothing")
         unclear = sum(1 for r in recorded.values() if r.get("label") == "could_not_compare")
         total = len(recorded)
-        if total and failed == total:
+        if total and unclear == total:
+            # nothing could be compared: "0 failed first (good)" would be nonsense, so say so once, in the same shape as the "unavailable" case
+            reasons = {str(r.get("reason") or "") for r in recorded.values()}
+            why = reasons.pop() if len(reasons) == 1 else ""
+            out[10] = ("not_recorded", "The tests could not be run on the empty project" + (f" (the board noted: {_short(why, 120)})" if why else "") + ".",
+                       ["This says nothing about the finished work."])
+        elif total and failed == total:
             out[10] = ("done", f"Every test failed on the empty project ({failed} of {total}), so none is fake.", ["Each test was run on the project as it was and failed, as a real test should."])
         else:
             parts = [f"{failed} of {total} tests failed first (good)"] + ([f"{idle} did not distinguish"] if idle else []) + ([f"{unclear} could not be compared"] if unclear else [])
@@ -1336,7 +1377,7 @@ def _late_facts(c: dict[str, Any], real: bool, rejected: bool) -> dict[int, tupl
         text = ("The reviewer checked the report against the code and it passed" if _dict(state.get("task_kinds")).get(task) == "analysis"
                 else "The reviewer tested the whole app and it passed") + (f" (reviewer from {company.split(' ')[0]})" if company else "") + "."
         out[22] = ("earlier" if stale else "done", text if not stale else text + " That was before the work changed shape.",
-                   [text] + ([f"Final review: {_plural(len(finals) - 1, 'earlier attempt')} found problems."] if len(finals) > 1 else []))
+                   [text] + _earlier_final_attempts([r for r in finals if r is not last and r.get("status") != "passed"]))
     release_known = release.get("status") in ("VISUAL_TEST_REQUIRED", "ACCEPTED")
     if release_known:
         proof_row = _dict(_dict(state.get("revert_proofs")).get(task))
@@ -1371,7 +1412,7 @@ def _areas(c: dict[str, Any]) -> list[dict[str, Any]]:
 
     Output is a list of dicts with id, title, done, kind, and reviews; a
     task with neither subtasks nor more than one chunk produces one
-    unlabeled area holding every non-final review.
+    unlabeled area holding every non-final review (or, when the task had only final reviews, those).
     """
     facts, state = c["facts"], c["state"]
     plain = [r for r in c["reviews"] if not _is_final(r)]
@@ -1385,7 +1426,9 @@ def _areas(c: dict[str, Any]) -> list[dict[str, Any]]:
     if mode == "chunked" and len(chunks) > 1:
         return [{"id": name, "title": _title_case(name), "done": ch.get("status") == "passed", "kind": "part",
                  "reviews": [r for r in plain if r.get("chunk") == name or r.get("subtask") == name]} for name, ch in chunks]
-    return [{"id": "", "title": "", "done": False, "kind": "", "reviews": plain}]
+    # A task delivered as one piece has no chunk reviews: its only reviews are the final whole-task ones, and those are what
+    # the build/review/repair steps must tell (otherwise those steps read "not tracked" although the reviews happened).
+    return [{"id": "", "title": "", "done": False, "kind": "", "reviews": plain or [r for r in c["reviews"] if _is_final(r)]}]
 
 
 def _cycle_facts(c: dict[str, Any], area: dict[str, Any]) -> dict[int, tuple[str, str, list[str]]]:
@@ -1426,10 +1469,17 @@ def _cycle_facts(c: dict[str, Any], area: dict[str, Any]) -> dict[int, tuple[str
         out[17] = ("done", f"Round 1: {_judged_text(r1)}.", [f"The reviewer tested {scope} in round 1: {_judged_text(r1)}."])
         if r1.get("status") == "passed":
             out[18] = ("done", "Round 1 passed. Nothing to repair.", ["The reviewer passed it in the first round."])
+        elif _not_tested(r1):
+            # Codex R1-1 (2026-11-05): a review that could not test found no problem; saying "found problems" invents defects.
+            out[18] = ("done", "Round 1 could not be fully tested. No problem was found in the work.",
+                       ["The reviewer could not check everything in this round. That is a limit of the check, not a defect of the work."])
         else:
             n = len(r1.get("structured_findings") or []) if isinstance(r1.get("structured_findings"), list) else 0
             out[18] = ("done", f"Round 1 found {_plural(n, 'problem')} to fix." if n else "Round 1 found problems to fix.", ["Every real problem was listed at once, with steps to reproduce."])
-    if r1 and r1.get("status") == "failed" and (r2 or r3 or any(r.get("status") in ("claimed", "passed") and r is not r1 for r in reviews)):
+    if _not_tested(r1) and (r2 or r3 or any(r is not r1 for r in reviews)):
+        out[19] = ("skipped", "Skipped: round 1 found nothing to repair; the review was tried again.",
+                   ["Nothing was repaired because no problem was found. The review was run again."])
+    elif r1 and r1.get("status") == "failed" and (r2 or r3 or any(r.get("status") in ("claimed", "passed") and r is not r1 for r in reviews)):
         out[19] = ("done", "The builder fixed what the reviewer found.", ["The builder repaired the problems. The tests cannot be changed to make a repair pass."])
     elif r1 and r1.get("status") == "passed" and not r2:
         out[19] = ("skipped", "Skipped: round 1 passed, so there was nothing to repair.", ["Nothing to repair."])
@@ -1517,7 +1567,7 @@ def timeline(state: dict[str, Any], task: str, st: dict[str, Any], facts: dict[s
 
     for n in range(1, 12):
         title = None
-        if n == 10 and early.get(10) and early[10][1].startswith("Tests checked"):
+        if n == 10 and early.get(10) and (early[10][1].startswith("Tests checked") or early[10][0] == "not_recorded"):
             title = "Tests checked on the empty project"
         add(n, str(n), early.get(n), now_step, "", title)
     for index, area in enumerate(areas):
@@ -1661,7 +1711,7 @@ def proof(state: dict[str, Any], task: str, facts: dict[str, Any], ledger: dict[
     notes = code_quality.notes(state, task)
     if rows:
         header = (f"{covered_count} of {len(rows)} requirements have a test written before any code. "
-                  + (f"{failed_first} of {total_tests} tests were seen failing on the project before the work, as they should. " if recorded else "")
+                  + (f"{failed_first} of {total_tests} tests were seen failing on the project before the work, as they should. " if failed_first else "")
                   + (f"On this version {passing} of {tested_rows} tested requirements pass when the board ran the tests itself." if fresh
                      else "The board has not run these tests on this exact version yet." if not earlier else "These results are from the version before your feedback."))
     else:
@@ -1673,7 +1723,13 @@ def proof(state: dict[str, Any], task: str, facts: dict[str, Any], ledger: dict[
              {"label": "Passing now", "value": f"{passing} of {tested_rows}" if fresh else "Not run on this version" if rows else "None",
               "note": "requirements, when the board ran this version" if fresh else ""},
              revert_tile]
-    requirements_tile = {"text": f"{passing} / {len(rows)} proven" if rows and fresh else "", "passing": passing, "total": len(rows), "fresh": fresh}
+    # Requirements with no test written in advance cannot be "proven" by tests; saying "6 / 11 proven" at the end of a passed task reads as a failure.
+    untested = len(rows) - tested_rows
+    final_passed = any(_is_final(r) and r.get("status") == "passed" and _fresh_structure(c, r) for r in c["reviews"]) and not earlier
+    tile_text = f"{passing} / {len(rows)} proven" if rows and fresh else ""
+    if tile_text and untested:
+        tile_text = f"{passing} / {len(rows)} proven by tests" + (f"; {untested} by the final review" if final_passed else " so far")
+    requirements_tile = {"text": tile_text, "passing": passing, "total": len(rows), "fresh": fresh}
     return {"rows": rows, "tiles": tiles, "header": header, "earlier": earlier, "fresh": fresh, "untied": untied, "requirements_tile": requirements_tile,
             "questioned": [_deviation_line(d) for d in devs], "quality": notes, "has_tests": bool(rows),
             "earlier_note": "These results are from the version before your feedback. They are not shown as current. New results appear after the next run." if earlier else ""}

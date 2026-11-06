@@ -490,7 +490,7 @@ class TimelineTests(unittest.TestCase):
         result = built(state(requirement_confirmations=contract(), requests=[self.failed_round_one()]))
         self.assertEqual(row(result, 8)["status"], "gap")
         self.assertEqual(row(result, 8)["tag"], "Not covered")
-        self.assertIn("1 of 3 are covered", row(result, 8)["text"])
+        self.assertIn("1 of 3 requirements have a test so far", row(result, 8)["text"])  # wording changed on purpose (2026-11-05): "not yet", not a bare failure
         self.assertEqual(row(result, 10)["title"], "Tests checked on the empty project", "'settled' never claims every test failed (spec 12.1)")
         self.assertIn("1 of 2 tests failed first (good), 1 did not distinguish", row(result, 10)["text"])
         self.assertEqual(row(result, 6)["status"], "done")

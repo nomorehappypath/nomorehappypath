@@ -344,6 +344,7 @@ PAGE = r'''<!doctype html>
     .settings-section h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
     .settings-section > p, .settings-section-copy { margin: 0; color: var(--mc-muted); font-size: 14px; }
     .settings-section.openai-card { max-width: none; }
+    .email-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
     details.settings-section > summary { cursor: pointer; font-size: 16px; font-weight: 700; }
     .plumbing-table { width: 100%; border-collapse: collapse; font-size: 14px; }
     .plumbing-table th, .plumbing-table td { padding: 8px 10px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
@@ -456,6 +457,19 @@ PAGE = r'''<!doctype html>
           <div class="field"><label for="openai-key">OpenAI API key</label><input id="openai-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" aria-describedby="openai-result"></div>
           <div class="openai-actions"><button class="button" type="button" id="openai-save">Save and connect</button><button class="button secondary" type="button" id="openai-test" hidden>Test connection</button><button class="button secondary" type="button" id="openai-remove" hidden>Remove key</button></div>
           <div class="connection-result" id="openai-result" role="status" aria-live="polite"></div>
+        </section>
+        <section class="settings-section openai-card" id="email-card" aria-labelledby="email-title">
+          <div><h2 id="email-title">Warning email</h2><p class="settings-card-copy">NoMoreHappyPath emails you when a project is blocked and paused, so you know it is waiting for you. It is on once your address and a mail server are saved. Gmail and Outlook need an app password, not your normal one. The password is stored on this computer in a file only you can read, and is never shown again.</p></div>
+          <div class="openai-state"><span class="badge idle" id="email-badge">Off</span><span id="email-detail"></span></div>
+          <div class="email-grid">
+            <div class="field"><label for="email-to">Your email address (where warnings go)</label><input id="email-to" type="text" autocomplete="off" spellcheck="false" placeholder="you@example.com"></div>
+            <div class="field"><label for="email-host">Mail server</label><input id="email-host" type="text" autocomplete="off" spellcheck="false" placeholder="smtp.gmail.com"></div>
+            <div class="field"><label for="email-port">Port</label><input id="email-port" type="text" inputmode="numeric" autocomplete="off" value="587"></div>
+            <div class="field"><label for="email-user">User name</label><input id="email-user" type="text" autocomplete="off" spellcheck="false" placeholder="usually your email address"></div>
+            <div class="field"><label for="email-password">Password</label><input id="email-password" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="email-result"></div>
+          </div>
+          <div class="openai-actions"><button class="button" type="button" id="email-save">Save</button><button class="button secondary" type="button" id="email-test">Send a test email</button></div>
+          <div class="connection-result" id="email-result" role="status" aria-live="polite">To switch warning emails off, clear the address and the mail server and press Save.</div>
         </section>
         <details class="settings-section" id="settings-advanced">
           <summary>Advanced (time limits, review input limits, check-in timing)</summary>
@@ -787,6 +801,7 @@ PAGE = r'''<!doctype html>
               <thead><tr><th>What you see</th><th>What it means and what to do</th></tr></thead>
               <tbody>
                 <tr><td>Chat box is greyed with a notice</td><td>No working OpenAI key. Open Settings → Project chat key and save one; the notice names the exact problem when a key exists but cannot be used.</td></tr>
+                <tr><td>A red card says "Blocked, needs you"</td><td>An agent got stuck, the CTO could not clear it, and the project paused itself so nothing more is spent. The card says the problem and what to do. Fix it, then press Resume. If you saved an address in Settings → Warning email, the app also sends you one email the first time this happens, so you do not have to be watching the screen. Press <strong>Send a test email</strong> there to check that it reaches you.</td></tr>
                 <tr><td>An agent launch button is greyed</td><td>That role is at its session limit. Stop one of its running terminals first.</td></tr>
                 <tr><td>"This project is closed" over the board</td><td>The board is not running. Go to Projects and click Open.</td></tr>
                 <tr><td>Buttons disabled and a paused banner</td><td>The project is paused. Resume it from the Projects page to make changes. <strong>Cancel this task</strong> still works while paused.</td></tr>
@@ -1194,6 +1209,36 @@ PAGE = r'''<!doctype html>
             ? `${state.message} Chat stays switched off until this key connects.`
             : `Paste the key from your OpenAI account. It is checked against ${value.chat_model || 'the chat model'} before it is saved, and is stored on this computer only, readable by you alone.`);
     }
+    function renderWarningEmail(value) {
+      const state = value.warning_email || {};
+      if (!q('#email-card')) return;
+      const badge = q('#email-badge');
+      badge.className = `badge ${state.on ? 'running' : 'idle'}`;
+      badge.textContent = state.on ? 'On' : 'Off';
+      q('#email-detail').textContent = state.on
+        ? `Warnings go to ${state.to}.${state.password_saved ? ' A password is saved.' : ' No password is saved.'}`
+        : 'No warning emails will be sent.';
+      q('#email-to').value = state.to || '';
+      q('#email-host').value = state.host || '';
+      q('#email-port').value = state.port || 587;
+      q('#email-user').value = state.user || '';
+      q('#email-password').value = '';
+      q('#email-password').placeholder = state.password_saved ? 'A password is saved. Leave empty to keep it.' : '';
+    }
+    async function emailAction(button, work) {
+      const buttons = ['#email-save', '#email-test'].map(q), result = q('#email-result');
+      buttons.forEach((item) => item.disabled = true);
+      result.className = 'connection-result';
+      result.textContent = button === 'test' ? 'Sending a test email…' : 'Saving…';
+      try {
+        await work(result);
+      } catch (error) {
+        result.className = 'connection-result bad';
+        result.textContent = error.message;
+      } finally {
+        buttons.forEach((item) => item.disabled = false);
+      }
+    }
     async function openaiAction(button, work) {
       const buttons = ['#openai-save', '#openai-test', '#openai-remove'].map(q);
       const result = q('#openai-result');
@@ -1246,6 +1291,7 @@ PAGE = r'''<!doctype html>
     function renderSettings(value) {
       settingsCatalog = value;
       renderOpenAI(value);
+      renderWarningEmail(value);
       const providers = Object.entries(value.providers || {});
       q('#settings-error').textContent = value.error || '';
       const noticeBox = q('#settings-notices');
@@ -1399,6 +1445,19 @@ PAGE = r'''<!doctype html>
       });
       q('#openai-test').onclick = () => openaiAction('test', () => api('/api/settings/openai-key/test', {method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'}));
       q('#openai-remove').onclick = () => openaiAction('remove', () => api('/api/settings/openai-key', {method: 'DELETE'}));
+    }
+    if (q('#email-card')) {
+      q('#email-save').onclick = () => emailAction('save', async (result) => {
+        const fields = {to: q('#email-to').value, host: q('#email-host').value, port: q('#email-port').value, user: q('#email-user').value, password: q('#email-password').value};
+        renderSettings(await api('/api/settings/warning-email', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(fields)}));
+        result.className = 'connection-result ok';
+        result.textContent = fields.to.trim() || fields.host.trim() ? 'Saved. Use Send a test email to check that it reaches you.' : 'Saved. Warning emails are off.';
+      });
+      q('#email-test').onclick = () => emailAction('test', async (result) => {
+        const outcome = await api('/api/settings/warning-email/test', {method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'});
+        result.className = `connection-result ${outcome.sent ? 'ok' : 'bad'}`;
+        result.textContent = outcome.sent ? 'Test email sent. Check your inbox (and your spam folder).' : `Not sent. ${outcome.error}`;
+      });
     }
     async function loadVersion() {
       try {

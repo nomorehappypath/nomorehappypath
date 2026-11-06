@@ -35,7 +35,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harness import upload_on_accept
-from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal
+from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -279,6 +279,7 @@ class ProjectWatchdog:
         self.last_report: dict = {}
         self.self_heal = None  # set by serve_worker once terminals can be opened
         self.notify = None  # set by serve_worker: sends one owner alert outside the page
+        self.warn = None  # set by serve_worker: emails the owner about a newly blocked project (a no-op when email is off)
 
     def tick(self) -> list[dict]:
         """Run one control-plane liveness check, trigger self-heal and cost-center collection when the
@@ -296,6 +297,13 @@ class ProjectWatchdog:
             # Backlog #7: the harness restarts stuck agents itself. It runs
             # here, in the worker, because only the worker may open terminals.
             self.last_report["self_heal"] = self.self_heal()
+        if self.warn is not None:
+            # After self-heal, and whatever the pause state: self-heal is what pauses the project and records the red card,
+            # and the watchdog keeps ticking while paused. The email never stops the rest of the check.
+            try:
+                self.warn()
+            except (OSError, ValueError) as error:
+                print(f"HARNESS PROJECT WATCHDOG | warning email check failed: {str(error)[:300]}", flush=True)
         if self.last_report.get("status") == "active":
             # Cost center: bounded, isolated, information only. It runs after recovery, outside the board lock, and never raises.
             cost_center.collect_project(self.root)
@@ -827,6 +835,7 @@ def serve(
 
         watchdog.self_heal = lambda: self_heal.run_once(root, self_heal_launch, create=self_heal_create)
         watchdog.notify = lambda alert: desktop_notify(alert["title"], alert["message"], project_name)
+        watchdog.warn = lambda: warning_email.notify_blocked_cards(root, settings_home, project_name, manager_url)
         watchdog.start()
         preview_supervisor.start()
         print(f"Live Harness Project Worker: {address['endpoint']}/", flush=True)

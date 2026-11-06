@@ -38,6 +38,12 @@ HARNESS_ACTION_EVENTS = {
     "cto_acted", "owner_default_applied",
 }
 HARNESS_ACTION_LINES = 5
+# A "replacing the Delivery Agent" line describes something under way. Once one of these later events exists for the same task
+# (the fresh attempt started work, the review passed, the release was prepared or the owner decided) the line is history, not news.
+REPLACEMENT_ENDED_BY = {
+    "task_resumed", "release_routing_requested", "development_complete", "visual_test_required",
+    "owner_release_decision_recorded", "git_acceptance_completed", "delivery_stopped_after_acceptance",
+}
 DASHBOARD_REVIEW_LIMIT_PER_TASK = 40
 
 
@@ -2976,11 +2982,7 @@ def _compact_dashboard_state(
         if value.get("task") in accepted
     })
     # Backlog #7: the last few things the harness did by itself, newest first.
-    compact["harness_actions"] = [
-        {"kind": event.get("kind"), "at": event.get("at"), "message": event.get("message", "")}
-        for event in reversed(state.get("events") or [])
-        if event.get("kind") in HARNESS_ACTION_EVENTS and event.get("message")
-    ][:HARNESS_ACTION_LINES]
+    compact["harness_actions"] = _harness_actions(state)
     # Backlog #9: each card says what clears it; an expired card is never
     # shown, even before the watchdog's next sweep marks it done.
     current = datetime.now(timezone.utc)
@@ -4094,6 +4096,29 @@ def dashboard_payload(
         result["story"] = {"error": f"The summary could not be computed ({type(error).__name__}).", "empty": False, "agents": [], "tasks": {}, "order": []}
     result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids, root=root)
     return result
+
+
+def _harness_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The last few things the harness did by itself, newest first, leaving out an action that is already over.
+
+    Takes the board state; returns up to HARNESS_ACTION_LINES dicts with kind, at and message. A "replacing the Delivery Agent" line is dropped
+    when a later event for the same task (see REPLACEMENT_ENDED_BY) shows the replacement is finished or the task was passed or accepted,
+    so the page does not keep saying a fresh attempt "follows" after the work has been accepted."""
+    events = [event for event in state.get("events") or [] if isinstance(event, dict)]
+    accepted = {task for task, decision in (state.get("release_decisions") or {}).items() if (decision or {}).get("decision") == "accepted"}
+    ended_at: dict[str, str] = {}   # task -> time of its newest "replacement is over" event
+    for event in events:
+        if event.get("kind") in REPLACEMENT_ENDED_BY and event.get("task"):
+            ended_at[str(event["task"])] = max(ended_at.get(str(event["task"]), ""), str(event.get("at") or ""))
+    lines = []
+    for event in reversed(events):
+        if event.get("kind") not in HARNESS_ACTION_EVENTS or not event.get("message"):
+            continue
+        task = str(event.get("task") or "")
+        if event.get("kind") == "agent_replacement_requested" and (task in accepted or ended_at.get(task, "") > str(event.get("at") or "")):
+            continue
+        lines.append({"kind": event.get("kind"), "at": event.get("at"), "message": event.get("message", "")})
+    return lines[:HARNESS_ACTION_LINES]
 
 
 def _finished_delivery_predecessor(root: Path) -> str:
