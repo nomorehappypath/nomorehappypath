@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import board, board_viewer, browser_acceptance, control, project_memory, project_worker, self_heal
 from tests.requirements_support import agreed_requirements
 
@@ -54,10 +55,10 @@ class _Fixture(unittest.TestCase):
 
     def create(self, kind: str) -> dict:
         self.created.append(kind)
-        return control.create(self.root, kind)
+        return control.create(self.root, kind, settings_override=old_settings())
 
     def delivery_with_task(self, task: str = "BRIEF-TASK") -> tuple[dict, dict, subprocess.Popen]:
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
         control.note_cli_exec(self.root, session["id"])   # the runner reached the CLI, as a real session does
@@ -130,11 +131,12 @@ class DecisionTests(_Fixture):
         self.assertEqual(self_heal.plan(self.root), [])
 
     def test_a_missing_reviewer_is_started_but_not_while_claude_needs_sign_in(self):
+        control.update_agent_settings(self.root, old_settings())      # this case is about a Claude Reviewer; a Codex one would not be signed out
         with board.locked_state(self.root) as state:
             state["reviewer_needed"] = {"requested_at": _ago(6 * 60), "request_id": "review-1"}
         actions = self_heal.plan(self.root)
         self.assertEqual([a["action"] for a in actions], ["start_reviewer"])
-        cto = control.create(self.root, "claude_cto")
+        cto = control.create(self.root, "claude_cto", settings_override=old_settings())
         control.attach(self.root, cto["id"], self.stand_in().pid)
         control.record_attention(self.root, cto["id"], "Login expired - Please run /login")
         self.assertEqual(self_heal.plan(self.root), [], "a new Reviewer would be signed out too")

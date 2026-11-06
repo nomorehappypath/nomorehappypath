@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import sys
 import subprocess
 import tempfile
@@ -171,19 +172,87 @@ class StopAllRegexScopingTests(unittest.TestCase):
         import re
         import subprocess as sp
         script = (ROOT / "scripts" / "stop_all.sh").read_text(encoding="utf-8")
-        escape_line = [l for l in script.splitlines() if l.startswith("root_re=")]
-        self.assertTrue(escape_line, "stop_all.sh must escape root for the regex")
+        lines = [l for l in script.splitlines() if l.startswith(("root_re=", "app_re="))]
+        self.assertEqual(len(lines), 2, "stop_all.sh must escape root for the regex and build the app pattern from it")
         probe = sp.run(
-            ["bash", "-c",
-             'root="/tmp/harness.next"; '
-             + escape_line[0].replace('"$root"', '"$root"') + '; '
-             + 'printf "%s" "$root_re"'],
+            ["bash", "-c", 'root="/tmp/harness.next"; ' + "; ".join(lines) + '; printf "%s" "$app_re"'],
             capture_output=True, text=True, timeout=10,
         )
-        pattern = "python3.*" + probe.stdout + r"\/harness\/(project_manager|project_worker)\.py"
+        pattern = probe.stdout
         self.assertTrue(re.search(pattern, "python3 /tmp/harness.next/harness/project_manager.py --home x"))
         self.assertFalse(re.search(pattern, "python3 /tmp/harnessXnext/harness/project_manager.py --home x"),
                          "foreign installation must never match")
+        self.assertFalse(re.search(pattern, "python3 /y/tmp/harness.next/harness/project_manager.py --home x"),
+                         "a longer path that merely ends with this root must never match")
+
+
+class StopAllFindsAnyInterpreterTests(unittest.TestCase):
+    """The stop script finds the app whatever the interpreter is called (Xcode's Python has no "python3" in its path)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        base = Path(self._tmp.name).resolve()
+        self.home = base / "home"
+        self.home.mkdir()
+        # The interpreter, named the way Xcode's is: no "python3" anywhere in its path.
+        link = base / "Xcode.app" / "Contents" / "MacOS" / "Python"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(Path(sys.executable).resolve())
+        self.interpreter = link
+        self.processes = []
+        self.addCleanup(self._end_processes)
+        self.mine = self._install(base / "mine")
+        self.other = self._install(base / "mine-other")      # another installation whose name starts like ours
+        self.script = self.mine / "scripts" / "stop_all.sh"
+        self.assertNotIn("python3", str(self.interpreter) + str(self.mine))
+
+    def _install(self, root: Path) -> Path:
+        """A minimal installation: the stop script, the library it sources and a harness/project_manager.py that just sleeps."""
+        import shutil
+        (root / "scripts").mkdir(parents=True)
+        (root / "harness").mkdir()
+        for name in ("stop_all.sh", "platform_support.sh"):
+            shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
+        (root / "harness" / "project_manager.py").write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+        return root
+
+    def _start(self, root: Path) -> subprocess.Popen:
+        """Start the sleeper the way the app is started on a stock Mac: <interpreter> -E <root>/harness/project_manager.py."""
+        process = subprocess.Popen([str(self.interpreter), "-E", str(root / "harness" / "project_manager.py")],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(process)
+        return process
+
+    def _end_processes(self):
+        for process in self.processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+
+    def _run(self, *arguments):
+        return subprocess.run(["bash", str(self.script), *arguments], capture_output=True, text=True, timeout=30,
+                              env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
+
+    def _wait_listed(self, pid: int):
+        import time
+        for _ in range(100):
+            if str(pid) in self._run("--list").stdout:
+                return
+            time.sleep(0.1)
+        self.fail(f"--list never showed pid {pid}: {self._run('--list').stdout}")
+
+    def test_the_xcode_form_is_listed_and_stopped_and_another_installation_is_left_alone(self):
+        ours, foreign = self._start(self.mine), self._start(self.other)
+        self._wait_listed(ours.pid)
+        listed = self._run("--list").stdout
+        self.assertNotIn(str(foreign.pid), listed, "another installation is never listed")
+        self.assertIsNone(ours.poll(), "--list stops nothing")
+        stopped = self._run()
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertIn(f"stopped pid {ours.pid}", stopped.stdout)
+        ours.wait(timeout=10)
+        self.assertIsNone(foreign.poll(), "the other installation keeps running")
 
 
 class PrerequisiteAgreesWithTheAppTests(unittest.TestCase):

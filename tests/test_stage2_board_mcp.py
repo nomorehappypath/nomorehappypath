@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from tests.claude_auth_support import auth_arguments
 
 from harness import board, board_mcp, board_surface, cli_capabilities, contract, control, global_settings, project_registry
@@ -184,7 +185,7 @@ class RunnerTests(unittest.TestCase):
                         encoding="utf-8")
         cli_capabilities.record_live(self.home, provider, {f"{provider}.mcp_reaches_board": True}, auth_mode="test",
                                      source_environment={**os.environ, **environment})
-        session = control.create(self.context, kind)
+        session = control.create(self.context, kind, settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         with self.served(authority) as endpoint, self.bootstrap_served(authority, endpoint) as bootstrap:

@@ -24,6 +24,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.request import urlopen
 
+from tests.pinned_settings import old_settings
 from harness import board, board_viewer, browser_acceptance, control, conversation, project_memory
 from harness.project_context import ProjectContext
 from tests.environment_support import require_loopback
@@ -203,7 +204,7 @@ class LaunchPlanTests(unittest.TestCase):
         patcher.start(); self.addCleanup(patcher.stop)
 
     def test_claude_first_launch_mints_and_records_then_resumes_only_while_the_store_has_it(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         first = conversation.plan_cli_launch(self.root, session["id"], "claude")
         self.assertEqual(first["mode"], "fresh")
         uuid.UUID(first["cli_session_id"])
@@ -227,7 +228,7 @@ class LaunchPlanTests(unittest.TestCase):
         self.assertTrue(third["transcript"].endswith(f"control/transcripts/{session['id']}.log"))
 
     def test_codex_first_launch_has_no_id_and_resumes_once_one_is_recorded(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         first = conversation.plan_cli_launch(self.root, session["id"], "codex")
         self.assertEqual((first["mode"], first["cli_session_id"]), ("fresh", ""))
         self.assertEqual(first["codex_marker"], conversation.codex_launch_marker(session["id"], 1))
@@ -276,7 +277,7 @@ class RunnerArgvTests(unittest.TestCase):
         return self.capture.read_text(encoding="utf-8")
 
     def test_claude_first_launch_gets_a_session_id_and_a_relaunch_resumes_it_with_a_recovery_message(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         argv = self.argv()
@@ -311,7 +312,7 @@ class RunnerArgvTests(unittest.TestCase):
         self.assertIn("launch: mode=resume provider=claude", transcript.read_text(encoding="utf-8"))
 
     def test_claude_relaunch_falls_back_to_fresh_when_the_store_lost_the_session(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         self.assertEqual(run_runner(self.root, session, self.environment).returncode, 0)
         first = self.argv()[self.argv().index("--session-id") + 1]
         stage_relaunch(self.root, session["id"])
@@ -326,7 +327,7 @@ class RunnerArgvTests(unittest.TestCase):
                       conversation.transcript_path(self.root, session["id"]).read_text(encoding="utf-8"))
 
     def test_codex_first_launch_is_unchanged_and_a_relaunch_resumes_the_recorded_id(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         argv = self.argv()
@@ -394,7 +395,7 @@ class RelaunchAfterPauseTests(unittest.TestCase):
         control.mark_resume_launch_requested(self.root, session["id"])
 
     def test_claude_resumed_after_a_pause_gets_the_pause_message_and_a_plain_relaunch_does_not(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         minted = self.argv()[self.argv().index("--session-id") + 1]
@@ -424,7 +425,7 @@ class RelaunchAfterPauseTests(unittest.TestCase):
         self.assertNotIn(conversation.PAUSE_RESUME_LABEL, self.text())
 
     def test_a_fresh_launch_after_a_pause_still_says_what_happened_and_where_the_record_is(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         # The CLI's store does NOT hold the conversation: the relaunch is fresh.
@@ -492,7 +493,7 @@ class CodexStoreClearedRelaunchTests(unittest.TestCase):
         return marker
 
     def test_after_the_store_is_cleared_the_next_relaunch_resumes_the_NEW_session(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         since = time.time() - 5
         # Launch 1: fresh, marker #1 in the prompt; the supervisor discovers X.
         argv, text = self.launch(session)
@@ -613,7 +614,7 @@ class ReadableConversationTests(unittest.TestCase):
             root = Path(tmp) / "project"; root.mkdir()
             claude_dir = Path(tmp) / "claude-config"
             with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}):
-                session = control.create(root, "claude_cto")
+                session = control.create(root, "claude_cto", settings_override=old_settings())
                 transcript = conversation.Transcript(conversation.transcript_path(root, session["id"]))
                 transcript.agent_bytes(b"\x1b[2J\xe2\x9c\xbbMulling\xe2\x80\xa6\r\n")
                 transcript.owner("raw owner line")
@@ -642,7 +643,7 @@ class ReadableConversationTests(unittest.TestCase):
             root = Path(tmp) / "project"; root.mkdir()
             claude_dir = Path(tmp) / "claude-config"
             with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}):
-                session = control.create(root, "claude_cto")
+                session = control.create(root, "claude_cto", settings_override=old_settings())
                 control.record_cli_session(root, session["id"], "11111111-1111-1111-1111-111111111111", "claude")
                 write_claude_session(claude_dir, "11111111-1111-1111-1111-111111111111")
                 completed = subprocess.run(
@@ -719,33 +720,33 @@ class RoleContinuityTests(unittest.TestCase):
             state["sessions"][session_id].update({"status": "exited", "ended_at": control.now(), "pid": None})
 
     def test_a_new_session_inherits_the_newest_ended_session_of_its_role_only(self):
-        first = control.create(self.root, "codex_delivery")
+        first = control.create(self.root, "codex_delivery", settings_override=old_settings())
         control.record_cli_session(self.root, first["id"], "00000000-0000-0000-0000-0000000000aa", "codex")
         control.note_cli_launch(self.root, first["id"], resumed=False)
         # While the first is ACTIVE, a second concurrent Delivery does not take its conversation.
         control.attach(self.root, first["id"], os.getpid())
-        second = control.create(self.root, "codex_delivery")
+        second = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.assertIsNone(second["cli_session_id"]); self.assertIsNone(second["continues_session"])
         # Another role never inherits across kinds.
-        cto = control.create(self.root, "claude_cto")
+        cto = control.create(self.root, "claude_cto", settings_override=old_settings())
         self.assertIsNone(cto["cli_session_id"])
         # Once the first has ended, the next Delivery continues it.
         self.end(first["id"]); self.end(second["id"])
-        third = control.create(self.root, "codex_delivery")
+        third = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.assertEqual(third["cli_session_id"], "00000000-0000-0000-0000-0000000000aa")
         self.assertEqual(third["cli_launches"], 1)
         self.assertEqual(third["continues_session"], first["id"])
         self.assertEqual(control.cli_session(self.root, third["id"])["continues_session"], first["id"])
 
     def test_codex_role_resumes_the_previous_agents_conversation_or_is_told_where_to_read_it(self):
-        first = control.create(self.root, "codex_delivery")
+        first = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.launch(first)                                  # fresh
         marker = conversation.codex_launch_marker(first["id"], 1)
         write_rollout(self.day, "00000000-0000-0000-0000-0000000000aa", self.root, "directive…\n" + marker)
         control.record_cli_session(self.root, first["id"], "00000000-0000-0000-0000-0000000000aa", "codex")
         self.end(first["id"])
         # The owner launches the Delivery role again: a NEW managed session.
-        second = control.create(self.root, "codex_delivery")
+        second = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.assertEqual(second["continues_session"], first["id"])
         argv, text = self.launch(second)
         self.assertEqual(argv[0], "resume", "a new Delivery session resumes the last Delivery conversation")
@@ -755,7 +756,7 @@ class RoleContinuityTests(unittest.TestCase):
         self.end(second["id"])
         # The CLI's store lost the conversation: the next Delivery starts fresh and is told to read it.
         conversation.codex_rollout_path("00000000-0000-0000-0000-0000000000aa").unlink()
-        third = control.create(self.root, "codex_delivery")
+        third = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.assertEqual(third["continues_session"], second["id"])
         argv, text = self.launch(third)
         self.assertEqual(argv[0], "--cd")
@@ -771,12 +772,12 @@ class RoleContinuityTests(unittest.TestCase):
                          (True, conversation.codex_launch_marker(third["id"], record["cli_launches"])))
 
     def test_claude_role_resumes_the_previous_agents_conversation(self):
-        first = control.create(self.root, "claude_cto")
+        first = control.create(self.root, "claude_cto", settings_override=old_settings())
         argv, _ = self.launch(first)
         minted = argv[argv.index("--session-id") + 1]
         write_claude_session(self.claude_dir, minted)
         self.end(first["id"])
-        second = control.create(self.root, "claude_cto")
+        second = control.create(self.root, "claude_cto", settings_override=old_settings())
         self.assertEqual(second["cli_session_id"], minted)
         argv, text = self.launch(second)
         self.assertIn("--resume", argv); self.assertEqual(argv[argv.index("--resume") + 1], minted)
@@ -924,7 +925,7 @@ class RenderedConversationLinkTests(unittest.TestCase):
         control.initialize(self.context)
         board.snapshot(self.context)
         project_memory.initialize(self.context, project_name="Memory proof", description="Facts.")
-        self.session = control.create(self.context, "claude_cto")
+        self.session = control.create(self.context, "claude_cto", settings_override=old_settings())
         control.attach(self.context, self.session["id"], os.getpid())
         board.register(self.context, "cto", "GLOBAL_MONITOR", vendor="Anthropic", session_id=self.session["id"])
         transcript = conversation.Transcript(conversation.transcript_path(self.context, self.session["id"]))

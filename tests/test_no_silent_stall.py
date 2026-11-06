@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from harness import board, board_viewer, control, self_heal
 from tests.test_self_restart import _Fixture, _ago
 
@@ -37,7 +38,7 @@ class _Stall(_Fixture):
 
     def create(self, kind: str, continues: str = "") -> dict:
         self.created.append(kind)
-        return control.create(self.root, kind, continues=continues)
+        return control.create(self.root, kind, continues=continues, settings_override=old_settings())
 
     def at(self, seconds: float) -> datetime:
         return self.base + timedelta(seconds=seconds)
@@ -64,7 +65,7 @@ class _Stall(_Fixture):
                 agent.update({"recovery_state": "automatic_requested", "automatic_recovery_requested_at": stamp})
 
     def reviewer(self, task: str = "BRIEF-TASK") -> tuple[dict, dict, object]:
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
         control.note_cli_exec(self.root, session["id"])
@@ -77,7 +78,7 @@ class _Stall(_Fixture):
         return session, board.snapshot(self.root)["agents"][agent["id"]], process
 
     def cto(self) -> tuple[dict, dict, object]:
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
         control.note_cli_exec(self.root, session["id"])
@@ -209,7 +210,7 @@ class LadderTests(_Stall):
         session, agent, _ = self.delivery_with_task("LADDER-TASK")
         self.retire(older["id"], older_agent["id"], stopped_by_owner_at="2026-01-01T00:00:00+00:00")
         self.retire(session["id"], agent["id"], stopped_by_harness_at=_ago(20))
-        unbound = control.create(self.root, "codex_delivery")
+        unbound = control.create(self.root, "codex_delivery", settings_override=old_settings())
         with board.locked_state(self.root) as state:
             self.assertEqual(board._stopped_task_to_resume(state, "x"), (older_agent["id"], "OLDER-OWNER-STOPPED-TASK"), "unbound pickup guesses the earliest")
         board.bind_replacement(self.root, unbound["id"], agent["id"], "LADDER-TASK")
@@ -218,7 +219,7 @@ class LadderTests(_Stall):
 
     def test_a_failed_handoff_is_said_out_loud(self):
         session, agent, _ = self.delivery_with_task("HANDOFF-TASK")   # the source is still active: two owners would result
-        fresh_session = control.create(self.root, "codex_delivery")
+        fresh_session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         board.bind_replacement(self.root, fresh_session["id"], agent["id"], "HANDOFF-TASK")
         fresh = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=fresh_session["id"])
         failed = self.events("replacement_handoff_failed")
@@ -333,7 +334,7 @@ class GuardTests(_Stall):
         self.assertEqual([a["action"] for a in self.plan()], ["stall_wake"], "a check running past the bound is a stall, not an exemption")
 
     def test_a_session_that_never_started_belongs_to_the_launch_failure_card(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         control.fail_launch(self.root, session["id"], "the harness could not reopen the terminal: no Terminal")
         with control.locked_state(self.root) as state:
             state["sessions"][session["id"]]["launch_failure"] = {"reason": "the CLI never started", "at": _ago(5)}

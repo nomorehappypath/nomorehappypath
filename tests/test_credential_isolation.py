@@ -342,7 +342,7 @@ class RenderedSettingsTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(global_settings, "PROVIDER_SEARCH_DIRECTORIES", ()), \
                 patch("harness.claude_auth.resolve_token", return_value="tok"), patch("harness.claude_auth.validate_token"):
-            result = global_settings.test_connection(home, "claude", "opus", "high", workspace)
+            result = global_settings.test_connection(home, "claude", "sonnet", "low", workspace)
         self.assertEqual(result["cli_version"], "99.0.0")
         self.assertEqual(Path(result["cli_path"]).resolve(), fake.resolve())
 

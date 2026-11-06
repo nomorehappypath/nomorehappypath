@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from tests.pinned_settings import old_settings
 from harness import board, control, project_registry, project_worker
 from harness.board_surface import (
     ALL_BOARD_OPERATIONS,
@@ -54,7 +55,7 @@ class BoardSurfaceAuthenticationTests(unittest.TestCase):
         control.initialize(self.context)
 
     def session(self, kind="codex_delivery", role="engineering", task=board.AWAITING_OWNER_DIRECTION):
-        session = control.create(self.context, kind)
+        session = control.create(self.context, kind, settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())
@@ -131,7 +132,7 @@ class BoardSurfaceAuthenticationTests(unittest.TestCase):
 
     def test_wrong_project_and_cross_session_tokens_are_refused(self):
         first, _, authority, token = self.session()
-        second = control.create(self.context, "claude_cto")
+        second = control.create(self.context, "claude_cto", settings_override=old_settings())
         authority.prepare(second["id"])
         control.attach(self.context, second["id"], os.getpid())
         board.register(self.context, "cto", "GLOBAL_MONITOR", session_id=second["id"])
@@ -169,7 +170,7 @@ class BoardSurfaceAuthenticationTests(unittest.TestCase):
             replacement_authority.authenticate(token)
 
     def test_worker_restart_before_claim_replaces_unrecoverable_raw_token(self):
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         first_worker = SessionTokenAuthority(self.context)
         first_worker.prepare(session["id"])
         original = first_worker._pending[session["id"]]
@@ -184,7 +185,7 @@ class BoardSurfaceAuthenticationTests(unittest.TestCase):
             restarted_worker.authenticate(original)
 
     def test_bootstrap_claim_is_one_time_and_returns_exact_environment(self):
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())
@@ -201,7 +202,7 @@ class BoardSurfaceAuthenticationTests(unittest.TestCase):
         self.assertNotIn(environment[TOKEN_ENV], json.dumps(repeated))
 
     def test_unrelated_local_process_cannot_race_the_attached_session_bootstrap(self):
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())
@@ -227,7 +228,7 @@ print(s.makefile("rb").readline().decode(),end="")
         )
 
     def test_protocol_mismatch_and_non_loopback_bind_fail_closed(self):
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())
@@ -285,7 +286,7 @@ print(s.makefile("rb").readline().decode(),end="")
         return home
 
     def test_real_managed_runner_bootstraps_token_into_provider_environment(self):
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         with self.served(authority) as endpoint, self.bootstrap_served(authority, endpoint) as bootstrap:
@@ -344,7 +345,7 @@ class BoardSurfaceCommandTests(unittest.TestCase):
         control.initialize(self.context)
 
     def session(self, kind="codex_delivery", role="engineering", task=board.AWAITING_OWNER_DIRECTION):
-        session = control.create(self.context, kind)
+        session = control.create(self.context, kind, settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())
@@ -539,7 +540,7 @@ class BoardSurfaceCommandTests(unittest.TestCase):
         )
 
     def test_register_ignores_claimed_role_task_vendor_name_and_session(self):
-        session = control.create(self.context, "claude_reviewer")
+        session = control.create(self.context, "claude_reviewer", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         control.attach(self.context, session["id"], os.getpid())

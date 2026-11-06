@@ -12,6 +12,7 @@ import os
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import control
 from tests.test_stage4_system_layer import Stage4RunnerTests
 
@@ -45,13 +46,13 @@ class ClaudeWindowSelectCopyTests(unittest.TestCase):
         self.switch("claude", stage4=False)
         for kind in ("claude_reviewer", "claude_cto"):
             with self.subTest(kind=kind):
-                self.launch(control.create(self.context, kind), kind)
+                self.launch(control.create(self.context, kind, settings_override=old_settings()), kind)
                 self.assertEqual(self.mouse_values(), ["1"], f"{kind}: the owner could not select or copy text")
 
     def test_the_codex_delivery_window_is_left_alone(self):
         self.require_confinement()
         self.switch("codex", stage4=False)
-        self.launch(control.create(self.context, "codex_delivery"), "codex_delivery")
+        self.launch(control.create(self.context, "codex_delivery", settings_override=old_settings()), "codex_delivery")
         self.assertNotIn("1", self.mouse_values())
 
 

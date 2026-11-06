@@ -59,7 +59,7 @@ Demo videos and a longer walkthrough: https://nomorehappypath.com
 
 The first run needs a few sign-ins; the sections below explain each one.
 
-**Costs tip:** the agents run on your own plans. For small tasks, choose a medium effort level in Settings before you start the agents; the highest effort settings use noticeably more of your allowance.
+**Costs tip:** the agents run on your own plans. A new install starts with the less expensive choices: the builder is Claude Sonnet (medium effort), the independent reviewer is Codex gpt-6-sol (high effort) and the CTO is Claude Sonnet (low effort). Change any of them in Settings; choices you already saved are never changed. For small tasks, choose a medium effort level in Settings before you start the agents; the highest effort settings use noticeably more of your allowance.
 
 **On a fresh Linux server, also:**
 
@@ -141,6 +141,7 @@ AI agents it governs run on **your own accounts**.
 | **Codex CLI** (any role) | `npm install -g @openai/codex` — sign in with your OpenAI account | your OpenAI/ChatGPT plan |
 | **Claude Code CLI** (any role) | https://claude.com/claude-code — sign in with your Anthropic account | your Anthropic plan |
 | **Antigravity CLI** (`agy`, optional — Gemini for any role) | https://antigravity.google/cli — sign in with your Google account; the agent asks once more inside its own window | a free Google account has a weekly quota; Google AI Pro/Ultra raise it (billing: one.google.com) |
+| **chrome-headless-shell** (optional; only for screen checks and rendered tests: without it those two are off and all other work runs) | macOS: run `npx playwright install chromium-headless-shell` once (needs Node.js). It unpacks into `~/Library/Caches/ms-playwright`, which the app searches by itself, so there is nothing to set. Linux on a 64-bit Intel/AMD processor: the same command unpacks into `~/.cache/ms-playwright` (not if `XDG_CACHE_HOME` is set), also found by itself. Other Linux: install Chrome and set `HARNESS_BROWSER_BIN`, as described under Linux below | free |
 | **OpenAI API key** (project chat) | https://platform.openai.com/api-keys — entered under Settings, verified before storage, kept in a file only you can read | pay-per-use, cents |
 
 You can start with just one CLI, but cross-vendor review, where an agent

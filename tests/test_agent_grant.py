@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.pinned_settings import old_settings
 from harness import project_context, project_registry
 from harness.agent_grant import GrantTooBroad, agent_writable_roots
 
@@ -288,7 +289,7 @@ class RunnerRefusesBeforeInvokingTheAgent(unittest.TestCase):
         context = project_context.context_from_roots(
             code_root=code, data_root=data, workspace_root=workspace)
         control_module.restore_missing_resume_session(
-            context, self.SESSION_ID, "codex_delivery")
+            context, self.SESSION_ID, "codex_delivery", settings_override=old_settings())
 
         sentinel = root / "AGENT-WAS-INVOKED"
         fake = root / "fake-codex"

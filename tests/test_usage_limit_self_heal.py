@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 
+from tests.pinned_settings import old_settings
 from harness import attention, board, control, self_heal
 from tests import test_self_restart as base
 
@@ -24,6 +25,9 @@ def _limit_incident(resets_in_hours: float = 3.0) -> dict:
 
 
 class HeldTerminalSelfHealTests(base._Fixture):
+    def setUp(self):
+        super().setUp()
+        control.update_agent_settings(self.root, old_settings())      # these cases are about a Claude Reviewer
     def hold(self, session_id: str, provider: str = "codex") -> None:
         control.record_attention(self.root, session_id, attention.limit_reason(provider), limit=_limit_incident())
 
@@ -62,7 +66,7 @@ class HeldTerminalSelfHealTests(base._Fixture):
         self.assertFalse(self_heal._stall_blocked(state, state["agents"][agent["id"]], resumed, past_grace))
 
     def test_no_second_reviewer_is_started_against_the_same_exhausted_allowance(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
         control.note_cli_exec(self.root, session["id"])
@@ -77,7 +81,7 @@ class HeldTerminalSelfHealTests(base._Fixture):
         self.assertEqual([a["action"] for a in self_heal.plan(self.root)], ["start_reviewer"])
 
     def test_an_unrelated_crashed_delivery_is_still_recovered_while_a_reviewer_is_held(self):
-        reviewer = control.create(self.root, "claude_reviewer")
+        reviewer = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, reviewer["id"], process.pid)
         control.note_cli_exec(self.root, reviewer["id"])
@@ -101,7 +105,7 @@ class HeldTerminalSelfHealTests(base._Fixture):
         self.assertEqual(self.launched, [])
 
     def test_a_reviewer_start_planned_before_the_hold_is_dropped_at_execution(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         process = self.stand_in()
         control.attach(self.root, session["id"], process.pid)
         control.note_cli_exec(self.root, session["id"])

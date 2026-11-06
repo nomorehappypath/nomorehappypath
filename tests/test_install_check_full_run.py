@@ -102,7 +102,9 @@ class EffectiveConfigurationTests(unittest.TestCase):
     def test_the_shipped_defaults_are_reported_without_changing_them(self):
         text = preflight.role_defaults_text()
         self.assertIn("Reviewer", text)
-        self.assertIn("opus (max)", text)
+        self.assertIn("Delivery Agent: Claude sonnet (medium)", text)
+        self.assertIn("CTO: Claude sonnet (low)", text)
+        self.assertIn("Independent Reviewer: Codex gpt-6-sol (high)", text)
 
 
 class BrowserTests(unittest.TestCase):
@@ -125,6 +127,21 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("rendered-page proof", text)
         self.assertIn("other work runs without it", text)
         self.assertNotIn("sudo apt", text)
+        self.assertIn("npx playwright install chromium-headless-shell", text)
+        self.assertIn("~/Library/Caches/ms-playwright", text)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the macOS cache layout is only consulted on a Mac")
+    def test_the_printed_command_lands_where_the_app_looks(self):
+        """What `npx playwright install chromium-headless-shell` unpacks (checked against Playwright 1.60 and a real install) is found."""
+        from harness import browser_acceptance
+        with tempfile.TemporaryDirectory() as home:
+            binary = Path(home).resolve() / "Library" / "Caches" / "ms-playwright" / "chromium_headless_shell-1228" / "chrome-headless-shell-mac-arm64" / "chrome-headless-shell"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o755)
+            with mock.patch.dict(os.environ, {"HOME": home}, clear=False):
+                os.environ.pop("HARNESS_BROWSER_BIN", None); os.environ.pop("CHROME_BIN", None)
+                self.assertEqual(browser_acceptance.resolve_binary(), str(binary))
 
     def test_an_unknown_processor_gets_no_invented_download_and_the_exact_export_is_named_after_install(self):
         unknown = preflight.native_browser_problem("Linux", "riscv64", self.missing)

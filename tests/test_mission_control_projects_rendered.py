@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import unittest
 
+from tests.pinned_settings import old_settings
 from harness import project_manager, project_registry as registry
 from tests.mission_control_support import (RenderedCase, empty_project_state, paused_project_state, ready_project_state,
                                            repair_project_state)
@@ -101,7 +102,7 @@ class RenderedProjectsPageTests(RenderedCase):
         self.assertEqual(sky["now"], "The builder is fixing the 2 problems the reviewer found.")
         self.assertIn("Step 19 of 26 · Repair", sky["step"])
         self.assertEqual(sky["bar"], {"now": "19", "max": "26"})
-        self.assertIn("Builder · OpenAI Codex", sky["pills"])
+        self.assertIn("Builder · Anthropic Claude", sky["pills"])
         self.assertIn("Cost: not measured yet", sky["pills"], "the cost center has counted nothing for this project: never $0")
         self.assertEqual(sky["links"], ["Open the story →", "History (2 tasks)", "Ask about it"])
         self.assertIsNone(sky["tell"])

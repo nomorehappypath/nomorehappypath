@@ -10,6 +10,7 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
+from tests.pinned_settings import old_settings
 from harness import board, board_viewer, claude_auth, control, project_worker, project_memory
 from harness.board_surface import SessionTokenAuthority
 from tests.environment_support import require_loopback
@@ -32,6 +33,7 @@ class ClaudeAuthRenderedTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.root = Path(tmp)
             project_memory.initialize(self.root, project_name='Claude setup proof', description='Token-only agent authentication')
+            control.update_agent_settings(self.root, old_settings())      # the page starts a Claude Reviewer here
             authority = SessionTokenAuthority(self.root)
             worker = ThreadingHTTPServer(('127.0.0.1', 0), project_worker.make_handler(self.root, authority=authority, endpoint=lambda:'http://127.0.0.1:1', bootstrap_socket=lambda:'/tmp/unused.sock'))
             threading.Thread(target=worker.serve_forever, daemon=True).start()

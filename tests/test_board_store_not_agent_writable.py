@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from tests.claude_auth_support import auth_arguments
 
 from harness import agent_confinement, agent_grant, board, contract, control, platform_support, project_registry
@@ -145,7 +146,7 @@ class ExecutedConfinementTests(unittest.TestCase):
         """
         data = self.project / ".harness"
         context = ProjectContext(self.project, data, Path(self._tmp.name) / "workspaces")
-        session = control.create(context, "codex_delivery")
+        session = control.create(context, "codex_delivery", settings_override=old_settings())
         control.record_cli_session(context, session["id"], "01a0fad0-0000-0000-0000-000000000000", "codex")
         transcript = data / "control" / "transcripts" / f"{session['id']}.log"
         transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +188,7 @@ class RunnerTests(unittest.TestCase):
         return home
 
     def _run(self, kind: str, home: Path, environment: dict) -> subprocess.CompletedProcess:
-        session = control.create(self.context, kind)
+        session = control.create(self.context, kind, settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         with self.served(authority) as endpoint, self.bootstrap_served(authority, endpoint) as bootstrap:

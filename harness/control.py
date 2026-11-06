@@ -29,10 +29,12 @@ KINDS = {
     "claude_reviewer": {"label": "CLAUDE CLI", "role": "Independent Reviewer", "vendor": "Anthropic"},
     "claude_cto": {"label": "CTO (CLAUDE)", "role": "CTO", "vendor": "Anthropic"},
 }
+# Shipped defaults for a NEW install (owner, 2026-11-05: cheaper models). Builder and Reviewer must stay from different AI companies.
+# Saved choices are never rewritten when these change.
 ROLE_SETTINGS = {
-    "delivery": {"label": "Delivery Agent", "default_provider": "codex", "default_model": "gpt-5.6-sol", "default_effort": "high"},
-    "cto": {"label": "CTO", "default_provider": "claude", "default_model": "opus", "default_effort": "high"},
-    "reviewer": {"label": "Independent Reviewer", "default_provider": "claude", "default_model": "opus", "default_effort": "max"},
+    "delivery": {"label": "Delivery Agent", "default_provider": "claude", "default_model": "sonnet", "default_effort": "medium"},
+    "cto": {"label": "CTO", "default_provider": "claude", "default_model": "sonnet", "default_effort": "low"},
+    "reviewer": {"label": "Independent Reviewer", "default_provider": "codex", "default_model": "gpt-6-sol", "default_effort": "high"},
 }
 PROVIDERS = {
     "codex": {"label": "Codex", "short": "Codex", "binary_env": "HARNESS_CODEX_BIN", "vendor": "OpenAI"},

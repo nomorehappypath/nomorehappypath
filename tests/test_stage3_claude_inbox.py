@@ -20,6 +20,7 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from tests.claude_auth_support import auth_arguments
 
 from harness import board, control
@@ -134,7 +135,7 @@ class Stage3ClaudeTests(unittest.TestCase):
         cli.chmod(0o755)
         # A relaunch is a NEW session of the same role, continuing the ended one
         # (same project, same Claude conversation file).
-        self.session = control.create(self.root, "claude_reviewer")
+        self.session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         if relaunch:
             # The runner records a continuing launch as resumed before it starts the supervisor (run_managed_agent.sh:
             # note-cli-launch --resumed). Without that record this terminal reads as a fresh start and, since 2026-10-28,
@@ -415,7 +416,7 @@ class RunnerTests(unittest.TestCase):
                         encoding="utf-8")
         cli_capabilities.record_live(self.home, "claude", {name: True for name in needed if name not in static},
                                      auth_mode="test", source_environment=source)
-        session = control.create(self.context, "claude_reviewer")
+        session = control.create(self.context, "claude_reviewer", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         master, slave = pty.openpty()

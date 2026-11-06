@@ -5188,9 +5188,16 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         waiting = (state.get("requirement_proposals") or {}).get(str(task)) or {}
         if (waiting.get("contract_check") or {}).get("status") == "rechecking" and waiting.get("status") == "awaiting_owner":
             return _recheck_update(root, state, qa, waiting, number, new_checks, reason)
-        if number in ((waiting.get("contract_check") or {}).get("coverage_requested") or []) and waiting.get("status") == "awaiting_owner" and waiting["contract_check"].get("status") in {"ready", "questions"}:
+        confirmation = (state.get("requirement_confirmations") or {}).get(str(task))      # exists once Delivery confirmed the contract
+        # The coverage answer is taken while the owner decides AND in the short time after Go ahead before Delivery has
+        # confirmed the contract (2026-11-05: Go ahead came a minute before the Reviewer's answer and it was refused).
+        # "answered" is the state after a Go ahead that also answered the Reviewer's questions (Codex R1-1).
+        still_open = waiting.get("status") == "awaiting_owner" or (waiting.get("status") == "accepted" and not confirmation)
+        if number in ((waiting.get("contract_check") or {}).get("coverage_requested") or []) and still_open and waiting["contract_check"].get("status") in {"ready", "questions", "answered"}:
             return _coverage_update(root, state, qa, waiting, number, new_checks, (paths, none_because), reason)
-        block = ((state.get("requirement_confirmations") or {}).get(str(task)) or {}).get("contract_check") or {}
+        # The confirmed contract's own block, also when it holds no check yet (Codex R1-2: a contract confirmed with zero checks
+        # has an empty fingerprint, so "confirmed" is read from the confirmation record, never from the fingerprint).
+        block = confirmation.setdefault("contract_check", {}) if isinstance(confirmation, dict) else {}
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
         if not new_checks and number != 0 and not old:
             # Nothing is stored for this requirement (a report has no program to check, or the requirement was declared untestable) and the
@@ -5202,31 +5209,44 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
             return {"criterion": number, "checks": 0, "unchanged": True}
         if not new_checks and number != 0:
             raise ValueError("the correction needs at least one check")
+        criteria = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria") or []
         if not old:
-            raise ValueError("that requirement has no stored check to correct")
+            # 2026-11-05 (second stranger run): the owner said Go ahead a minute before the Reviewer answered the board's
+            # coverage request; from then on a requirement with no stored check could never get one ("no stored check to
+            # correct"), and 5 of 11 requirements were built with no test written in advance. A requirement of the agreed
+            # contract that has no check yet may receive its first checks here; anything else is refused as before.
+            agreed = next((item for item in criteria if item.get("n") == number), None) or next(
+                (dict(item, text=item.get("criterion", "")) for item in block.get("labels") or [] if item.get("n") == number), None)
+            if agreed is None or not confirmation:
+                raise ValueError("that requirement has no stored check to correct")
         if _task_closed_for_checks(state, str(task)):
             raise ValueError("the task is finished; its checks can no longer be corrected")
         folder = _contract_check_folder(root, str(task), f"correction-{secrets.token_hex(3)}")
-        header = {"n": number, "text": old[0]["criterion"]}
+        text = old[0]["criterion"] if old else str(agreed.get("text") or "")
+        header = {"n": number, "text": text}
         new = []
         for position, item in enumerate(new_checks, 1):
             stored = _store_contract_check(folder, f"c{number}-k{position}.json", header, item)
-            new.append({"n": f"{number}.{position}", "criterion_index": number, "criterion": old[0]["criterion"], **stored})
-        block["checks"] = sorted([item for item in block["checks"] if item["criterion_index"] != number] + new, key=lambda item: tuple(int(part) for part in item["n"].split(".")))
+            new.append({"n": f"{number}.{position}", "criterion_index": number, "criterion": text, **stored})
+        block["checks"] = sorted([item for item in block.get("checks") or [] if item["criterion_index"] != number] + new, key=lambda item: tuple(int(part) for part in item["n"].split(".")))
         block["checks_sha256"] = _checks_digest(block["checks"])
         block.setdefault("corrections", []).append({
             "criterion_index": number, "reason": reason, "at": now(), "reviewer_id": agent_id, "replaced": old, "new": new,
         })
-        criteria = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria") or []
         for item in criteria:
             if item["n"] == number:
                 item["checks"] = [{k: entry[k] for k in ("coverage", "file", "sha256", "covers") if k in entry} for entry in new]
+                if not old:
+                    item["mapped"] = True      # the Reviewer has now said which tests cover this requirement
+                    if paths or none_because:
+                        item["failure_paths"], item["no_failure_paths_because"] = paths, none_because
         contract_check.apply_coverage(criteria)
         block["labels"] = contract_check.labels(criteria)
         (block.get("results") or {}).pop(str(number), None)   # the corrected check has not run yet
         _event(state, "contract_check_corrected", qa, {
             "task": str(task), "criterion": number, "reason": reason,
-            "message": "a stored check was corrected by the Reviewer; the original and the reason are kept, earlier results no longer count",
+            "message": ("a stored check was corrected by the Reviewer; the original and the reason are kept, earlier results no longer count" if old else
+                        "the Reviewer added the first checks for a requirement that had none; the reason is kept"),
         })
         corrected = {"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}
         (block.get("compare") or {}).pop(str(number), None)      # the old label was about the old check
@@ -7600,7 +7620,13 @@ def _commit_files(folder: Path, commit: str) -> dict[str, str] | None:
         mode, kind, blob = meta.decode("ascii", "replace").split()[:3]
         if kind != "blob":
             continue  # submodules
-        files[name.decode("utf-8", errors="surrogateescape")] = "link" if mode == "120000" else blob + (":x" if mode == "100755" else "")
+        text = name.decode("utf-8", errors="surrogateescape")
+        if _harness_owned_path(text) or "/__pycache__/" in f"/{text}":
+            # The same files _tree_fingerprint leaves out. A capture's fingerprint never holds the app's own .harness storage, so a
+            # commit that does (2026-11-05: a generated sandbox profile got committed during a repair) must not be compared on it:
+            # every fresh capture was refused as "the code changed after this capture" over a file that is not project content.
+            continue
+        files[text] = "link" if mode == "120000" else blob + (":x" if mode == "100755" else "")
     return files
 
 
@@ -17379,6 +17405,9 @@ def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, An
     stopped = stop_accepted_delivery_terminals(root, task)
     if stopped:
         recorded_response["delivery_stopped"] = stopped
+    idle = stop_idle_reviewer_and_cto(root, task)
+    if idle:
+        recorded_response["idle_agents_stopped"] = idle
     return recorded_response
 
 
@@ -17411,6 +17440,58 @@ def stop_accepted_delivery_terminals(root: Path, task: str) -> list[str]:
                 _event(state, "delivery_stop_after_acceptance_failed", None, {
                     "task": task, "message": f"Task accepted; its Delivery terminal could not be stopped: {error}"[:300],
                 })
+    return stopped
+
+
+# Session kinds that have nothing left to do once the last open task is accepted, and the plain name each is told by.
+IDLE_AFTER_ACCEPT_KINDS = {"claude_reviewer": "Reviewer", "claude_cto": "CTO"}
+
+
+def stop_idle_reviewer_and_cto(root: Path, task: str) -> list[str]:
+    """The owner accepted `task`: stop the running Reviewer and CTO terminals when no other task is still live.
+
+    Takes the project root and the accepted task. Returns the ids of the sessions it stopped (empty when another task is
+    being built, reviewed or waiting for the owner, or when none is running). Each stop is recorded as a plain event
+    ("reviewer_stopped_after_acceptance" / "cto_stopped_after_acceptance"). Why: in a real run both stayed open, idle, for hours
+    after Accept. They start again by themselves when the owner gives the next direction (the page starts every role that is
+    not running). A failure is noted and never undoes or fails the Accept.
+    """
+    from harness import board_viewer, control  # local, as everywhere in this module (import cycle)
+    try:
+        running = control.live_session_ids(root)
+        sessions = [
+            (str(entry["id"]), str(entry["kind"])) for entry in control.snapshot(root).get("sessions", [])
+            if entry.get("kind") in IDLE_AFTER_ACCEPT_KINDS and entry.get("id") in running
+        ]
+    except (OSError, ValueError):
+        return []
+    if not sessions:
+        return []
+    with locked_state(root) as state:
+        # The same definition of "live" the page uses for its task list; the accepted task itself may still show
+        # (for example while its upload finishes) and is not another task.
+        other_live = set(board_viewer._live_task_names(state, {})) - {task}
+    if other_live:
+        return []
+    stopped: list[str] = []
+    for session_id, kind in sessions:
+        name = IDLE_AFTER_ACCEPT_KINDS[kind]
+        try:
+            stop_session(root, session_id)
+            control.stop(root, session_id)
+        except (OSError, ValueError) as error:
+            with locked_state(root) as state:
+                _event(state, "idle_agent_stop_after_acceptance_failed", None, {
+                    "task": task, "message": f"Task accepted; the {name} terminal could not be stopped: {error}"[:300],
+                })
+            continue
+        message = f"Task accepted and nothing else is open, so the {name} was stopped. It starts again when you give the next direction."
+        with locked_state(root) as state:
+            agent = next((value for value in state.get("agents", {}).values() if value.get("session_id") == session_id), None)
+            if agent:
+                agent["status_note"] = message
+            _event(state, f"{name.lower()}_stopped_after_acceptance", agent, {"task": task, "message": message})
+        stopped.append(session_id)
     return stopped
 
 

@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from harness import attention, board, control, gemini_auth, global_settings, platform_support
 from tests.environment_support import require_loopback
 from tests.test_conversation_memory import run_runner
@@ -375,7 +376,7 @@ class RunnerLaunchTests(unittest.TestCase):
         codex = self.root / "codex-env-probe"
         codex.write_text("#!/usr/bin/env bash\nprintf '%s' \"${GEMINI_API_KEY:-ABSENT}\" > \"$HARNESS_CAPTURE\"\n", encoding="utf-8")
         codex.chmod(0o755)
-        session = control.create(self.root, "codex_delivery")          # the default Delivery provider: Codex
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())          # a Codex Delivery
         self.assertEqual(session["provider"], "codex")
         done = run_runner(self.root, session, {**self.environment, "HARNESS_CODEX_BIN": str(codex)})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

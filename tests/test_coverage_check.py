@@ -9,7 +9,7 @@ import copy
 import unittest
 
 from harness import board, contract_check, control
-from tests.test_contract_first_checks import TASK, TEST_FILE, TEXT, _Fixture, ledger, write_json
+from tests.test_contract_first_checks import QUESTION, TASK, TEST_FILE, TEXT, _Fixture, ledger, write_json
 
 CHECK = {"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}
 
@@ -82,6 +82,85 @@ class CoverageTests(_Fixture):
         self.assertEqual(self.proposal()["status"], "accepted")
         confirmed = board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]["criteria"][0]
         self.assertEqual(confirmed["coverage_line"], contract_check.GAP_NORMAL_ONLY)
+
+    def gap_then_go_ahead(self):
+        """Requirement 2 has no check, the Reviewer was asked once, and the owner says Go ahead before it answers."""
+        agent = self.delivery()
+        session, reviewer = self.reviewer()
+        board.record_requirement_proposal(self.root, agent["id"], TEXT)
+        control.take_instructions(self.root, session["id"])
+        self.submit(reviewer, criteria((True, True), (False, False)))
+        self.assertEqual(len(self.asked(session)), 1)
+        board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=self.proposal()["contract_check"]["token"])
+        return agent, reviewer, write_json(self.base, "late.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
+
+    def confirmed_block(self):
+        return board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
+
+    def test_a_gap_answered_after_go_ahead_and_before_the_contract_is_confirmed_is_taken(self):
+        """Second stranger run 2026-11-05: Go ahead came a minute before the Reviewer's answer; every answer was then refused
+        ("no stored check to correct") and 5 of 11 requirements were built with no test written in advance."""
+        agent, reviewer, fix = self.gap_then_go_ahead()
+        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        self.assertEqual(self.lines(), ["covered", "covered"])
+        board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
+        self.assertEqual(sorted({c["criterion_index"] for c in self.confirmed_block()["checks"]}), [1, 2], "the late check is in the locked contract")
+
+    def test_a_gap_answered_after_the_contract_is_confirmed_adds_the_first_checks(self):
+        agent, reviewer, fix = self.gap_then_go_ahead()
+        board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
+        before = self.confirmed_block()
+        self.assertEqual([c["criterion_index"] for c in before["checks"]], [1])
+        result = board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        self.assertEqual(result["checks"], 1)
+        after = self.confirmed_block()
+        self.assertEqual(sorted({c["criterion_index"] for c in after["checks"]}), [1, 2])
+        self.assertEqual(next(c for c in after["checks"] if c["criterion_index"] == 2)["criterion"], "Requirement number 2 holds")
+        self.assertNotEqual(after["checks_sha256"], before["checks_sha256"], "the lock covers the new check")
+        self.assertEqual([label["coverage"] for label in after["labels"]], ["covered", "covered"])
+        added = [e for e in board.snapshot(self.root)["events"] if e["kind"] == "contract_check_corrected"]
+        self.assertIn("added the first checks for a requirement that had none", added[-1]["message"])
+        with self.assertRaisesRegex(ValueError, "no stored check to correct"):
+            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 9, "not a requirement of this contract", fix)
+
+    def test_a_gap_answered_after_a_go_ahead_that_also_answered_a_question_is_taken(self):
+        """Codex R1-1: answering the Reviewer's question puts the check in the state "answered"; the late coverage answer
+        was still refused there and the contract was confirmed without the check."""
+        agent = self.delivery()
+        session, reviewer = self.reviewer()
+        board.record_requirement_proposal(self.root, agent["id"], TEXT)
+        control.take_instructions(self.root, session["id"])
+        value = criteria((True, True), (False, False))
+        value["questions"] = [QUESTION]
+        self.submit(reviewer, value)
+        token = self.proposal()["contract_check"]["token"]
+        board.record_requirements_decision(self.root, TASK, "answer", version=1, token=token, answers=[{"question": 1, "choice": 1, "other": ""}])
+        board.record_requirements_decision(self.root, TASK, "go_ahead", version=self.proposal()["version"], token=self.proposal()["contract_check"]["token"])
+        self.assertEqual((self.proposal()["status"], self.proposal()["contract_check"]["status"]), ("accepted", "answered"))
+        fix = write_json(self.base, "late.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
+        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
+        # requirement 1's own check went stale with the answered question (existing rule); requirement 2's late check must be there
+        self.assertIn(2, {c["criterion_index"] for c in self.confirmed_block()["checks"]}, "the late check survives confirmation")
+
+    def test_a_contract_confirmed_with_no_check_at_all_can_receive_its_first_one(self):
+        """Codex R1-2: with zero checks the contract's fingerprint is empty; that must not read as "not confirmed"."""
+        agent = self.delivery()
+        session, reviewer = self.reviewer()
+        board.record_requirement_proposal(self.root, agent["id"], TEXT)
+        control.take_instructions(self.root, session["id"])
+        self.submit(reviewer, criteria((False, False)))
+        board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=self.proposal()["contract_check"]["token"])
+        board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
+        self.assertEqual((self.confirmed_block().get("checks") or [], self.confirmed_block().get("checks_sha256") or ""), ([], ""))
+        fix = write_json(self.base, "first.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
+        result = board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
+        self.assertEqual(result["checks"], 1)
+        after = self.confirmed_block()
+        self.assertEqual([c["criterion_index"] for c in after["checks"]], [1])
+        self.assertTrue(after["checks_sha256"], "the first check is locked")
+        with self.assertRaisesRegex(ValueError, "no stored check to correct"):
+            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 7, "not a requirement", fix)
 
     def test_happy_path_only_is_a_gap(self):
         session, reviewer = self.start()

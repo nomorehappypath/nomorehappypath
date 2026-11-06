@@ -468,8 +468,11 @@ class SubmissionAndAnswersTests(_Fixture):
         recorded = board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
         self.assertEqual([c["n"] for c in recorded["checks"]], ["2.1"])
         self.assertEqual({i["n"]: i["label"] for i in recorded["labels"]}, {1: "not checked in advance", 2: "checked"})
-        with self.assertRaisesRegex(ValueError, "no stored check|not a|another|nothing"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "too late to update this", self.correction())
+        # 2026-11-05: the update the Reviewer could not finish before Go ahead is no longer lost. It may still add the first
+        # check for that requirement afterwards (before this, 5 of 11 requirements of a real run were built with no test).
+        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "the update I could not finish before Go ahead", self.correction())
+        late = board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
+        self.assertEqual(sorted({c["criterion_index"] for c in late["checks"]}), [1, 2])
 
     def test_the_recheck_has_one_deadline_and_a_late_update_is_refused(self):
         _agent, _session, reviewer = self.start()
