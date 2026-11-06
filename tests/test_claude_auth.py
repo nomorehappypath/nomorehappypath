@@ -11,6 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from tests.pinned_settings import old_settings
 from harness import claude_auth, control, project_worker, board_viewer, agent_confinement, platform_support
 
 
@@ -51,7 +52,7 @@ class ClaudeAuthTests(unittest.TestCase):
 
     def test_each_claude_role_and_delivery_override_refuses_before_terminal(self):
         for kind in ('claude_cto', 'claude_reviewer', 'codex_delivery'):
-            settings = control.default_agent_settings()
+            settings = old_settings()
             if kind == 'codex_delivery':
                 settings['delivery'] = {'provider': 'claude', 'model': 'opus', 'effort': 'high'}
                 settings['reviewer'] = {'provider': 'codex', 'model': 'gpt-5.6-sol', 'effort': 'high'}
@@ -72,7 +73,7 @@ class ClaudeAuthTests(unittest.TestCase):
             host.assert_not_called()
 
     def test_codex_does_not_resolve_a_claude_token(self):
-        session = control.create(self.root, 'codex_delivery')
+        session = control.create(self.root, 'codex_delivery', settings_override=old_settings())
         with patch.object(claude_auth, 'resolve_token') as resolve:
             self.assertEqual(claude_auth.prepare_launch(self.root, session), '')
             resolve.assert_not_called()

@@ -16,6 +16,9 @@ from pathlib import Path
 
 from harness import board, control, global_settings, review_rounds, self_heal
 from tests import test_frozen_review_scope as frozen
+from tests.pinned_settings import old_settings
+
+
 
 GAP = "TASK DONE: NOT TESTED — the report page cannot be opened here"
 
@@ -46,7 +49,7 @@ class Retry(frozen.Rounds):
     def create_factory(self, sessions, settings=None, models=None):
         def create(kind, continues="", recovery=False):
             session = control.create(self.root, kind, fresh=recovery,
-                                     settings_override=control.reviewer_retry_settings(settings or control.default_agent_settings(), models))
+                                     settings_override=control.reviewer_retry_settings(settings or old_settings(), models))
             sessions.append(session)
             return session
         return create
@@ -83,7 +86,7 @@ class Retry(frozen.Rounds):
         self.request(changes="no code change; the fresh Reviewer tests it")
 
     def test_an_unset_field_uses_the_strongest_model_and_effort_is_raised_to_high(self):
-        settings = control.default_agent_settings()
+        settings = old_settings()
         settings["reviewer"]["effort"] = "low"
         chosen = control.reviewer_retry_settings(settings, {"claude": "", "codex": "", "gemini": ""})["reviewer"]
         self.assertEqual((chosen["provider"], chosen["model"], chosen["effort"]), ("claude", control.STRONGEST_MODELS["claude"], "high"))
@@ -93,7 +96,7 @@ class Retry(frozen.Rounds):
 
     def test_a_reviewer_of_the_delivery_agents_company_is_never_started_and_the_part_ends_honestly(self):
         self.gaps()
-        settings = control.default_agent_settings()
+        settings = old_settings()
         swapped = {**settings, "delivery": {**settings["delivery"], "provider": "claude", "model": "opus"}, "reviewer": {**settings["reviewer"], "provider": "codex", "model": "gpt-5.6-sol"}}
         control.create(self.root, "codex_delivery", settings_override=swapped)        # a live Delivery session of the Reviewer company (claude)
         sessions, launched = [], []
@@ -175,11 +178,11 @@ class SettingsField(unittest.TestCase):
         document = global_settings.initialize(self.home)
         self.assertEqual(document["reviewer_retry_models"], {"claude": "", "codex": "", "gemini": ""}, "unset by default")
         preset = control.PROVIDER_MODELS["claude"][0]
-        saved = global_settings.update_agent_settings(self.home, control.default_agent_settings(), None, {"claude": preset})
+        saved = global_settings.update_agent_settings(self.home, old_settings(), None, {"claude": preset})
         self.assertEqual(global_settings.load(self.home)["reviewer_retry_models"]["claude"], preset)
         self.assertEqual(saved["recovery_models"], document["recovery_models"], "the Delivery field is untouched")
         with self.assertRaises(ValueError):
-            global_settings.update_agent_settings(self.home, control.default_agent_settings(), None, {"gemini": "gpt-6-sol"})
+            global_settings.update_agent_settings(self.home, old_settings(), None, {"gemini": "gpt-6-sol"})
         old = json.loads((self.home / global_settings.SETTINGS_FILENAME).read_text(encoding="utf-8"))
         old.pop("reviewer_retry_models")
         (self.home / global_settings.SETTINGS_FILENAME).write_text(json.dumps(old), encoding="utf-8")

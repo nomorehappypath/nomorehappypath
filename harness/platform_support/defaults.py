@@ -45,6 +45,25 @@ from typing import Any, Mapping
 from harness.terminal_titles import role_title, window_title
 
 
+
+def keep_out_of_git(store: Path) -> None:
+    """Make the app's own `.harness` folder ignore itself when a profile store lies inside one.
+
+    Takes the folder the sandbox profiles are written to. When that folder is inside a `.harness` folder (the app's storage
+    kept beside a project), a `.gitignore` holding `*` is written at the top of that `.harness` once, so an agent's
+    `git add` in the project never commits generated files such as a sandbox profile (2026-11-05: one was committed during
+    a repair and every review capture was then refused). Returns nothing; a folder that cannot be written is left alone."""
+    for folder in (store, *store.parents):
+        if folder.name == ".harness":
+            ignore = folder / ".gitignore"
+            try:
+                if not ignore.exists():
+                    ignore.write_text("*\n", encoding="utf-8")
+            except OSError:
+                pass
+            return
+
+
 class _Discovery:
     """Where this platform keeps the tools the harness needs."""
 
@@ -1193,6 +1212,7 @@ class _AgentConfinement:
         profile = "\n".join(lines) + "\n"
         store = Path(store)
         store.mkdir(parents=True, exist_ok=True)
+        keep_out_of_git(store)
         path = store / f"read-guard-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"
         if not path.is_file() or path.read_text(encoding="utf-8") != profile:
             path.write_text(profile, encoding="utf-8")
@@ -1251,6 +1271,7 @@ class _AgentConfinement:
         profile = self.profile(writable, protected_reads, protected_writes, denied_executables)
         store = Path(store)
         store.mkdir(parents=True, exist_ok=True)
+        keep_out_of_git(store)
         path = store / f"agent-sandbox-{hashlib.sha256(profile.encode('utf-8')).hexdigest()[:16]}.sb"
         if not path.is_file() or path.read_text(encoding="utf-8") != profile:
             path.write_text(profile, encoding="utf-8")

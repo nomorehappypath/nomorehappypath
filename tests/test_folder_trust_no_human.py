@@ -32,6 +32,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import codex_app_server, control, global_settings, workspace_settings
 from harness.interactive_supervisor import _remote_tui_command
 from tests.test_stage4_system_layer import Stage4RunnerTests, stage_relaunch
@@ -101,7 +102,7 @@ class LaunchLineTests(unittest.TestCase):
     def test_claude_fresh_and_resumed_both_launch_trusted(self):
         self.require_confinement()
         self.switch("claude", stage4=False)
-        session = control.create(self.context, "claude_reviewer")
+        session = control.create(self.context, "claude_reviewer", settings_override=old_settings())
         argv = self.launch(session, "claude_reviewer")
         self.assertEqual(self.sandboxed_values(), ["1"], "a fresh agent never stops on the folder-trust question")
         minted = argv[argv.index("--session-id") + 1]

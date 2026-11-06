@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, control, execution_identity as xid
+from tests.pinned_settings import old_settings
 from tests.requirements_support import agreed_requirements
 
 
@@ -47,7 +48,7 @@ class RepairContextTests(unittest.TestCase):
         proof = self.root / "proof.txt"
         proof.write_text("proven\n")
         contract.add_evidence(self.root, "TASK-R", "delivery", [proof])
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         dev = board.register(self.root, "development", board.AWAITING_OWNER_DIRECTION,
                              vendor="OpenAI", session_id=session["id"])
         board.record_owner_direction(self.root, session["id"], "Ship repair flow", allow_split=True)   # some runs use a chunked plan

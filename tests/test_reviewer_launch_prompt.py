@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.pinned_settings import old_settings
 from tests.claude_auth_support import auth_arguments
 
 from harness import control, project_context, project_registry
@@ -35,7 +36,7 @@ class ReviewerLaunchPromptTests(unittest.TestCase):
             })
             context = project_context.context_from_roots(
                 code_root=code, data_root=data, workspace_root=workspace)
-            control.restore_missing_resume_session(context, SESSION_ID, "claude_reviewer")
+            control.restore_missing_resume_session(context, SESSION_ID, "claude_reviewer", settings_override=old_settings())
             captured = data / "PROMPT"
             fake = base / "fake-claude"
             fake.write_text(f'#!/bin/sh\nfor a; do last="$a"; done\nprintf "%s" "$last" > "{captured}"\n',

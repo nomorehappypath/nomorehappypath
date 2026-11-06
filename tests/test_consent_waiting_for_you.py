@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from harness import attention, board, board_viewer, claude_auth, control, self_heal
 from tests.test_sign_in_needed import _Fixture
 
@@ -103,10 +104,15 @@ class BoardTests(_Fixture):
 
 
 class ReviewerMessageTests(_Fixture):
+    def setUp(self):
+        """These tests refuse a Claude Reviewer's consent, so they save the Codex builder and Claude Reviewer choices on purpose."""
+        super().setUp()
+        control.update_agent_settings(self.root, old_settings())
+
     def test_with_no_reviewer_registered_a_refused_consent_is_named_not_start_one(self):
         dev = self.delivery("TASK-REFUSED")
         self.declare_chunks(dev["id"], [("one", "one reviewable outcome")])
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         with control.locked_state(self.root) as state:
             state["sessions"][session["id"]]["claude_auth_action"] = claude_auth.action("consent", "run X")
         board.request_review(self.root, dev["id"], self.ledger("refused.md"), "review while consent is refused",
@@ -117,7 +123,7 @@ class ReviewerMessageTests(_Fixture):
         self.assertNotIn("start one from Mission Control", message)
 
     def test_self_heal_does_not_keep_starting_reviewers_while_consent_is_refused(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         with control.locked_state(self.root) as state:
             state["sessions"][session["id"]]["claude_auth_action"] = claude_auth.action("consent", "run X")
         skipped = self_heal._skip_if_held_now(self.root, {"action": "start_reviewer", "kind": "claude_reviewer"})

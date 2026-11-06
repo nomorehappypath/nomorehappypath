@@ -9,6 +9,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import control
 from tests.test_stage4_system_layer import Stage4RunnerTests
 
@@ -40,12 +41,12 @@ class ReviewerLongWalkTests(unittest.TestCase):
     def test_only_the_reviewer_gets_a_long_command_limit_and_it_comes_from_a_setting(self):
         self.require_confinement()
         self.switch("claude", stage4=False)
-        self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertEqual(self.limit(), "7200000", "the Reviewer's commands were capped at 10 minutes")
-        self.launch(control.create(self.context, "claude_cto"), "claude_cto")
+        self.launch(control.create(self.context, "claude_cto", settings_override=old_settings()), "claude_cto")
         self.assertEqual(self.limit(), "<unset>", "the CTO keeps Claude Code's default")
         self.environment["HARNESS_REVIEWER_BASH_MAX_TIMEOUT_MS"] = "3600000"
-        self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertEqual(self.limit(), "3600000", "the limit is a setting, not a constant")
 
 

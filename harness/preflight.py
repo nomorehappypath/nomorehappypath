@@ -114,6 +114,13 @@ def claude_bypass_consent_problem(
     )
 
 
+# The one command that puts a compatible chrome-headless-shell where the app already looks (platform_support headless_cache_candidates:
+# ~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell). Checked against
+# Playwright 1.60's own browser table (mac-x64 and mac-arm64 both unpack to chrome-headless-shell-mac-<arch>) and against an
+# existing install on a Mac.
+PLAYWRIGHT_BROWSER_COMMAND = "npx playwright install chromium-headless-shell"
+
+
 def chrome_install_line(machine: str | None = None) -> str:
     """The Google Chrome .deb for this machine, or "" when no known native package exists for the architecture."""
     machine = (machine or platform.machine()).lower()
@@ -144,8 +151,9 @@ def native_browser_problem(system: str | None = None, machine: str | None = None
     effect = "Only rendered-page proof (screen checks and rendered tests) is affected; other work runs without it."
     if system != "Linux":
         return (
-            f"No headless Chromium for rendered-page proof was found. {effect} Install chrome-headless-shell or Chromium outside "
-            "an application bundle and set HARNESS_BROWSER_BIN to its executable."
+            f"No headless Chromium for rendered-page proof was found. {effect} To add it (needs Node.js), run: "
+            f"{PLAYWRIGHT_BROWSER_COMMAND} - the app then finds it by itself in ~/Library/Caches/ms-playwright, so there is nothing to set. "
+            "If you install a browser another way, put it outside an application bundle and set HARNESS_BROWSER_BIN to its executable."
         )
     line = chrome_install_line(machine)
     how = (

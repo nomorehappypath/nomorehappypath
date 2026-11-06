@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from harness import board, claude_auth, control
 from tests.environment_support import require_loopback
 from tests.test_stage4_system_layer import Stage4RunnerTests
@@ -104,10 +105,10 @@ class LauncherTests(unittest.TestCase):
     def test_only_the_reviewer_agent_gets_the_token_for_its_commands(self):
         self.require_confinement()
         self.switch("claude", stage4=False)
-        self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertEqual(self.seen(), "shared", "the Reviewer's test copy could not start a real Claude")
         for kind in ("claude_cto",):
-            self.launch(control.create(self.context, kind), kind)
+            self.launch(control.create(self.context, kind, settings_override=old_settings()), kind)
             self.assertEqual(self.seen(), "hidden", f"{kind} must not expose the token to its commands")
 
 

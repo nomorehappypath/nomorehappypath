@@ -18,7 +18,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from harness import board_viewer, browser_acceptance, control, platform_support
+from tests.pinned_settings import old_settings
+from harness import board_viewer, browser_acceptance, control, global_settings, platform_support
 from harness.platform_support import linux
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
@@ -59,6 +60,8 @@ class LinuxLaunchBlockedRenderedTests(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
 
     def test_the_owner_reads_the_reason_and_no_session_is_left_running(self):
+        global_settings.initialize(self.root / ".harness" / "home")
+        global_settings.update_agent_settings(self.root / ".harness" / "home", old_settings())      # the page starts a Codex Delivery here
         mock.patch.object(platform_support, "terminal_host", return_value=linux.TERMINAL_HOST).start()
         mock.patch.object(linux, "launch_problem", return_value=REASON).start()
         server = ThreadingHTTPServer(("127.0.0.1", 0), board_viewer.make_handler(

@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.pinned_settings import old_settings
 from harness import board, board_mcp, claude_inbox, contract, contract_check, control, gemini_runtime, reference_chapters, test_machine
 from harness.board_surface import CommandGateway, SessionTokenAuthority, SurfaceAuthenticationError, SurfaceAuthorizationError
 from harness.project_context import ProjectContext
@@ -397,7 +398,7 @@ class LaunchMatrixTests(Stage4RunnerTests):
     def test_a_recording_failure_is_said_out_loud_and_the_agent_still_starts(self):
         self.require_confinement()
         self.switch("claude", stage4=True)
-        session = control.create(self.context, "claude_reviewer", fresh=True)
+        session = control.create(self.context, "claude_reviewer", fresh=True, settings_override=old_settings())
         broken = self.wrapper("python-without-recorder", '*note-instruction*) echo "recorder broke" >&2; exit 1;;')
         argv, completed = self.launch_with(session, "claude_reviewer", python=broken)
         self.assertIn("--append-system-prompt", argv)

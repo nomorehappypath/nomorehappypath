@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import attention, board, board_viewer, browser_acceptance, control, project_memory
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
@@ -60,7 +61,7 @@ class RenderedUsageLimitTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         project_memory.initialize(self.root, project_name="Usage limit proof", description="Facts.")
-        self.session = control.create(self.root, "codex_delivery")
+        self.session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.agent = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=self.session["id"])
 
     def hold(self, resets_in_hours: float = 3.0, kind: str = "announced") -> None:

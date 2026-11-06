@@ -21,6 +21,7 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import board, control
 from tests import stage3_stubs
 
@@ -82,7 +83,7 @@ class Stage3SupervisorFixture(unittest.TestCase):
                        .replace("sys.path.insert(0, ROOT)", f"sys.path.insert(0, {str(ROOT)!r})"))
         tui.chmod(0o755)
         self.server_log = base / "server.log"
-        self.session = control.create(self.root, "codex_delivery")
+        self.session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.agent = board.register(self.root, "engineering", "AWAITING_OWNER_DIRECTION", vendor="OpenAI",
                                     session_id=self.session["id"])
         self.runtime = base / "rt"
@@ -235,7 +236,7 @@ class RunnerTests(unittest.TestCase):
         path.write_text(json.dumps({"identity": identity, "probed_at": "test", "probe_version": cli_capabilities.PROBE_VERSION,
                                     "static": {name: True for name in needed if name not in live}}), encoding="utf-8")
         cli_capabilities.record_live(self.home, "codex", {name: True for name in live}, auth_mode="test", source_environment=source)
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         authority = SessionTokenAuthority(self.context)
         authority.prepare(session["id"])
         master, slave = pty.openpty()
@@ -369,7 +370,7 @@ class RuntimeDirectoryCleanupTests(unittest.TestCase):
         base = Path(tempfile.mkdtemp(dir="/tmp" if os.path.isdir("/tmp") else None, prefix="hn3d-"))
         self.addCleanup(__import__("shutil").rmtree, base, True)
         root = base / "p"; root.mkdir()
-        session = control.create(root, "codex_delivery")
+        session = control.create(root, "codex_delivery", settings_override=old_settings())
         agent = board.register(root, "engineering", "AWAITING_OWNER_DIRECTION", vendor="OpenAI", session_id=session["id"])
         runtime = base / "rt"
         master, slave = pty.openpty()

@@ -22,6 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import board, control, self_heal
 from tests.test_conversation_memory import RUNNER, fake_cli
 from tests.environment_support import require_loopback
@@ -105,7 +106,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     # --- the runner always says why --------------------------------------------------------------
     def test_a_failing_step_before_the_cli_leaves_a_plain_reason_a_distinct_exit_code_and_no_cli(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         (self.root / ".harness").mkdir(exist_ok=True)
         (self.root / ".harness" / "board").write_text("not a directory\n")      # the registration step cannot work
         code, _, err = self.finish(self.runner(session))
@@ -122,7 +123,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertIn("registering with the board", err, "the terminal itself says it too")
 
     def test_a_setup_refusal_after_the_launch_was_planned_says_pressing_start_will_not_fix_it(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         code, _, err = self.finish(self.runner(session))          # no sign-in handoff: the runner refuses
         self.assertEqual(code, 2, err)
         record = self.session_record(session)
@@ -132,7 +133,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertEqual(record["launch_failure"]["step"], "starting the CLI")
 
     def test_a_missing_cli_program_is_named(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         environment = {**self.environment, "HARNESS_CODEX_BIN": str(self.root / "no-such-codex")}
         code, _, err = self.finish(self.runner(session, environment=environment))
         record = self.session_record(session)
@@ -142,7 +143,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertTrue(record["launch_failure"]["setup_problem"])
 
     def test_a_normal_launch_records_no_failure(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         code, _, err = self.finish(self.runner(session))
         self.assertEqual(code, 0, err)
         record = self.session_record(session)
@@ -152,7 +153,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     def test_a_signal_before_the_cli_is_reported_once_with_the_signal_name(self):
         server = self.bootstrap(["hang"] * 4)
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         process = self.runner(session, "--board-bootstrap", server.path,
                               environment={**self.environment, "HARNESS_LAUNCH_RETRIES": "1"})
         deadline = time.time() + 15
@@ -168,7 +169,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     def test_an_owner_stop_is_not_reported_as_a_launch_failure(self):
         server = self.bootstrap(["hang"] * 4)
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         process = self.runner(session, "--board-bootstrap", server.path,
                               environment={**self.environment, "HARNESS_LAUNCH_RETRIES": "1"})
         deadline = time.time() + 15
@@ -183,7 +184,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     # --- the registry notices what the runner could not report --------------------------------------
     def test_an_attempt_that_died_unreported_is_marked_as_unknown_cause_not_as_a_normal_exit(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, session["id"], 99999999)          # dead pid, CLI launch never noted
         record = self.session_record(session)
         self.assertEqual(record["status"], "exited")
@@ -191,7 +192,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertEqual(record["launch_failure"]["recorded_by"], "reconcile")
 
     def test_a_late_report_from_an_earlier_attempt_is_rejected_and_a_new_attempt_keeps_history(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, session["id"], os.getpid())
         recorded = control.record_launch_failure(self.root, session["id"], os.getpid(), 1, "planning the CLI launch", "boom")
         self.assertTrue(recorded["recorded"])
@@ -207,7 +208,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertNotIn("\x1b", cleaned)
 
     def test_an_attempt_that_never_attached_gets_an_honest_card(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         with control.locked_state(self.root) as state:                    # its 30 seconds have passed
             state["sessions"][session["id"]]["launch_deadline"] = "2000-01-01T00:00:00+00:00"
         record = self.session_record(session)
@@ -216,7 +217,7 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertEqual([item["action"] for item in self_heal.plan(self.root)], ["announce_launch_failure"])
 
     def test_a_runner_report_before_attach_is_kept_for_the_card(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.record_launch_failure(self.root, session["id"], 4242, 2, "attaching to the control panel", "Project root does not exist")
         with control.locked_state(self.root) as state:
             state["sessions"][session["id"]]["launch_deadline"] = "2000-01-01T00:00:00+00:00"
@@ -224,21 +225,21 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertIn("Project root does not exist", record["reason"])
 
     def test_a_runner_killed_between_the_plan_and_the_exec_is_still_a_failed_launch(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, session["id"], 99999999)
         control.note_cli_launch(self.root, session["id"], False)         # planned, but never exec'd
         self.assertIn("cause was not recorded", self.session_record(session)["reason"])
 
     def test_a_failed_session_with_registered_work_is_not_hidden_by_an_unrelated_newer_session(self):
-        failed = control.create(self.root, "claude_reviewer")
+        failed = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=failed["id"])
         control.attach(self.root, failed["id"], 99999999)
         self.session_record(failed)
-        control.create(self.root, "claude_reviewer")                    # a different reviewer, carrying nothing of the failed one
+        control.create(self.root, "claude_reviewer", settings_override=old_settings())                    # a different reviewer, carrying nothing of the failed one
         self.assertEqual([item["action"] for item in self_heal.plan(self.root)], ["announce_launch_failure"])
 
     def test_a_plan_made_before_a_successful_resume_publishes_nothing(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, session["id"], 99999999)
         self.session_record(session)
         stale_plan = self_heal.plan(self.root)
@@ -251,7 +252,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     # --- the card, exactly once ------------------------------------------------------------------------
     def test_the_board_gets_one_card_for_the_failed_attempt_even_for_an_idle_reviewer_with_no_agent(self):
-        session = control.create(self.root, "claude_reviewer")
+        session = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, session["id"], 99999999)
         self.session_record(session)                                # reconcile marks it
         actions = self_heal.plan(self.root)
@@ -265,23 +266,23 @@ class LaunchExitLoudTests(unittest.TestCase):
         self.assertEqual(self_heal.plan(self.root), [])
 
     def test_no_card_when_a_live_replacement_already_carries_the_role(self):
-        first = control.create(self.root, "claude_reviewer")
+        first = control.create(self.root, "claude_reviewer", settings_override=old_settings())
         control.attach(self.root, first["id"], 99999999)
         self.session_record(first)
-        control.create(self.root, "claude_reviewer")                # the owner pressed Start
+        control.create(self.root, "claude_reviewer", settings_override=old_settings())                # the owner pressed Start
         self.assertEqual(self_heal.plan(self.root), [])
 
     # --- transient trouble is waited out, a definite answer is not ------------------------------------
     def test_a_board_that_closes_the_connection_twice_is_retried_and_the_launch_goes_on(self):
         server = self.bootstrap(["close", "close", "close", "close"])
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         code, _, err = self.finish(self.runner(session, "--board-bootstrap", server.path))
         self.assertEqual(server.connections, 4, err)                # default 4 attempts, all spent
         self.assertIn("signing in to the board", self.session_record(session)["reason"])
 
     def test_a_definite_refusal_is_not_retried(self):
         server = self.bootstrap(["refuse", "refuse", "refuse", "refuse"])
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         self.finish(self.runner(session, "--board-bootstrap", server.path))
         self.assertEqual(server.connections, 1)
         record = self.session_record(session)
@@ -289,7 +290,7 @@ class LaunchExitLoudTests(unittest.TestCase):
 
     def test_invalid_retry_overrides_fall_back_to_the_defaults(self):
         server = self.bootstrap(["close"] * 8)
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         environment = {**self.environment, "HARNESS_LAUNCH_RETRIES": "99", "HARNESS_LAUNCH_RETRY_SECONDS": "-3"}
         process = self.runner(session, "--board-bootstrap", server.path, environment=environment)
         process_output = self.finish(process, timeout=90)

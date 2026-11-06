@@ -21,6 +21,7 @@ from pathlib import Path
 
 from tests.claude_auth_support import auth_arguments
 
+from tests.pinned_settings import old_settings
 from harness import cli_capabilities, conversation, control, global_settings, project_registry
 from harness.board_surface import SessionTokenAuthority
 from harness.project_context import ProjectContext
@@ -117,7 +118,7 @@ class Stage4RunnerTests(unittest.TestCase):
     def test_claude_fresh_and_resume_both_carry_the_rules_in_the_system_layer(self):
         self.require_confinement()
         self.switch("claude", stage4=True)
-        session = control.create(self.context, "claude_reviewer")
+        session = control.create(self.context, "claude_reviewer", settings_override=old_settings())
         argv = self.launch(session, "claude_reviewer")
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], REVIEWER)
         self.assertEqual(argv[argv.index("--system-prompt-snapshot") + 1], "off", "never replayed stale after an upgrade")
@@ -135,7 +136,7 @@ class Stage4RunnerTests(unittest.TestCase):
 
     def test_codex_gets_the_rules_as_developer_instructions(self):
         self.switch("codex", stage4=True)
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         argv = self.launch(session, "codex_delivery")
         flags = [argv[index + 1] for index, item in enumerate(argv) if item == "-c"]
         instructions = next(flag for flag in flags if flag.startswith("developer_instructions="))
@@ -145,11 +146,11 @@ class Stage4RunnerTests(unittest.TestCase):
     def test_switched_off_the_prompt_is_byte_for_byte_todays(self):
         self.require_confinement()
         self.switch("claude", stage4=False)
-        argv = self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        argv = self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertNotIn("--append-system-prompt", argv)
         self.assertTrue(argv[-1].startswith(REVIEWER + "\n\nMODE: Independent Reviewer.\n"), "directive, blank line, kickoff")
         self.switch("codex", stage4=False)
-        argv = self.launch(control.create(self.context, "codex_delivery"), "codex_delivery")
+        argv = self.launch(control.create(self.context, "codex_delivery", settings_override=old_settings()), "codex_delivery")
         self.assertFalse(any(item.startswith("developer_instructions=") for item in argv))
         self.assertTrue(argv[-1].startswith(DELIVERY + "\n\nMODE: Delivery Agent.\n"))
 
@@ -159,7 +160,7 @@ class Stage4RunnerTests(unittest.TestCase):
         if not self.home_outside_temp:
             self.skipTest("this checkout lives in temp space; Stage 3 refuses a runtime directory there by design")
         self.switch("claude", stage4=True, stage3=True)
-        argv = self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        argv = self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertEqual(argv.count("--append-system-prompt"), 1)
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], REVIEWER + "\n\n" + claude_inbox.AUTHORITY_NOTE)
 

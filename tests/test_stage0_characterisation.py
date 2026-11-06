@@ -26,6 +26,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.pinned_settings import old_settings
 from harness import control, platform_support, project_worker
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +55,7 @@ class SecondLauncherArgvTests(unittest.TestCase):
         """
         with patch.object(platform_support.defaults.sys, "platform", "darwin"), \
              patch.object(platform_support.defaults.subprocess, "run") as run:
-            session = control.create(Path(tmp), "codex_delivery")
+            session = control.create(Path(tmp), "codex_delivery", settings_override=old_settings())
             project_worker.launch_terminal(Path(tmp), session, "/tmp/bootstrap.sock")
             return run, session
 
@@ -106,7 +107,7 @@ class SecondLauncherArgvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(platform_support, "terminal_host", return_value=macos_host), \
              patch.object(platform_support.defaults.sys, "platform", "linux"):
-            session = control.create(Path(tmp), "codex_delivery")
+            session = control.create(Path(tmp), "codex_delivery", settings_override=old_settings())
             with self.assertRaisesRegex(RuntimeError, "requires macOS Terminal"):
                 project_worker.launch_terminal(Path(tmp), session, "/tmp/bootstrap.sock")
 

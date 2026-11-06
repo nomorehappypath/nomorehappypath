@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import board, control, global_settings, review_rounds, self_heal
 from tests import test_repair_context as base
 
@@ -632,7 +633,7 @@ class RecoveryModel(unittest.TestCase):
         self.home = Path(self._tmp.name)
 
     def settings(self):
-        return control.default_agent_settings()
+        return old_settings()
 
     def test_the_saved_vendor_model_is_used_silently_and_an_unset_field_uses_the_default(self):
         global_settings.initialize(self.home)

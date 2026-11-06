@@ -26,6 +26,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from tests.pinned_settings import old_settings
 from harness import attention, board, board_viewer, control, conversation, project_manager
 from harness import project_registry as registry
 from harness.agent_grant import agent_writable_roots
@@ -233,7 +234,7 @@ class SessionRecordTests(unittest.TestCase):
     def test_attention_is_recorded_once_per_wait_cleared_and_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            session = control.create(root, "claude_cto")
+            session = control.create(root, "claude_cto", settings_override=old_settings())
             self.assertEqual((session["attention_since"], session["attention_reason"]), (None, None))
             first = control.record_attention(root, session["id"], "is asking permission to continue")
             self.assertTrue(first["attention_since"])
@@ -274,7 +275,7 @@ class SupervisorTests(unittest.TestCase):
     def test_a_waiting_prompt_marks_the_session_and_the_owners_answer_clears_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            session = control.create(root, "claude_cto")
+            session = control.create(root, "claude_cto", settings_override=old_settings())
             agent = board.register(root, "cto", "GLOBAL_MONITOR", vendor="Anthropic", session_id=session["id"])
             master, slave = pty.openpty()
             prompt = b"".join(REAL_PROMPT_PIECES)
@@ -348,7 +349,7 @@ class RunnerPermissionTests(unittest.TestCase):
         return [argv[index + 1] for index, item in enumerate(argv) if item == "--add-dir"]
 
     def test_claude_launches_fresh_and_resumed_with_bypass_mode_and_the_harness_roots(self):
-        session = control.create(self.root, "claude_cto")
+        session = control.create(self.root, "claude_cto", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         argv = self.argv()
@@ -372,7 +373,7 @@ class RunnerPermissionTests(unittest.TestCase):
         self.assertEqual(sorted(self._add_dirs(argv)), sorted(expected))
 
     def test_codex_launch_is_unchanged_and_never_gets_claude_flags(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         argv = self.argv()
@@ -385,7 +386,7 @@ class RunnerPermissionTests(unittest.TestCase):
             self.assertIn(root, writable)
 
     def test_codex_launch_carries_folder_trust_so_no_config_file_write_is_needed(self):
-        session = control.create(self.root, "codex_delivery")
+        session = control.create(self.root, "codex_delivery", settings_override=old_settings())
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         trust = [item for item in self.argv() if item.startswith("projects.") and item.endswith('.trust_level="trusted"')]
@@ -480,7 +481,7 @@ class RenderedBannerTests(unittest.TestCase):
         registry.activate(home, entry["id"])   # only the open project's board is read (owner 2026-10-28)
         context = registry.context_for_entry(entry)
         control.initialize(context)
-        session = control.create(context, "claude_cto")
+        session = control.create(context, "claude_cto", settings_override=old_settings())
         control.record_attention(context, session["id"], "is asking permission to continue ('Do you want to proceed?')")
         manager = project_manager.ProjectManager(home, board_port=0)
         listed = manager.projects_payload()["projects"][0]
@@ -508,7 +509,7 @@ class RenderedBannerTests(unittest.TestCase):
 
     def test_studio_board_blinks_a_banner_and_badges_the_waiting_agent(self):
         root = self.base / "studio"; root.mkdir()
-        session = control.create(root, "claude_cto")
+        session = control.create(root, "claude_cto", settings_override=old_settings())
         board.register(root, "cto", "GLOBAL_MONITOR", vendor="Anthropic", session_id=session["id"])
         control.record_attention(root, session["id"], "says it needs you to act ('USER ACTION: Needed')")
         reading = self._render(self._serve(board_viewer.make_handler(root)), STUDIO_PROBE)

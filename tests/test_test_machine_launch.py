@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import unittest
 
+from tests.pinned_settings import old_settings
 from harness import conversation, control, test_machine
 from tests.test_conversation_memory import stage_relaunch
 from tests import test_stage4_system_layer as stage4
@@ -29,10 +30,10 @@ class MachineLaunchTests(unittest.TestCase):
     def test_claude_fresh_and_resumed_launches_get_the_machine_rule_and_other_projects_get_nothing(self):
         self.require_confinement()
         self.switch("claude", stage4=True)
-        quiet = self.launch(control.create(self.context, "claude_reviewer"), "claude_reviewer")
+        quiet = self.launch(control.create(self.context, "claude_reviewer", settings_override=old_settings()), "claude_reviewer")
         self.assertNotIn("[test-machine]", quiet[-1], "a project that never used a machine sees nothing")
         connected_descriptor(self.context)
-        session = control.create(self.context, "claude_reviewer")
+        session = control.create(self.context, "claude_reviewer", settings_override=old_settings())
         fresh = self.launch(session, "claude_reviewer")
         self.assertIn("[test-machine]", fresh[-1])
         self.assertIn("machine-status", fresh[-1])
@@ -56,14 +57,14 @@ class MachineLaunchTests(unittest.TestCase):
         self.require_confinement()
         self.switch("claude", stage4=True)
         connected_descriptor(self.context)
-        argv = self.launch(control.create(self.context, "claude_cto"), "claude_cto")
+        argv = self.launch(control.create(self.context, "claude_cto", settings_override=old_settings()), "claude_cto")
         self.assertIn("Test machine rule (revision 2)", argv[-1])
         self.assertIn("the CTO asks the owner once to approve a restart", argv[-1])
 
     def test_codex_launch_gets_the_machine_rule_in_its_first_message(self):
         self.switch("codex", stage4=True)
         connected_descriptor(self.context)
-        argv = self.launch(control.create(self.context, "codex_delivery"), "codex_delivery")
+        argv = self.launch(control.create(self.context, "codex_delivery", settings_override=old_settings()), "codex_delivery")
         self.assertIn("[test-machine]", argv[-1])
         self.assertIn("need-test-machine", argv[-1])
         self.assertIn("Test machine rule (revision 2)", argv[-1])

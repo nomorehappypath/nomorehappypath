@@ -13,6 +13,7 @@ from pathlib import Path
 
 import tempfile
 
+from tests.pinned_settings import old_settings
 from harness import board, control
 from tests.test_requirements_contract import context, delivery_with_direction
 from tests import test_stage4_system_layer as stage4
@@ -40,7 +41,7 @@ class LaunchLineTests(unittest.TestCase):
         self.switch("claude", stage4=False)
         for kind in ("claude_reviewer", "claude_cto"):
             with self.subTest(kind=kind):
-                session = control.create(self.context, kind)
+                session = control.create(self.context, kind, settings_override=old_settings())
                 argv = self.launch(session, kind)
                 self.assert_question_tool_denied(argv)
                 minted = argv[argv.index("--session-id") + 1]
@@ -53,7 +54,7 @@ class LaunchLineTests(unittest.TestCase):
 
     def test_codex_has_its_question_feature_switched_off(self):
         self.switch("codex", stage4=False)
-        session = control.create(self.context, "codex_delivery")
+        session = control.create(self.context, "codex_delivery", settings_override=old_settings())
         argv = self.launch(session, "codex_delivery")
         self.assertEqual(argv[argv.index("--disable") + 1], "default_mode_request_user_input")
         self.assertNotIn("--disallowedTools", argv)

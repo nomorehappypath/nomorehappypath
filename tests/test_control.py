@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from tests.claude_auth_support import auth_arguments
+from tests.pinned_settings import OLD_DEFAULTS
 
 from harness import board, board_viewer, contract, control, project_registry
 from harness.project_context import ProjectContext
@@ -79,7 +80,7 @@ class ControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
-            session = control.create(root, "codex_delivery")
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
             environment = {
                 **os.environ,
                 "HARNESS_CODEX_BIN": str(fake_codex),
@@ -115,7 +116,7 @@ class ControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
-            session = control.create(root, "codex_delivery")
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex), "HARNESS_CAPTURE": str(capture)}
             process = subprocess.run(
                 ["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)],
@@ -143,7 +144,7 @@ class ControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
-            session = control.create(context, "codex_delivery")
+            session = control.create(context, "codex_delivery", settings_override=OLD_DEFAULTS)
             completed = subprocess.run(
                 [
                     "bash", str(RUNNER),
@@ -195,7 +196,7 @@ class ControlTests(unittest.TestCase):
             fake_codex = base / "fake-codex"
             fake_codex.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$HARNESS_CAPTURE\"\n", encoding="utf-8")
             fake_codex.chmod(0o755)
-            session = control.create(context, "codex_delivery")
+            session = control.create(context, "codex_delivery", settings_override=OLD_DEFAULTS)
             completed = subprocess.run(
                 [
                     "bash", str(RUNNER),
@@ -263,7 +264,7 @@ class ControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
-            session = control.create(root, "codex_delivery")
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
             completed = subprocess.run(
                 [
                     "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
@@ -310,7 +311,7 @@ class ControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_codex.chmod(0o755)
-            session = control.create(root, "codex_delivery")
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
             completed = subprocess.run(
                 [
                     "/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV",
@@ -635,7 +636,7 @@ class ControlTests(unittest.TestCase):
             fake_codex = root / "fake-codex"
             fake_codex.write_text("#!/usr/bin/env bash\npwd > \"$HARNESS_WORKING_DIRECTORY\"\nprintf '%s\\n' \"$@\" > \"$HARNESS_CAPTURE\"\nsleep 30\n", encoding="utf-8")
             fake_codex.chmod(0o755)
-            session = control.create(root, "codex_delivery")
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
             environment = {**os.environ, "HARNESS_CODEX_BIN": str(fake_codex), "HARNESS_CAPTURE": str(capture), "HARNESS_WORKING_DIRECTORY": str(working_directory), "HARNESS_EXECUTION_ROOT": str(execution_root)}
             process = subprocess.Popen(["bash", str(RUNNER), "--root", str(root), "--session-id", session["id"], "--kind", session["kind"], *auth_arguments(root, session)], env=environment)
             try:
@@ -670,7 +671,7 @@ class ControlTests(unittest.TestCase):
 
     def test_terminal_launch_is_hard_coded_without_owner_task_arguments(self):
         with TemporaryDirectory() as tmp, patch("harness.board_viewer.sys.platform", "darwin"), patch("harness.board_viewer.subprocess.run") as run:
-            session = control.create(Path(tmp), "codex_delivery")
+            session = control.create(Path(tmp), "codex_delivery", settings_override=OLD_DEFAULTS)
             board_viewer.launch_terminal(Path(tmp), session)
             command = shlex.join(run.call_args_list[0].args[0][5:])
             self.assertIn("run_managed_agent.sh", command)
@@ -685,7 +686,7 @@ class ControlTests(unittest.TestCase):
             data = base / "managed" / "alpha"; data.mkdir(parents=True)
             workspaces = base / "workspaces" / "alpha"; workspaces.mkdir(parents=True)
             context = ProjectContext(code, data, workspaces)
-            session = control.create(context, "codex_delivery")
+            session = control.create(context, "codex_delivery", settings_override=OLD_DEFAULTS)
             board_viewer.launch_terminal(context, session)
             arguments = run.call_args_list[0].args[0][5:]
             self.assertFalse(any("ProjectContext(" in argument for argument in arguments))
@@ -817,7 +818,7 @@ class ControlTests(unittest.TestCase):
     def test_session_api_explains_live_provider_collision_before_launch(self):
         with TemporaryDirectory() as tmp, patch("harness.board_viewer.launch_terminal") as launch:
             root = Path(tmp)
-            control.create(root, "claude_reviewer")
+            control.create(root, "claude_reviewer", settings_override=OLD_DEFAULTS)
             control.update_agent_settings(root, {
                 "delivery": {"provider": "claude", "model": "sonnet", "effort": "high"},
                 "cto": {"provider": "claude", "model": "opus", "effort": "high"},
@@ -846,14 +847,14 @@ class ControlTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(control.agent_settings(root), {
-                "delivery": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"},
-                "cto": {"provider": "claude", "model": "opus", "effort": "high"},
-                "reviewer": {"provider": "claude", "model": "opus", "effort": "max"},
+                "delivery": {"provider": "claude", "model": "sonnet", "effort": "medium"},
+                "cto": {"provider": "claude", "model": "sonnet", "effort": "low"},
+                "reviewer": {"provider": "codex", "model": "gpt-6-sol", "effort": "high"},
             })
             updated = {
-                "delivery": {"provider": "claude", "model": "sonnet", "effort": "medium"},
+                "delivery": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "medium"},
                 "cto": {"provider": "codex", "model": "gpt-5.6-terra", "effort": "low"},
-                "reviewer": {"provider": "codex", "model": "gpt-5.6-sol", "effort": "xhigh"},
+                "reviewer": {"provider": "claude", "model": "opus", "effort": "xhigh"},
             }
             self.assertEqual(control.update_agent_settings(root, updated), updated)
             self.assertEqual(control.agent_settings(root), updated)
@@ -864,7 +865,7 @@ class ControlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "model must be"):
                 control.update_agent_settings(root, {**updated, "cto": {"provider": "codex", "model": "bad model; command", "effort": "high"}})
             same_vendor = dict(updated)
-            same_vendor["reviewer"] = {"provider": "claude", "model": "opus", "effort": "xhigh"}
+            same_vendor["reviewer"] = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "xhigh"}
             with self.assertRaisesRegex(ValueError, "different providers"):
                 control.update_agent_settings(root, same_vendor)
 
@@ -923,7 +924,7 @@ class ControlTests(unittest.TestCase):
         for first_kind, blocked_kind, active_role, provider_label in cases:
             with self.subTest(blocked_kind=blocked_kind), TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                active = control.create(root, first_kind)
+                active = control.create(root, first_kind, settings_override=OLD_DEFAULTS)
                 control.update_agent_settings(root, {
                     "delivery": {"provider": "claude", "model": "sonnet", "effort": "high"},
                     "cto": {"provider": "claude", "model": "opus", "effort": "high"},
@@ -1067,8 +1068,8 @@ class ControlTests(unittest.TestCase):
     def test_session_launch_keeps_model_selected_when_button_was_clicked(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            session = control.create(root, "codex_delivery")
-            changed = control.agent_settings(root)
+            session = control.create(root, "codex_delivery", settings_override=OLD_DEFAULTS)
+            changed = __import__("json").loads(__import__("json").dumps(OLD_DEFAULTS))
             changed["delivery"] = {"provider": "codex", "model": "gpt-5.6-terra", "effort": "low"}
             control.update_agent_settings(root, changed)
             captured = control.session_launch_settings(root, session["id"], "codex_delivery")
@@ -1132,6 +1133,29 @@ class ControlTests(unittest.TestCase):
                 server.shutdown(); thread.join(timeout=3); server.server_close()
 
 
+class ShippedDefaultsTests(unittest.TestCase):
+    """A new install ships the cheaper choices (owner, 2026-11-05); an install that already saved its own choices keeps them."""
+
+    def test_a_new_install_gets_the_cheaper_choices_from_two_different_companies(self):
+        settings = control.default_agent_settings()
+        self.assertEqual(settings["delivery"], {"provider": "claude", "model": "sonnet", "effort": "medium"})
+        self.assertEqual(settings["cto"], {"provider": "claude", "model": "sonnet", "effort": "low"})
+        self.assertEqual(settings["reviewer"], {"provider": "codex", "model": "gpt-6-sol", "effort": "high"})
+        self.assertNotEqual(settings["delivery"]["provider"], settings["reviewer"]["provider"])
+        self.assertEqual(control._validated_agent_settings(settings), settings, "the defaults pass the same checks as saved choices")
+
+    def test_saved_choices_load_unchanged_and_defaults_do_not_overwrite_them(self):
+        from harness import global_settings
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            global_settings.initialize(home)
+            saved = global_settings.update_agent_settings(home, OLD_DEFAULTS)["agent_settings"]
+            self.assertEqual(saved, OLD_DEFAULTS)
+            self.assertEqual(global_settings.load(home)["agent_settings"], OLD_DEFAULTS)
+            global_settings.initialize(home)           # opening the app again must not rewrite what the owner chose
+            self.assertEqual(global_settings.load(home)["agent_settings"], OLD_DEFAULTS)
+
+
 class RenderedModelDescriptionTests(unittest.TestCase):
     """The Settings page shows, next to each model, what it is for (owner, 2026-09-24)."""
 
@@ -1152,7 +1176,7 @@ class RenderedModelDescriptionTests(unittest.TestCase):
   document.querySelector('[data-page="settings"]').click();
   let select = null;
   for (let attempt = 0; attempt < 60; attempt++) {
-    select = document.querySelector('[data-setting-model-choice="delivery"]');
+    select = document.querySelector('[data-setting-model-choice="reviewer"]');
     if (select && select.options.length > 1) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }

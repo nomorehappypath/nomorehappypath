@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.pinned_settings import old_settings
 from tests.claude_auth_support import auth_arguments
 
 from harness import control, workspace_settings
@@ -189,7 +190,7 @@ class WorkspaceSettingsTests(unittest.TestCase):
             fake = Path(tmp) / "fake-claude"
             fake.write_text("#!/bin/bash\npwd\n")
             fake.chmod(0o755)
-            session = control.create(target, "claude_reviewer")
+            session = control.create(target, "claude_reviewer", settings_override=old_settings())
             environment = dict(os.environ)
             environment.pop("HARNESS_EXECUTION_ROOT", None)
             environment["HARNESS_CLAUDE_BIN"] = str(fake)
