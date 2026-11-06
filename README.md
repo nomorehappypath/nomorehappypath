@@ -55,7 +55,7 @@ Demo videos and a longer walkthrough: https://nomorehappypath.com
 4. **In Settings:** choose a provider for each of the three roles (Delivery, Reviewer, CTO) from the CLIs you installed, keeping Delivery and Reviewer on different vendors, and use the connection test to check each one. Settings apply to agents you start afterwards. If you use Claude, set up its agent token as described in [Claude agent authentication](#claude-agent-authentication); if you use Gemini, follow [Gemini agent setup](#gemini-agent-setup-optional). For the optional project chat, add your OpenAI API key under *Project chat key*.
 5. **New project** (or **Adopt existing**): choose the folder (read *Help → Your Responsibility* first: agents can edit, delete and run code in that folder, so choose it deliberately and back it up), then start the three agent roles from Mission Control. If Claude or Codex asks *Do you trust this folder?*, answer it in the agent's window (**View agent**).
 6. **Start the Delivery agent and choose the kind of work** (Write code, Analyze code or Write specs), then **give your first direction** in plain English. Review the requirements the agents propose and press **Go ahead** (or change them).
-7. **When the task shows "ready for your test"**, follow its test checklist: press **View app** (or **Open report** for a document), try it, then choose **Accepted** or **Not accepted**.
+7. **When the task shows "ready for your test"**, follow its test checklist: press **View app** (or **Open report** for a document), try it, then choose **Accepted** or **Not accepted**. View app starts your project by its own `start.sh` when it has one, a Streamlit page with Streamlit, and otherwise `python3 app.py`, `server.py` or `main.py`, or `npm start`.
 
 The first run needs a few sign-ins; the sections below explain each one.
 
@@ -80,13 +80,23 @@ The first run needs a few sign-ins; the sections below explain each one.
 - **A write sandbox around every agent**, enforced by the operating system on macOS and Linux: agents can write only to the project, their own CLI state, caches and temporary folders, not to your other files.
 - **Self-healing.** A stalled or unexpectedly ended agent session is restarted for you (up to three times an hour), sign-in problems are flagged in plain words, and agents resume their saved conversation after a pause or stop.
 - **Mission Control.** A local web app to watch every project, preview the finished app, ask questions about your project (project chat uses your own OpenAI API key), accept the result, and update itself with one click.
-- **Over 3,400 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
+- **Over 4,200 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
 
 ## Before work starts: the reviewer reads your requirements
 
 When Delivery writes down the final requirements, the Reviewer reads them first and writes tests for them before any work starts. If it cannot write a test without guessing, it asks you at most four questions, once, on a single card in Mission Control, each with a recommended answer and an Other box; your answers are added to the requirements under "Decided before coding". You can always go ahead without waiting. Later, each requirement is marked checked, partly checked or not checked in advance. Agents ask you product questions only in Mission Control (a banner at the top counts them), never in their own terminal windows.
 
 **A passing flag is not proof.** When a project runs its own final check before it is called done, it prints one `FINAL CHECK` line for each check: passed, failed, not run, warnings only or skipped. The board reads those lines and does not accept "done" on anything but passed, even when the program exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.
+
+## When work gets stuck: the CTO first, then you
+
+The board checks every agent all the time, at no cost. A builder or Reviewer that says it is blocked, or that answers two wake-ups with nothing new, is handed to the CTO, and the CTO's instruction is typed straight into that agent's window. If the CTO cannot clear it, the project **pauses itself**, so nothing more is spent, and Mission Control shows one red card, **Blocked, needs you**, with the problem in the agent's own words, what the CTO answered, and what to do. Fix the cause and press **Resume**.
+
+**Warning email (optional).** In **Settings → Warning email**, save your address and your mail server (server, port, user name, password; Gmail and Outlook need an app password) and press **Send a test email**. From then on you get one email when a project is blocked and waiting for you. The password is kept in a file only you can read and is never sent over an unencrypted connection. Clearing the address and the server switches it off.
+
+## What the reviewer's browser can and cannot see
+
+Screen checks run in a browser with no window that loads nothing from outside your computer. What your app draws itself is drawn, including maps and charts made with WebGL. Map tiles, fonts or pictures served by other sites are refused and listed in the check as "not shown in this capture"; that is the browser's limit, not a defect of your app, and it does not fail the review. A page that navigates away or sends data out does fail it.
 
 ## Windows programs, end to end
 
