@@ -44,6 +44,7 @@ from harness.project_context import context_cli_arguments
 from harness import story, upload_on_accept, workspace_settings
 from harness import test_machine
 from harness import platform_support, web_guard
+from harness import support_mode
 from harness.project_manager_page import PAGE
 
 MANAGER_PORT = 8740
@@ -2425,13 +2426,22 @@ def main(argv=None) -> int:
     parser.add_argument("--migrate-root", default="", help="register this existing single-root harness as the default project")
     parser.add_argument("--worker-start-timeout", default=None,
                         help="seconds to wait for a project board to start (default 60; env %s)" % WORKER_START_TIMEOUT_ENV)
+    parser.add_argument("--support", action="store_true",
+                        help="run this installation in support mode: receive and show one paired app's "
+                             "error/issue reports instead of the normal project manager "
+                             "(directives/SUPPORT_ISSUE_CONTRACT.md)")
+    parser.add_argument("--support-admin-port", type=int, default=support_mode.SUPPORT_ADMIN_PORT,
+                        help="loopback-only port for the support mode case-card page (default %(default)s)")
     args = parser.parse_args(argv)
+    home = Path(args.home).expanduser()
+    if args.support:
+        support_mode.serve_support(home, args.host, args.port, args.support_admin_port)
+        return 0
     raw_timeout = args.worker_start_timeout if args.worker_start_timeout is not None else os.environ.get(WORKER_START_TIMEOUT_ENV)
     try:
         start_timeout = parse_start_timeout(raw_timeout) if raw_timeout not in (None, "") else WORKER_START_TIMEOUT
     except ValueError as error:
         parser.error(str(error))
-    home = Path(args.home).expanduser()
     if args.migrate_root:
         registry.migrate_single_root(home, Path(args.migrate_root).expanduser())
     serve(home, args.host, args.port, args.board_port, start_timeout)

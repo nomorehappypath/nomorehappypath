@@ -528,6 +528,11 @@ function releasePreviewHtml(release){
   const name=String(release?.task||''), task=esc(JSON.stringify(name)), id=esc(name);
   const location=[preview.branch?`branch <code>${esc(preview.branch)}</code>`:'',commit?`commit <code>${esc(commit)}</code>`:''].filter(Boolean).join(' · ');
   const where=preview.workspace?`<p class="preview-where"><strong>Where the delivered work is:</strong> <code>${esc(preview.workspace)}</code>${location?` <small>(${location})</small>`:''}</p>`:'';
+  // Owner, 2026-11-07: decided once at delivery (record_release_ready), not recomputed here on
+  // every render — a change to a non-app's workspace after release never makes the button return.
+  if(release?.app_openable===false){
+    return `<div class="release-preview"><strong>This work is not an app to open.</strong>${where}</div>`;
+  }
   const run=viewAppRuns[name];
   const starting=Boolean(run)||(preview.status==='starting'&&preview.requested==='view_app');
   const failed=!run&&preview.status==='failed';
