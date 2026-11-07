@@ -1,0 +1,13 @@
+[Unit]
+Description=NoMoreHappyPath Support mode (receiver + case cards)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nomorehappypath
+ExecStart=/usr/bin/python3 -E %h/nomorehappypath/harness/project_manager.py --support --home %h/.harness-home-support --host 0.0.0.0 --port 8742 --support-admin-port 8741
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

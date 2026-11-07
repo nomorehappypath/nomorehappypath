@@ -18,6 +18,12 @@ for item in harness web engine tests scripts directives profile.template \
             README.md install.sh .gitignore; do
   cp -R "$source_root/$item" "$out/"
 done
+# docs/ stays private, except the Support install folder (guide, systemd unit, proxy config):
+# scripts/check_support_install.sh and the public install guide need it (v0.19.0).
+# (Guarded: tests run this script against small planted source trees that have no docs/support.)
+if [[ -d "$source_root/docs/support" ]]; then
+  mkdir -p "$out/docs" && cp -R "$source_root/docs/support" "$out/docs/"
+fi
 find "$out" \( -name __pycache__ -o -name .DS_Store -o -name "*.pyc" \) -prune -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$out/web/node_modules" 2>/dev/null || true
 

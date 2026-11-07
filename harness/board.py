@@ -16950,6 +16950,37 @@ def build_cards(root: Path, state: dict[str, Any], tasks: Any) -> dict[str, dict
     return cards
 
 
+def _release_app_openable(root: Path, state: dict[str, Any], task: str) -> bool:
+    """Whether Mission Control will find anything to start for this release, decided once at delivery.
+
+    Owner, 2026-11-07: "View app" used to show on every card and only fail on click, with a
+    download note that made no sense for a change with no app at all (the Support task that
+    started this). Deciding here, from the delivered work's own files, means the card already
+    knows before the owner ever presses the button — and a later, unrelated file change in that
+    workspace cannot flip the answer, because this value is stored once and read, never redone.
+    A missing or unreadable workspace stays permissive (True) so an older or still-materializing
+    task is not wrongly told it has nothing to open.
+
+    Review r1 B1: a file-only look at the workspace missed two launch paths that do not depend on
+    the workspace's own files at all — the owner's saved preview command (any project setting) and
+    an already-built macOS app bundle — so both are checked too, the same way release_preview's own
+    supervisor would use them.
+    """
+    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
+    if not workspace:
+        return True
+    from harness import release_preview, workspace_settings  # deferred: release_preview imports board
+    try:
+        settings = workspace_settings.load(root).get("preview") or {}
+        if str(settings.get("command") or "").strip():
+            return True
+        if release_preview.find_app_bundle(workspace) is not None:
+            return True
+        return bool(release_preview.detect_start(Path(workspace)))
+    except OSError:
+        return True
+
+
 def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str, Any]) -> dict[str, Any]:
     """Record the only state that Mission Control may present as complete."""
     with locked_state(root) as state:
@@ -17010,6 +17041,7 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
         }
         if checks.get("build_required"):
             release["build"] = _release_build_snapshot(root, state, task)
+        release["app_openable"] = _release_app_openable(root, state, task)
         state.setdefault("release_lifecycle", {})[task] = lifecycle_record
         state.setdefault("releases", {})[task] = release
         # A NEW release candidate supersedes any earlier owner response. Without
