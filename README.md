@@ -92,7 +92,7 @@ When Delivery writes down the final requirements, the Reviewer reads them first 
 
 The board checks every agent all the time, at no cost. A builder or Reviewer that says it is blocked, or that answers two wake-ups with nothing new, is handed to the CTO, and the CTO's instruction is typed straight into that agent's window. If the CTO cannot clear it, the project **pauses itself**, so nothing more is spent, and Mission Control shows one red card, **Blocked, needs you**, with the problem in the agent's own words, what the CTO answered, and what to do. Fix the cause and press **Resume**.
 
-**Warning email (optional).** In **Settings → Warning email**, save your address and your mail server (server, port, user name, password; Gmail and Outlook need an app password) and press **Send a test email**. From then on you get one email when a project is blocked and waiting for you. The password is kept in a file only you can read and is never sent over an unencrypted connection. Clearing the address and the server switches it off.
+**Warning email (optional).** In **Settings → Warning email**, fill in your address and your mail server (server, port, user name, password; for Gmail: smtp.gmail.com, port 587, your address as the user name, and an app password, not your normal one), press **Save**, then press **Send a test email**. The test uses only what is saved. From then on you get one email when a project is blocked and waiting for you. The password is kept in a file only you can read and is never sent over an unencrypted connection. Clearing the address and the server switches it off.
 
 ## What the reviewer's browser can and cannot see
 
