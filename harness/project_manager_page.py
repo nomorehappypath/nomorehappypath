@@ -459,7 +459,7 @@ PAGE = r'''<!doctype html>
           <div class="connection-result" id="openai-result" role="status" aria-live="polite"></div>
         </section>
         <section class="settings-section openai-card" id="email-card" aria-labelledby="email-title">
-          <div><h2 id="email-title">Warning email</h2><p class="settings-card-copy">NoMoreHappyPath emails you when a project is blocked and paused, so you know it is waiting for you. It is on once your address and a mail server are saved. Gmail and Outlook need an app password, not your normal one. The password is stored on this computer in a file only you can read, and is never shown again.</p></div>
+          <div><h2 id="email-title">Warning email</h2><p class="settings-card-copy">NoMoreHappyPath emails you when a project is blocked and paused, so you know it is waiting for you. It is on once your address and a mail server are saved. Fill in the fields and press Save first; Send a test email uses only what is saved. Gmail and Outlook need an app password, not your normal one. The password is stored on this computer in a file only you can read, and is never shown again.</p></div>
           <div class="openai-state"><span class="badge idle" id="email-badge">Off</span><span id="email-detail"></span></div>
           <div class="email-grid">
             <div class="field"><label for="email-to">Your email address (where warnings go)</label><input id="email-to" type="text" autocomplete="off" spellcheck="false" placeholder="you@example.com"></div>
@@ -469,7 +469,7 @@ PAGE = r'''<!doctype html>
             <div class="field"><label for="email-password">Password</label><input id="email-password" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="email-result"></div>
           </div>
           <div class="openai-actions"><button class="button" type="button" id="email-save">Save</button><button class="button secondary" type="button" id="email-test">Send a test email</button></div>
-          <div class="connection-result" id="email-result" role="status" aria-live="polite">To switch warning emails off, clear the address and the mail server and press Save.</div>
+          <div class="connection-result" id="email-result" role="status" aria-live="polite">Press Save first, then Send a test email. To switch warning emails off, clear the address and the mail server and press Save.</div>
         </section>
         <details class="settings-section" id="settings-advanced">
           <summary>Advanced (time limits, review input limits, check-in timing)</summary>
@@ -802,7 +802,7 @@ PAGE = r'''<!doctype html>
               <thead><tr><th>What you see</th><th>What it means and what to do</th></tr></thead>
               <tbody>
                 <tr><td>Chat box is greyed with a notice</td><td>No working OpenAI key. Open Settings → Project chat key and save one; the notice names the exact problem when a key exists but cannot be used.</td></tr>
-                <tr><td>A red card says "Blocked, needs you"</td><td>An agent got stuck, the CTO could not clear it, and the project paused itself so nothing more is spent. The card says the problem and what to do. Fix it, then press Resume. If you saved an address in Settings → Warning email, the app also sends you one email the first time this happens, so you do not have to be watching the screen. Press <strong>Send a test email</strong> there to check that it reaches you.</td></tr>
+                <tr><td>A red card says "Blocked, needs you"</td><td>An agent got stuck, the CTO could not clear it, and the project paused itself so nothing more is spent. The card says the problem and what to do. Fix it, then press Resume. If you saved an address in Settings → Warning email, the app also sends you one email the first time this happens, so you do not have to be watching the screen. Fill in the card and press <strong>Save</strong> first, then <strong>Send a test email</strong> to check that it reaches you. For Gmail: mail server smtp.gmail.com, port 587, your address as the user name, and an app password (not your normal one).</td></tr>
                 <tr><td>View app says the app could not start</td><td>View app starts your project by its own <strong>start.sh</strong> when it has one, a Streamlit page with Streamlit, and otherwise <strong>python3 app.py</strong>, <strong>server.py</strong> or <strong>main.py</strong>, or <strong>npm start</strong>, on a free port it passes in <strong>PORT</strong>. If your app starts another way, ask the builder to add a <strong>start.sh</strong> at the top of the project; the card also shows the command to run it yourself.</td></tr>
                 <tr><td>A screen check lists something as "not shown in this capture"</td><td>The reviewer's browser loads nothing from outside your computer, so map tiles, fonts or pictures from other sites are left out. What your app draws itself, maps and charts included, is drawn and checked. This is the browser's limit, not a problem with your app, and it does not fail the review.</td></tr>
                 <tr><td>An agent launch button is greyed</td><td>That role is at its session limit. Stop one of its running terminals first.</td></tr>

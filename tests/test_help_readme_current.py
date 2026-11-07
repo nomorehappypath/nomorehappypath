@@ -19,6 +19,14 @@ class HelpAndReadmeTests(unittest.TestCase):
                       "FINDINGS.md", "Tell it only the facts about your project", "Takes the project off this list"):
             self.assertIn(piece, PAGE)
 
+    def test_warning_email_says_save_first_then_test(self):
+        # Owner 2026-11-06: he pressed Send a test email before Save and got "not set up". The card, its result line and Help say the order.
+        self.assertIn("press Save first; Send a test email uses only what is saved", PAGE)      # the card
+        self.assertIn("Press Save first, then Send a test email.", PAGE)                          # its result line
+        self.assertIn("press <strong>Save</strong> first, then <strong>Send a test email</strong>", PAGE)  # Help
+        self.assertIn("mail server smtp.gmail.com, port 587", PAGE)
+        self.assertIn("press **Save**, then press **Send a test email**", README)
+
     def test_readme_names_the_kinds_of_work(self):
         # The README's "What's new" lists were removed (owner 2026-11-04); Help above still covers the rest.
         self.assertIn("Write code, Analyze code or Write specs", README)
