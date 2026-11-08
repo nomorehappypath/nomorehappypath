@@ -16,7 +16,7 @@ from unittest import mock
 from harness import board, contract_check, control, review_brief
 from tests.test_contract_first_checks import TASK, TEXT, _Fixture, submission, write_json
 
-PLAIN_TEXT = "In plain words:\nThe button label says Save instead of Submit.\n\n" + TEXT
+PLAIN_TEXT = "In plain words:\nThe button label says Save instead of Submit.\n\nAlready in the project:\nNothing related exists yet.\n\n" + TEXT
 
 
 class FastLaneTests(_Fixture):

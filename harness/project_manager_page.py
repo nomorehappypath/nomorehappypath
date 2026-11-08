@@ -1270,6 +1270,7 @@ PAGE = r'''<!doctype html>
       review_input_measure_seconds: ['Longest spent measuring the size of a change', 's'],
       difficulty_note_max_chars: ['Longest note an agent can leave about what slowed it', 'characters'],
       contract_check_wait_seconds: ['Longest the reviewer’s early look at the requirements may take', 's'],
+      project_brief_max_chars: ['Longest summary of the project a new task starts from', 'characters'],
       revert_proof_max_files: ['Most changed files put back one at a time at the final review', 'files'],
       revert_proof_budget_seconds: ['Longest spent putting changed files back', 's'],
       cto_heartbeat_seconds: ['How often the CTO checks in while a task is live', 's'],

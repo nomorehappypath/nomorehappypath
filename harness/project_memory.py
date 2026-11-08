@@ -4,6 +4,11 @@
 The board remains the source of truth.  This module stores a small human-
 readable index plus immutable detailed records so a resumed session can load
 only the references it needs instead of replaying the complete board history.
+
+It also builds the Project brief (``build_brief``): a small plain text, worked out
+from the live board each time it is needed, that tells a new task what the project
+is, what was really accepted, what is in progress and what the owner decided.
+Spec: board/tasks/2026-11-08_project-brief_SPEC.md (revision 3).
 """
 from __future__ import annotations
 
@@ -13,12 +18,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from harness import contract_check, git_process, story
 from harness.project_context import ProjectRoot, project_context
 
 MEMORY_VERSION = 1
@@ -30,6 +37,37 @@ NON_MATERIAL_EVENTS = {
     "review_execution_started",
     "review_execution_finished",
 }
+
+
+# --- Project brief: one budget per part so the total cap always holds (spec 3a) -----------------------------------------------------------
+BRIEF_MAX_CHARS_DEFAULT, BRIEF_MAX_CHARS_LOW, BRIEF_MAX_CHARS_HIGH = 4000, 2000, 12000
+_configured: dict[str, int] = {}
+BRIEF_DESCRIPTION_CHARS = 300      # the description is a pointer to what the project is, not its documentation
+BRIEF_MAP_NAMES = 25               # the folder map names the top-level things only; more names do not tell a builder more
+BRIEF_MAP_CHARS = 300              # characters of those names (the names joined by ", "), so a project with long names stays small
+BRIEF_MAP_SECONDS = 10             # git must answer quickly; a slow repository gives the "unavailable" line, never a stalled task start
+BRIEF_IN_PROGRESS_LINES = 5        # a task start needs the neighbours in flight, not all of them
+BRIEF_DECISION_LINES = 10          # the owner's recent decisions that could be undone by accident
+BRIEF_DECISION_CHARS = 160         # one decision line says the point; the full words are in project-history --task
+BRIEF_DIRECTION_CHARS = 80         # an older task with no plain block is named by the start of the owner's direction
+HISTORY_PAGE_SIZE = 20             # project-history --list: one page of one-line titles
+BRIEF_FILE = "project_brief.md"      # the latest brief, written beside the memory index as a convenience (delivery points never read it)
+BRIEF_TITLE = "Project brief (worked out from the board just now; the board is the truth)"
+BRIEF_HOW_TO_KNOW_MORE = "For any past task: `project-history --task <id>`; for the full list: `project-history --list`."
+BRIEF_NO_ACCEPTED = "No NMHP task accepted yet; this project was adopted with existing code."
+
+
+def configure(plumbing: Any) -> None:
+    """Install the owner's brief size (the project worker passes the plumbing settings once at start); anything unusable keeps the default."""
+    _configured.clear()
+    value = plumbing.get("project_brief_max_chars") if isinstance(plumbing, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool) and BRIEF_MAX_CHARS_LOW <= value <= BRIEF_MAX_CHARS_HIGH:
+        _configured["chars"] = value
+
+
+def brief_max_chars() -> int:
+    """Return the configured total size of the brief in characters, or BRIEF_MAX_CHARS_DEFAULT when none was configured."""
+    return _configured.get("chars", BRIEF_MAX_CHARS_DEFAULT)
 
 
 class MemoryRecordConflict(ValueError):
@@ -452,6 +490,7 @@ def _sync_events_unlocked(
     # be filled idempotently by retry; a rejected index can never orphan newly
     # appended records that no index references.
     _write_index(root, value)
+    _write_brief_file(root, state, project_value)
     conflict = None
     try:
         _append_replay_batch(root, ordered)
@@ -610,6 +649,7 @@ def reconcile_from_board(root: ProjectRoot, board_state: dict[str, Any]) -> dict
         # Re-publish even on a match. This makes the board-authoritative read
         # explicit and refreshes the validated external mirror atomically.
         _write_index(root, rebuilt)
+        _write_brief_file(root, board_state, project_value)
         snapshot(root, expected_sequence)
         return {
             "authority": "board",
@@ -667,6 +707,13 @@ def snapshot(root: ProjectRoot, sequence: int) -> Path:
         shutil.copy2(record, temporary_record)
         os.replace(temporary_record, mirrored)
 
+    brief_file = memory_dir(root) / BRIEF_FILE
+    if brief_file.is_file():
+        # the convenience brief rides in the mirror too, so a restore gives back exactly the folder that was backed up
+        temporary_brief = destination / f".{BRIEF_FILE}.{uuid.uuid4().hex}.tmp"
+        shutil.copy2(brief_file, temporary_brief)
+        os.replace(temporary_brief, destination / BRIEF_FILE)
+
     temporary_index = destination / f".index.md.{uuid.uuid4().hex}.tmp"
     shutil.copy2(index_path(root), temporary_index)
     os.replace(temporary_index, destination / "index.md")
@@ -717,3 +764,199 @@ def memory_digest(root: ProjectRoot) -> str:
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+# --- Project brief ------------------------------------------------------------------------------------------------------------------------
+
+def _dict(value: Any) -> dict[str, Any]:
+    """Return value when it is a dict, else an empty dict (board state read defensively)."""
+    return value if isinstance(value, dict) else {}
+
+
+def _clip(text: Any, limit: int) -> str:
+    """Return text on one line, cut to its first limit characters followed by an ellipsis when it was longer."""
+    line = " ".join(str(text or "").split())
+    return line if len(line) <= limit else line[:limit].rstrip() + "…"
+
+
+def _plain_line(state: dict[str, Any], task: str) -> str:
+    """Return the first "In plain words" line of task's confirmed requirements, else the start of its direction, else a notice."""
+    text = _dict(_dict(state.get("requirement_confirmations")).get(task)).get("text")
+    try:
+        return contract_check.split_plain_summary(text)[0][0]
+    except ValueError:
+        pass     # an older task has no plain block: its direction names it instead
+    direction = _clip(_dict(state.get("task_owner_directions")).get(task), BRIEF_DIRECTION_CHARS)
+    return direction or "no description recorded"
+
+
+def accepted_tasks(state: dict[str, Any]) -> list[dict[str, str]]:
+    """Take the board state; return the really accepted tasks (owner_accept_is_real), newest first.
+
+    Each row has task, when (the merge record's time, else the owner's decision time), date, plain (first plain line) and commit
+    (short commit from git_acceptances, else "merge not recorded").
+    """
+    from harness import board     # imported here because board imports this module
+    acceptances = _dict(state.get("git_acceptances"))
+    rows = []
+    for task, decision in _dict(state.get("release_decisions")).items():
+        if not board.owner_accept_is_real(state, str(task), decision):
+            continue
+        merge = _dict(acceptances.get(task))
+        when = str(merge.get("accepted_at") or _dict(decision).get("recorded_at") or "")
+        rows.append({
+            "task": str(task), "when": when, "date": when[:10] or "date not recorded", "plain": _plain_line(state, str(task)),
+            "commit": str(merge.get("commit") or "")[:7] or "merge not recorded",
+        })
+    return sorted(rows, key=lambda row: (row["when"], row["task"]), reverse=True)
+
+
+def _stage(state: dict[str, Any], task: str) -> str:
+    """Return the Story page's name of the step task is at, or a notice when it cannot be worked out."""
+    try:
+        return str(story.build(state, None, task, detail=False)["step_title"])
+    except Exception:    # noqa: BLE001 - the Story is a display; a task it cannot describe never stops the brief
+        return "stage not recorded"
+
+
+def modify_words(events: list[dict[str, Any]], task: str) -> list[tuple[str, str]]:
+    """Take board events (hot or the whole log); return (time, words) for each Modify the owner asked on task."""
+    return [
+        (str(event.get("at") or ""), " ".join(str(event["owner_change_request"]).split()))
+        for event in events if isinstance(event, dict) and event.get("kind") == "requirements_modify"
+        and event.get("task") == task and event.get("owner_change_request")
+    ]
+
+
+def early_look_answers(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Return the owner's answers to the Reviewer's early-look questions on task, as kept on its proposal (question, answer, recommended)."""
+    proposal = _dict(_dict(state.get("requirement_proposals")).get(task))
+    return [item for item in _dict(proposal.get("contract_check")).get("answers") or [] if isinstance(item, dict)]
+
+
+def _answer_line(task: str, question: Any, answer: Any) -> str:
+    """Return the decision line for an early-look answer: the owner's answer is kept whole, the question is cut (or left out) to fit."""
+    prefix = f"On {task}: "
+    answer = _clip(answer, BRIEF_DECISION_CHARS - len(prefix) - len("chose: "))
+    room = BRIEF_DECISION_CHARS - len(prefix) - len(" -> ") - len(answer)
+    return f"{prefix}{_clip(question, room)} -> {answer}" if room >= 20 else f"{prefix}chose: {answer}"
+
+
+def _decision_rows(state: dict[str, Any], task: str) -> list[tuple[str, str]]:
+    """Return (time, line) for each owner decision on task that the brief shows: Modify words in the hot log, and early-look answers that
+    differed from the recommended one."""
+    prefix = f"On {task}: "
+    rows = [(when, prefix + _clip(words, BRIEF_DECISION_CHARS - len(prefix))) for when, words in modify_words(state.get("events") or [], task)]
+    decided = str(_dict(_dict(state.get("requirement_proposals")).get(task)).get("decided_at") or "")
+    rows.extend(
+        (decided, _answer_line(task, item.get("text"), item.get("answer")))
+        for item in early_look_answers(state, task) if not item.get("recommended")
+    )
+    return rows
+
+
+def _folder_map(repository: Any) -> str:
+    """Take the task's repository folder; return the "Where things live" line (top-level names only), or a one-line reason it is unavailable."""
+    if not repository:
+        return "Folder map unavailable: this task has no repository yet."
+    try:
+        done = git_process.run(["git", "ls-files", "-z"], cwd=repository, capture_output=True, timeout=BRIEF_MAP_SECONDS)
+    except FileNotFoundError:
+        return "Folder map unavailable: Git is not installed or the folder cannot be read."
+    except subprocess.TimeoutExpired:
+        return "Folder map unavailable: Git did not answer in time."
+    except OSError as error:
+        return f"Folder map unavailable: {_clip(error, 120)}."
+    if done.returncode != 0:
+        return "Folder map unavailable: this folder is not a readable Git repository."
+    names: list[str] = []
+    for path in done.stdout.decode("utf-8", "replace").split("\0"):
+        top = path.split("/", 1)[0]
+        if top and top not in names:
+            names.append(top)
+    if not names:
+        return "Where things live: no files are tracked yet."
+    shown: list[str] = []
+    for name in names:
+        if len(shown) >= BRIEF_MAP_NAMES or len(", ".join([*shown, name])) > BRIEF_MAP_CHARS:
+            break
+        shown.append(name)
+    more = len(names) - len(shown)
+    return "Where things live: " + ", ".join(shown) + (f" and {more} more." if more else ".")
+
+
+def build_brief(state: dict[str, Any], project: dict[str, Any] | None, repository: Any) -> str:
+    """Take the live board state, the project's name/description dict and the task's repository folder; return the Project brief text.
+
+    Six parts, each with its own budget (spec 3a). The total stays within brief_max_chars(): accepted work gives way first (never
+    fewer than the newest task), then the decision lines.
+    """
+    cap = brief_max_chars()
+    description = _safe_project(project)["description"]
+    accepted = accepted_tasks(state)
+    done = {row["task"] for row in accepted}
+    cancelled = _dict(state.get("cancelled_tasks"))
+    open_tasks = [task for task in reversed(list(_dict(state.get("task_owner_directions")))) if task not in done and task not in cancelled]
+    shown_open = open_tasks[:BRIEF_IN_PROGRESS_LINES]
+    progress = [f"- {task}: {_stage(state, task)}" for task in shown_open]
+    if len(open_tasks) > len(shown_open):
+        progress.append(f"and {len(open_tasks) - len(shown_open)} more in progress")
+    fixed = [
+        BRIEF_TITLE,
+        "What this project is: " + (_clip(description, BRIEF_DESCRIPTION_CHARS) if description else "No description recorded."),
+        _folder_map(repository),
+    ]
+    rows_by_task: dict[str, list[tuple[str, str]]] = {}
+
+    def assemble(kept: int, decision_lines: int) -> str:
+        """Join the parts with the newest kept accepted tasks and at most decision_lines decision lines."""
+        lines = [*fixed, "Accepted work, newest first:"]
+        lines += [f"- {row['task']} ({row['date']}): {row['plain']} [{row['commit']}]" for row in accepted[:kept]] or [BRIEF_NO_ACCEPTED]
+        if len(accepted) > kept:
+            lines.append(f"and {len(accepted) - kept} earlier accepted tasks: `project-history --list`")
+        lines += ["In progress:", *(progress or ["Nothing is in progress."])]
+        rows: list[tuple[str, str]] = []
+        for task in [row["task"] for row in accepted[:kept]] + shown_open:
+            rows += rows_by_task.setdefault(task, _decision_rows(state, task))
+        decisions = [line for _when, line in sorted(rows, reverse=True)[:min(BRIEF_DECISION_LINES, decision_lines)]]
+        if decisions:
+            lines += ["Decisions the owner made:", *decisions]
+        return "\n".join([*lines, BRIEF_HOW_TO_KNOW_MORE])
+
+    text = assemble(0, BRIEF_DECISION_LINES)
+    for kept in range(len(accepted), 0, -1):
+        text = assemble(kept, BRIEF_DECISION_LINES)
+        if len(text) <= cap:
+            return text
+    for decision_lines in range(BRIEF_DECISION_LINES - 1, -1, -1):
+        if len(text) <= cap:
+            break
+        text = assemble(min(1, len(accepted)), decision_lines)
+    return text if len(text) <= cap else text[:cap - 1].rstrip() + "…"     # last resort (very long task ids): the cap always holds
+
+
+def brief_for(root: ProjectRoot, state: dict[str, Any], repository: Any = None, project: dict[str, Any] | None = None) -> str:
+    """Take the project root, the live board state, the task's repository folder and (optionally) the project dict; return the brief.
+
+    Never raises: any failure becomes "Project brief unavailable: <reason>." so a task start is never blocked by the brief.
+    """
+    try:
+        if project is None:
+            try:
+                project = _dict(load_index(root, restore=False).get("project"))
+            except ValueError:
+                project = {}      # no memory index yet: the brief simply has no description
+        return build_brief(state, project, repository)
+    except Exception as error:     # noqa: BLE001 - the brief must never stop a task from starting
+        return f"Project brief unavailable: {_clip(str(error) or type(error).__name__, 200)}."
+
+
+def _write_brief_file(root: ProjectRoot, state: dict[str, Any], project: dict[str, Any]) -> None:
+    """Write the latest brief beside the memory index (a convenience for the owner's chat and snapshots; delivery points never read it).
+
+    Uses the project's own code folder for the folder map. A failed write is ignored: the index it sits beside is what matters.
+    """
+    try:
+        _atomic_text(memory_dir(root) / BRIEF_FILE, brief_for(root, state, project_context(root).code_root, project) + "\n")
+    except OSError:
+        pass

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from harness import child_process, contract_check, control, cost_center, cto_wakes, difficulty_note, review_cost, revert_proof
+from harness import child_process, contract_check, control, cost_center, cto_wakes, difficulty_note, project_memory, review_cost, revert_proof
 from harness import platform_support
 
 SETTINGS_VERSION = 1
@@ -109,6 +109,8 @@ PLUMBING_LIMITS = {
     "review_input_measure_seconds": (review_cost.MEASURE_SECONDS_DEFAULT, review_cost.MEASURE_SECONDS_LOW, review_cost.MEASURE_SECONDS_HIGH),
     # The longest difficulty note kept (2026-10-26): longer text is trimmed, never refused.
     "difficulty_note_max_chars": (difficulty_note.MAX_CHARS_DEFAULT, difficulty_note.MAX_CHARS_LOW, difficulty_note.MAX_CHARS_HIGH),
+    # The Project brief a new task starts from (2026-11-08): its total size in characters. Information only: older work is a count and a list.
+    "project_brief_max_chars": (project_memory.BRIEF_MAX_CHARS_DEFAULT, project_memory.BRIEF_MAX_CHARS_LOW, project_memory.BRIEF_MAX_CHARS_HIGH),
     "contract_check_wait_seconds": (contract_check.WAIT_DEFAULT_SECONDS, contract_check.WAIT_MIN_SECONDS, contract_check.WAIT_MAX_SECONDS),
     # Revert proof (2026-10-26): how many changed files the board puts back one at a time at final review, and the longest it spends doing so.
     # Information only: files over the limit are listed as not checked.

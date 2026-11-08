@@ -70,7 +70,8 @@ class RenderedSettingsTests(RenderedCase):
         self.assertTrue(result["advancedClosed"])
         self.assertEqual(result["plumbing"]["inputs"], 0, "the plumbing limits are read-only here")
         limits = {row[0]: row for row in result["plumbing"]["rows"]}
-        self.assertEqual(len([name for name in global_settings.PLUMBING_LIMITS]), 17)
+        self.assertEqual(len([name for name in global_settings.PLUMBING_LIMITS]), 18)       # 18 since the Project brief size (2026-11-08)
+        self.assertIn("Longest summary of the project a new task starts from", limits)
         heartbeat = limits["How often the CTO checks in while a task is live"]
         default, low, high = global_settings.PLUMBING_LIMITS["cto_heartbeat_seconds"]
         self.assertEqual(heartbeat[1], f"{default} s")

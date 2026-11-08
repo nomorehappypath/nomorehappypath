@@ -4676,10 +4676,11 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     if not text or len(text) > 12000:
         raise ValueError("the requirements proposal is required and must be 12000 characters or fewer")
     if plain_required:
-        # every agent's proposal (the agent command passes this) starts with a short block the owner can read; the board's own callers and
+        # every agent's proposal (the agent command passes this) starts with two short blocks the owner can read; the board's own callers and
         # proposals stored before this rule are not refused
         try:
             _, text = contract_check.split_plain_summary(text)
+            _, text = contract_check.split_fit_block(text)      # the second block: what the project already holds (spec 2026-11-08_project-brief 3c)
         except ValueError:
             # a missing task is the first thing to fix: the format message used to hide it (2026-10-28, three refusals in a row)
             not_ready = _proposal_not_ready(root, agent_id)
@@ -4762,9 +4763,10 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
             "message": "final agreed requirements filed; the owner decides Go ahead or Modify on the board",
         })
         if reviewer:
+            brief = project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))
             wake = {
                 "task": task, "version": version, "session_id": str(reviewer.get("session_id") or ""), "reviewer_id": reviewer["id"],
-                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or "")),
+                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or ""), brief),
             }
     if wake:
         _send_contract_check_wake(root, wake)
@@ -5486,17 +5488,95 @@ def _verified_contract_checks(state: dict[str, Any], task: str) -> list[dict[str
 
 
 def show_contract_checks(root: Path, agent_id: str, task: str = "") -> dict[str, Any]:
-    """Read-only: what was checked in advance for a confirmed task (Delivery reads its target here; the Reviewer and CTO may read any task)."""
+    """Read-only: what was checked in advance for a confirmed task (Delivery reads its target here; the Reviewer and CTO may read any task).
+
+    The Reviewer also gets the Project brief, and before the requirements are confirmed it gets the pending proposal, the check's state and
+    the brief instead of a refusal, so a restarted Reviewer can resume the early look. Delivery and the CTO never get the brief here.
+    """
     state = _read_state(root)
     agent = _require_agent(state, agent_id)
     task = agent["task"] if agent.get("role") in DEVELOPER_ROLES else str(task or "")
     block = ((state.get("requirement_confirmations") or {}).get(task) or {}).get("contract_check")
+    waiting = (state.get("requirement_proposals") or {}).get(task) or {}
+    if block is None and agent.get("role") == "qa" and waiting.get("status") == "awaiting_owner":
+        # the Reviewer holding the routed early look has nothing confirmed yet: it gets the pending proposal, the check's state and the brief
+        # (so a restarted Reviewer can carry on), where Delivery and the CTO are refused as before
+        check = waiting.get("contract_check") or {}
+        return {
+            "task": task, "pending_proposal": waiting.get("text", ""), "version": waiting.get("version", 1),
+            "status": check.get("status", ""), "reason": check.get("reason", ""),
+            "project_brief": project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task)),
+        }
     if block is None:
         raise ValueError("this task has no confirmed requirements with an early check yet" if task else "name the task with --task")
     return {
         "task": task, "status": block.get("status", ""), "reason": block.get("reason", ""), "labels": block.get("labels") or [],
         "answers": block.get("answers") or [], "corrections": [{"requirement": c["criterion_index"], "reason": c["reason"], "at": c["at"]} for c in block.get("corrections") or []],
         "checks": _verified_contract_checks(state, task),
+        **({"project_brief": project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))} if agent.get("role") == "qa" else {}),
+    }
+
+
+def _task_events(root: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The board's whole event log (the durable file, then the hot events not yet in it), for an explicit history lookup only."""
+    by_sequence: dict[int, dict[str, Any]] = {}
+    path = board_dir(root) / "events.jsonl"
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                by_sequence[int(event.get("sequence", 0))] = event
+    for event in state.get("events", []):
+        by_sequence.setdefault(int(event.get("sequence", 0)), event)
+    return [by_sequence[key] for key in sorted(by_sequence)]
+
+
+def show_project_history(root: Path, agent_id: str, list_all: bool = False, page: int = 1, task: str = "") -> dict[str, Any]:
+    """Read-only, for Delivery and the Reviewer: the accepted work of this board, one page at a time, or one past task in detail.
+
+    Takes list_all (with page, 1-based, project_memory.HISTORY_PAGE_SIZE tasks per page) or task (a task id). With list_all it returns
+    each really accepted task newest first as id, date and plain first line. With task it returns the owner's direction, the confirmed
+    requirements, the owner's Modify words (whole event log) and early-look answers, the merge record, and the final review's result
+    (hot index) and one-line summary (cold record when present); anything never recorded says "not recorded".
+    """
+    state = _read_state(root)
+    agent = _require_agent(state, agent_id)
+    if agent.get("role") not in DEVELOPER_ROLES | {"qa"}:
+        raise ValueError("only Delivery and the Reviewer read the project history")
+    if bool(list_all) == bool(task):
+        raise ValueError("ask for the list with --list [--page N], or for one task with --task <id>")
+    if list_all:
+        rows = project_memory.accepted_tasks(state)
+        size = project_memory.HISTORY_PAGE_SIZE
+        page = max(1, int(page))
+        return {
+            "page": page, "pages": max(1, -(-len(rows) // size)), "total": len(rows),
+            "tasks": [{"task": row["task"], "date": row["date"], "plain": row["plain"]} for row in rows[(page - 1) * size:page * size]],
+        }
+    task = str(task).strip()
+    if task not in (state.get("task_owner_directions") or {}) and task not in (state.get("release_decisions") or {}):
+        raise ValueError(f"this project has no task named {task}; list the accepted tasks with --list")
+    not_recorded = "not recorded"
+    merge = (state.get("git_acceptances") or {}).get(task) or {}
+    finals = [r for r in _task_requests(state, task) if r.get("phase") == "final_acceptance"]
+    final = max(finals, key=lambda r: (r.get("status") == "passed", str(r.get("completed_at") or r.get("requested_at") or "")), default=None)
+    summary = str((final or {}).get("result_summary") or "")
+    if final and not summary:
+        summary = next((str(r.get("result_summary") or "") for r in _read_cold(root, "qa_requests") if r.get("id") == final.get("id")), "")
+    return {
+        "task": task,
+        "owner_direction": (state.get("task_owner_directions") or {}).get(task) or not_recorded,
+        "requirements": ((state.get("requirement_confirmations") or {}).get(task) or {}).get("text") or not_recorded,
+        "owner_modify_requests": [{"at": when, "words": words} for when, words in project_memory.modify_words(_task_events(root, state), task)],
+        "early_look_answers": [
+            {"question": item.get("text", ""), "answer": item.get("answer", ""), "recommended": bool(item.get("recommended"))}
+            for item in project_memory.early_look_answers(state, task)
+        ],
+        "merge": {"commit": merge.get("commit") or "merge not recorded", "date": str(merge.get("accepted_at") or "")[:10] or not_recorded},
+        "final_review": {"result": (final or {}).get("result") or not_recorded, "summary": summary or not_recorded},
     }
 
 
@@ -8967,7 +9047,9 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         message = f"Product Management defined the internal task in its {binding}; captured {inherited_count} inherited dirty files for internal attribution; owner action is not required"
         begun = _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count,
                                                    "open_reference": reference_chapters.reference_hint("delivery-workflow", *(["inherited-changes"] if inherited_count else [])), "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding})
-    return begun
+        # the Project brief rides on this result only (never stored with the event, never in a poll): computed from the live state, never blocks the start
+        brief = project_memory.brief_for(root, state, workspace or repository)
+    return {**begun, "project_brief": brief}
 
 
 
@@ -9051,6 +9133,7 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
         source_session_id = str(source.get("session_id") or "")
         recovery_instruction = f"Resume {task}. Preserved next action: {next_action} Owner action is not required."
         event = _event(state, "task_resumed", agent, {"task": task, "source_agent_id": source_agent_id, "message": "replacement Delivery Agent resumed preserved task memory; owner action is not required", "next_action": next_action})
+        brief = project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))
     if session_id:
         try:
             from harness import control
@@ -9068,7 +9151,7 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
             # predecessor process exits between those steps, its board record
             # remains read-only and cannot mutate the recovered task.
             pass
-    return event
+    return {**event, "project_brief": brief}     # a replaced or compacted builder gets the brief again
 
 
 def reconcile_inherited_baseline(root: Path, agent_id: str) -> dict[str, Any]:
@@ -18831,6 +18914,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
     p = sub.add_parser("contract-checks"); p.add_argument("--agent", required=True); p.add_argument("--task", default="")
+    p = sub.add_parser("project-history"); p.description = "Read the project's accepted work: --list [--page N] for one-line titles, or --task <id> for one past task in detail."; p.add_argument("--agent", required=True); p.add_argument("--list", action="store_true", help="list the accepted tasks, newest first, 20 per page"); p.add_argument("--page", type=int, default=1, help="the page of the list (1 is the newest)"); p.add_argument("--task", default="", help="the id of one past task")
     p = sub.add_parser("contract-check-skip"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True, help="why this stored check could not run and is set aside (at least 8 characters)")
     p = sub.add_parser("send-to-full-lane"); p.description = "Reviewer only: a Small change task is not small; send it back to the full lane once, with a plain reason"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True, help="one plain sentence, for example: this changes behaviour, not just text")
     p = sub.add_parser("check-deviation"); p.description = "Say that ONE stored check does not match reality (what it assumes vs what is real, with evidence); the Reviewer answers once"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--check", required=True, help="the check number contract-checks shows, for example 3.1"); p.add_argument("--why", required=True, help="one paragraph: what the check assumes, what is real, and the evidence")
@@ -18966,6 +19050,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
         elif args.command == "contract-checks": out = show_contract_checks(root, args.agent, args.task)
+        elif args.command == "project-history": out = show_project_history(root, args.agent, args.list, args.page, args.task)
         elif args.command == "contract-check-skip": out = record_contract_check_skip(root, args.agent, args.task, args.criterion, args.reason)
         elif args.command == "send-to-full-lane": out = record_send_to_full_lane(root, args.agent, args.task, args.reason)
         elif args.command == "check-deviation": out = record_check_deviation(root, args.agent, args.task, args.criterion, args.check, args.why)

@@ -779,13 +779,26 @@ function splitPlainBlock(text){
   if(block.length<1||block.length>3||!lines.slice(index).join('\n').trim())return null;
   return block;
 }
+// The second block (spec 2026-11-08_project-brief): "Already in the project:" follows the plain block and a blank line; text stored before it existed has none and shows nothing extra.
+function splitFitBlock(text){
+  const lines=String(text||'').replace(/\r\n/g,'\n').trim().split('\n');
+  let index=1;
+  while(index<lines.length&&lines[index].trim())index++;
+  while(index<lines.length&&!lines[index].trim())index++;
+  if(index>=lines.length||lines[index].trim().toLowerCase()!=='already in the project:')return null;
+  const block=[];index++;
+  while(index<lines.length&&lines[index].trim()){block.push(lines[index].trim());index++;}
+  return block.length&&block.length<=3?block:null;
+}
 function plainRequirementsHtml(text,answers,kind,copyHtml){
   const block=splitPlainBlock(text);
   const given=Array.isArray(answers)?answers:[];
   const choices=given.length?`<div class="plain-choices" data-plain-choices><strong>Your choices</strong> (they replace anything above that says otherwise)<ul>${given.map(item=>`<li>${esc(item.text)} — ${esc(item.answer)}</li>`).join('')}</ul></div>`:'';
   const summary=block?`<div class="plain-summary" data-plain-summary="plain"><strong>In plain words</strong>${block.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`
     :`<div class="plain-summary" data-plain-summary="legacy"><p>This agreement was written in developer language, before plain summaries existed. To get a plain summary, press <strong>Send clarification</strong> and ask Delivery for one.</p></div>`;
-  return `${summary}${choices}<div class="full-requirements-head" style="display:flex;gap:10px;align-items:flex-start"><details class="full-requirements" data-keep="full-requirements-${esc(kind)}" style="flex:1"><summary>${block?'Full requirements':'Full requirements (developer language)'}</summary><div class="requirements-body">${requirementsHtml(text||'')}</div></details>${copyHtml||''}</div>`;
+  const fit=block?splitFitBlock(text):null;
+  const fitHtml=fit?`<div class="plain-summary" data-fit-summary="fit"><strong>Already in the project</strong>${fit.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`:'';
+  return `${summary}${fitHtml}${choices}<div class="full-requirements-head" style="display:flex;gap:10px;align-items:flex-start"><details class="full-requirements" data-keep="full-requirements-${esc(kind)}" style="flex:1"><summary>${block?'Full requirements':'Full requirements (developer language)'}</summary><div class="requirements-body">${requirementsHtml(text||'')}</div></details>${copyHtml||''}</div>`;
 }
 function testedListHtml(labels,results,title,compare){
   const list=Array.isArray(labels)?labels:[];

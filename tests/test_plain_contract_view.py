@@ -17,6 +17,7 @@ from tests.test_contract_first_checks import TEST_FILE, TASK, ledger, plain_read
 from tests.test_requirements_contract import context, delivery_with_direction
 
 GOOD_BLOCK = "In plain words:\nA forecast page will show the next five days.\nYou will see a high and a low for each day.\nNothing for you to do."
+FIT = "Already in the project:\nNothing related exists yet."
 FULL = "Objective: five-day forecast.\nAcceptance: each day shows a high and a low."
 
 
@@ -135,11 +136,11 @@ class ProposalCommandTests(unittest.TestCase):
         self.assertNotIn(TASK, board.snapshot(self.root).get("requirement_proposals", {}), "nothing was filed")
 
     def test_a_good_block_is_accepted_and_confirmed_word_for_word(self):
-        code, output = self.propose(GOOD_BLOCK + "\n\n" + FULL)
+        code, output = self.propose(GOOD_BLOCK + "\n\n" + FIT + "\n\n" + FULL)
         self.assertEqual(code, 0, output)
         board.record_requirements_decision(self.root, TASK, "go_ahead")
-        confirmation = board.record_requirement_confirmation(self.root, self.agent["id"], GOOD_BLOCK + "\n\n" + FULL)
-        self.assertEqual(board.snapshot(self.root)["requirement_confirmations"][TASK]["text"], GOOD_BLOCK + "\n\n" + FULL)
+        confirmation = board.record_requirement_confirmation(self.root, self.agent["id"], GOOD_BLOCK + "\n\n" + FIT + "\n\n" + FULL)
+        self.assertEqual(board.snapshot(self.root)["requirement_confirmations"][TASK]["text"], GOOD_BLOCK + "\n\n" + FIT + "\n\n" + FULL)
         self.assertTrue(confirmation)
 
     def test_the_boards_own_callers_are_not_refused(self):
