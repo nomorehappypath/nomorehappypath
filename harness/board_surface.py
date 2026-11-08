@@ -53,6 +53,7 @@ ALL_BOARD_OPERATIONS = {
     "attach-workspace", "bind-repository", "reconcile-baseline",
     "owner-direction", "clear-hold", "reconcile-unmerged-accept", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
     "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane",
+    "project-history",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
     "findings", "request-qa", "request-independent-review", "define-plan",
     "declare-subtasks", "start-subtask", "declare-subtask-chunks", "git-commit",
@@ -89,6 +90,8 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
     "contract-checks", "ask-owner", "contract-check-skip",
+    # 2026-11-08: Delivery and the Reviewer look up older accepted work one page or one task at a time (never the CTO).
+    "project-history",
     # 2026-10-26: Delivery says a locked check does not match reality; the Reviewer answers once.
     "check-deviation",
     # 2026-10-29: Code analysis, two equal passes: Delivery files its own list and checks the Reviewer's.
@@ -111,7 +114,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
 }
 REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # 2026-10-23: the Reviewer's one early look at the requirements, and the correction of a stored check.
-    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner",
+    "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "project-history",
     # 2026-10-26: the Reviewer may send a Small change task back to the full lane once.
     "send-to-full-lane",
     "execute-challenge", "findings", "claim-qa", "reserve-qa", "test-env-run",
@@ -186,7 +189,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "project-history", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks", "retire-chunk",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "analysis-list", "analysis-crosscheck", "analysis-merge", "review-support", "retained-plan",
@@ -225,7 +228,7 @@ CONCURRENT_BOARD_OPERATIONS = {
 # board's own file lock still orders every state access.
 SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status", "reference"}
 # A refused read changes nothing, so it never opens a hold (backlog #15).
-READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks", "retained-plan", "reference"}
+READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks", "retained-plan", "reference", "project-history"}
 
 
 # Reserved legacy frame sentinel (pre-1.0 wire format); kept for compatibility.

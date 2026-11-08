@@ -157,7 +157,7 @@ class StandingChecksGateTests(unittest.TestCase):
             self.assertIn(needle, reviewer)
 
     def test_requirements_without_a_security_line_are_sent_back(self) -> None:
-        plain = "In plain words:\nA report of the problems.\nNothing for you to do.\n\nFind problems.\nNon-functional: none"
+        plain = "In plain words:\nA report of the problems.\nNothing for you to do.\n\nAlready in the project:\nNothing related exists yet.\n\nFind problems.\nNon-functional: none"
         with self.assertRaisesRegex(ValueError, "Security:"):
             board.record_requirement_proposal(Path("/nonexistent"), "agent", plain, plain_required=True)
         self.assertEqual(standing_checks.requirements_problem(plain + "\nSecurity: the report is read-only and touches no live data."), "")

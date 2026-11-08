@@ -178,6 +178,47 @@ def split_plain_summary(text: Any) -> tuple[list[str], str]:
     return block, raw
 
 
+FIT_HEADING = "Already in the project:"
+FIT_EXAMPLE = (
+    "Good: \"Already in the project:\nThe sign-in page you accepted last week already exists.\nThis change adds a reset link to it instead of "
+    "building a second page.\n\n<the full requirements>\". Say \"Nothing related exists yet.\" when that is true."
+)
+
+
+def split_fit_block(text: Any) -> tuple[list[str], str]:
+    """(fit lines, the whole text) when the text, which already starts with a valid plain block, continues with a valid "Already in the project:" block, else raises ValueError with the fix.
+
+    Takes the text split_plain_summary returned. The block follows the plain block and its blank line: one to three short lines under the same
+    plain-words rules, then a blank line, then the full requirements. Only the shape is checked; whether the lines are true is the Reviewer's judgment.
+    """
+    lines = str(text or "").split("\n")
+    index = 1
+    while index < len(lines) and lines[index].strip():
+        index += 1                      # past the plain block
+    while index < len(lines) and not lines[index].strip():
+        index += 1                      # past the blank line
+    if index >= len(lines) or not lines[index].strip().lower().startswith(FIT_HEADING.lower()):
+        raise ValueError(f"after the \"{SUMMARY_HEADING}\" block and a blank line, add an \"{FIT_HEADING}\" block: one to {SUMMARY_MAX_LINES} short lines saying what accepted work or existing code this task touches and how the new work fits or extends it, then a blank line, then the full requirements. {FIT_EXAMPLE}")
+    same_line = lines[index].strip()[len(FIT_HEADING):].strip()
+    if same_line:
+        # "Already in the project: The page exists." on one line is the same block (as for the plain block)
+        lines[index:index + 1] = [FIT_HEADING, same_line]
+    block: list[str] = []
+    after = index + 1
+    while after < len(lines) and lines[after].strip():
+        block.append(lines[after].strip())
+        after += 1
+    if not 1 <= len(block) <= SUMMARY_MAX_LINES:
+        raise ValueError(f"the \"{FIT_HEADING}\" block must have one to {SUMMARY_MAX_LINES} lines, then a blank line. {FIT_EXAMPLE}")
+    if not "\n".join(lines[after:]).strip():
+        raise ValueError(f"after the \"{FIT_HEADING}\" block, a blank line and the full requirements must follow. {FIT_EXAMPLE}")
+    for number, line in enumerate(block, 1):
+        problem = plain_problem(line, SUMMARY_LINE_LIMIT, min_words=3)
+        if problem:
+            raise ValueError(f"line {number} of the \"{FIT_HEADING}\" block is not plain words: {problem}. {FIT_EXAMPLE}")
+    return block, "\n".join(lines)
+
+
 def configure(seconds: Any) -> None:
     """Install the owner's wait (the project worker passes the settings value once at start); None restores the default."""
     _configured.clear()
@@ -459,8 +500,8 @@ def existing_code_note(repository: str) -> str:
             "you can find by reading. Leave a requirement unchecked only when, after reading the code, no test can show it, and say in why_not_checked what you read.")
 
 
-def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "") -> str:
-    """Build the message routing a Reviewer to write contract checks for task at the given requirements version, carrying the owner's original direction, the requirements text, a repository note when repository is given, and the minutes allowed before a late submission is refused. Return the instruction text to send."""
+def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "", brief: str = "") -> str:
+    """Build the message routing a Reviewer to write contract checks for task at the given requirements version, carrying the owner's original direction, the requirements text, a repository note when repository is given, the minutes allowed before a late submission is refused, and the Project brief when one is given. Return the instruction text to send."""
     return (
         f"CONTRACT CHECK ROUTED: task {task}, requirements version {version}. This is advisory preparation, not a review round: "
         "do not reserve, claim or review anything for it, and the work for this task is not built yet. Read the owner's original direction and the "
@@ -471,6 +512,7 @@ def reviewer_instruction(task: str, version: int, requirements: str, direction: 
         "a check without guessing, each with 2 to 4 options and one recommended. The owner may go ahead without waiting and a submission after "
         f"that, or after about {max(1, minutes)} minutes, is refused. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
         f"ORIGINAL OWNER DIRECTION:\n{direction}\nREQUIREMENTS (version {version}):\n{requirements}"
+        + (f"\nPROJECT BRIEF:\n{brief}" if brief else "")
     )
 
 

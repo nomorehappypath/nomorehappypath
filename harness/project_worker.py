@@ -35,7 +35,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harness import upload_on_accept
-from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
+from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, project_memory, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -737,6 +737,7 @@ def serve(
         difficulty_note.configure(global_settings.load(settings_home).get("plumbing"))
         revert_proof.configure(global_settings.load(settings_home).get("plumbing"))
         cto_wakes.configure(global_settings.load(settings_home).get("plumbing"))
+        project_memory.configure(global_settings.load(settings_home).get("plumbing"))
     watchdog = ProjectWatchdog(root)
     preview_supervisor = release_preview.ReleasePreviewSupervisor(root)
     chat_action_token = secrets.token_urlsafe(32)

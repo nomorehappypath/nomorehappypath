@@ -150,12 +150,20 @@ After receiving the exact owner direction, Product Management may ask
 clarifying questions, one at a time, with `ask-owner` (see chapter `owner-questions`);
 the CLI's own question widget is not available to you and is never used. When the requirements are agreed in
 conversation, FILE them as a proposal with
-`propose-requirements --agent <agent-id> --text "..."` and WAIT. **The text starts with an "In plain words:" block for the owner**: one
+`propose-requirements --agent <agent-id> --text "..."` and WAIT. **Before you propose, read the Project brief** that `begin-task` and
+`resume-task` return (what the project is, where things live, the accepted work, what is in progress, the owner's decisions), then OPEN
+the existing code it points at for whatever this task touches. For older work use `project-history --list` and `project-history --task <id>`.
+Never build again what the project already has, and never undo a decision the owner made; extend or change what exists.
+**The text starts with an "In plain words:" block for the owner**: one
 to three short lines (what will be built, what changes for them, whether they must do anything), then a blank line, then the full
 requirements. The board refuses a proposal without it, or whose lines name a spec section, a file, a function, a commit, GIVEN/WHEN/THEN
 or "delta". Good: `In plain words:` / `A forecast page will show the next five days.` / `You will see a high and a low for each day.` /
 `Nothing for you to do.` Bad: `Implements delta 3 of spec section 15 in forecast_view.py (commit 4efdf2f).` The owner reads the plain
-block first; the full text sits behind a toggle. The owner
+block first; the full text sits behind a toggle. **Right after it, a blank line and a second block, "Already in the project:"**: one to three
+short lines in the same plain words (what accepted work or existing code this task touches and how the new work fits or extends it;
+"Nothing related exists yet." only when you looked and that is true), then a blank line, then the full requirements. The board refuses
+a proposal without this block, with nothing after it, or whose lines break the plain-words rules; the owner reads it under the plain block,
+and the Reviewer checks that it is true. The owner
 decides on the board with the Go ahead / Modify buttons — terminal prose such
 as an owner typing "go ahead" is NOT authorization and the board will refuse a
 confirmation without an accepted proposal. When the accepted decision arrives
@@ -182,7 +190,10 @@ coding" and the GO AHEAD message carries the exact accepted text to record.
 When the board routes `CONTRACT CHECK ROUTED`, a Delivery Agent has filed requirements and the owner has not decided yet. This is
 advisory preparation, not a review round: reserve and claim nothing, no code exists, and nothing here counts as a PASS or a FAIL.
 Work from the owner's original direction and the requirements text in the message (black box: what the finished program prints,
-answers or shows). When the message says the project already has code, read that code first (read only): find the real commands, functions, files and pages
+answers or shows). The message also carries the PROJECT BRIEF (and `contract-checks` returns it again after a restart, with the pending proposal before the
+requirements are confirmed): if the proposal duplicates or contradicts an accepted task in the brief or in `project-history --list`, say so as
+one of your product questions, with a recommended answer (to keep and change what exists, or to follow the new direction). Open an older task
+with `project-history --task <id>` before you ask. When the message says the project already has code, read that code first (read only): find the real commands, functions, files and pages
 each requirement is about and write checks that call them. A check for a defect must fail on that code today. Never guess an interface you can find by
 reading; a requirement stays unchecked only when, after reading, no test can show it, and `why_not_checked` says what you read. Submit ONCE, with `contract-check-submit --agent <your-id> --task <task> --version <n> --submission <file.json>`.
 The owner may go ahead without waiting; a submission after that, after the wait ends, or for an older version is refused.
