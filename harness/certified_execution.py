@@ -481,11 +481,25 @@ def run(
             raise ValueError(
                 "the test machine changed or needed the owner's password while this command ran, so its result was discarded "
                 "(machine revision or authorization is no longer the one it started under). Run machine-status, then submit again.")
+        # 2026-11-08: the board's own run of a stored check may be converted to "did not run" only when nothing in the output or the
+        # process audit says anything about the work: no failure word (unittest, pytest, Go's "--- FAIL", a final-check verdict), no
+        # problem of any kind (a permission prompt or an owner-browser launch stays a finding, ambient or not).
+        _nothing_said = (unable_not_failure and not final_check_problem(output) and not _FAILURE_SIGNS.search(output)
+                         and not re.search(r"(?m)^\s*(--- )?FAIL\b|\.\.\. (FAIL|ERROR)\b|^(FAIL|ERROR): ", output)
+                         and not [p for p in process_audit["problems"] if not p.startswith("internal-QA test command timed out")])
         if process_audit["timed_out"]:
+            if _nothing_said:
+                # 2026-11-08: the board's own run of a stored check that never finished says nothing about the work (a 35-minute suite
+                # against a 300-second limit cost the owner two hours and four messages). "Did not run", so it can be set aside with a reason.
+                raise CouldNotRun(f"the check did not finish within {timeout_seconds} seconds, so it has no result "
+                                  "(a check this long needs a shorter command, or the suite run in parts)", output)
             raise ValueError(browser_acceptance.with_blocked_note(
                 f"internal-QA test command timed out after {timeout_seconds} seconds; partial output was not certified",
                 output,
             ))
+        if raw_exit == 127 and _nothing_said and _test_count(output) is None:
+            # the program the check calls is not installed in this copy (exit 127: command not found): not a failure of the work
+            raise CouldNotRun("the check's command was not found in this copy (exit 127: command not found)", output)
         finished_at = _at()
         duration = round((datetime.now(timezone.utc) - started).total_seconds(), 3)
         problem = ""

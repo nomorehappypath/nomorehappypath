@@ -3749,7 +3749,8 @@ def _review_escalation_note(state: dict[str, Any] | None) -> str:
         what = (("a fresh Reviewer is being started because the review could not be completed" if item.get("who") == "reviewer" else "a fresh Delivery attempt is being started")
                 if item["status"] == "recovery" else "automatic repair has stopped and nothing of it is released")
         lines.append(f"REVIEW LIMIT: {item['task']} failed review {item['failed_judgments']} times ({', '.join(item['open_ids'] or [])}); {what}.")
-    return " " + " ".join(lines) + " Do not route a repair of that part, do not restart Delivery for it, and do not ask the owner; say it in one plain line and keep other work moving."
+    return " " + " ".join(lines) + (" Do not route a repair of that part and do not ask the owner: the owner has a red card with Try once more and Give up (2026-11-08); "
+                                    "never clear that card yourself. Say it in one plain line and keep other work moving.")
 
 
 def _build_collection_note(state: dict[str, Any] | None) -> str:
@@ -4274,6 +4275,24 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
     return stalled
 
 
+PASTED_SCREEN_MESSAGE = "This looks like a pasted terminal screen, not a direction. Write what you want done in your own words."
+_SCREEN_LINE = re.compile(
+    r"^(Last login:|exec /bin/sh|\S+@\S+ [~\w/.-]* [%$#] |\S+@\S+:[~\w/.-]*[%$#] ?|[~\w.-]* ?[%$#] |/(Users|home|Applications|usr|opt|private|tmp|var)/\S+$|"
+    r"[A-Za-z]:\\\S+$|Traceback \(most recent call last\)|  File \"|\$ )")
+
+
+def looks_like_pasted_screen(text: str) -> bool:
+    """Is this text a terminal screen (prompts, exec lines, bare paths, tracebacks) rather than words from the owner?
+
+    2026-11-08: a pasted screen became a direction, spawned a Delivery agent and bound its task to the live NMHP folder named in
+    the paste. Half or more of the lines looking like a screen means a screen; a sentence that mentions one path still passes."""
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    screen = sum(1 for line in lines if _SCREEN_LINE.match(line))
+    return screen * 2 >= len(lines) and (screen >= 2 or len(lines) == 1)
+
+
 def record_owner_direction(root: Path, session_id: str, text: str, allow_split: bool = False) -> dict[str, Any]:
     """Record the owner's actual terminal input for a managed Delivery session.
 
@@ -4283,6 +4302,8 @@ def record_owner_direction(root: Path, session_id: str, text: str, allow_split: 
     text = contract.normalize_owner_direction(text)
     if not session_id or not text:
         raise ValueError("session_id and owner direction are required")
+    if looks_like_pasted_screen(text):
+        raise ValueError(PASTED_SCREEN_MESSAGE)
     # A bare CLI control command (/model, /help, …) typed at the terminal is
     # input for the CLI, never the owner's objective (issue row 1). A real
     # direction that begins with a filesystem path contains a second slash and
@@ -4385,6 +4406,8 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
     message_type = str(message_type or "").strip().lower()
     if not text:
         raise ValueError("a direction or clarification is required")
+    if looks_like_pasted_screen(text):
+        raise ValueError(PASTED_SCREEN_MESSAGE)
     if len(text) > MAX_REASON_LENGTH:
         raise ValueError(f"the message must be {MAX_REASON_LENGTH} characters or fewer")
     if message_type not in {"direction", "clarification", "cto_message"}:
@@ -5319,10 +5342,7 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
     reason = " ".join(str(reason or "").split())
     if len(reason) < 8:
         raise ValueError("skipping a check requires a reason of at least 8 characters")
-    try:
-        number = int(criterion)
-    except (TypeError, ValueError):
-        raise ValueError("name the requirement number") from None
+    number = _requirement_number(criterion)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent.get("role") not in DEVELOPER_ROLES | {"cto"}:
@@ -5380,6 +5400,24 @@ def _keep_checked_deviation(state: dict[str, Any], qa: dict[str, Any], task: str
     return {"criterion": number, "deviation": "kept", "checks_sha256": block.get("checks_sha256", "")}
 
 
+def _requirement_number(criterion: Any, check: str = "") -> int:
+    """The requirement number as the agent writes it: 6, "6", "R6", "r6", or taken from the check number "6.1" when the requirement is empty.
+
+    2026-11-08: Delivery wrote --criterion R6 (the requirements are shown as R1..R10) and was refused three times with
+    "name the requirement number"; the owner had to step in. Anything else is still refused with that message."""
+    text = str(criterion if criterion is not None else "").strip()
+    from_check = str(check or "").strip().split(".", 1)[0] if "." in str(check or "") else ""
+    if not text and from_check:
+        text = from_check
+    match = re.fullmatch(r"[Rr]?\s*(\d+)", text)
+    if not match:
+        raise ValueError("name the requirement number (for example 6, or R6)")
+    number = int(match.group(1))
+    if from_check.isdigit() and int(from_check) != number:
+        raise ValueError(f"name the requirement number that matches the check: the check {check} belongs to requirement {from_check}, not {number}")
+    return number
+
+
 def record_check_deviation(root: Path, agent_id: str, task: str, criterion: Any, check: str, why: str) -> dict[str, Any]:
     """Delivery says ONE locked check does not match reality; the Reviewer is woken and answers once. Nothing is held, no owner question.
 
@@ -5389,11 +5427,8 @@ def record_check_deviation(root: Path, agent_id: str, task: str, criterion: Any,
     why = " ".join(str(why or "").split())
     if not contract_check.DEVIATION_WHY_MIN <= len(why) <= contract_check.DEVIATION_WHY_MAX:
         raise ValueError(f"say in {contract_check.DEVIATION_WHY_MIN} to {contract_check.DEVIATION_WHY_MAX} characters what the check assumes, what is real, and the evidence")
-    try:
-        number = int(criterion)
-    except (TypeError, ValueError):
-        raise ValueError("name the requirement number") from None
     check = str(check or "").strip()
+    number = _requirement_number(criterion, check)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent.get("role") not in DEVELOPER_ROLES or agent.get("task") != str(task):
@@ -5584,6 +5619,13 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                     )
                     outcomes[item["criterion_index"]] = "did_not_run"
                 except ValueError as error:
+                    if "required test executable is unavailable" in str(error) and "preflight failed" in str(error) and ";" not in str(error).split("execution: ", 1)[-1]:
+                        # 2026-11-08: the program the check calls is not installed in this copy (found before the run): the check did not run.
+                        # A malformed command, a board call or a security refusal in the same preflight is still a failure.
+                        reasons[item["criterion_index"]] = (f"{error}. This says nothing about the work. Delivery or the CTO can skip this check with a "
+                                                            "recorded reason (contract-check-skip), or the Reviewer can correct it.")
+                        outcomes[item["criterion_index"]] = "did_not_run"
+                        continue
                     outcomes[item["criterion_index"]] = "failed"
                     _record_contract_check_results(root, task, outcomes)
                     raise ValueError(
@@ -6287,8 +6329,9 @@ _OWNER_ACTION_DECISION_EVENTS = {
     "requirements_modify": "Resolved: you chose Modify",
 }
 _OWNER_ACTION_REVIEWER_EVENTS = {"agent_registered", "agent_resume_session_attached", "agent_restarted_by_harness"}
+_IDLE_TASK_CLEARING_EVENTS = {"board_polled", "agent_registered", "task_resumed", "agent_recovered"}   # a builder is on the task again
 OWNER_ACTION_TRIGGER_EVENTS = frozenset(
-    set(_OWNER_ACTION_TASK_EVENTS) | set(_OWNER_ACTION_AGENT_EVENTS)
+    set(_OWNER_ACTION_TASK_EVENTS) | set(_OWNER_ACTION_AGENT_EVENTS) | _IDLE_TASK_CLEARING_EVENTS
     | set(_OWNER_ACTION_DECISION_EVENTS) | _OWNER_ACTION_REVIEWER_EVENTS
     # an owner message to the CTO is noted on every open question card (never closes one)
     | {"owner_cto_message_received", "deliverable_waived_by_owner"}   # the waiver closes a verification gap and its card
@@ -6938,7 +6981,13 @@ def _settle_owner_actions(state: dict[str, Any], event: dict[str, Any], agent: d
             continue
         card = _classify_owner_action(state, action)
         outcome = ""
-        if kind in _OWNER_ACTION_TASK_EVENTS and card.get("task") and card["task"] == task:
+        if action.get("idle_task"):
+            # the "nobody is working" card: only a Delivery agent on that task clears it, never the CTO's notes
+            if kind in _IDLE_TASK_CLEARING_EVENTS and role in DEVELOPER_ROLES and task == action.get("task"):
+                outcome = IDLE_TASK_RESOLVED
+            elif kind in _OWNER_ACTION_TASK_EVENTS and task == action.get("task"):
+                outcome = _OWNER_ACTION_TASK_EVENTS[kind]
+        elif kind in _OWNER_ACTION_TASK_EVENTS and card.get("task") and card["task"] == task:
             outcome = _OWNER_ACTION_TASK_EVENTS[kind]
         elif kind in _OWNER_ACTION_AGENT_EVENTS and card["kind"] == "agent" and agent_id:
             # A card naming no agent is about whichever worker the owner had
@@ -8239,6 +8288,10 @@ def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) 
             raise ValueError("unknown owner action")
         if action.get("status") == "done":
             return dict(action)
+        if action.get("owner_only_close"):
+            # 2026-11-08: the harness's own red cards (a stopped part, a refused command, nobody working) are the owner's; the CTO
+            # cannot wave them away. They close by the owner's choice, by the task ending, or when a builder is back on the task.
+            raise ValueError("this red card is the owner's: it closes only by the owner's choice on it, when the task ends, or when a builder is working on the task again")
         action.update({"status": "done", "outcome": outcome, "done_at": now()})
         _event(state, "owner_action_cleared", agent, {
             "task": action.get("task", ""), "action_id": action_id, "outcome": outcome,
@@ -11364,11 +11417,13 @@ def record_refusal_defect(root: ProjectRoot, task: str, operation: str, error: s
         item = defects.get(key)
         if item:
             item.update({"count": int(count), "last_at": now()})
+            _refusal_card(state, task, operation, error, role or str(item.get("role") or ""), int(count))   # a recurrence raises the card again
             return json.loads(json.dumps(item))
         who = role or "An agent"
         item = {"task": task, "operation": operation, "message": str(error)[:900], "count": int(count), "role": role,
                 "status": "open", "first_at": now(), "last_at": now()}
         defects[key] = item
+        _refusal_card(state, task, operation, error, role, int(count))
         _event(state, "repeated_refusal_defect", None, {
             "task": task, "operation": operation,
             "message": (f"{who} refused {operation} {count}x, same reason: {' '.join(str(error).split())[:60]}. "
@@ -15938,9 +15993,206 @@ def review_recovery_update(root: Path, key: str, **fields: Any) -> dict[str, Any
         return json.loads(json.dumps(entry))
 
 
+HARNESS_AGENT = {"id": "harness", "role": "cto"}   # the board itself as the author of a card nobody else would raise
+REVIEW_STOP_CHOICES = ("Try once more", "Give up")
+
+
+def _harness_card(state: dict[str, Any], card_key: str, title: str, why: str, task: str, **extra: Any) -> dict[str, Any]:
+    """One red "Blocked, needs you" card raised by the board itself, identified by card_key (never merged with another card).
+
+    `_record_owner_action` merges cards of the same task and kind, which would fold two stopped parts, a refused command and
+    "nobody is working" into one card with the wrong words (Codex plan check 2026-11-08, finding 2). A card with the same key is
+    refreshed in place (its email stamp stays, so no second email); any other is a new card. Closed only by the owner's choice,
+    the task ending, or the condition itself ending (owner_only_close)."""
+    actions = state.setdefault("owner_actions", {})
+    for existing in actions.values():
+        if existing.get("status") == "open" and existing.get("card_key") == card_key:
+            if existing.get("why") != why:
+                existing.update({"why": why, "refreshed_at": now()})
+            return existing
+    recorded_at = now()
+    action = {
+        "id": f"action-{secrets.token_hex(6)}", "title": title, "command": "", "why": why,
+        "task": task, "for_agent": "", "kind": "task", "agent_id": HARNESS_AGENT["id"], "status": "open",
+        "recorded_at": recorded_at, "outcome": "", "done_at": "", "blocked": True, "owner_only_close": True, "card_key": card_key, **extra,
+    }
+    actions[action["id"]] = action
+    _event(state, "owner_action_recorded", None, {"task": task, "action_id": action["id"], "title": title, "message": f"owner action needed: {title}"})
+    return action
+
+
+def _scope_words(entry: dict[str, Any]) -> str:
+    """The part of the task a review escalation is about, in the owner's words ("the final review", "part <chunk>")."""
+    scope = entry.get("scope") or {}
+    if scope.get("phase") == "final_acceptance":
+        return "the final review"
+    if scope.get("chunk") and scope.get("chunk") != "final":
+        return f"part {scope['chunk']}"
+    if scope.get("subtask"):
+        return f"part {scope['subtask']}"
+    return "one part"
+
+
+def _stopped_scope_card(state: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any] | None:
+    """2026-11-08 (owner: "no email was sent to me raising this issue???"): a part the harness stopped repairing gets a red card.
+
+    Before, review_rounds set could_not_finish, the Delivery terminal ended and the CTO wrote "owner action is not required";
+    no red card, so no warning email. Now one red card per scope, with the two choices the owner has (Try once more lets
+    Delivery request one more review; Give up closes the part for good). None for a part the owner already gave up."""
+    if entry.get("status") != "could_not_finish" or entry.get("given_up_at"):
+        return None
+    task = str(entry.get("task") or "")
+    outcome = str(entry.get("outcome") or "The builder could not finish one part after repeated tries; nothing of it was released.")
+    return _harness_card(
+        state, f"review_stop:{entry.get('key')}", f"Blocked, needs you: {task}, {_scope_words(entry)} stopped after repeated failed reviews",
+        blocked_card_text(outcome, "Press Try once more to let the builder request one more review of this part (its last fix is kept), "
+                                   "or Give up to close this part for good. Until you choose, nobody works on it."),
+        task, choices=list(REVIEW_STOP_CHOICES), choice_kind="review_stop", scope_key=str(entry.get("key") or ""))
+
+
+def stopped_scope_cards(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every stopped part of an open task has its card (Codex plan check 2026-11-08, finding 1: a part stopped before this
+    release, or while the project was paused, never crosses the transition again). Same key, same card, no second email."""
+    cards = []
+    for entry in (state.get("review_escalations") or {}).values():
+        if isinstance(entry, dict) and not _task_closed_for_checks(state, str(entry.get("task") or "")):
+            card = _stopped_scope_card(state, entry)
+            if card:
+                cards.append(card)
+    return cards
+
+
+def _refusal_card(state: dict[str, Any], task: str, operation: str, error: str, role: str, count: int) -> dict[str, Any]:
+    """2026-11-08: the third identical refusal of an agent's command is the owner's business, not a log line to nobody.
+
+    Five of six tasks that week ended with the owner typing the workaround himself after reading the agent's window."""
+    who = {"engineering": "builder", "development": "builder", "qa": "reviewer", "cto": "CTO"}.get(role, "agent")
+    return _harness_card(
+        state, f"refusal:{task}:{operation}", f"Blocked, needs you: the board refused the {who}'s command {count} times",
+        blocked_card_text(f"The {who} tried {operation} {count} times and the board refused each time: {' '.join(str(error).split())[:400]}",
+                          "Read the refusal. Give the agent a clarification with the exact step to take instead, or tell the CTO with "
+                          "Message the CTO. This is usually a defect in NoMoreHappyPath itself; it is logged for the next release."),
+        task)
+
+
+IDLE_TASK_MINUTES = 10
+IDLE_TASK_RESOLVED = "Resolved: an agent is working on it again"
+
+
+def idle_task_cards(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
+    """2026-11-08 (owner asked "are we stuck again?" eleven times in a week): an open task nobody works on gets a red card.
+
+    Conditions: the task is open (not accepted, cancelled or released), has had a Delivery agent, every Delivery agent on it is
+    gone (none active), the owner did not stop the last one himself (the Story already says so), and no agent on the task has
+    checked the board for IDLE_TASK_MINUTES. One card per task, carrying the last agent's own note (for example "visible CLI
+    terminal ended"); emailed like every blocked card; cleared when an agent on the task checks the board again. Nothing happens
+    while the project is paused (the owner knows). Returns the cards made or found on this pass."""
+    current = current or datetime.now(timezone.utc)
+    try:
+        with locked_state(root, operation="idle task cards") as state:
+            resumed = _parsed_timestamp((state.get("project_pause") or {}).get("resumed_at"))
+            if resumed is not None and current - resumed < timedelta(minutes=IDLE_TASK_MINUTES):
+                return []       # just resumed: the agents get their grace period before anyone is called gone
+            groups: dict[str, list[dict[str, Any]]] = {}
+            for agent in (state.get("agents") or {}).values():
+                if isinstance(agent, dict) and agent.get("role") in DEVELOPER_ROLES:
+                    task = str(agent.get("task") or "")
+                    if task and task not in {AWAITING_OWNER_DIRECTION, "GLOBAL_MONITOR", "REVIEW_QUEUE"}:
+                        groups.setdefault(task, []).append(agent)
+            cards = []
+            for task, agents in groups.items():
+                if _task_closed_for_checks(state, task):
+                    continue
+                # any agent of the task (a Reviewer at work on its review counts) seen within the grace period means the task is alive;
+                # a successor that registered but never checked the board does not (Codex plan check 2026-11-08, finding 7)
+                # a replacement that registered within the grace period but has not polled yet counts by its spawn time (Codex task
+                # review r2, non-blocking: the sweep between registration and the first poll recreated the card for a moment)
+                seen_all = [_parsed_timestamp(a.get("last_poll_at") or (a.get("spawned_at") if a.get("active") else None))
+                            for a in (state.get("agents") or {}).values() if isinstance(a, dict) and str(a.get("task") or "") == task]
+                seen_all = [t for t in seen_all if t is not None]
+                seen = max(seen_all) if seen_all else None
+                if seen is None or current - seen < timedelta(minutes=IDLE_TASK_MINUTES):
+                    continue        # alive, or never checked the board yet (the launch ladder's business, not abandonment)
+                agents.sort(key=lambda a: str(a.get("last_poll_at") or ""))
+                last = agents[-1]
+                if last.get("status") == "stopped":
+                    continue        # the owner's own Stop: the Story says "You stopped the builder" already
+                since = seen.strftime("%H:%M UTC")
+                note = " ".join(str(last.get("liveness_note") or "").split()) or "its terminal ended"
+                # the kept-task restart (register picks a stopped builder's task) needs the stop marker; a superseded or retired agent
+                # never got one, so "Start a new builder" would have left the task orphaned (Codex task review 2026-11-08, R1-2)
+                last.pop("superseded_by_agent_id", None)
+                if not (last.get("stopped_by_owner_at") or last.get("stopped_by_harness_at")):
+                    last["stopped_by_harness_at"] = now()
+                card = _harness_card(
+                    state, f"idle:{task}", f"Blocked, needs you: nobody is working on {task}",
+                    blocked_card_text(f"Nobody has worked on {task} since {since}. The last builder ({last.get('id')}) is gone: {note}. "
+                                      "Nothing moves until a builder is on it again.",
+                                      "Start a new builder for this task from the Story page, or cancel the task if it should not continue."),
+                    task, idle_task=True)
+                cards.append(json.loads(json.dumps(card)))
+            return cards
+    except ProjectPausedError:
+        return []
+
+
+def harness_cards_pass(root: Path, current: datetime | None = None) -> list[dict[str, Any]]:
+    """After each self-heal pass (project_worker): the board's own red cards, stopped parts first, then tasks nobody works on."""
+    cards = idle_task_cards(root, current)
+    try:
+        with locked_state(root, operation="stopped part cards") as state:
+            cards = [json.loads(json.dumps(c)) for c in stopped_scope_cards(state)] + cards
+    except ProjectPausedError:
+        pass
+    return cards
+
+
+def owner_action_choose(root: Path, action_id: str, choice: str) -> dict[str, Any]:
+    """The owner pressed one of a card's choices (2026-11-08). Only a card with choices takes one; the choice is recorded verbatim.
+
+    review_stop: Try once more reopens the scope for one more review and wakes the task's Delivery agent through the board poll;
+    Give up closes the scope. The card closes with the choice as its outcome either way."""
+    choice = " ".join(str(choice or "").split())
+    with locked_state(root) as state:
+        card = (state.get("owner_actions") or {}).get(str(action_id or ""))
+        if not card or card.get("status") != "open":
+            raise ValueError("that card is no longer open")
+        if choice not in (card.get("choices") or []):
+            raise ValueError("choose one of: " + ", ".join(card.get("choices") or []) or "this card has no choices")
+        at = now()
+        if card.get("choice_kind") == "review_stop":
+            entry = (state.get("review_escalations") or {}).get(str(card.get("scope_key") or ""))
+            if not entry:
+                raise ValueError("the part this card is about no longer exists on the board")
+            if choice == "Try once more":
+                review_rounds.reopen_by_owner(entry, at)
+                alive = any(isinstance(a, dict) and a.get("role") in DEVELOPER_ROLES and a.get("active") and str(a.get("task") or "") == entry["task"]
+                            for a in (state.get("agents") or {}).values())
+                message = f"{entry['task']}: the owner pressed Try once more; Delivery may request one more review of this part"
+                if not alive:
+                    # the kept-task restart (register picks a stopped builder's task) needs the stop marker the recovery retirement never set
+                    gone = sorted((a for a in (state.get("agents") or {}).values() if isinstance(a, dict) and a.get("role") in DEVELOPER_ROLES
+                                   and str(a.get("task") or "") == entry["task"]), key=lambda a: str(a.get("last_poll_at") or ""))
+                    if gone:
+                        last = gone[-1]
+                        last.pop("superseded_by_agent_id", None)
+                        if not (last.get("stopped_by_owner_at") or last.get("stopped_by_harness_at")):
+                            last["stopped_by_harness_at"] = at
+                    message += ". No builder is on the task: start a new builder from the Story page to carry on"
+                _event(state, "review_reopened_by_owner", None, {"task": entry["task"], "message": message})
+            else:
+                review_rounds.give_up_by_owner(entry, at)
+                message = f"{entry['task']}: the owner pressed Give up; this part stays closed and is not reviewed again"
+                _event(state, "review_given_up_by_owner", None, {"task": entry["task"], "message": message})
+        else:
+            raise ValueError("this card's choice is not one the board knows how to carry out")
+        _resolve_owner_action(state, card, f"You chose: {choice}", "owner_choice")
+        return {"card": json.loads(json.dumps(card)), "message": message}
+
+
 def review_recovery_settle(root: Path, key: str, reason: str, closed: bool = False) -> dict[str, Any] | None:
     """The attempt could not run or did not finish: automatic repair of this part stops and the honest outcome is recorded (or, when the
-    task itself was cancelled, the record is closed). Nothing is released and no owner card is made."""
+    task itself was cancelled, the record is closed). Nothing is released; the owner gets the red card with Try once more / Give up."""
     with locked_state(root) as state:
         entry = (state.get("review_escalations") or {}).get(key)
         if not entry or entry.get("status") != "recovery":
@@ -15951,6 +16203,7 @@ def review_recovery_settle(root: Path, key: str, reason: str, closed: bool = Fal
             return json.loads(json.dumps(entry))
         entry.update(status="could_not_finish", settled_at=at, outcome=review_rounds.outcome_text(entry, reason))
         _event(state, "review_could_not_finish", None, {"task": entry["task"], "message": entry["outcome"]})
+        _stopped_scope_card(state, entry)
         return json.loads(json.dumps(entry))
 
 
@@ -16298,6 +16551,8 @@ def qa_result(
                                                                   limit=review_rounds.limit_for(task_kind(state, str(request.get("task") or ""), root)),
                                                                   analysis=task_kind(state, str(request.get("task") or ""), root) == "analysis"):
                 _event(state, escalation_event["kind"], qa, {"task": request["task"], "request_id": request_id, "message": escalation_event["message"]})
+                if escalation_event["kind"] == "review_could_not_finish":
+                    _stopped_scope_card(state, state["review_escalations"][review_rounds.lineage_key(request)])
         qa.update({"status": "qa_complete", "status_note": f"{request_id}: {result}", "last_status_at": completed})
         developer = _require_agent(state, request["developer_id"])
         if request.get("stage") == INDEPENDENT_REVIEW:

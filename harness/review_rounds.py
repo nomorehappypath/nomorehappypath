@@ -417,6 +417,7 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
         escalations[key] = entry
     if decision["effective_result"] == "passed":
         entry.update(status="closed", open_ids=[], closed_at=at)
+        entry.pop("owner_round", None)
         return events
     if analysis and is_environment_gap(summary):
         # A Code analysis has only two judgments: a review that could not run for want of the Reviewer's own environment is no judgment at all.
@@ -432,6 +433,11 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
     entry["open_ids"] = [str(m.get("id")) for m in decision["blockers"] if m.get("id")]
     entry["last_failed_at"] = at
     gap = is_testing_gap(summary)
+    if entry.pop("owner_round", None):
+        # 2026-11-08: the one round the owner granted with Try once more is spent; no automatic recovery budget reopens it
+        entry.update(status="could_not_finish", settled_at=at, outcome=outcome_text(entry, "the round you granted with Try once more"))
+        events.append({"kind": "review_could_not_finish", "message": entry["outcome"]})
+        return events
     if entry["status"] == "recovery" and entry.get("who") == "reviewer":
         if not reviewer_session or reviewer_session != entry.get("session_id"):
             return events           # another Reviewer's verdict counts as a failed judgment but never moves the retry
@@ -473,6 +479,27 @@ def record_judgment(escalations: dict[str, Any], request: dict[str, Any], decisi
     return events
 
 
+def reopen_by_owner(entry: dict[str, Any], at: str, limit: int | None = None) -> None:
+    """Owner pressed Try once more on a stopped part (2026-11-08): Delivery may request ONE more review of this scope.
+
+    The entry goes back to watching with the flag owner_round: the next judgment consumes it, whatever the automatic budgets say
+    (a PASS closes the part as any pass does; a FAIL or a review that could not be completed goes straight back to could_not_finish
+    and its red card). The retry bookkeeping of the fresh attempt is cleared."""
+    if entry.get("status") != "could_not_finish" or entry.get("given_up_at"):
+        raise ValueError("only a part that stopped after repeated failed reviews, and was not given up, can be tried once more")
+    entry.update(status="watching", owner_round=True, owner_reopened=int(entry.get("owner_reopened") or 0) + 1, reopened_at=at)
+    for stale in _RETRY_KEYS + ("settled_at", "outcome", "retired_at"):
+        entry.pop(stale, None)
+
+
+def give_up_by_owner(entry: dict[str, Any], at: str) -> None:
+    """Owner pressed Give up on a stopped part (2026-11-08): the part stays could_not_finish for every consumer (nothing of it is
+    released, no recovery, no new card) and carries the owner's word, which refusal_for and the Story show."""
+    if entry.get("status") != "could_not_finish":
+        raise ValueError("only a part that stopped after repeated failed reviews can be given up")
+    entry["given_up_at"] = at
+
+
 def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
     """What the CTO poll (and the Delivery agent of the task) is shown: only entries past the round limit."""
     shown = []
@@ -487,7 +514,9 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
                               if entry["status"] == "recovery" else
                               "The reviewer could not run a check for want of the project's test environment; no stronger model is started. Delivery prepares it (a virtual environment outside the code, recorded with test-env-set) and asks for the review again; do not repair anything."
                               if entry["status"] == "needs_environment" else
-                              "Automatic repair of this part has stopped and nothing of it will be released. Note it in one plain line, keep other work moving, and do not ask the owner."),
+                              ("The owner gave this part up: nothing of it will be released and it is not reviewed again. Keep other work moving."
+                               if entry.get("given_up_at") else
+                               "Automatic repair of this part has stopped and nothing of it will be released. The owner has a red card with Try once more and Give up; do not ask the owner yourself, keep other work moving, and watch the board: Try once more lets Delivery request one more review.")),
                 "outcome": entry.get("outcome", ""),
             })
     return shown
@@ -504,8 +533,10 @@ def refusal_for(escalations: dict[str, Any], request_like: dict[str, Any]) -> st
     if not entry:
         return ""
     if entry.get("status") == "could_not_finish":
+        if entry.get("given_up_at"):
+            return "the owner gave this part up (Give up on the red card); nothing from it will be released and it is not reviewed again"
         return ("this part could not be finished automatically (" + entry.get("outcome", "") + ") and nothing from it will be released; "
-                "work on other parts, or the owner may give new direction")
+                "work on other parts; the owner has a red card with Try once more and Give up")
     if entry.get("status") == "recovery" and entry.get("phase") != "started" and entry.get("who") != "reviewer":
         return "a fresh Delivery attempt is being started for this part after repeated failed reviews; wait for it instead of repairing here"
     return ""
