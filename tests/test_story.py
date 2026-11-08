@@ -224,7 +224,8 @@ class ExceptionPriorityTests(unittest.TestCase):
         result = built(state(review_escalations={"e": {"task": TASK, "status": "could_not_finish", "outcome": "Could not finish the login page; nothing of it was released."}}))
         self.assertEqual(result["exception"]["kind"], "repairs_exhausted")
         self.assertIn("nothing of it was released", result["now"])
-        self.assertFalse(result["needs_owner"])
+        self.assertTrue(result["needs_owner"], "2026-11-08: the stopped part is the owner's decision (Try once more / Give up)")
+        self.assertIn("Try once more", result["exception"]["action"])
 
     def test_verification_gap_asks_only_when_the_owner_decides(self):
         deciding = built(state(verification_gaps={"g": {"task": TASK, "state": "owner_decision", "reason": "the VM was off"}}))

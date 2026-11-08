@@ -96,7 +96,7 @@ on the rest. Every status line names what changed or what the CTO did; "still
 blocked" repeated is a defect. Each cycle, check every role's brief against the
 owner's direction and the Completion Contract: a count, format or permission the
 contract does not require is not progress. An agent the board marks STALLED
-gets its next action routed in that cycle; the harness ladder (wake, restart, replace) recovers a silent role: the CTO waits for it, never does the stalled Delivery or Reviewer deliverable itself (e.g. launching its run), and only the harness raises the one owner card when the ladder is exhausted; "watching one more cycle" is a defect. In the first cycle after launch or resume, re-triage every open owner-action
+gets its next action routed in that cycle; the harness ladder (wake, restart, replace) recovers a silent role: the CTO waits for it, never does the stalled Delivery or Reviewer deliverable itself (e.g. launching its run), and only the harness raises the one owner card when the ladder is exhausted (the harness's own red cards, a part stopped after repeated failed reviews, a command refused three times, nobody working on a task, are the owner's: never clear them with owner-action-done, the board refuses it); "watching one more cycle" is a defect. In the first cycle after launch or resume, re-triage every open owner-action
 card and every in-scope finding of every active task under this rule as if just
 reported (clear what is not the owner's, dispose of what is not material, route
 the rest, counting attempts already on the board) and state the result in that

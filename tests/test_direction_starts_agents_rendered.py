@@ -45,6 +45,27 @@ HEAD = r"""
   };
 """
 
+PASTE_FIRST = HEAD + r"""
+  try {
+    await wait(() => q('#give-direction') && !q('#give-direction').hidden && !q('#give-direction').disabled && lastBoard);
+    q('#give-direction').click();
+    await wait(() => q('#color-dialog').open);
+    await wait(() => !q('#color-launch').disabled);
+    q('#color-launch').click();
+    await wait(() => q('#owner-message-dialog').open);
+    q('#owner-message-text').value = 'alice@ubuntu:~/app$ pytest\nalice@ubuntu:~/app$ npm test';
+    q('#owner-message-text').dispatchEvent(new Event('input'));
+    q('#owner-message-submit').click();
+    await wait(() => /pasted terminal screen/.test(q('#owner-message-error').textContent));
+    result.errorText = q('#owner-message-error').textContent;
+    result.dialogStillOpen = q('#owner-message-dialog').open;
+    result.phase = 'done';
+  } catch (error) { result.error = String(error && error.stack || error); result.phase = 'done'; }
+  await post(result);
+})();
+</script>
+"""
+
 NORMAL = HEAD + r"""
   try {
     await give();
@@ -160,6 +181,16 @@ class DirectionStartsAgentsRenderedTests(unittest.TestCase):
             recorded = json.dumps(state.get("owner_directions") or {})
         self.assertIn("tiny program that prints the temperature", recorded)
         self.assertTrue(agent["id"])
+
+    def test_a_pasted_screen_as_the_first_direction_starts_no_agent(self):
+        """2026-11-08: the launch choices wait until the words are read; a pasted terminal screen is refused and nothing starts."""
+        self.open_page(PASTE_FIRST)
+        done = self.phase("done", 120)
+        self.assertNotIn("error", done, json.dumps(done))
+        self.assertIn("pasted terminal screen", done["errorText"])
+        self.assertTrue(done["dialogStillOpen"], "the owner can correct the words in place")
+        time.sleep(2)
+        self.assertEqual(self.launched, [], "no agent may start for a refused direction")
 
     def test_a_paused_project_keeps_the_direction_and_starts_the_agents_only_on_resume(self):
         board.begin_project_pause(self.root, drain_seconds=0)

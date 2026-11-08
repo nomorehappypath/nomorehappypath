@@ -104,7 +104,7 @@ class Retry(frozen.Rounds):
         entry = self.entry()
         self.assertEqual((entry["status"], sessions, launched), ("could_not_finish", [], []))
         self.assertIn("could not be started", entry["outcome"])
-        self.assertEqual(self.owner_cards(), [])
+        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Try once more", "Give up"]], "2026-11-08: the stopped part is one red card for the owner")
         self.assertEqual([a for a in self_heal.plan(self.root) if a["action"].startswith("review_recovery")], [], "no second attempt")
 
     def test_a_restart_between_creating_and_started_never_makes_a_second_session(self):
@@ -136,7 +136,7 @@ class Retry(frozen.Rounds):
         self.tick(self.create_factory(sessions), launched)
         return board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic", session_id=sessions[0]["id"])
 
-    def test_if_the_fresh_reviewer_cannot_complete_it_either_the_part_is_not_finished_with_no_owner_card(self):
+    def test_if_the_fresh_reviewer_cannot_complete_it_either_the_part_is_not_finished_and_the_owner_gets_the_card(self):
         self.gaps()
         fresh = self.start_fresh()
         with board.locked_state(self.root) as state:      # a verdict from some other Reviewer session counts as a failed review but never settles the retry
@@ -150,7 +150,7 @@ class Retry(frozen.Rounds):
         entry = self.entry()
         self.assertEqual(entry["status"], "could_not_finish")
         self.assertIn("could not be fully tested", entry["outcome"])
-        self.assertEqual(self.owner_cards(), [])
+        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Try once more", "Give up"]], "2026-11-08: the stopped part is one red card for the owner")
         with self.assertRaisesRegex(ValueError, "could not be finished automatically"):
             self.request(changes="once more")
         self.assertEqual([a["action"] for a in self_heal.plan(self.root) if a["action"].startswith("review_recovery")], [], "nothing is stopped or restarted")

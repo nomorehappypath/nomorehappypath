@@ -605,10 +605,11 @@ def exception_for(state: dict[str, Any], task: str, *, agents: list[dict[str, An
                     "reason": "The CTO is not responding; it may need to sign in again. Its automatic wake-ups are paused.",
                     "action": "Open the CTO's terminal window; if it shows a login prompt, run /login."}
     for escalation in _dict(state.get("review_escalations")).values():
-        if isinstance(escalation, dict) and escalation.get("status") == "could_not_finish" and live(escalation.get("task")) and (not task or str(escalation.get("task")) == task):
-            return {"kind": "repairs_exhausted", "role": "builder", "needs_owner": False,
+        if isinstance(escalation, dict) and escalation.get("status") == "could_not_finish" and not escalation.get("given_up_at") and live(escalation.get("task")) and (not task or str(escalation.get("task")) == task):
+            # 2026-11-08: this used to say "Nothing is needed from you now" while nobody would ever touch the part again.
+            return {"kind": "repairs_exhausted", "role": "builder", "needs_owner": True,
                     "reason": _short(redact(escalation.get("outcome") or "The builder could not finish one part after repeated tries; nothing of it was released.")),
-                    "action": "Nothing is needed from you now. Send the builder a message if you want it to try another way."}
+                    "action": "You are needed: on the red card, press Try once more (one more review of the builder's last fix) or Give up (close this part)."}
     for gap in _dict(state.get("verification_gaps")).values():
         if isinstance(gap, dict) and gap.get("state") in ("diagnosing", "owner_decision", "answered") and live(gap.get("task")) and (not task or str(gap.get("task")) == task):
             ask = gap.get("state") == "owner_decision"
@@ -625,6 +626,17 @@ def exception_for(state: dict[str, Any], task: str, *, agents: list[dict[str, An
         return {"kind": "stopped", "role": "builder", "needs_owner": True,
                 "reason": "You stopped the builder. The task and all its work are kept.",
                 "action": "Start a new builder to carry on, or cancel the task."}
+    for card in _dict(state.get("owner_actions")).values():
+        if isinstance(card, dict) and card.get("status") == "open" and card.get("idle_task") and live(card.get("task")) and (not task or str(card.get("task")) == task):
+            return {"kind": "nobody_working", "role": "builder", "needs_owner": True,
+                    "reason": _short(redact(str(card.get("why") or "").split("\n")[0].removeprefix("Problem: ")), 300),
+                    "action": "Start a new builder for this task, or cancel the task."}
+    # a part the owner gave up is information only, so it comes after everything that needs him (Codex plan check 2026-11-08 r2-4)
+    for escalation in _dict(state.get("review_escalations")).values():
+        if isinstance(escalation, dict) and escalation.get("status") == "could_not_finish" and escalation.get("given_up_at") and live(escalation.get("task")) and (not task or str(escalation.get("task")) == task):
+            return {"kind": "given_up", "role": "builder", "needs_owner": False,
+                    "reason": "You gave up one part of this task after repeated failed reviews; nothing of it will be released.",
+                    "action": "Nothing for you to do. Give the builder a new direction if you want that part done another way."}
     if gate_kind == "git_refused":
         owner_of = next((a for a in pool if a.get("task") == task), None) or {}
         reason = _dict(owner_of.get("broker_refusal")).get("reason", "")

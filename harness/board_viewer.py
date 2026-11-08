@@ -244,6 +244,7 @@ let currentHistoryVersion='';
 let historyLoading=false;
 let pendingLaunchKind='';
 let directionAfterLaunch=false;   // Give direction with no Delivery agent running opens the Start dialog first, then the direction box
+let pendingDirectionLaunch=null;  // 2026-11-08: the launch choices wait until the direction is read and accepted; a pasted screen starts nothing
 let lastManaged=null;   // the latest /api/control snapshot, for the launch dialog's provider list
 let ownerMessageAgentId='';
 const waitingForReview=new Set();   // 'task:version' the owner chose to wait for the reviewer on (2026-10-28: the click showed nothing)
@@ -1761,6 +1762,10 @@ async function submitOwnerMessage(event){
   let validated;try{validated=validateOwnerMessageText(el('#owner-message-text').value);}catch(failure){error.textContent=failure.message;return false;}
   if(directionLauncher){
     // No Delivery agent exists yet: keep the words, start the three agents with the owner's saved launch settings, then send.
+    // 2026-11-08: the board reads the words first, so a pasted terminal screen starts no agent at all.
+    try{await call('/api/direction-check',{text:validated.text});}catch(failure){error.textContent=failure.message;return false;}
+    const launch=pendingDirectionLaunch;pendingDirectionLaunch=null;
+    if(launch){const ok=await start(launch.kind,launch.color,launch.choice);if(!ok){error.textContent='Delivery could not be started; your words are kept in this browser.';}}
     writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now()});
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
@@ -1853,8 +1858,17 @@ function renderOwnerActions(state){
     const loc=item.location&&Array.isArray(item.location.urls)?item.location:null;const locLine=loc?`<small data-card-location="${esc(item.id)}">Checked by the board ${esc(String(loc.checked_at||'').slice(11,16))} UTC: ${loc.urls.map(u=>`${esc(u.url)} — ${esc(u.verdict==='owner'?'the owner\'s instance':u.reason)}`).join('; ')}${loc.verified_how?`. CTO: ${esc(loc.verified_how)}`:''}</small>`:'';
     const links=Array.isArray(item.links)?item.links:[];const cardLinks=links.length?`<div class="card-links">${links.map(link=>link.available===false?`<span class="unavailable">${esc(link.label)}: cannot be shown (${esc(link.reason||'')})</span>`:`<a href="${esc(apiPath(link.url))}" target="_blank" rel="noopener" data-card-link="${esc(item.id)}">${esc(link.label)}</a>`).join('')}${item.links_note?`<small>${esc(item.links_note)}</small>`:''}</div>`:'';
     // A blocked card (owner 2026-11-05): nobody is left to solve it, so it is red, announced, and shows Problem / What to do on two lines.
-    return `<div class="owner-action${item.blocked?' blocked':''}"${item.blocked?' role="alert"':''} data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
+    // 2026-11-08: a card may carry the owner's choices (Try once more / Give up on a part the harness stopped repairing).
+    const choices=Array.isArray(item.choices)&&item.choices.length?`<div class="actions" data-card-choices="${esc(item.id)}">${item.choices.map(choice=>`<button type="button" onclick="chooseOwnerAction(${id},${esc(JSON.stringify(choice))})">${esc(choice)}</button>`).join('')}</div>`:'';
+    return `<div class="owner-action${item.blocked?' blocked':''}"${item.blocked?' role="alert"':''} data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}${choices}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
   }).join(''));
+}
+
+async function chooseOwnerAction(actionId,choice){
+  const card=document.querySelector(`[data-card-choices="${CSS.escape(actionId)}"]`);
+  if(card)card.querySelectorAll('button').forEach(button=>{button.disabled=true;});
+  try{const result=await call(`/api/owner-actions/${encodeURIComponent(actionId)}/choose`,{choice});if(result&&result.message){el('#notice').textContent=result.message;}await refresh();}
+  catch(error){if(card)card.querySelectorAll('button').forEach(button=>{button.disabled=false;});alert(error.message||String(error));}
 }
 
 async function copyOwnerActionCommand(actionId){
@@ -2575,13 +2589,13 @@ async function loadHistory(force=false){
 
 el('#status-dialog-close').onclick=()=>el('#status-dialog').close();
 el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';directionAfterLaunch=false;};
-el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;const done=start(kind,'black');if(after)done.then(ok=>{if(ok)openDirectionStart(true);});}};
-el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;const done=start(kind,selected,choice);if(after)done.then(ok=>{if(ok)openDirectionStart(true);});}};
+el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:'black',choice:null};openDirectionStart(true);return;}start(kind,'black');}};
+el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:selected,choice};openDirectionStart(true);return;}start(kind,selected,choice);}};
 el('#decision-cancel').onclick=()=>el('#decision-dialog').close();
 el('#decision-form').onsubmit=submitRejection;
 el('#push-cancel').onclick=()=>el('#push-dialog').close();
 el('#push-form').onsubmit=submitPushInstruction;
-el('#owner-message-cancel').onclick=()=>el('#owner-message-dialog').close();
+el('#owner-message-cancel').onclick=()=>{pendingDirectionLaunch=null;el('#owner-message-dialog').close();};
 el('#owner-message-form').onsubmit=submitOwnerMessage;
 const closeProjectButton=el('#close-project');
 if(closeProjectButton){
@@ -4783,6 +4797,16 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             section[key] = data[key]
                     preview = workspace_settings.update_preview(root, section)
                     self.send_json(200, {"preview": preview}); return
+                if path == "/api/direction-check":
+                    # 2026-11-08: the composer asks, before saving the words or starting any agent, whether they are a direction at
+                    # all; it reads nothing of the board and writes nothing, so it also answers while the project is paused
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 128 * 1024:
+                        raise ValueError("message is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if board.looks_like_pasted_screen(str(data.get("text", ""))):
+                        raise ValueError(board.PASTED_SCREEN_MESSAGE)
+                    self.send_json(200, {"ok": True}); return
                 owner_cancel = path.startswith("/api/tasks/") and path.endswith("/cancel")
                 pause_status = board.pause_state(root).get("status")
                 # the owner's Cancel task still works on a paused project; everything else stays read-only
@@ -4908,6 +4932,15 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(self.rfile.read(length) or b"{}")
                     event = board.record_agent_question_answer(root, question_id, str(data.get("answer", "")), data.get("choice"))
                     self.send_json(201, {"answer": event}); return
+                choose_prefix, choose_suffix = "/api/owner-actions/", "/choose"
+                if path.startswith(choose_prefix) and path.endswith(choose_suffix):
+                    # 2026-11-08: the owner's choice on a red card (Try once more / Give up); the board records it verbatim
+                    action_id = unquote(path[len(choose_prefix):-len(choose_suffix)])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 4 * 1024:
+                        raise ValueError("the choice is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    self.send_json(200, board.owner_action_choose(root, action_id, str(data.get("choice", "")))); return
                 owner_prefix, owner_suffix = "/api/agents/", "/owner-message"
                 if path.startswith(owner_prefix) and path.endswith(owner_suffix):
                     agent_id = unquote(path[len(owner_prefix):-len(owner_suffix)])

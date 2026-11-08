@@ -933,9 +933,8 @@ class CommandGateway:
         told = (f" [This has been refused {len(window)} times for the same reason. It is logged as a harness defect and sent to the CTO, "
                 "who will fix it or give you the exact workaround. Do not retry it. Post a status saying what you tried, then continue "
                 "with other work or wait for the CTO.]")
-        if key in self._refusal_holds:
-            return told
-        self._refusal_holds.add(key)
+        if len(window) > self.REFUSAL_HOLD_THRESHOLD:
+            return told         # the same series: recorded at its third refusal; a new series after the window records again (2026-11-08)
         if task:
             try:
                 from harness import board

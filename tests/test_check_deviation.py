@@ -95,8 +95,10 @@ class CheckDeviationTests(_Fixture):
             board.record_contract_check_correction(self.root, agent["id"], TASK, 1, "I want it my way", self.keep())
         with self.assertRaisesRegex(ValueError, "only the Reviewer"):
             board.record_contract_check_correction(self.root, agent["id"], TASK, 1, "I want it my way", self.fix("mine.json"))
-        with self.assertRaisesRegex(ValueError, "not a stored check"):
+        with self.assertRaisesRegex(ValueError, "belongs to requirement 9, not 1"):   # 2026-11-08: a requirement that contradicts the check number is named as such
             board.record_check_deviation(self.root, agent["id"], TASK, 1, "9.9", WHY)
+        with self.assertRaisesRegex(ValueError, "not a stored check"):
+            board.record_check_deviation(self.root, agent["id"], TASK, 9, "9.9", WHY)
         with self.assertRaisesRegex(ValueError, "20 to"):
             board.record_check_deviation(self.root, agent["id"], TASK, 1, "1.1", "wrong")
         with self.assertRaisesRegex(ValueError, "only Delivery"):

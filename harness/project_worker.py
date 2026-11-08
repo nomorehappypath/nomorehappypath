@@ -28,7 +28,7 @@ import time
 from collections import OrderedDict, deque
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 if __package__ in {None, ""}:
@@ -835,7 +835,11 @@ def serve(
 
         watchdog.self_heal = lambda: self_heal.run_once(root, self_heal_launch, create=self_heal_create)
         watchdog.notify = lambda alert: desktop_notify(alert["title"], alert["message"], project_name)
-        watchdog.warn = lambda: warning_email.notify_blocked_cards(root, settings_home, project_name, manager_url)
+        def warn() -> list[dict[str, Any]]:
+            """After each self-heal pass: first the "nobody is working" cards (2026-11-08), then one email per new blocked card."""
+            board.harness_cards_pass(root)
+            return warning_email.notify_blocked_cards(root, settings_home, project_name, manager_url)
+        watchdog.warn = warn
         watchdog.start()
         preview_supervisor.start()
         print(f"Live Harness Project Worker: {address['endpoint']}/", flush=True)
