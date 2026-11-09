@@ -224,8 +224,8 @@ class RealClaudeTests(unittest.TestCase):
     def setUp(self):
         require_loopback()
         self.claude = shutil.which("claude")
-        if not self.claude:
-            self.skipTest("the Claude CLI is not installed here")
+        if not self.claude or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("needs the Claude CLI and HARNESS_TESTS_REAL_CLI=1 (the suite never starts the real CLI by itself)")
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         base = Path(self._tmp.name)

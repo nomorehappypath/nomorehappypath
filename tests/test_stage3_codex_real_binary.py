@@ -44,8 +44,8 @@ def ours(marker: str) -> list[str]:
 class RealCodexFixture(unittest.TestCase):
     def setUp(self):
         self.codex = global_settings.resolved_cli("codex").get("path", "")
-        if not self.codex or not shutil.which(self.codex):
-            self.skipTest("codex CLI not installed")
+        if not self.codex or not shutil.which(self.codex) or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("codex CLI not installed or not opted in (the suite never starts the real CLI by itself: set HARNESS_TESTS_REAL_CLI=1 to run it)")
         self.scratch = Path(tempfile.mkdtemp(prefix="hn3real-"))
         self.addCleanup(shutil.rmtree, self.scratch, True)
         self.marker = self.scratch.name                  # every process of this test carries it in its argv

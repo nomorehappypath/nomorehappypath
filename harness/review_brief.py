@@ -78,6 +78,7 @@ def build(
     controls whether their outcomes are disclosed. Return: a dict with the
     full brief, including its own sha256 digest.
     """
+    from harness import board  # local: board imports this module
     task = _text(request.get("task"))
     if not task:
         raise ValueError("review brief requires an exact task")
@@ -189,6 +190,10 @@ def build(
             "confirmed_at": _text(confirmation.get("confirmed_at")),
             "version": confirmation.get("version", 1),
             "contract_revision": request.get("contract_revision") or {},
+            # accept-after-repair R9(a): who uses the app, from the contract; security is judged against this line only
+            "users": board.users_line(_text(confirmation.get("text"))),
+            # accept-after-repair R8: findings the owner closed on earlier reviews of this task; binding, never restated
+            "owner_decisions": board.owner_decisions_text(state, task),
         },
         "risk_and_scope": {
             "required_review_scope": "complete full suite" if request.get("phase") == "final_acceptance" else _text(request.get("test_scope") or "full"),

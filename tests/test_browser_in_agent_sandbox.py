@@ -115,8 +115,8 @@ class BrowserInsideAgentSandboxTests(unittest.TestCase):
         config is never read or written.
         """
         codex = shutil.which("codex")
-        if not codex:
-            raise unittest.SkipTest("the Codex CLI is not installed")
+        if not codex or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            raise unittest.SkipTest("the Codex CLI is not installed or not opted in (HARNESS_TESTS_REAL_CLI=1; the suite never runs the real sandbox by itself)")
         codex_home = self.root / "codex-home"
         codex_home.mkdir()
         (codex_home / "config.toml").write_text(

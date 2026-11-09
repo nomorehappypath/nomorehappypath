@@ -78,7 +78,7 @@ class R1StoppedPartGetsACardAndAnEmail(BoardCase):
         self.assertEqual(len(cards), 1)
         card = cards[0]
         self.assertTrue(card["blocked"])
-        self.assertEqual(card["choices"], ["Try once more", "Give up"])
+        self.assertEqual(card["choices"], ["Fix once more", "Stop"])   # no certified candidate in this fixture: Take what you have is not offered
         self.assertIn("stopped after repeated failed reviews", card["title"])
         self.assertIn("Could not finish", card["why"])
         self.assertEqual(len(self.emails()), 1)
@@ -96,7 +96,7 @@ class R1StoppedPartGetsACardAndAnEmail(BoardCase):
         exc = story.exception_for(self.state(), TASK)
         self.assertEqual(exc["kind"], "repairs_exhausted")
         self.assertTrue(exc["needs_owner"])
-        self.assertIn("Try once more", exc["action"])
+        self.assertIn("Fix once more", exc["action"])
         # giving up one part never hides the other part's red card (plan check r2-4)
         first = next(c for c in self.open_cards() if c["scope_key"] == key)
         board.owner_action_choose(self.root, first["id"], "Give up")
@@ -145,7 +145,7 @@ class R2TryOnceMoreAndGiveUp(BoardCase):
         self.assertEqual(story.exception_for(self.state(), TASK)["kind"], "given_up")
         with self.assertRaises(ValueError):
             board.owner_action_choose(self.root, card["id"], "Try once more")   # the card is closed
-        self.assertEqual(board.clear_owner_action(self.root, self.cto["id"], card["id"], "cleared")["outcome"], "You chose: Give up", "a done card stays as the owner left it")
+        self.assertEqual(board.clear_owner_action(self.root, self.cto["id"], card["id"], "cleared")["outcome"], "You chose: Stop", "a done card stays as the owner left it")
 
     def test_the_cto_cannot_clear_the_owners_card(self):
         self.put_entry()
@@ -208,8 +208,10 @@ class R4NobodyWorking(BoardCase):
     def gone(self, minutes_ago: int, status: str = "superseded", note: str = "visible CLI terminal ended"):
         with board.locked_state(self.root, operation="test") as state:
             agent = state["agents"][self.builder["id"]]
+            stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+            # a status update counts as a sign of life too (accept-after-repair R7): the gone agent's last one is as old as its poll
             agent.update({"active": False, "status": status, "liveness": "offline", "liveness_note": note,
-                          "last_poll_at": (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()})
+                          "last_poll_at": stamp, "last_status_at": stamp})
 
     def test_ten_minutes_with_nobody_makes_one_card_cleared_only_by_a_builder(self):
         global_settings.save_warning_email(self.home, GOOD, "secret-app-password")
@@ -353,7 +355,7 @@ class R7HelpSaysSo(unittest.TestCase):
         page = project_manager_page.PAGE
         row = page[page.index('A red card says "Blocked, needs you"'):]
         row = row[:row.index("</tr>")]
-        for words in ("Try once more", "Give up", "refused a builder's command three times", "nobody has worked on a task for ten minutes"):
+        for words in ("Fix once more", "Take what you have", "Stop", "Does not apply", "Users:", "refused a builder's command three times", "nobody has worked on a task for ten minutes"):
             self.assertIn(words, row)
 
 

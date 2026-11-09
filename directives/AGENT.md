@@ -927,6 +927,8 @@ demand an item for a feature the app does not have, and never fail an app for
 lacking Enhanced security deliverables while the task's checkbox is off, nor
 for lacking multi-factor login or any feature nobody asked for.
 
+Users line (2026-11-08). The brief's `requirements.users` is the contract's `Users:` line (the owner's own words, else the default "solo owner on his own machine; no other accounts, no outsiders"). Judge security against it: when it excludes other accounts or outsiders, write and count no outsider, multi-user or same-account-attacker scenario (a guessed key, a copied token, a same-account process reading a credential); checks on actual inputs, imported files and exposed network listeners stay, because those exist whoever the users are. A finding the line excludes is not a finding.
+
 ## standing-checks
 
 Security and code quality are part of every task, build or report. The builder
@@ -1279,6 +1281,8 @@ material.
   After the third failed review of a scope the harness starts one fresh Delivery attempt with a precise brief (your poll shows it as `review_recovery`); that attempt reads the brief, fixes everything in one repair and does not ask the owner anything.
   If that attempt fails, the harness stops repairing that part: do not repair it again, say so in one plain line, and continue with other, independent parts.
 - *CTO.* Nothing to route after round 3: the harness acts by itself (`review_escalations` in your poll). Do not restart Delivery for that part, do not ask the owner, and note the outcome in one plain line; independent work continues.
+
+Owner decisions (2026-11-08). The brief's `requirements.owner_decisions` lists every finding the owner closed on this task, verbatim, with his words. A closed finding is closed: judge without it and do not restate it under another id or in other words; restating it is a breach of this rule, and the owner closes it again with one click. When the owner closes the last open finding of a failed final review, or chooses Take what you have on the red card, the board records his review waiver for exactly that candidate and the task moves on as after a PASS; your FAIL record stays as you wrote it. A finding you tag `safety`, `data-loss` or `leak` cannot be closed with a click: the owner must write his decision in a sentence, and that sentence is recorded.
 
 ## status-flags
 

@@ -609,7 +609,8 @@ def exception_for(state: dict[str, Any], task: str, *, agents: list[dict[str, An
             # 2026-11-08: this used to say "Nothing is needed from you now" while nobody would ever touch the part again.
             return {"kind": "repairs_exhausted", "role": "builder", "needs_owner": True,
                     "reason": _short(redact(escalation.get("outcome") or "The builder could not finish one part after repeated tries; nothing of it was released.")),
-                    "action": "You are needed: on the red card, press Try once more (one more review of the builder's last fix) or Give up (close this part)."}
+                    "action": ("You are needed: on the red card, press Fix once more (one more review of the builder's last fix), Take what you have "
+                               "(release this version as it is, on your decision) or Stop (close this part); or close a finding that does not apply.")}
     for gap in _dict(state.get("verification_gaps")).values():
         if isinstance(gap, dict) and gap.get("state") in ("diagnosing", "owner_decision", "answered") and live(gap.get("task")) and (not task or str(gap.get("task")) == task):
             ask = gap.get("state") == "owner_decision"
@@ -757,6 +758,10 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
             note_at = str(brief.get("updated_at") or "")
             if fresh_note and note_at and moved_on and max(moved_on) > note_at:
                 fresh_note += " (written earlier; the builder has done more since)"
+    # accept-after-repair R8: the open findings of the newest failed final review, each the owner may close; and his decision, once made
+    findings, decision = owner_findings_and_decision(state, task)
+    if decision and status in ("READY FOR YOUR TEST", "OWNER ACCEPTED", "RELEASE CHECKS", "ACCEPT SAVED, NOT IN MAIN YET") and not problem:
+        now_text = now_text.rstrip() + " " + decision
     result = {
         "task": task, "title": _title_case(task), "step": step, "of": TOTAL_STEPS, "step_title": step_title(step), "who": who,
         "now": now_text, "next": next_text, "needs_owner": needs_owner, "owner_action": action,
@@ -765,6 +770,7 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
         "cost": money["text"], "usd": money["usd"], "codex_window": money["window"],
         "released": bool(release.get("status") in ("VISUAL_TEST_REQUIRED", "ACCEPTED")),
         "accepted": status == "OWNER ACCEPTED", "progress": round(100 * step / TOTAL_STEPS),
+        "findings": findings, "owner_decision": decision,
     }
     if detail:
         try:
@@ -775,6 +781,20 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
             result["timeline"] = {"error": f"The step list could not be drawn ({type(error).__name__}).", "steps": []}
             result["proof"] = {"error": f"The proof could not be drawn ({type(error).__name__}).", "rows": []}
     return result
+
+
+def owner_findings_and_decision(state: dict[str, Any], task: str) -> tuple[list[dict[str, Any]], str]:
+    """The open findings of the task's newest final review when it failed (each with id, summary, harm tag and whether a click may
+    close it), and the sentence that says the task was released on the owner's decision ("" when it was not)."""
+    from harness import board   # local: board imports this module
+    request = board._newest_final_request(state, task)
+    findings = board.open_findings(state, task, request) if request else []
+    waiver = _dict(_dict(state.get("owner_review_waivers")).get(task))
+    decision = ""
+    if waiver and request and waiver.get("request_id") == request.get("id"):
+        closed, left = list(waiver.get("closed_findings") or []), list(waiver.get("left_open") or [])
+        decision = "Released on your decision" + (f": you closed {', '.join(closed)}" if closed else "") + (f"; left open: {', '.join(left)}" if left else "") + "."
+    return findings, decision
 
 
 # ---- the agent strip -----------------------------------------------------------------------------------------------------------
@@ -859,6 +879,7 @@ def agent_strip(state: dict[str, Any], task: str, *, agents: list[dict[str, Any]
             detail = f"{_plural(wakes, 'wake-up')} this task." if wakes else "Not woken for this task."
         viewable = bool(session and session.get("status") in ("launching", "running") and not session.get("read_only"))
         message = _message(role, agent, session, viewable, state)
+        others, warning = _other_agents_of_role(state, task, role, agent, pool, now)
         rows.append({
             "role": role, "label": ROLE_LABEL[role], "company": company, "present": bool(agent),
             "agent_id": (agent or {}).get("id", ""), "session_id": (session or {}).get("id", ""),
@@ -866,8 +887,48 @@ def agent_strip(state: dict[str, Any], task: str, *, agents: list[dict[str, Any]
             "message": message,
             "view": {"enabled": viewable, "session_id": (session or {}).get("id", ""),
                      "note": "" if viewable else _no_view_note(role, agent, session)},
+            "others": others, "warning": warning,
         })
     return rows
+
+
+def _agent_state_words(agent: dict[str, Any], now: datetime | None) -> str:
+    """One agent's real state in plain words: what it holds and when it was last seen (accept-after-repair R5)."""
+    if agent.get("task") == "AWAITING_OWNER_DIRECTION":
+        holds = "waiting for instructions, holds no task"
+    elif agent.get("status") == "stopped":
+        holds = "stopped"
+    elif agent.get("write_authority") is False:
+        holds = "on the task without the right to act"
+    else:
+        holds = "on the task, may act"
+    seen = max((str(agent.get(k) or "") for k in ("last_poll_at", "last_status_at", "spawned_at")), default="")
+    words = elapsed_words(seen, None, now).replace(" so far", "") if seen else ""
+    when = ("last seen just now" if words == "just started" else f"last seen {words} ago" if words else "never checked the board")
+    return f"{holds}, {when}"
+
+
+def _other_agents_of_role(state: dict[str, Any], task: str, role: str, shown: dict[str, Any] | None, pool: list[dict[str, Any]],
+                          now: datetime | None) -> tuple[list[dict[str, Any]], str]:
+    """Every OTHER active agent of this role that is on the task (or, for builders, waiting with no task), and one plain warning
+    when more than one builder is live on the same task.
+
+    2026-11-08 (owner: "if i open 2 builders or 2 reviewers i still see one only for each?"): the strip showed the newest builder
+    and the owner learned from the dev, not the page, that two builders sat on Finish Support. Display only: the existing Stop on
+    an agent's row is the action."""
+    if role == "cto":
+        return [], ""
+    roles = DEVELOPER_ROLES if role == "builder" else {"qa"}
+    same = [a for a in pool if a.get("role") in roles and a.get("active") and a.get("id") != (shown or {}).get("id")
+            and (a.get("task") == task or (role == "builder" and a.get("task") == "AWAITING_OWNER_DIRECTION"))]
+    others = [{"agent_id": a.get("id", ""), "words": _agent_state_words(a, now)} for a in same]
+    warning = ""
+    if role == "builder":
+        on_task = [a for a in pool if a.get("role") in roles and a.get("active") and a.get("task") == task]
+        if len(on_task) > 1:
+            warning = (f"{len(on_task)} builders are on this task; only one can hold it. "
+                       "Stop the ones you do not want (Stop on the agent's row).")
+    return others, warning
 
 
 def _difficulty_latest(state: dict[str, Any], task: str) -> dict[str, dict[str, Any]]:

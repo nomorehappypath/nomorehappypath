@@ -107,8 +107,45 @@ def _pin_run_root() -> Path:
     os.environ["HARNESS_AGY_BIN"] = str(run_root / "no-agy-in-tests" / "agy")
     # Standing checks (security and code-quality sections) are gated for real runs; fixtures about other things do not carry them.
     os.environ["HARNESS_STANDING_CHECKS"] = "off"
+    _pin_stub_clis(run_root)
     atexit.register(shutil.rmtree, run_root, True)
     return run_root
+
+
+STUB_CLI_DIR_NAME = "stub-cli"
+REAL_CLI_OPT_IN = "HARNESS_TESTS_REAL_CLI"
+_STUB_CLI = """#!/bin/sh
+# Stub {name} for the test suite (tests/__init__.py). 2026-11-08: a test launched the real Codex reviewer through
+# scripts/run_managed_agent.sh in an empty throw-away home, so Codex opened a sign-in window on the owner's screen,
+# twice in one day. The managed runner resolves the CLI from HARNESS_{upper}_BIN, which the suite now points here.
+case "${{1:-}}" in
+  --version|-V|version) echo "{name} 0.0.0 (test stub)"; exit 0 ;;
+  "") echo "{name} test stub"; exit 0 ;;
+esac
+echo "a test asked a stub for real agent work: {name} $*" >&2
+echo "set {opt_in}=1 on a test that really needs the {name} CLI" >&2
+exit 2
+"""
+
+
+def _pin_stub_clis(run_root: Path) -> None:
+    """The suite never starts the owner's real Codex or Claude: both CLI names point at stubs unless a test opts in.
+
+    `global_settings.provider_executable` honours an absolute HARNESS_*_BIN as the owner's explicit choice, so the managed
+    runner and every launch that goes through it get the stub. A direct `shutil.which("codex")` in a test is not covered:
+    such a test opts in with HARNESS_TESTS_REAL_CLI=1 or is skipped (see tests that say so)."""
+    if os.environ.get(REAL_CLI_OPT_IN) == "1":
+        return
+    stub_dir = run_root / STUB_CLI_DIR_NAME
+    stub_dir.mkdir(mode=0o700, exist_ok=True)
+    for name, env_name in (("codex", "HARNESS_CODEX_BIN"), ("claude", "HARNESS_CLAUDE_BIN")):
+        stub = stub_dir / name
+        stub.write_text(_STUB_CLI.format(name=name, upper=name.upper(), opt_in=REAL_CLI_OPT_IN), encoding="utf-8")
+        stub.chmod(0o700)
+        os.environ[env_name] = str(stub)
+    # PATH too (Codex task review 2026-11-08 r1-3): a test that resolves `codex` with shutil.which and runs it directly gets the stub,
+    # so a real launch needs the explicit opt-in rather than slipping past the environment pins
+    os.environ["PATH"] = str(stub_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
 if not os.environ.get("HARNESS_TESTS_RUN_ROOT"):

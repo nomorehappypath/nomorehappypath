@@ -346,6 +346,11 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
             checks = cto.release_check(
                 root, task, Path(ledger) if ledger else repo / "MISSING-LEDGER",
                 repo, execute_health=True)
+            if not checks.get("owner_artifacts_readable") and board.refresh_owner_documents(root, task):
+                # accept-after-repair R1: the owner's stale copy was refreshed from the reviewed commit; run the checks again in full
+                checks = cto.release_check(
+                    root, task, Path(ledger) if ledger else repo / "MISSING-LEDGER",
+                    repo, execute_health=True)
             required_checks = (
                 board.BROKER_RELEASE_REQUIRED_CHECKS
                 if broker_governed else board.RELEASE_REQUIRED_CHECKS

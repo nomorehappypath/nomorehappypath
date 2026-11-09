@@ -29,6 +29,8 @@ class ClaudeAuthE2ETests(unittest.TestCase):
     def test_cto_and_reviewer_use_oauth_token_and_complete_real_turns(self):
         require_loopback()
         browser_binary = browser_acceptance.resolve_binary()
+        if os.environ.get('HARNESS_TESTS_REAL_CLI') != '1':
+            self.skipTest('set HARNESS_TESTS_REAL_CLI=1 to run the real Claude CLI (the suite never starts it by itself)')
         real_cli=shutil.which('claude')
         self.assertTrue(real_cli)
         self.assertTrue(os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'))

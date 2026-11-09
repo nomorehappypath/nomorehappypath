@@ -104,7 +104,7 @@ class Retry(frozen.Rounds):
         entry = self.entry()
         self.assertEqual((entry["status"], sessions, launched), ("could_not_finish", [], []))
         self.assertIn("could not be started", entry["outcome"])
-        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Try once more", "Give up"]], "2026-11-08: the stopped part is one red card for the owner")
+        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Fix once more", "Stop"]], "2026-11-08: the stopped part is one red card for the owner; Take what you have is not offered for a review whose checks the board never ran (accept-after-repair R9b)")
         self.assertEqual([a for a in self_heal.plan(self.root) if a["action"].startswith("review_recovery")], [], "no second attempt")
 
     def test_a_restart_between_creating_and_started_never_makes_a_second_session(self):
@@ -150,7 +150,7 @@ class Retry(frozen.Rounds):
         entry = self.entry()
         self.assertEqual(entry["status"], "could_not_finish")
         self.assertIn("could not be fully tested", entry["outcome"])
-        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Try once more", "Give up"]], "2026-11-08: the stopped part is one red card for the owner")
+        self.assertEqual([c.get("choices") for c in self.owner_cards()], [["Fix once more", "Stop"]], "2026-11-08: the stopped part is one red card for the owner; Take what you have is not offered for a review whose checks the board never ran (accept-after-repair R9b)")
         with self.assertRaisesRegex(ValueError, "could not be finished automatically"):
             self.request(changes="once more")
         self.assertEqual([a["action"] for a in self_heal.plan(self.root) if a["action"].startswith("review_recovery")], [], "nothing is stopped or restarted")

@@ -1873,8 +1873,35 @@ function renderOwnerActions(state){
     // A blocked card (owner 2026-11-05): nobody is left to solve it, so it is red, announced, and shows Problem / What to do on two lines.
     // 2026-11-08: a card may carry the owner's choices (Try once more / Give up on a part the harness stopped repairing).
     const choices=Array.isArray(item.choices)&&item.choices.length?`<div class="actions" data-card-choices="${esc(item.id)}">${item.choices.map(choice=>`<button type="button" onclick="chooseOwnerAction(${id},${esc(JSON.stringify(choice))})">${esc(choice)}</button>`).join('')}</div>`:'';
-    return `<div class="owner-action${item.blocked?' blocked':''}"${item.blocked?' role="alert"':''} data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}${choices}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
+    // accept-after-repair R8: the open findings of the failed review, each the owner may close ("Does not apply")
+    const findings=findingsHtml(item.task,item.findings);
+    return `<div class="owner-action${item.blocked?' blocked':''}"${item.blocked?' role="alert"':''} data-action-id="${esc(item.id)}"><strong>${esc(item.title)}</strong>${item.why?`<p>${esc(item.why)}</p>`:''}${locLine}${cardLinks}${command}${findings}${choices}<small>${esc(relativeUpdate(item.recorded_at))}${item.task?` · ${esc(item.task)}`:''}${item.clears_when?`. ${esc(item.clears_when)}`:''}.</small></div>`;
   }).join(''));
+}
+
+function findingsHtml(task,findings){
+  // the owner's decision on a finding (2026-11-08, "i need a way to impose my will"): one click closes an ordinary finding; a finding the
+  // reviewer tagged safety, data-loss or leak asks for his own sentence, recorded verbatim
+  if(!task||!Array.isArray(findings)||!findings.length)return '';
+  const rows=findings.map(f=>{
+    const tag=f.harm_tag?`<span class="mc-pill bad">${esc(f.harm_tag)}</span> `:'';
+    const button=f.closable_by_click
+      ?`<button type="button" class="secondary" data-finding-close onclick="closeFinding(${esc(JSON.stringify(task))},${esc(JSON.stringify(f.request_id))},${esc(JSON.stringify(f.id))},false)">Does not apply — close it</button>`
+      :`<button type="button" class="secondary" data-finding-close onclick="closeFinding(${esc(JSON.stringify(task))},${esc(JSON.stringify(f.request_id))},${esc(JSON.stringify(f.id))},true)">Close it with my own words</button>`;
+    return `<li data-finding="${esc(f.id)}">${tag}<strong>${esc(f.id)}</strong> ${esc(f.summary)} ${button}</li>`;
+  }).join('');
+  return `<div class="mc-findings" data-task-findings="${esc(task)}"><strong>The reviewer's open findings</strong><ul>${rows}</ul></div>`;
+}
+
+async function closeFinding(task,requestId,findingId,needsWords){
+  let words='';
+  if(needsWords){
+    words=prompt(`Finding ${findingId} is marked as a safety, data-loss or leak problem. Write your decision in a sentence of your own; it is recorded in your words.`)||'';
+    if(!words.trim())return;
+  }
+  const buttons=document.querySelectorAll('[data-finding-close]');buttons.forEach(b=>{b.disabled=true;});
+  try{const result=await call(`/api/tasks/${encodeURIComponent(task)}/findings/${encodeURIComponent(requestId)}/${encodeURIComponent(findingId)}/close`,{words});if(result&&result.message){el('#notice').textContent=result.message;}await refresh();}
+  catch(error){buttons.forEach(b=>{b.disabled=false;});alert(error.message||String(error));}
 }
 
 async function chooseOwnerAction(actionId,choice){
@@ -2152,7 +2179,9 @@ function renderStrip(story){
       +`<div class="mc-doing">${esc(a.doing)}</div>`
       +(a.detail?`<small>${esc(a.detail)}</small>`:'')+(a.slowed?`<small>${esc(a.slowed)}</small>`:'')+`<small>${esc(a.cost)}</small>`
       +`<div class="actions"><button type="button" class="secondary" data-strip-action="message" ${messageAttrs}>${esc(message.label||'Message')}</button><button type="button" class="secondary" data-strip-action="view" ${viewAttrs}>View its screen</button></div>`
-      +(note?`<p class="mc-note" role="status">${esc(note)}</p>`:'')+`</div>`;
+      +(note?`<p class="mc-note" role="status">${esc(note)}</p>`:'')
+      +((a.others||[]).length?`<ul class="mc-others" data-strip-others>${a.others.map(o=>`<li>Also here: ${esc(o.agent_id)} — ${esc(o.words)}</li>`).join('')}</ul>`:'')
+      +(a.warning?`<p class="mc-note mc-warning" role="alert" data-strip-warning>${esc(a.warning)}</p>`:'')+`</div>`;
   }).join('');
   writeHtml(node,html);
 }
@@ -2188,6 +2217,8 @@ function renderTimeline(story){
     const problem=c.exception;
     html=`<h2 id="story-timeline-title">The story of this task</h2>`
       +(problem?`<div class="mc-attention" role="alert" data-story-attention><strong>Needs attention first</strong>${esc(problem.reason)} ${esc(problem.action)}</div>`:'')
+      +findingsHtml(c.task,c.findings)
+      +(c.owner_decision?`<p class="mc-note" data-story-owner-decision>${esc(c.owner_decision)}</p>`:'')
       +`<p class="mc-hint">Select a step to see what happened.</p><ol class="mc-steps" aria-labelledby="story-timeline-title" data-story-steps>${timelineListHtml(shown,c.task)}</ol>`
       +(skipped.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-skipped" data-fold="skipped"><summary>${skipped.length===1?'1 step not needed':skipped.length+' steps not needed'}</summary><ol class="mc-steps">${timelineListHtml(skipped,c.task)}</ol></details>`:'')
       +(later.length?`<details class="mc-fold" data-keep="tl-${esc(c.task)}-later" data-fold="later"><summary>${laterLabel}</summary><ol class="mc-steps">${timelineListHtml(later,c.task)}</ol></details>`:'')
@@ -4945,6 +4976,17 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     data = json.loads(self.rfile.read(length) or b"{}")
                     event = board.record_agent_question_answer(root, question_id, str(data.get("answer", "")), data.get("choice"))
                     self.send_json(201, {"answer": event}); return
+                finding_match = re.fullmatch(r"/api/tasks/([^/]+)/findings/([^/]+)/([^/]+)/close", path)
+                if finding_match:
+                    # accept-after-repair R8: the owner closes one finding of a failed review ("Does not apply"); a safety, data-loss or
+                    # leak finding takes his own words. Owner-only: this route exists on the owner's page, never on an agent's surface.
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 8 * 1024:
+                        raise ValueError("the decision is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    self.send_json(200, board.owner_finding_close(
+                        root, unquote(finding_match.group(1)), unquote(finding_match.group(2)), unquote(finding_match.group(3)),
+                        str(data.get("words", "")))); return
                 choose_prefix, choose_suffix = "/api/owner-actions/", "/choose"
                 if path.startswith(choose_prefix) and path.endswith(choose_suffix):
                     # 2026-11-08: the owner's choice on a red card (Try once more / Give up); the board records it verbatim

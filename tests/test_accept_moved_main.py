@@ -248,8 +248,12 @@ class AcceptWhenMainMovedTests(unittest.TestCase):
             state["agents"][self.delivery["id"]].update({"active": False, "status": "stopped", "liveness": "offline"})
             state["project_pause"] = {"status": "resuming", "resume_id": "resume-1", "agents": {}}
         board.stage_required_delivery_resumes(self.root, "resume-1")
-        staged = board.snapshot(self.root)["project_pause"]["agents"][self.delivery["id"]]
-        self.assertTrue(staged["write_authority"], "the resumed owner can run reintegrate-main")
+        # 2026-11-08 (accept-after-repair R4): a builder the owner stopped is never revived by Resume, not even for the owed
+        # re-integration; the task stays kept and the next builder the owner starts carries it (and the re-integration) on
+        self.assertNotIn(self.delivery["id"], board.snapshot(self.root)["project_pause"]["agents"], "the owner's Stop outranks Resume")
+        with board.locked_state(self.root, allow_paused=True) as state:
+            state["project_pause"] = {"status": "active"}
+        self.assertEqual(board._stopped_task_to_resume(board.snapshot(self.root), "")[1], "GIT-MODEL", "the kept task is offered to the next builder")
 
     def test_an_owed_accept_still_reserves_the_repository(self):
         self.move_main()

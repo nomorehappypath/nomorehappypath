@@ -1,0 +1,11 @@
+Deliverable: app.py serves the updated heading text, paragraph unchanged.
+
+Rendered screen-check id: screen-20261108T062527-4cd2044d
+URL checked: http://127.0.0.1:18762/
+--expect: "Welcome to the community garden"
+expect_found: true
+visible_text returned by the capture:
+Welcome to the community garden
+Our community garden
+
+This confirms the live page's <h1> now reads "Welcome to the community garden" and the paragraph "Our community garden" is unchanged.

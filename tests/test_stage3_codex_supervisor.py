@@ -330,8 +330,8 @@ class LaunchLineTests(unittest.TestCase):
         from unittest import mock
         from harness import cli_capabilities, global_settings, interactive_supervisor
         codex = global_settings.resolved_cli("codex").get("path", "")
-        if not codex or not _shutil.which(codex):
-            self.skipTest("codex CLI not installed")
+        if not codex or not _shutil.which(codex) or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("codex CLI not installed or not opted in (the suite never starts the real CLI by itself: set HARNESS_TESTS_REAL_CLI=1 to run it)")
         def scratch_dir() -> Path:
             # A killed Codex can still be writing its plugin cache for a moment.
             path = Path(tempfile.mkdtemp(prefix="hn3gate-"))
