@@ -263,7 +263,7 @@ class RunnerTests(unittest.TestCase):
         table = next(f for f in flags if f.startswith("permissions.harness_agent.filesystem=")).split("=", 1)[1]
         self.assertIn(f'"{folder}" = "none"', table)
         codex = shutil.which("codex")
-        if codex and platform_support.agent_confinement().available():
+        if codex and platform_support.agent_confinement().available() and os.environ.get("HARNESS_TESTS_REAL_CLI") == "1":   # the real sandbox: opt in
             codex_home = self.base / "codex-token-home"; codex_home.mkdir()
             sandbox = [codex, "sandbox"]
             for flag in flags:
@@ -291,8 +291,8 @@ class RunnerTests(unittest.TestCase):
         self.assertIn('default_permissions="harness_agent"', flags)
         self.assertIn("permissions.harness_agent.network.enabled=true", flags)
         codex = shutil.which("codex")
-        if not codex or not platform_support.agent_confinement().available():
-            self.skipTest("the real Codex CLI is not installed here; flag shape asserted above")
+        if not codex or not platform_support.agent_confinement().available() or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("the real Codex CLI is not installed here or not opted in (HARNESS_TESTS_REAL_CLI=1); flag shape asserted above")
         data = self.context.data_root
         script = (
             f"( echo x > '{self.context.code_root}/work.txt' && echo WROTE_PROJECT ) 2>/dev/null || echo DENIED_PROJECT; "

@@ -462,7 +462,8 @@ def _certified_delivery_health(
         request.get("phase") == "final_acceptance"
         and request.get("test_scope") == "full"
         and request.get("delivery_state") == "passed"
-        and request.get("status") == "passed"
+        # the owner's waiver for this exact candidate counts as its PASS; Delivery's certified suite is the same bytes either way
+        and (request.get("status") == "passed" or board.review_counts_as_passed(board.snapshot(root), request))
     ):
         return failed
     command = str(request.get("unit_test_command") or "").strip()
@@ -588,20 +589,38 @@ def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
     return text.upper().startswith("TASK DONE: YES")
 
 
-def _committed_report_sha(state: dict[str, Any], task: str, latest_review: dict[str, Any] | None, link: dict[str, Any]) -> str:
-    """SHA-256 of the report file as committed in the commit the final review passed ("FINDINGS.md: ..." names the file), else ""."""
+def committed_report(root: Path | None, state: dict[str, Any], task: str, latest_review: dict[str, Any] | None, link: dict[str, Any]) -> tuple[str, bytes, str]:
+    """The report file as committed in the commit the final review passed: (sha256, bytes, file name), or ("", b"", "") when there is
+    no such source. "FINDINGS.md: ..." in the document or deliverable text names the file; the commit is the review's; the bytes come
+    from the task workspace, else from the project repository (the task branch's commit is in the same object store) when the
+    workspace is gone (accept-after-repair R1, 2026-11-08)."""
     from harness import standing_checks
     review = latest_review or {}
     commit = str(review.get("reviewed_commit") or "")
     name = standing_checks.report_file_name(link.get("document")) or standing_checks.report_file_name(link.get("deliverable"))
-    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
-    if review.get("status") != "passed" or not commit or not name or not workspace:
-        return ""
-    try:
-        shown = git_process.run(["git", "show", f"{commit}:{name}"], cwd=workspace, capture_output=True, timeout=20, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return hashlib.sha256(shown.stdout).hexdigest() if shown.returncode == 0 else ""
+    if not board.review_counts_as_passed(state, review) or not commit or not name:
+        return "", b"", ""
+    places = [str((state.get("task_workspaces") or {}).get(task) or "")]
+    if root is not None:
+        try:
+            places.append(str(board.project_context(root).code_root))
+        except (OSError, ValueError):
+            pass
+    for place in places:
+        if not place or not Path(place).is_dir():
+            continue
+        try:
+            shown = git_process.run(["git", "show", f"{commit}:{name}"], cwd=place, capture_output=True, timeout=20, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if shown.returncode == 0:
+            return hashlib.sha256(shown.stdout).hexdigest(), shown.stdout, name
+    return "", b"", ""
+
+
+def _committed_report_sha(state: dict[str, Any], task: str, latest_review: dict[str, Any] | None, link: dict[str, Any]) -> str:
+    """SHA-256 of the report file as committed in the commit the final review passed ("FINDINGS.md: ..." names the file), else ""."""
+    return committed_report(None, state, task, latest_review, link)[0]
 
 
 def owner_artifacts_readable(root: Path, state: dict[str, Any], task: str, latest_review: dict[str, Any] | None) -> tuple[bool, list[str], list[dict[str, Any]]]:
@@ -735,10 +754,12 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         "internal_chunk_qa_evidence_complete": internal_chunk_proof if chunk_flow else application_internal_proof if delivery_mode == "application" else internal_final_proof,
         "internal_final_qa_evidence_present": internal_final_proof,
         "latest_development_qa_request": latest_qa.get("id") if latest_qa else None,
-        "independent_review_passed": bool(latest_review and latest_review.get("status") == "passed" and latest_review.get("evidence")),
+        # accept-after-repair R8/R9: the owner's review waiver for exactly this candidate counts as the PASS (the FAIL record stays)
+        "independent_review_passed": bool(latest_review and board.review_counts_as_passed(state, latest_review) and latest_review.get("evidence")),
         "latest_independent_review_request": latest_review.get("id") if latest_review else None,
         "final_acceptance_review_present": bool(latest_review),
-        "final_review_says_task_done_yes": final_review_says_task_done_yes(latest_review),
+        "final_review_says_task_done_yes": final_review_says_task_done_yes(latest_review) or board.owner_review_waiver_for(state, latest_review) is not None,
+        "owner_decided_review": board.owner_review_waiver_for(state, latest_review) is not None,
         "delivery_chunks_complete": structure_complete,
     }
     developers = [
@@ -775,8 +796,9 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     )
     checks["delivery_scenario_simulations_executed"] = delivery_simulations_ok
     checks["delivery_scenario_simulation_problems"] = delivery_simulation_problems
+    reviewer_simulations_ok, waiver_note = board.reviewer_checks_satisfied(state, latest_review, reviewer_simulations_ok)
     checks["reviewer_scenario_simulations_executed"] = reviewer_simulations_ok
-    checks["reviewer_scenario_simulation_problems"] = reviewer_simulation_problems
+    checks["reviewer_scenario_simulation_problems"] = ([waiver_note] if waiver_note else []) if reviewer_simulations_ok else reviewer_simulation_problems
     try:
         contract_ok, contract_problems, _ = contract.contract_complete(root, task)
     except (FileNotFoundError, json.JSONDecodeError):

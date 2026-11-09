@@ -136,8 +136,8 @@ class RealClaudeTests(unittest.TestCase):
         from tests.environment_support import require_loopback
         require_loopback()
         self.claude = global_settings.resolved_cli("claude").get("path", "")
-        if not self.claude or not shutil.which(self.claude):
-            self.skipTest("claude CLI not installed")
+        if not self.claude or not shutil.which(self.claude) or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("claude CLI not installed or not opted in (the suite never starts the real CLI by itself: set HARNESS_TESTS_REAL_CLI=1 to run it)")
         self.scratch = Path(tempfile.mkdtemp(prefix="hntrust-"))
         self.addCleanup(shutil.rmtree, self.scratch, True)
         self.api = ThreadingHTTPServer(("127.0.0.1", 0), _StubAPI)
@@ -176,8 +176,8 @@ class RealCodexTests(unittest.TestCase):
 
     def setUp(self):
         self.codex = global_settings.resolved_cli("codex").get("path", "")
-        if not self.codex or not shutil.which(self.codex):
-            self.skipTest("codex CLI not installed")
+        if not self.codex or not shutil.which(self.codex) or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("codex CLI not installed or not opted in (the suite never starts the real CLI by itself: set HARNESS_TESTS_REAL_CLI=1 to run it)")
         self.scratch = Path(tempfile.mkdtemp(prefix="hncodextrust-"))
         self.addCleanup(shutil.rmtree, self.scratch, True)
         self.flags = ["-c", 'model_provider="stub"', "-c", 'model="gpt-5"',

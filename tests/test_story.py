@@ -224,8 +224,8 @@ class ExceptionPriorityTests(unittest.TestCase):
         result = built(state(review_escalations={"e": {"task": TASK, "status": "could_not_finish", "outcome": "Could not finish the login page; nothing of it was released."}}))
         self.assertEqual(result["exception"]["kind"], "repairs_exhausted")
         self.assertIn("nothing of it was released", result["now"])
-        self.assertTrue(result["needs_owner"], "2026-11-08: the stopped part is the owner's decision (Try once more / Give up)")
-        self.assertIn("Try once more", result["exception"]["action"])
+        self.assertTrue(result["needs_owner"], "2026-11-08: the stopped part is the owner's decision (Fix once more / Take what you have / Stop)")
+        self.assertIn("Fix once more", result["exception"]["action"])
 
     def test_verification_gap_asks_only_when_the_owner_decides(self):
         deciding = built(state(verification_gaps={"g": {"task": TASK, "state": "owner_decision", "reason": "the VM was off"}}))
@@ -388,6 +388,21 @@ class AgentStripTests(unittest.TestCase):
         self.assertFalse(absent["present"])
         self.assertIn("No reviewer is running", absent["view"]["note"])
         self.assertEqual(absent["cost"], "Cost: not measured yet")
+
+    def test_every_builder_on_the_task_is_shown_and_two_on_one_task_get_a_plain_warning(self):
+        # 2026-11-08: two builders sat on Finish Support (one revived by Resume without the right to act, one the owner started) and
+        # the strip showed one; a third, waiting with no task, was invisible too
+        ghost = builder(id="dev-ghost", session_id="s-ghost", write_authority=False, status="stopped")
+        waiting = builder(id="dev-wait", session_id="s-wait", task="AWAITING_OWNER_DIRECTION")
+        rows = self.strip(state(agents=[builder(), ghost, waiting, reviewer()]))
+        shown = {o["agent_id"]: o["words"] for o in rows["builder"]["others"]}
+        self.assertEqual(set(shown), {"dev-ghost", "dev-wait"})
+        self.assertIn("stopped", shown["dev-ghost"])
+        self.assertIn("waiting for instructions, holds no task", shown["dev-wait"])
+        self.assertEqual(rows["builder"]["warning"], "2 builders are on this task; only one can hold it. Stop the ones you do not want (Stop on the agent's row).")
+        self.assertEqual((rows["reviewer"]["others"], rows["reviewer"]["warning"], rows["cto"]["others"]), ([], "", []))
+        alone = self.strip(state(agents=[builder(), reviewer()]))["builder"]
+        self.assertEqual((alone["others"], alone["warning"]), ([], ""))
 
     def test_a_waiting_builder_is_asked_for_direction_not_a_clarification(self):
         waiting = builder(task="AWAITING_OWNER_DIRECTION")

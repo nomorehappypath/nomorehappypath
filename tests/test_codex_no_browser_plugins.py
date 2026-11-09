@@ -96,8 +96,8 @@ class IsolationArgumentTests(unittest.TestCase):
 
     def test_a_real_codex_with_another_codex_home_and_an_ancestor_config_still_starts(self):
         # review round 2: an ancestor's config that this Codex does not load must not make the generated overrides invalid
-        if not shutil.which("codex"):
-            self.skipTest("needs the Codex CLI")
+        if not shutil.which("codex") or os.environ.get("HARNESS_TESTS_REAL_CLI") != "1":
+            self.skipTest("needs the Codex CLI and HARNESS_TESTS_REAL_CLI=1 (the suite never starts the real CLI by itself)")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
             (base / ".codex").mkdir()
@@ -137,7 +137,8 @@ class IsolationArgumentTests(unittest.TestCase):
         self.assertIn("codex_access+=(\"$isolation_arg\")", script)
 
 
-@unittest.skipUnless(shutil.which("codex"), "needs the Codex CLI")
+@unittest.skipUnless(shutil.which("codex") and os.environ.get("HARNESS_TESTS_REAL_CLI") == "1",
+                     "needs the Codex CLI and HARNESS_TESTS_REAL_CLI=1 (the suite never starts the real CLI by itself)")
 class RealCodexTests(unittest.TestCase):
     def test_a_real_codex_lists_no_enabled_browser_tool_server_with_the_launch_arguments(self):
         with tempfile.TemporaryDirectory() as temporary:

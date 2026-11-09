@@ -516,7 +516,7 @@ def poll_view(escalations: dict[str, Any]) -> list[dict[str, Any]]:
                               if entry["status"] == "needs_environment" else
                               ("The owner gave this part up: nothing of it will be released and it is not reviewed again. Keep other work moving."
                                if entry.get("given_up_at") else
-                               "Automatic repair of this part has stopped and nothing of it will be released. The owner has a red card with Try once more and Give up; do not ask the owner yourself, keep other work moving, and watch the board: Try once more lets Delivery request one more review.")),
+                               "Automatic repair of this part has stopped and nothing of it will be released. The owner has a red card with Fix once more, Take what you have and Stop, and may close findings himself; do not ask the owner yourself, keep other work moving, and watch the board: Fix once more lets Delivery request one more review.")),
                 "outcome": entry.get("outcome", ""),
             })
     return shown
@@ -534,9 +534,9 @@ def refusal_for(escalations: dict[str, Any], request_like: dict[str, Any]) -> st
         return ""
     if entry.get("status") == "could_not_finish":
         if entry.get("given_up_at"):
-            return "the owner gave this part up (Give up on the red card); nothing from it will be released and it is not reviewed again"
+            return "the owner gave this part up (Stop on the red card); nothing from it will be released and it is not reviewed again"
         return ("this part could not be finished automatically (" + entry.get("outcome", "") + ") and nothing from it will be released; "
-                "work on other parts; the owner has a red card with Try once more and Give up")
+                "work on other parts; the owner has a red card with Fix once more, Take what you have and Stop")
     if entry.get("status") == "recovery" and entry.get("phase") != "started" and entry.get("who") != "reviewer":
         return "a fresh Delivery attempt is being started for this part after repeated failed reviews; wait for it instead of repairing here"
     return ""

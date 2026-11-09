@@ -1,0 +1,22 @@
+{
+ "acceptance_base_commit": "1ecb3b6316bf2005649f661836f81ac74e46c15a",
+ "head_commit": "7f1779d557d0134598b057f709ac5119d3d0cd68",
+ "main_fast_forward_safe": true,
+ "main_unchanged_before_accept": true,
+ "owner_artifact_problems": [
+  "the owner's document for 'app.py serves the updated heading text, paragraph unchanged' (1794119210352359000-evidence-0020c6c09ef51dcf5e316b579e0cbfa0fd12fdac43989a00e9f992ed4460c3cf.txt) is an earlier copy: it differs from the report the independent review passed; attach the committed report again with contract-evidence --for-owner so the owner opens the reviewed version"
+ ],
+ "owner_artifacts_readable": false,
+ "owner_documents": [
+  {
+   "deliverable": "app.py serves the updated heading text, paragraph unchanged",
+   "latest": true,
+   "marked_at": "2026-11-08T06:26:50.374997+00:00",
+   "path": "data/evidence/uploads/ce301a95e38776223f75/1794119210352359000-evidence-0020c6c09ef51dcf5e316b579e0cbfa0fd12fdac43989a00e9f992ed4460c3cf.txt",
+   "sha256": "0020c6c09ef51dcf5e316b579e0cbfa0fd12fdac43989a00e9f992ed4460c3cf",
+   "title": "Deliverable: app.py serves the updated heading text, paragraph unchanged."
+  }
+ ],
+ "ready_for_owner_test": false,
+ "reviewed_commit": "7f1779d557d0134598b057f709ac5119d3d0cd68"
+}
