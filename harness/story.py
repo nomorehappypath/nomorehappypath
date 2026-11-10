@@ -1053,12 +1053,17 @@ def for_page(state: dict[str, Any], contracts: dict[str, Any] | None, live_tasks
     stories = {t: build(state, contracts, t, runtime, agents=agents, sessions=sessions, cost=cost, now=now, redact=redact,
                         ledger=_dict(ledgers).get(t)) for t in live_tasks}
     ranked = sorted(stories.values(), key=_priority)
-    lead = ranked[0] if ranked else None
+    # 2026-11-10 (owner): an accepted task that needs nothing from the owner never leads the page. It stays on the page for a while after its
+    # upload ("Accepted and uploaded"), and while it led, the page showed all of its steps and a Cancel button and hid the way to start the
+    # next task. It is shown as one quiet line instead; the board always offers "Tell the builder what to build" when nothing leads.
+    leading = [s for s in ranked if not (s.get("accepted") and not s.get("needs_owner") and not s.get("exception"))]
+    lead = leading[0] if leading else None
+    last_accepted = next((s for s in ranked if s not in leading), None) if not lead else None
     project_exc = None
     if not lead:
         project_exc = exception_for(state, "", agents=agents, sessions=sessions, redact=redact)
     task = lead["task"] if lead else ""
-    return {"current": lead, "direction_sent": not lead and _direction_sent(state, agents), "tasks": stories, "order": [s["task"] for s in ranked], "exception": (lead or {}).get("exception") or project_exc,
+    return {"current": lead, "last_accepted": ({"task": last_accepted["task"], "title": last_accepted.get("title") or last_accepted["task"]} if last_accepted else None), "direction_sent": not lead and _direction_sent(state, agents), "tasks": stories, "order": [s["task"] for s in ranked], "exception": (lead or {}).get("exception") or project_exc,
             "agents": agent_strip(state, task, agents=agents, sessions=sessions, settings=settings, cost=cost, story=lead, now=now),
             "empty": not stories, "total_steps": TOTAL_STEPS}
 
@@ -1096,7 +1101,7 @@ def project_now(state: dict[str, Any], task: str, *, paused: bool = False, accep
         if exc and exc["kind"] == "paused":
             return {**base, "state": "paused", "now": exc["reason"], "next": "Next: " + exc["action"], "exception": exc}
         return {**base, "state": "done", "now": "Accepted and complete.", "next": "Next: open the project to add new instructions or a new task.",
-                "step": TOTAL_STEPS, "step_title": step_title(TOTAL_STEPS), "progress": 100}
+                "step": TOTAL_STEPS, "step_title": step_title(TOTAL_STEPS), "progress": 100, "tell_builder": True}
     story = build(state, None, task, runtime, agents=agents, sessions=sessions, cost=cost, now=now, redact=redact, detail=False)
     out = {**base, "step": story["step"], "step_title": story["step_title"], "now": story["now"], "next": story["next"], "elapsed": story["elapsed"],
            "cost": story["cost"], "usd": story["usd"], "codex_window": story["codex_window"], "exception": story["exception"], "progress": story["progress"],
