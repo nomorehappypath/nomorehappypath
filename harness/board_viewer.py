@@ -107,6 +107,7 @@ PAGE = r"""<!doctype html>
 .mc-now{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin-top:18px}
 .mc-now.mc-needs{border-color:var(--mc-amber-line);background:var(--mc-amber-bg)}
 .mc-now-main{flex:1 1 480px;min-width:0}
+.mc-kind{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--mc-muted);font-size:12px;font-weight:700;letter-spacing:0;text-transform:none}
 .mc-eyebrow{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mc-muted)}
 .mc-now-text{margin-top:4px;font-size:19px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
 .mc-next{margin-top:5px;color:var(--mc-muted);font-size:14px;overflow-wrap:anywhere}
@@ -911,7 +912,8 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
-  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3></div>${badge(gate.status)}</div><details class="technical-details" data-keep="technical-details"><summary>Technical details</summary><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div>${technicalStructure}</details>`;
+  const kindWords={development:'Write code',analysis:'Analyze code',spec:'Write specs'}[(state.task_kinds||{})[name]]||'Write code';
+  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3><span class="mc-kind" data-task-kind>${esc(kindWords)}</span></div>${badge(gate.status)}</div><details class="technical-details" data-keep="technical-details"><summary>Technical details</summary><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div>${technicalStructure}</details>`;
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive ${copyButtonHtml('directive',name,directive)}</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
@@ -2212,17 +2214,17 @@ function renderStory(story){
     html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text" data-story-now>The builder has your direction and is turning it into a plan.</div><div class="mc-next" data-story-next>Next: it shows you the plan and asks for your Go ahead.</div></div>`;
   }else if(!s.current){
     const problem=s.exception;
-    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text" data-story-now>${esc(problem?problem.reason:(s.last_accepted?'Nothing is in progress. Last task accepted: '+s.last_accepted.title+'.':'Nothing is in progress.'))}</div><div class="mc-next" data-story-next>${esc(problem?'Next: '+problem.action:'Next: tell the builder what to build.')}</div><button type="button" class="mc-tell" id="story-tell-builder" data-mc-keep="1">Tell the builder what to build</button></div>`;
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now</div><div class="mc-now-text" data-story-now>${esc(problem?problem.reason:(s.last_accepted?'Nothing is in progress. Last task accepted: '+s.last_accepted.title+(s.last_accepted.kind?' ('+s.last_accepted.kind+')':'')+'.':'Nothing is in progress.'))}</div><div class="mc-next" data-story-next>${esc(problem?'Next: '+problem.action:'Next: tell the builder what to build.')}</div><button type="button" class="mc-tell" id="story-tell-builder" data-mc-keep="1">Tell the builder what to build</button></div>`;
   }else{
     const c=s.current,others=(s.order||[]).slice(1).map(name=>(s.tasks||{})[name]).filter(Boolean);
     const percent=Math.max(0,Math.min(100,Math.round(100*Number(c.step||0)/Number(c.of||26))));
     // 2026-11-10 (owner): an accepted task that is still on the page is finished: no Cancel, and the way to start the next task is shown.
     const finished=Boolean(c.accepted&&!c.needs_owner&&!c.exception);
-    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now${others.length?` · ${esc(c.title)}`:''}</div><div class="mc-now-text" data-story-now>${esc(c.now)}</div><div class="mc-next" data-story-next>${esc(finished?'Next: tell the builder what to build.':c.next)}</div>`
+    html=`<div class="mc-now-main"><div class="mc-eyebrow">Now${c.kind?` · <span class="mc-kind" data-story-kind>${esc(c.kind)}</span>`:''}${others.length?` · ${esc(c.title)}`:''}</div><div class="mc-now-text" data-story-now>${esc(c.now)}</div><div class="mc-next" data-story-next>${esc(finished?'Next: tell the builder what to build.':c.next)}</div>`
       +(c.needs_owner?`<div class="mc-needs-line" role="status" data-story-needs>Needs you: ${esc(c.owner_action)}</div>`:'')
       +`<div class="mc-step"><span data-story-step>Step ${Number(c.step)} of ${Number(c.of)} · ${esc(c.step_title)}${c.who?` (${esc(c.who)})`:''}</span><span>${esc(c.elapsed||'')}</span></div><div class="mc-bar" role="progressbar" aria-label="Step ${Number(c.step)} of ${Number(c.of)}" aria-valuemin="0" aria-valuemax="${Number(c.of)}" aria-valuenow="${Number(c.step)}"><i style="width:${percent}%"></i></div>${finished?'<button type="button" class="mc-tell" id="story-tell-builder" data-mc-keep="1">Tell the builder what to build</button>':storyCancelButton(c.task,'Cancel this task')}</div>`
       +`<div class="mc-tiles">${storyTile('Cost',String(c.cost||'').replace(/^Cost: /,''),c.codex_window)}${c.requirements&&c.requirements.text?`<div class="mc-tile" data-story-requirements><span>Requirements</span><strong>${esc(c.requirements.text)}</strong></div>`:''}</div>`
-      +(others.length?`<ul class="mc-others" aria-label="Other tasks in progress">${others.map(o=>`<li><strong>${esc(o.title)}</strong>: step ${Number(o.step)} of ${Number(o.of)}, ${esc(o.step_title)}. ${esc(o.now)} ${storyCancelButton(o.task,'Cancel')}</li>`).join('')}</ul>`:'');
+      +(others.length?`<ul class="mc-others" aria-label="Other tasks in progress">${others.map(o=>`<li><strong>${esc(o.title)}</strong>${o.kind?` (${esc(o.kind)})`:''}: step ${Number(o.step)} of ${Number(o.of)}, ${esc(o.step_title)}. ${esc(o.now)} ${storyCancelButton(o.task,'Cancel')}</li>`).join('')}</ul>`:'');
   }
   writeHtml(node,html);
   node.classList.toggle('mc-needs',Boolean(s.current&&s.current.needs_owner));
