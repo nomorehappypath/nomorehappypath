@@ -770,7 +770,7 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
         "cost": money["text"], "usd": money["usd"], "codex_window": money["window"],
         "released": bool(release.get("status") in ("VISUAL_TEST_REQUIRED", "ACCEPTED")),
         "accepted": status == "OWNER ACCEPTED", "progress": round(100 * step / TOTAL_STEPS),
-        "findings": findings, "owner_decision": decision,
+        "findings": findings, "owner_decision": decision, "kind": kind_label(state, task),
     }
     if detail:
         try:
@@ -1032,6 +1032,15 @@ def _priority(item: dict[str, Any]) -> tuple:
     return (0 if item.get("needs_owner") else 1 if exc else 2 if not item.get("accepted") else 3, -int(item.get("step") or 0))
 
 
+KIND_LABELS = {"development": "Write code", "analysis": "Analyze code", "spec": "Write specs"}
+
+
+def kind_label(state: dict[str, Any], task: str) -> str:
+    """The kind of work the owner chose on the Start screen, in his own words (2026-11-10: a Write specs task was rejected for not
+    building code because nothing on the page said what it was)."""
+    return KIND_LABELS.get(str(_dict(state.get("task_kinds")).get(task) or "development"), "Write code")
+
+
 def _direction_sent(state: dict[str, Any], agents: list[dict[str, Any]] | None) -> bool:
     """The owner has sent a direction and the builder has not turned it into a task yet (a minute or two; 2026-10-28 the page said
     "Nothing is in progress, tell the builder what to build" during it)."""
@@ -1063,7 +1072,7 @@ def for_page(state: dict[str, Any], contracts: dict[str, Any] | None, live_tasks
     if not lead:
         project_exc = exception_for(state, "", agents=agents, sessions=sessions, redact=redact)
     task = lead["task"] if lead else ""
-    return {"current": lead, "last_accepted": ({"task": last_accepted["task"], "title": last_accepted.get("title") or last_accepted["task"]} if last_accepted else None), "direction_sent": not lead and _direction_sent(state, agents), "tasks": stories, "order": [s["task"] for s in ranked], "exception": (lead or {}).get("exception") or project_exc,
+    return {"current": lead, "last_accepted": ({"task": last_accepted["task"], "title": last_accepted.get("title") or last_accepted["task"], "kind": last_accepted.get("kind") or ""} if last_accepted else None), "direction_sent": not lead and _direction_sent(state, agents), "tasks": stories, "order": [s["task"] for s in ranked], "exception": (lead or {}).get("exception") or project_exc,
             "agents": agent_strip(state, task, agents=agents, sessions=sessions, settings=settings, cost=cost, story=lead, now=now),
             "empty": not stories, "total_steps": TOTAL_STEPS}
 
