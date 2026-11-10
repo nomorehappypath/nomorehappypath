@@ -2,7 +2,7 @@
 
 **Be a software company of one. Make "done" mean done.**
 
-NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for building commercial software with AI agents. A builder, an independent reviewer from a different AI company and a CTO take your idea through 21 quality steps: tests written before any code and proven able to fail, a board the agents cannot edit, reviews that end, and security built in and enhanced on demand. Mission Control shows every step in plain English, and nothing is done until you accept it. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
+NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for building commercial software with AI agents. A builder, an independent reviewer from a different AI company and a CTO take your idea through 26 quality steps: tests written before any code and proven able to fail, a board the agents cannot edit, reviews that end, and security built in and enhanced on demand. Mission Control shows every step in plain English, and nothing is done until you accept it. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
 
 Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years building and selling commercial fintech software.
 
@@ -23,8 +23,8 @@ Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years buil
 ![Mission Control: a task ready for the owner's test](https://nomorehappypath.com/assets/shot-ready.png)
 *A small weather app built from one request: review passes recorded, then "ready for your test".*
 
-![How a task becomes accepted work: twenty-one steps in six phases](https://nomorehappypath.com/assets/process-infographic.png)
-*Twenty-one steps in six phases. You describe the task and approve a plain-words contract; the reviewer from the other AI company writes the tests first; a coverage check confirms every requirement has a test (the board checks the reviewer's labels); the board locks them and checks they fail on the project as it was before the work; the builder builds and proves its scenarios; the board and reviewer prove it works in bounded rounds; two safety nets retry once on a model you choose in Settings, otherwise "could not finish"; you review and accept.*
+![How a task becomes accepted work: twenty-six steps in six phases](https://nomorehappypath.com/assets/process-infographic.png?v=26)
+*Twenty-six steps in six phases, the same steps Mission Control shows for every task. You describe the task and agree a plain-words contract; the reviewer from the other AI company writes the tests first; the board checks every requirement has a test, locks the tests and checks they fail on the project as it was before the work; the builder plans, builds and tests its own work; the board runs the locked tests itself and the reviewer proves it works on the real product in bounded rounds, with a last retry on a stronger model you choose in Settings; release checks and a try-it copy; you review and accept. If it gets stuck, the CTO tries first, then you get one red card and an email.*
 
 ![Why every test must fail first](https://nomorehappypath.com/assets/red-proof.png)
 *A test that passes on nothing proves nothing, so it is flagged "did not distinguish" and does not count. This shows a test can fail before the work, not that it covers every requirement.*
