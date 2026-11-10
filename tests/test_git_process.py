@@ -11,6 +11,12 @@ from harness import board, child_process, cto, git_process
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# support_github.py runs git only inside its own scratch clone of the REPORTED app's repository (never a
+# harness-owned project repository), and it authenticates with the GIT_CONFIG_COUNT/KEY/VALUE variables
+# the sanitized boundary strips on purpose (the token must not appear in `ps`). It therefore keeps its own
+# subprocess calls; this list is the one place that says so.
+SCRATCH_CLONE_MODULES = {"support_github.py"}
+
 
 def initialize_repository(path: Path, marker: str) -> str:
     path.mkdir()
@@ -155,6 +161,8 @@ class GitProcessTests(unittest.TestCase):
     def test_all_harness_owned_git_subprocesses_use_the_sanitized_boundary(self):
         direct_calls = []
         for path in sorted((ROOT / "harness").rglob("*.py")):
+            if path.name in SCRATCH_CLONE_MODULES:
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
@@ -177,7 +185,7 @@ class GitProcessTests(unittest.TestCase):
         }
         bypasses = []
         for path in sorted((ROOT / "harness").rglob("*.py")):
-            if path.name == "git_broker.py":
+            if path.name == "git_broker.py" or path.name in SCRATCH_CLONE_MODULES:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

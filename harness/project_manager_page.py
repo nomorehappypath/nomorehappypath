@@ -554,7 +554,7 @@ PAGE = r'''<!doctype html>
                 <ul class="help-list">
                   <li><strong>Write code:</strong> build or change code with the full process: tests first, an independent review, end to end.</li>
                   <li><strong>Analyze code:</strong> find issues and refactoring ideas across all the code and change nothing. After you press Go ahead, the builder and the reviewer each read all the code and make their own list, without seeing each other's. Then each checks the other's list for false alarms and wrong findings, once (each side can also add a problem it notices while checking); the CTO removes the duplicates; and the result is one clean list that the builder writes into the report and the reviewer checks. Tell it only the facts about your project: the code folder, what the product is and who uses it, where its tests run and which test database is allowed, and what is out of scope. The builder finds the languages and the setup itself. The result is one report, <code>FINDINGS.md</code>: it opens with a table of every issue, and each issue has a level (1: the app cannot work or customer data or money is at risk; 2: an important function fails; 3: an annoyance with a simple workaround), where it is, the proof, how it fails, what it costs you, what to do, and how sure the builder is. Ideas that are not bugs (level 4) are listed apart. The report ends with what was checked and what could not be.</li>
-                  <li><strong>Write specs:</strong> a spec, a deck or text. The reviewer always reads and judges the text before it is finished.</li>
+                  <li><strong>Write specs:</strong> a spec, a deck or text. The reviewer always reads and judges the text before it is finished. For an app spec (type "not an app spec" to skip this and keep the old free-form text): after you describe the app, you answer one card of questions — a few written just for this app, plus the same fixed questions every app spec asks — and press Continue; anything you skip gets written into the plan as its own "Assumed: ..." line instead of being guessed silently. NMHP then writes the full plan itself: the functional part as before, plus fixed technical chapters (back end, front end, networking, Latency, Load, Security, Error handling, backup and recovery, maintainability, documentation, and a Support plan when this app gets Support), each ending in a short Targets list — a number, a yes/no, or a named test, never an adjective. Once you accept the plan, its Targets become real requirements on every later Write-code task for this app: Security and Error handling always apply, and the task's hand-in must say, for each Target that applies to what it touched, whether it was met and by which test.</li>
                 </ul>
                 If you start with <strong>Give direction</strong> and did not choose at launch, the same three choices are at the top of that box. The Story tab shows what the task is running as.</li>
               <li>State the outcome you want in plain language: what the user should be able to do when the task is done.</li>
@@ -646,6 +646,7 @@ PAGE = r'''<!doctype html>
                 <tr><td>View status</td><td>Shows the selected agent's current task, stage, last update, next step, and whether you need to act.</td></tr>
                 <tr><td>Stop terminal / Stop all agents</td><td>Stops visible terminals. Use it when you intentionally want work to stop; saved board records remain.</td></tr>
                 <tr><td>Enhanced security (checkbox on a task card)</td><td>Off by default. Tick it to make that task's app also ship a short threat model, a security test pass and a controls register, which the Reviewer then checks. Choose before Delivery's first review request: the choice locks at that moment and shows "locked at review". Every app gets the central error catch-all regardless.</td></tr>
+                <tr><td>This app gets Support (checkbox in New project, or the line in Give direction for an existing project)</td><td>Off by default. Tick it so a dedicated Support installation (see the <strong>Support</strong> chapter in the README) can watch this app: the build then includes <code>SUPPORT_PLAN.md</code> and sends the app's version and an <code>nmhp.support.check</code> event through its error module.</td></tr>
                 <tr><td>Settings</td><td>Changes default provider, model, effort, and connection tests for new agent sessions.</td></tr>
                 <tr><td>Help</td><td>Opens this guide.</td></tr>
               </tbody>
@@ -905,6 +906,7 @@ PAGE = r'''<!doctype html>
         <p class="field-hint" id="project-folder-hint">Your project folder will be created inside the selected location.</p>
         <div class="folder-preview" id="project-folder-preview" hidden></div>
       </div>
+      <div class="field"><label class="checkbox-field"><input type="checkbox" id="project-support-plan"> This app gets Support</label><p class="field-hint">A dedicated Support installation can watch this app: writes <code>SUPPORT_PLAN.md</code> into the build and makes the app send its version and an <code>nmhp.support.check</code> event. Off by default; an existing project can turn it on later with the line in Give direction.</p></div>
       <p class="form-error" id="create-error" role="alert" aria-live="polite"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" id="create-cancel">Cancel</button><button class="button" type="submit" id="create-save">Save project</button></div>
     </form>
@@ -1947,7 +1949,7 @@ PAGE = r'''<!doctype html>
       error.textContent = '';
       if (!name) { error.textContent = 'Add a project name.'; q('#project-name').focus(); return; }
       if (!createFolder) { error.textContent = adopting ? 'Choose the existing project folder.' : 'Choose a parent folder.'; q('#project-folder-browse').focus(); return; }
-      const data = {name, description: q('#project-description').value.trim(), kind: adopting ? 'adopted' : 'scaffold'};
+      const data = {name, description: q('#project-description').value.trim(), kind: adopting ? 'adopted' : 'scaffold', support_plan: q('#project-support-plan').checked};
       if (adopting) data.code_root = createFolder;
       else data.parent_root = createFolder;
       save.disabled = true;

@@ -2802,10 +2802,17 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
     with locked_state(
         root, operation="register agent", resume_session_id=session_id,
     ) as state:
-        existing = next((
+        # One terminal, one board agent: prefer the session's active agent, so a repeat
+        # register reattaches it instead of adding another (2026-11-09: nine empty
+        # duplicates on one terminal left the board unable to tell which agent it was).
+        matches = [
             agent for agent in state.get("agents", {}).values()
             if session_id and agent.get("session_id") == session_id
-        ), None)
+        ]
+        # The newest record is the terminal's current one: after an accepted first task the
+        # older agents on this session are history (Codex review R1-1, 2026-11-09).
+        newest = max(matches, key=lambda agent: (int(agent.get("role_counter") or 0), str(agent.get("spawned_at") or ""))) if matches else None
+        existing = next((agent for agent in matches if agent.get("active")), newest)
         pause = state.get("project_pause", {})
         saved_for_session = any(
             saved.get("session_id") == session_id
@@ -2863,6 +2870,19 @@ def register(root: Path, role: str, task: str, display_name: str = "", vendor: s
                 "message": "Resumed terminal reattached to its preserved board agent",
             })
             return dict(existing)
+        if (
+            existing and existing.get("role") == role and existing.get("status") == "done"
+            and existing.get("task", "") in (state.get("releases") or {})
+            and not owner_accept_is_real(state, existing.get("task", ""))
+        ):
+            # A finished agent whose release still waits for the owner never becomes a second,
+            # empty agent: a repair or a Resume brings the SAME agent back, and a duplicate would
+            # hide it from the board. After a real Accept, or with no release, the terminal may
+            # take the next task.
+            raise ValueError(
+                f"this terminal's {_role_label(existing)} ({existing.get('id')}) finished its task and stays itself; "
+                "it does not register again — a repair or Resume brings it back"
+            )
         sequence = int(state["role_counters"].get(role, 0)) + 1
         state["role_counters"][role] = sequence
         agent_id = f"{role}-{sequence:04d}-{secrets.token_hex(3)}"
@@ -3135,6 +3155,149 @@ def _lock_and_freeze_task_security(state: dict[str, Any], task: str, at: str) ->
     return {"on": bool(entry.get("enhanced", False)), "revision": int(entry.get("revision", 0) or 0)}
 
 
+def project_support_plan_state(state: dict[str, Any]) -> dict[str, Any]:
+    """The project's current "This app gets Support" choice (Off when never set)."""
+    entry = state.get("project_support_plan") or {}
+    return {"on": bool(entry.get("on")), "updated_at": str(entry.get("updated_at") or "")}
+
+
+def set_project_support_plan(root: Path, on: Any) -> dict[str, Any]:
+    """Record the owner's project-level "This app gets Support" choice (New project tick, or a
+    Give-direction line for an existing project). Takes effect for every task begun after this call;
+    a task already running keeps the choice it was begun with (see begin_task)."""
+    if not isinstance(on, bool):
+        raise ValueError("on must be true or false")
+    with locked_state(root) as state:
+        state["project_support_plan"] = {"on": on, "updated_at": now()}
+        return dict(state["project_support_plan"])
+
+
+def task_support_plan_state(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """The effective "This app gets Support" record snapshotted for one task (Off when never set)."""
+    entry = (state.get("task_support_plan") or {}).get(task) or {}
+    return {"on": bool(entry.get("on"))}
+
+
+def propose_spec_questions(
+    root: Path, agent_id: str, task: str, app_questions: list[dict[str, Any]],
+    *, include_existing_data: bool, include_data_loss: bool,
+) -> dict[str, Any]:
+    """Delivery's one submission of the "Write specs" question card's app-specific part
+    (write-specs-technical-chapters R2): up to five questions this app alone needs, plus which
+    of the two description-only conditional generic questions apply to it.
+
+    Return: the stored submission. Raises ValueError if this task already proposed one (one
+    round, like the Reviewer's own contract-check questions), or the questions are malformed.
+    """
+    from harness import spec_questions
+    normalized = spec_questions.validate_app_questions(app_questions)
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("task") != task:
+            raise ValueError("only the task's own Delivery agent may propose its spec questions")
+        if task in (state.get("spec_questions") or {}):
+            raise ValueError("spec questions were already proposed for this task")
+        entry = {
+            "app_questions": normalized, "include_existing_data": bool(include_existing_data),
+            "include_data_loss": bool(include_data_loss), "proposed_at": now(),
+        }
+        state.setdefault("spec_questions", {})[task] = entry
+        return dict(entry)
+
+
+def spec_questions_state(state: dict[str, Any], task: str) -> dict[str, Any] | None:
+    """The spec question card proposed for one task, or None if Delivery has not proposed one."""
+    entry = (state.get("spec_questions") or {}).get(task)
+    return dict(entry) if entry else None
+
+
+def record_spec_answers(root: Path, task: str, answers: dict[str, Any]) -> dict[str, Any]:
+    """Record the owner's one round of answers to the "Write specs" question card (Mission
+    Control's Continue button) — a plain dict of {question key: chosen option(s)}, one entry
+    per question the card actually showed; a key the owner left blank or omitted is a skip.
+    Every question allows more than one choice (owner 2026-11-10), so a value is normalized to
+    a list of 1+ option strings; a bare string is still accepted as a single choice.
+
+    Return: {"answered_at": ...}. Raises ValueError if no spec-question card was proposed for
+    this task, or one already has recorded answers (one round, like the card itself).
+    """
+    task = str(task or "").strip()
+    if not task:
+        raise ValueError("a task is required")
+    if not isinstance(answers, dict):
+        raise ValueError("answers must be an object of {question key: chosen option(s)}")
+    with locked_state(root) as state:
+        if task not in (state.get("spec_questions") or {}):
+            raise ValueError("no spec question card was proposed for this task")
+        if task in (state.get("spec_answers") or {}):
+            raise ValueError("this task's spec question card already has recorded answers")
+        normalized_answers: dict[str, list[str]] = {}
+        for key, value in answers.items():
+            chosen = [str(item) for item in value if str(item or "").strip()] if isinstance(value, list) \
+                else [str(value)] if str(value or "").strip() else []
+            if chosen:
+                normalized_answers[str(key)] = chosen
+        entry = {"answers": normalized_answers,
+                 "answered_at": now()}
+        state.setdefault("spec_answers", {})[task] = entry
+        return {"answered_at": entry["answered_at"]}
+
+
+def spec_answers_state(state: dict[str, Any], task: str) -> dict[str, Any] | None:
+    """The owner's recorded answers to one task's spec question card, or None if not answered yet."""
+    entry = (state.get("spec_answers") or {}).get(task)
+    return dict(entry) if entry else None
+
+
+# Owner repair 2026-11-09 (round 2): the full-app-spec card was only a paragraph of directive
+# text, with nothing in the board itself refusing to move on without it — Delivery could skip
+# straight to requirements and the owner never saw the card. The literal escape phrase stays the
+# one way out of the card, exactly as the directive already told the owner it would.
+_NOT_AN_APP_SPEC_PHRASE = "not an app spec"
+
+
+def _direction_is_free_form_spec(direction_text: str) -> bool:
+    """True when the owner's own words for this task literally say "not an app spec"."""
+    return _NOT_AN_APP_SPEC_PHRASE in (direction_text or "").lower()
+
+
+def app_spec_card_required(state: dict[str, Any], task: str, direction_text: str, kind: str) -> bool:
+    """Whether task must have an answered spec question card before requirements or hand-in:
+    a "Write specs" (`spec`) task whose own direction is an app description, not the literal
+    "not an app spec" escape phrase."""
+    return kind == "spec" and bool((direction_text or "").strip()) and not _direction_is_free_form_spec(direction_text)
+
+
+def app_spec_card_satisfied(state: dict[str, Any], task: str) -> bool:
+    """Whether the owner has a real, answered card for this app-spec task: proposed AND
+    answered (answering with every question skipped, i.e. pressing Continue with none, still
+    counts — record_spec_answers always stores an entry, even an empty one)."""
+    return spec_questions_state(state, task) is not None and spec_answers_state(state, task) is not None
+
+
+def task_spec_state(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """Whether this task's project already has an accepted SPEC.md (snapshotted once at
+    begin_task, from the file on disk — see begin_task; never re-checked mid-task, so a SPEC.md
+    accepted by a different task running at the same time cannot retarget this one)."""
+    entry = (state.get("task_spec") or {}).get(task) or {}
+    return {"accepted": bool(entry.get("accepted"))}
+
+
+def _any_spec_task_accepted(state: dict[str, Any]) -> bool:
+    """Whether any "Write specs" app-spec task on this project has a real owner Accept recorded.
+
+    Review r1 B3: a SPEC.md merely sitting on disk (a draft from a task still in progress, or any
+    other file that happens to have that name) is never enough by itself — only an actual
+    recorded owner acceptance of a "spec" task makes `project_spec.accepted` true.
+    """
+    decisions = state.get("release_decisions") or {}
+    kinds = state.get("task_kinds") or {}
+    return any(
+        decision.get("decision") == "accepted" and kinds.get(task_name) == "spec"
+        for task_name, decision in decisions.items()
+    )
+
+
 def set_task_security(root: Path, task: str, enhanced: Any) -> dict[str, Any]:
     """Record the OWNER's enhanced-security choice for one task (board page checkbox)."""
     if not isinstance(enhanced, bool):
@@ -3273,6 +3436,10 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         "owner_waived_deliverables": owner_waived_deliverables,
         "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE,
                               **({"open_reference": reference_chapters.reference_hint("enhanced-security")} if task_security_state(state, task)["on"] else {})},
+        "support_plan": task_support_plan_state(state, task),
+        "spec_questions": spec_questions_state(state, task),
+        "spec_answers": spec_answers_state(state, task),
+        "project_spec": task_spec_state(state, task),
     }
 
 
@@ -4735,6 +4902,13 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         direction = owner_direction_for_task(state, agent_id, task)
         if not direction:
             raise ValueError("cannot propose requirements without the preserved original owner direction")
+        if app_spec_card_required(state, task, direction, task_kind(state, task)) and not app_spec_card_satisfied(state, task):
+            raise ValueError(
+                "this app spec needs its question card answered before requirements: run "
+                f"propose-spec-questions --agent {agent_id} --task {task} --questions '<JSON>' "
+                "[--existing-data] [--keeps-data], then wait for poll's spec_answers to be set "
+                "before proposing requirements (open reference --name full-app-spec)"
+            )
         existing = state.setdefault("requirement_proposals", {}).get(task)
         if existing and existing.get("status") == "awaiting_owner":
             earlier = existing.get("contract_check") or {}
@@ -9101,6 +9275,22 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         state.setdefault("task_baselines", {})[task] = baseline
         state.setdefault("task_owner_directions", {})[task] = contract.normalize_owner_direction(direction_text)
         state.setdefault("task_security", {}).setdefault(task, {"enhanced": False, "locked": False, "revision": 0, "updated_at": now()})
+        # Owner, 2026-11-07: "This app gets Support" is a project-level choice (New project tick, or a
+        # Give-direction line for an existing project), snapshotted once per task the same way task_kinds
+        # is, so a later change to the project's choice never silently retargets a task already building.
+        state.setdefault("task_support_plan", {})[task] = {"on": bool((state.get("project_support_plan") or {}).get("on"))}
+        # write-specs-technical-chapters R7: an accepted SPEC.md's Targets carry into every later
+        # Write-code task on the same project. Snapshotted once here, the same way
+        # task_support_plan is — never re-checked mid-task, so a SPEC.md accepted while this task
+        # is already running cannot retarget it. Review r1 B3: the file merely existing is not
+        # enough — a draft from a "spec" task still in progress, or any unrelated file with that
+        # name, must never count; only a recorded owner Accept of an actual "spec" task does.
+        try:
+            spec_on_disk = (project_context(root).code_root / "SPEC.md").is_file()
+        except OSError:
+            spec_on_disk = False
+        spec_accepted = spec_on_disk and _any_spec_task_accepted(state)
+        state.setdefault("task_spec", {})[task] = {"accepted": spec_accepted}
         kind = normalize_task_kind(direction.get("task_kind"), bool(direction.get("document_only"))) if agent.get("session_id") else "development"
         state.setdefault("task_kinds", {})[task] = kind
         state.setdefault("task_document_only", {})[task] = kind == "spec"
@@ -14268,6 +14458,15 @@ def _completion_gate_problems(
     owner_direction = owner_direction_for_task(state, developer_id, task)
     if not owner_direction:
         problems.append("recorded owner direction is missing")
+    # Owner repair 2026-11-09 (round 2): the propose-requirements gate alone was not enough for
+    # the owner's own confidence that a spec can never be handed in unskimmed — this is the same
+    # check, repeated at completion, so no other path (a repair, a retained plan) can reach
+    # complete() for an app-spec task whose card the owner never actually answered.
+    if owner_direction and app_spec_card_required(state, task, owner_direction, task_kind(state, task)) and not app_spec_card_satisfied(state, task):
+        problems.append(
+            "this app spec's question card was never answered by the owner (propose-spec-questions, "
+            "then poll's spec_answers, before requirements and before completion)"
+        )
     if complete_contract and owner_direction:
         objective_matches = (
             contract.normalize_owner_direction(contract_value["objective"])
@@ -19090,7 +19289,9 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
         for key in (
             "task_chunks", "delivery_plans", "task_briefs", "task_baselines",
             "task_workspaces", "subtask_workspaces", "subtask_branches",
-            "task_owner_directions", "task_lineage", "task_security", "task_document_only", "task_kinds", "task_split_allowed",
+            "task_owner_directions", "task_lineage", "task_security", "task_support_plan",
+            "spec_questions", "spec_answers", "task_spec",
+            "task_document_only", "task_kinds", "task_split_allowed",
             "owner_clarifications", "requirement_confirmations", "releases",
             "release_decisions", "release_repairs",
             # 2026-10-28: a cancelled task's waiting proposal still showed a decision card, and its repository binding stayed
@@ -19431,6 +19632,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True); p.add_argument("--allow-split", action="store_true", help="the owner allowed this task to be split into separately reviewed parts")
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
     p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)")
+    p = sub.add_parser("propose-spec-questions"); p.description = "Delivery's one submission of a Write-specs app task's own question-card part: up to 5 app-specific questions, and whether the two description-only conditional generic questions apply to this app."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--questions", required=True, help="a JSON list of up to 5 {text, options (2-4 strings), recommended (index)} objects; [] if this app needs none"); p.add_argument("--existing-data", action="store_true", help="this app replaces something, so \"Is there existing data to bring in?\" belongs on the card"); p.add_argument("--keeps-data", action="store_true", help="this app keeps data, so both data-loss questions belong on the card")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
     p = sub.add_parser("contract-checks"); p.add_argument("--agent", required=True); p.add_argument("--task", default="")
@@ -19567,6 +19769,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text, allow_split=args.allow_split)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
         elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change)
+        elif args.command == "propose-spec-questions": out = propose_spec_questions(root, args.agent, args.task, json.loads(args.questions), include_existing_data=args.existing_data, include_data_loss=args.keeps_data)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
         elif args.command == "contract-checks": out = show_contract_checks(root, args.agent, args.task)

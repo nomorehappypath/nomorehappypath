@@ -191,6 +191,17 @@ def _streamlit_page(source: Path) -> str:
     return ""
 
 
+def is_harness_checkout(source: Any) -> bool:
+    """Whether this folder is a NoMoreHappyPath checkout (its manager and its start script are both there)."""
+    try:
+        if not str(source or "").strip():
+            return False   # Path("") is the current folder; an unknown workspace is not a checkout
+        root = Path(str(source))
+        return (root / "scripts" / "start_project_manager.sh").is_file() and (root / "harness" / "project_manager.py").is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def detect_start(source: Path) -> dict[str, str]:
     """How to start a candidate checkout, found from its own files (backlog #12).
 
@@ -201,6 +212,13 @@ def detect_start(source: Path) -> dict[str, str]:
         # 2026-11-05 (stranger run): a project that ships its own start script is started the way it says (a Streamlit app is
         # `streamlit run app.py`, not `python3 app.py`); the script receives its port in PORT like every other command.
         return {"command": "sh start.sh", "reason": "start.sh starts this project"}
+    if is_harness_checkout(source):
+        # 2026-11-09 (owner): a task that changes NoMoreHappyPath itself was told "not an app to open" because its start script lives in
+        # scripts/, not in the top folder. The test copy gets the port in PORT, a throwaway data folder of its own and the next port for its
+        # worker, so it can never touch the owner's real projects or the manager already running on 8740. The preview runs with a scrubbed
+        # environment (no HOME), which the script refuses to start without, so HOME is set to the owner's own home folder.
+        return {"command": "HOME=~ bash scripts/start_project_manager.sh --home {state_dir}/home --port {port} --worker-port $(({port} + 1)) --no-open",
+                "reason": "scripts/start_project_manager.sh starts NoMoreHappyPath (a test copy with its own data folder)"}
     streamlit_page = _streamlit_page(source)
     if streamlit_page:
         # 2026-11-05 (second stranger run): a Streamlit page is not started by `python3 app.py` (it runs once in "bare mode" and

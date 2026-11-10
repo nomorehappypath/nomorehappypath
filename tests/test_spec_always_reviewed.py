@@ -43,6 +43,9 @@ class SpecAlwaysReviewedTests(unittest.TestCase):
         with board.locked_state(self.root) as state:        # the owner chose "Write specs" for this task
             state.setdefault("task_kinds", {})[TASK] = "spec"
             state.setdefault("task_document_only", {})[TASK] = True
+        # These tests are about the review gate, not the question card: the card is already answered.
+        board.propose_spec_questions(self.root, self.dev["id"], TASK, [], include_existing_data=False, include_data_loss=False)
+        board.record_spec_answers(self.root, TASK, {})
         self.assertEqual(board.task_kind(board.snapshot(self.root), TASK), "spec")
         (self.root / "proof").mkdir()
         self.spec = self.root / "proof" / "spec.md"

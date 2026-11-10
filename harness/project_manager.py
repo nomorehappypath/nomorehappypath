@@ -2278,6 +2278,8 @@ def make_handler(manager: ProjectManager):
                             except OSError:
                                 pass
                         raise
+                    if value.get("support_plan"):
+                        board.set_project_support_plan(Path(entry["data_root"]), True)
                     return self._send(201, entry)
                 parts = self.path.strip("/").split("/")
                 if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "test-machine":

@@ -12,10 +12,37 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from harness import support_mode as sm
 from tests.environment_support import require_loopback
+
+
+TEST_OWNER_KEY = "owner-key-for-this-test-only"
+
+
+def owner_opener(base: str, store: "sm.CaseStore"):
+    """Sign in to one admin server as the owner (review r4 B2, the first-visit "Choose your owner
+    key" flow) and return an opener carrying the session cookie.
+
+    Args:
+        base: the admin server's http://127.0.0.1:<port> address.
+        store: its CaseStore; TEST_OWNER_KEY is chosen here if no owner key exists yet for it.
+
+    Return: a urllib opener whose requests carry the owner session cookie.
+    """
+    opener = build_opener(HTTPCookieProcessor())
+    if not store.owner_key_exists():
+        request = Request(f"{base}/support/choose-key", data=f"owner_key={TEST_OWNER_KEY}".encode(), method="POST",
+                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with opener.open(request, timeout=5) as response:
+            assert response.status == 200
+        return opener
+    request = Request(f"{base}/support/sign-in", data=f"owner_key={TEST_OWNER_KEY}".encode(), method="POST",
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with opener.open(request, timeout=5) as response:
+        assert response.status == 200
+    return opener
 
 
 def _error_event(**overrides):
@@ -253,6 +280,7 @@ class AdminHandlerTests(unittest.TestCase):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), sm.make_admin_handler(self.store))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
+        self.owner = owner_opener(f"http://127.0.0.1:{self.port}", self.store)
         self.addCleanup(self.server.shutdown)
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.store.close)
@@ -273,11 +301,16 @@ class AdminHandlerTests(unittest.TestCase):
         # Repair for review cycle 1, finding B2: the rendered case-card page had
         # no pairing or rotation control at all (only a JSON API nobody sees).
         self.store.pair("demoapp", "production", frozenset())
-        with urlopen(f"http://127.0.0.1:{self.port}/support", timeout=5) as response:
+        with self.owner.open(f"http://127.0.0.1:{self.port}/support", timeout=5) as response:
             page = response.read().decode("utf-8")
         self.assertIn("Rotate secret", page)
         self.assertIn("Issue a pairing secret", page)
         self.assertIn("demoapp", page)
+        # Review r3 B2: without the owner session the same page is read-only — no pairing form.
+        with urlopen(f"http://127.0.0.1:{self.port}/support", timeout=5) as response:
+            unsigned = response.read().decode("utf-8")
+        self.assertIn("Owner sign-in", unsigned)
+        self.assertNotIn("Issue a pairing secret", unsigned)
 
     def test_rotate_form_issues_a_new_secret_shown_once_and_invalidates_the_old_one(self):
         old_secret = self.store.pair("demoapp", "production", frozenset())
@@ -286,7 +319,11 @@ class AdminHandlerTests(unittest.TestCase):
             f"http://127.0.0.1:{self.port}/support/rotate-form", data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST",
         )
-        with urlopen(request, timeout=5) as response:
+        with self.assertRaises(HTTPError) as refused:  # review r3 B2: rotation is an owner control
+            urlopen(request, timeout=5)
+        self.assertEqual(refused.exception.code, 403)
+        self.assertTrue(self.store.verify_secret("demoapp", "production", old_secret))
+        with self.owner.open(request, timeout=5) as response:
             page = response.read().decode("utf-8")
         self.assertIn("shown only this once", page)
         self.assertFalse(self.store.verify_secret("demoapp", "production", old_secret))

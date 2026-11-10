@@ -27,9 +27,9 @@ def delivery_with_flag(root, document_only=None, task=TASK):
     session = control.create(root, "codex_delivery")
     agent = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
     if document_only is None:
-        board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: write the thing.", "direction", [])
+        board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: write the thing (not an app spec).", "direction", [])
     else:
-        board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: write the thing.", "direction", [], document_only=document_only)
+        board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: write the thing (not an app spec).", "direction", [], document_only=document_only)
     board.begin_task(root, agent["id"], task)
     agent["session_id"] = session["id"]
     return agent
@@ -226,7 +226,7 @@ class OpenedByTheApiTests(unittest.TestCase):
             import urllib.request
             request = urllib.request.Request(
                 f"http://127.0.0.1:{server.server_address[1]}/api/agents/{agent['id']}/owner-message",
-                data=json.dumps({"message_type": "direction", "text": "Write a spec for the thing."}).encode(),
+                data=json.dumps({"message_type": "direction", "text": "Write a spec for the thing (not an app spec)."}).encode(),
                 headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(request, timeout=20) as reply:
                 self.assertEqual(reply.status, 201)
@@ -269,7 +269,7 @@ class MultipartPathTests(unittest.TestCase):
             root = context(Path(temporary))
             session = control.create(root, "codex_delivery")
             agent = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
-            self.send(root, agent, {"message_type": "direction", "text": "Write a spec for the thing.", **fields})
+            self.send(root, agent, {"message_type": "direction", "text": "Write a spec for the thing (not an app spec).", **fields})
             self.assertIs(board.snapshot(root)["owner_directions"][session["id"]]["document_only"], expected)
             board.begin_task(root, agent["id"], TASK)
             self.assertIs(board.task_document_only(board.snapshot(root), TASK), expected)

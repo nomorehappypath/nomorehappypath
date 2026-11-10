@@ -193,14 +193,13 @@ PAGE = r"""<!doctype html>
 <section id="machine-card" class="panel section owner-actions" role="alert" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
-<div class="mc-tabs" role="tablist" aria-label="Views of this project" id="mc-tablist"><button type="button" role="tab" id="tab-story-btn" aria-controls="tab-story" aria-selected="true" data-mc-keep="1" data-mc-tab="story">Story</button><button type="button" role="tab" id="tab-proof-btn" aria-controls="tab-proof" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="proof">Proof</button><button type="button" role="tab" id="tab-advanced-btn" aria-controls="tab-advanced" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="advanced">Advanced</button></div>
+<div class="mc-tabs" role="tablist" aria-label="Views of this project" id="mc-tablist"><button type="button" role="tab" id="tab-story-btn" aria-controls="tab-story" aria-selected="true" data-mc-keep="1" data-mc-tab="story">Story</button><button type="button" role="tab" id="tab-advanced-btn" aria-controls="tab-advanced" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="advanced">Advanced</button></div>
 <div class="mc-panel" id="tab-story" role="tabpanel" aria-labelledby="tab-story-btn">
 <section class="panel mc-now" id="story-now" aria-label="Now"></section>
 <section class="mc-agents" id="agent-strip" aria-label="Agents"></section>
 <section class="panel mc-timeline" id="story-timeline" aria-labelledby="story-timeline-title"></section>
 <div class="left-column">__PROJECT_CHAT_PANEL__<section class="panel delivery-progress-panel"><h2>Delivery progress</h2><p>Only the work in progress appears here. The numbers show completed steps. When the work is ready for your test, try it and choose Accepted or Not accepted.</p><div id="tasks"></div></section><section class="panel history-panel"><details class="history-details" id="history"><summary><span><strong>Task history</strong></span><span class="summary-end"><span class="history-count" id="history-count"></span><i class="summary-caret" aria-hidden="true"></i></span></summary><p class="history-intro">Completed tasks are grouped under collapsible dates.</p><input class="history-search" id="history-search" type="search" placeholder="Search history by word or sentence…" aria-label="Search task history"><div class="history-search-status" id="history-search-status" aria-live="polite"></div><div class="history-list" id="history-list"></div></details></section></div>
 </div>
-<div class="mc-panel" id="tab-proof" role="tabpanel" aria-labelledby="tab-proof-btn" hidden><div class="mc-proof" id="proof-body"></div></div>
 <div class="mc-panel" id="tab-advanced" role="tabpanel" aria-labelledby="tab-advanced-btn" hidden>
 <section class="panel mc-advanced-intro" style="margin-top:18px"><h2>Advanced</h2><p>Everything for running the agents by hand: start and stop them, give direction, see every terminal and the review queue, and where this project’s AI access lives. Nothing here is needed for a normal task.</p></section>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button first asks what kind of work this is (Write code, Analyze code or Write specs), then lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
@@ -213,8 +212,9 @@ PAGE = r"""<!doctype html>
 <dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small>Up to 5 files, 10 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
-<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label id="owner-message-split" class="task-kind-note" hidden><input type="checkbox" id="owner-message-allow-split"> Allow Delivery to split this task into parts that are each reviewed on their own. Leave it off for one build and one review.</label><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
+<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label id="owner-message-split" class="task-kind-note" hidden><input type="checkbox" id="owner-message-allow-split"> Allow Delivery to split this task into parts that are each reviewed on their own. Leave it off for one build and one review.</label><label id="owner-message-support-plan" class="task-kind-note" hidden><input type="checkbox" id="owner-message-support-plan-check"> This app gets Support. Delivery writes <code>SUPPORT_PLAN.md</code> into the build and makes the app send its version and an <code>nmhp.support.check</code> event, so a dedicated Support installation can watch it.</label><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 of 20,000 units used. Some characters use more than one unit. Your message has a size limit; if it is too long you will be told before it is sent.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="owner-message-attachments-help">Attachments stay separate from the message. Up to 5 files, 10 MB each. Nothing is sent until you press Send.</small><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
+<dialog id="spec-questions-dialog" aria-labelledby="spec-questions-title"><form class="modal" id="spec-questions-form"><h2 id="spec-questions-title">A few questions before the plan is written</h2><p id="spec-questions-help">Answer what you want; skip anything and NMHP assumes a sensible default from your description, written into the plan as its own line.</p><div id="spec-questions-app" class="spec-questions-app"></div><fieldset class="spec-question"><legend>How do you use it?</legend><label><input type="checkbox" name="how_used" value="Web page, hosted"> Web page, hosted</label><label><input type="checkbox" name="how_used" value="Desktop app"> Desktop app</label><label><input type="checkbox" name="how_used" value="Phone app"> Phone app</label><label><input type="checkbox" name="how_used" value="No screen, just reports"> No screen, just reports</label></fieldset><fieldset class="spec-question"><legend>Who uses it?</legend><label><input type="checkbox" name="who_uses" value="Just me"> Just me</label><label><input type="checkbox" name="who_uses" value="Me and a few people I invite"> Me and a few people I invite</label><label><input type="checkbox" name="who_uses" value="The public"> The public</label></fieldset><fieldset class="spec-question" id="spec-question-concurrency" hidden><legend>At its busiest, how many people at the same time?</legend><label><input type="checkbox" name="concurrency" value="A few"> A few</label><label><input type="checkbox" name="concurrency" value="Dozens"> Dozens</label><label><input type="checkbox" name="concurrency" value="Hundreds or more"> Hundreds or more</label></fieldset><fieldset class="spec-question"><legend>What will it hold?</legend><label><input type="checkbox" name="what_holds" value="Nothing private"> Nothing private</label><label><input type="checkbox" name="what_holds" value="My own private information"> My own private information</label><label><input type="checkbox" name="what_holds" value="Other people's personal information"> Other people's personal information</label><label><input type="checkbox" name="what_holds" value="Money, payments or bank access"> Money, payments or bank access</label></fieldset><fieldset class="spec-question"><legend>If it stops for a day, what happens?</legend><label><input type="checkbox" name="if_stops" value="No big deal"> No big deal</label><label><input type="checkbox" name="if_stops" value="Annoying"> Annoying</label><label><input type="checkbox" name="if_stops" value="It costs me money or customers"> It costs me money or customers</label></fieldset><fieldset class="spec-question"><legend>Internet connection?</legend><label><input type="checkbox" name="internet" value="Always online"> Always online</label><label><input type="checkbox" name="internet" value="Must also work offline"> Must also work offline</label></fieldset><fieldset class="spec-question" id="spec-question-existing-data" hidden><legend>Is there existing data to bring in?</legend><label><input type="checkbox" name="existing_data" value="No"> No</label><label><input type="checkbox" name="existing_data" value="From spreadsheets or files"> From spreadsheets or files</label><label><input type="checkbox" name="existing_data" value="From another app"> From another app</label></fieldset><fieldset class="spec-question" id="spec-question-data-loss" hidden><legend>If its data were lost, what happens?</legend><label><input type="checkbox" name="data_loss" value="Nothing, it can be rebuilt"> Nothing, it can be rebuilt</label><label><input type="checkbox" name="data_loss" value="I lose some work"> I lose some work</label><label><input type="checkbox" name="data_loss" value="Serious loss (money, customers, records I can't recreate)"> Serious loss (money, customers, records I can't recreate)</label></fieldset><fieldset class="spec-question" id="spec-question-data-loss-window" hidden><legend>How much recent data could you afford to lose?</legend><label><input type="checkbox" name="data_loss_window" value="A day"> A day</label><label><input type="checkbox" name="data_loss_window" value="An hour"> An hour</label><label><input type="checkbox" name="data_loss_window" value="Nothing"> Nothing</label></fieldset><p id="spec-questions-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="spec-questions-cancel">Close</button><button type="submit" id="spec-questions-continue">Continue</button></div></form></dialog>
 <dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
 <script>
 const loadedViewerVersion='__VIEWER_VERSION__';
@@ -1760,6 +1760,7 @@ function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
   directionLauncher=false; setAttachmentFields(true); setTaskKindField(type==='direction');
   {const split=el('#owner-message-split');if(split){split.hidden=type!=='direction';el('#owner-message-allow-split').checked=false;}}   // off unless the owner ticks it: the app never splits a task on its own (owner 2026-11-04)
+  {const supportPlan=el('#owner-message-support-plan');if(supportPlan){supportPlan.hidden=type!=='direction';el('#owner-message-support-plan-check').checked=!!(lastBoard&&lastBoard.state&&lastBoard.state.project_support_plan&&lastBoard.state.project_support_plan.on);}}
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -1780,6 +1781,7 @@ async function submitOwnerMessage(event){
     const launch=pendingDirectionLaunch;pendingDirectionLaunch=null;
     if(launch){const ok=await start(launch.kind,launch.color,launch.choice);if(!ok){error.textContent='Delivery could not be started; your words are kept in this browser.';}}
     writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now()});
+    try{await call('/api/support-plan',{on:el('#owner-message-support-plan-check')?.checked===true});}catch(failure){/* project-level choice only; the direction itself is still sent */}
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
   }
@@ -1791,7 +1793,10 @@ async function submitOwnerMessage(event){
       const task=requirementsModifyTask;
       await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'modify',text:el('#owner-message-text').value});
       requirementsModifyTask='';
-    }else await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
+    }else{
+      if(ownerMessageType==='direction')await call('/api/support-plan',{on:el('#owner-message-support-plan-check')?.checked===true});
+      await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
+    }
     el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':ownerMessageType==='cto_message'?'Your message was sent to the CTO.':'Your clarification and attachments were sent to the current Delivery Agent.';
     if(ownerMessageType==='direction')await startMissingAgents(); else await refresh();
   }catch(failure){error.textContent=failure.message;}
@@ -2045,6 +2050,7 @@ function render(data,managed){
   const liveTasks=new Set(data.live_tasks||[]);
   writeText(el('#passed'),reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length);
   renderOwnerActions(state);
+  maybeOpenSpecQuestions(state);
   renderStory(data.story);
   renderStrip(data.story);
   renderTimeline(data.story);
@@ -2110,10 +2116,62 @@ function render(data,managed){
 }
 
 
+// ---- Write-specs question card (write-specs-technical-chapters): one combined round of
+// generic, conditional and app-specific questions Delivery's own propose-spec-questions call
+// fills in, shown once per task until the owner presses Continue. ----
+let specQuestionsTask='',specQuestionsAnswered=false;
+function maybeOpenSpecQuestions(state){
+  const proposals=state.spec_questions||{},answers=state.spec_answers||{};
+  const task=Object.keys(proposals).find(name=>!answers[name]);
+  if(!task){specQuestionsAnswered=false;return;}
+  if(task===specQuestionsTask&&specQuestionsAnswered)return;   // this tab already submitted it; wait for the board to catch up
+  const dialog=el('#spec-questions-dialog');
+  if(!dialog||dialog.open)return;
+  specQuestionsTask=task;specQuestionsAnswered=false;
+  const proposal=proposals[task]||{};
+  const appContainer=el('#spec-questions-app');
+  appContainer.innerHTML=(proposal.app_questions||[]).map((question,index)=>
+    `<fieldset class="spec-question"><legend>${esc(question.text)}</legend>`+
+    question.options.map(option=>`<label><input type="checkbox" name="q${index}" value="${esc(option)}"> ${esc(option)}</label>`).join('')+
+    `</fieldset>`,
+  ).join('');
+  el('#spec-question-existing-data').hidden=!proposal.include_existing_data;
+  el('#spec-question-data-loss').hidden=!proposal.include_data_loss;
+  el('#spec-question-data-loss-window').hidden=!proposal.include_data_loss;
+  el('#spec-question-concurrency').hidden=true;
+  // Every answer allows more than one choice (owner 2026-11-10): "not Just me" means any OTHER box is checked
+  // too, not merely that "Just me" itself is unchecked. Set on the dialog, not on the page's top level.
+  dialog.onchange=event=>{
+    if(event.target&&event.target.name==='who_uses'){
+      const checked=[...dialog.querySelectorAll('input[name="who_uses"]:checked')].map(input=>input.value);
+      el('#spec-question-concurrency').hidden=checked.every(value=>value==='Just me');
+    }
+  };
+  el('#spec-questions-error').textContent='';
+  dialog.showModal();
+}
+async function submitSpecQuestions(event){
+  event.preventDefault();
+  const form=el('#spec-questions-form'),answers={};
+  for(const input of form.querySelectorAll('input[type="checkbox"]:checked')){
+    (answers[input.name]||(answers[input.name]=[])).push(input.value);
+  }
+  const error=el('#spec-questions-error'),submit=el('#spec-questions-continue');
+  submit.disabled=true;error.textContent='';
+  try{
+    await call(`/api/tasks/${encodeURIComponent(specQuestionsTask)}/spec-answers`,answers);
+    specQuestionsAnswered=true;
+    el('#spec-questions-dialog').close();
+  }catch(failure){error.textContent=failure.message;}
+  finally{submit.disabled=false;}
+  return false;
+}
+
+
 // ---- Mission Control story (2026-10-27): the Now section, the agent strip and the tabs. Every sentence comes from harness/story.py
 // through the dashboard's `story`; the page only draws it (escaped) and wires the buttons to the routes that already exist. ----
 let mcTab='story',mcStartLinkDone=false;
-const mcTabs=['story','proof','advanced'];
+const mcTabs=['story','advanced'];
 function showTab(name,focus){
   mcTab=mcTabs.includes(name)?name:'story';
   for(const id of mcTabs){
@@ -2136,7 +2194,7 @@ function wireTabs(){
   const proofLink=el('#story-now');
   if(proofLink)proofLink.addEventListener('click',event=>{if(event.target.closest('[data-mc-goto]')){showTab(event.target.closest('[data-mc-goto]').dataset.mcGoto,true);}});
   let remembered='story';try{remembered=sessionStorage.getItem('nmhp-mc-tab')||'story';}catch(error){}
-  showTab(location.hash==='#proof'?'proof':['#history','#project-chat','#tasks','#start-direction'].includes(location.hash)?'story':remembered,false);
+  showTab(['#history','#project-chat','#tasks','#start-direction'].includes(location.hash)?'story':remembered,false);
   if(location.hash==='#history'&&el('#history'))el('#history').open=true;
 }
 function storyTile(label,value,note){return `<div class="mc-tile"><span>${esc(label)}</span><strong>${esc(value)}</strong>${note?`<small>${esc(note)}</small>`:''}</div>`;}
@@ -2161,7 +2219,7 @@ function renderStory(story){
     html=`<div class="mc-now-main"><div class="mc-eyebrow">Now${others.length?` · ${esc(c.title)}`:''}</div><div class="mc-now-text" data-story-now>${esc(c.now)}</div><div class="mc-next" data-story-next>${esc(c.next)}</div>`
       +(c.needs_owner?`<div class="mc-needs-line" role="status" data-story-needs>Needs you: ${esc(c.owner_action)}</div>`:'')
       +`<div class="mc-step"><span data-story-step>Step ${Number(c.step)} of ${Number(c.of)} · ${esc(c.step_title)}${c.who?` (${esc(c.who)})`:''}</span><span>${esc(c.elapsed||'')}</span></div><div class="mc-bar" role="progressbar" aria-label="Step ${Number(c.step)} of ${Number(c.of)}" aria-valuemin="0" aria-valuemax="${Number(c.of)}" aria-valuenow="${Number(c.step)}"><i style="width:${percent}%"></i></div>${storyCancelButton(c.task,'Cancel this task')}</div>`
-      +`<div class="mc-tiles">${storyTile('Cost',String(c.cost||'').replace(/^Cost: /,''),c.codex_window)}${c.requirements&&c.requirements.text?`<div class="mc-tile" data-story-requirements><span>Requirements</span><strong>${esc(c.requirements.text)}</strong><button type="button" class="mc-linkbtn" data-mc-goto="proof" data-mc-keep="1">See the proof</button></div>`:''}</div>`
+      +`<div class="mc-tiles">${storyTile('Cost',String(c.cost||'').replace(/^Cost: /,''),c.codex_window)}${c.requirements&&c.requirements.text?`<div class="mc-tile" data-story-requirements><span>Requirements</span><strong>${esc(c.requirements.text)}</strong></div>`:''}</div>`
       +(others.length?`<ul class="mc-others" aria-label="Other tasks in progress">${others.map(o=>`<li><strong>${esc(o.title)}</strong>: step ${Number(o.step)} of ${Number(o.of)}, ${esc(o.step_title)}. ${esc(o.now)} ${storyCancelButton(o.task,'Cancel')}</li>`).join('')}</ul>`:'');
   }
   writeHtml(node,html);
@@ -2632,6 +2690,13 @@ async function loadHistory(force=false){
 }
 
 el('#status-dialog-close').onclick=()=>el('#status-dialog').close();
+// The question card's Continue and Close wiring (Write specs); after the declarations so the node page tests, which stop at the line above, stay declarations only.
+document.addEventListener('DOMContentLoaded',()=>{
+  const form=el('#spec-questions-form');
+  if(form)form.addEventListener('submit',submitSpecQuestions);
+  const cancel=el('#spec-questions-cancel');
+  if(cancel)cancel.addEventListener('click',()=>el('#spec-questions-dialog').close());
+});
 el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';directionAfterLaunch=false;};
 el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:'black',choice:null};openDirectionStart(true);return;}start(kind,'black');}};
 el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'black';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:selected,choice};openDirectionStart(true);return;}start(kind,selected,choice);}};
@@ -3015,6 +3080,13 @@ def _compact_dashboard_state(
             task: value for task, value in (state.get(key) or {}).items()
             if task in live
         }
+    # 2026-11-09 (owner): releases of NoMoreHappyPath's own tasks were frozen as "not an app to open" before the app knew its own start
+    # script. Only that one case is corrected, for the page; the stored decision is untouched and no other release is recomputed.
+    from harness import release_preview as _release_preview  # deferred: release_preview imports this module's neighbours
+    for task, release in (compact.get("releases") or {}).items():
+        if isinstance(release, dict) and release.get("app_openable") is False and _release_preview.is_harness_checkout(
+                (compact.get("task_workspaces") or {}).get(task) or ""):
+            compact["releases"][task] = {**release, "app_openable": True}   # a copy: the stored record is shared with the live state
     # an agent's open question to the owner (shown in the banner with its answer box)
     compact["agent_questions"] = {key: value for key, value in (state.get("agent_questions") or {}).items() if value.get("status") == "open"}
     # Owner 2026-10-12: the page shows the COMPUTED enhanced-security record
@@ -4954,6 +5026,31 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     if not isinstance(data, dict):
                         raise ValueError('send a JSON object with "enhanced": true or false')
                     result = board.set_task_security(root, task, data.get("enhanced"))
+                    self.send_json(201, result); return
+                spec_answers_prefix, spec_answers_suffix = "/api/tasks/", "/spec-answers"
+                if path.startswith(spec_answers_prefix) and path.endswith(spec_answers_suffix):
+                    # write-specs-technical-chapters R2: the owner's one round of answers to the
+                    # Write-specs question card (fixed, conditional and Delivery's own app-specific
+                    # questions together).
+                    task = unquote(path[len(spec_answers_prefix):-len(spec_answers_suffix)])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError("send a JSON object of {question key: chosen option text}")
+                    result = board.record_spec_answers(root, task, data)
+                    self.send_json(201, result); return
+                if path == "/api/support-plan":
+                    # Owner, 2026-11-07: the project-level "This app gets Support" line in Give direction,
+                    # for an existing project that did not tick it at New project time.
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError('send a JSON object with "on": true or false')
+                    result = board.set_project_support_plan(root, data.get("on"))
                     self.send_json(201, result); return
                 req_prefix, req_suffix = "/api/tasks/", "/requirements-decision"
                 if path.startswith(req_prefix) and path.endswith(req_suffix):

@@ -406,6 +406,86 @@ class BoardSurfaceCommandTests(unittest.TestCase):
             "operation": operation, "arguments": [operation, *arguments],
         }
 
+    def test_propose_spec_questions_is_reachable_through_the_real_agent_command_channel(self):
+        """Owner repair 2026-11-09: Write specs' question card never appeared for a real app
+        task because propose-spec-questions was missing from ALL_BOARD_OPERATIONS/
+        DELIVERY_OPERATIONS — Delivery's own command channel refused it with "board operation
+        is not authorized". Every earlier test called board.propose_spec_questions directly in
+        Python, never through CommandGateway, so this gap went uncaught. This sends the command
+        exactly the way a real Delivery agent's CLI does: authenticated, through the gateway."""
+        _, agent, _, token, gateway = self.session()
+        with board.locked_state(self.context) as state:
+            state["agents"][agent["id"]]["task"] = "TASK-GATEWAY-SPEC"
+        result = gateway.execute(token, self.request("propose-spec-questions", [
+            "--agent", agent["id"], "--task", "TASK-GATEWAY-SPEC",
+            "--questions", json.dumps([{
+                "text": "Which marketplace do you sell on?",
+                "options": ["eBay", "Etsy", "Both"], "recommended": 2,
+            }]),
+            "--existing-data",
+        ], nonce=900))["result"]
+        self.assertEqual(result["app_questions"][0]["text"], "Which marketplace do you sell on?")
+        self.assertTrue(result["include_existing_data"])
+        stored = board.spec_questions_state(board.snapshot(self.context), "TASK-GATEWAY-SPEC")
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["app_questions"][0]["text"], "Which marketplace do you sell on?")
+
+    @staticmethod
+    def _formatted_requirements(objective: str) -> str:
+        return (
+            "In plain words:\n" + objective + "\n\n"
+            "Already in the project:\nNothing yet for this fixture.\n\n"
+            "Requirements:\n1. " + objective + "\n\n"
+            "Security: none applies to this fixture.\n"
+        )
+
+    def _seed_app_spec_task(self, task: str, direction_text: str) -> tuple:
+        _, agent, _, token, gateway = self.session()
+        with board.locked_state(self.context) as state:
+            state["agents"][agent["id"]]["task"] = task
+            state.setdefault("task_owner_directions", {})[task] = direction_text
+            state.setdefault("task_kinds", {})[task] = "spec"
+        return agent, token, gateway
+
+    def test_propose_requirements_is_refused_for_an_app_spec_with_no_answered_card(self):
+        """Owner repair 2026-11-09 (round 2): the card was only directive text — nothing in the
+        board refused to move on without it. propose-requirements must now refuse, through the
+        real agent command channel, until this app-spec task has a proposed AND answered card,
+        and the refusal must name the exact recovery command and chapter."""
+        agent, token, gateway = self._seed_app_spec_task(
+            "TASK-CARD-GATE-1", "A trading app for my own brokerage account.",
+        )
+        with self.assertRaisesRegex(SurfaceProtocolError, "propose-spec-questions") as raised:
+            gateway.execute(token, self.request("propose-requirements", [
+                "--agent", agent["id"],
+                "--text", self._formatted_requirements("Build the trading app."),
+            ], nonce=950))
+        self.assertIn("full-app-spec", str(raised.exception))
+
+    def test_propose_requirements_succeeds_once_the_card_is_proposed_and_answered(self):
+        agent, token, gateway = self._seed_app_spec_task(
+            "TASK-CARD-GATE-2", "A trading app for my own brokerage account.",
+        )
+        gateway.execute(token, self.request("propose-spec-questions", [
+            "--agent", agent["id"], "--task", "TASK-CARD-GATE-2", "--questions", "[]",
+        ], nonce=951))
+        board.record_spec_answers(self.context, "TASK-CARD-GATE-2", {})   # the owner pressed Continue with none
+        result = gateway.execute(token, self.request("propose-requirements", [
+            "--agent", agent["id"],
+            "--text", self._formatted_requirements("Build the trading app."),
+        ], nonce=952))["result"]
+        self.assertEqual(result["task"], "TASK-CARD-GATE-2")
+
+    def test_not_an_app_spec_direction_is_never_gated_by_the_card(self):
+        agent, token, gateway = self._seed_app_spec_task(
+            "TASK-CARD-GATE-3", "not an app spec: write me a one-page strategy memo.",
+        )
+        result = gateway.execute(token, self.request("propose-requirements", [
+            "--agent", agent["id"],
+            "--text", self._formatted_requirements("Write the strategy memo."),
+        ], nonce=953))["result"]
+        self.assertEqual(result["task"], "TASK-CARD-GATE-3")
+
     @contextmanager
     def served(self, authority):
         endpoint_box = {"value": ""}

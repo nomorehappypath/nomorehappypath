@@ -17,7 +17,7 @@ def agent_with_kind(root, kind=None, document_only=False, task=TASK):
     session = control.create(root, "codex_delivery")
     agent = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
     extra = {} if kind is None else {"task_kind": kind}
-    board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: do the thing.", "direction", [], document_only=document_only, **extra)
+    board.record_owner_message(root, agent["id"], f"OWNER DIRECTION - {task}: do the thing (not an app spec).", "direction", [], document_only=document_only, **extra)
     board.begin_task(root, agent["id"], task)
     agent["session_id"] = session["id"]
     return agent
