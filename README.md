@@ -88,11 +88,41 @@ When Delivery writes down the final requirements, the Reviewer reads them first 
 
 **A passing flag is not proof.** When a project runs its own final check before it is called done, it prints one `FINAL CHECK` line for each check: passed, failed, not run, warnings only or skipped. The board reads those lines and does not accept "done" on anything but passed, even when the program exited cleanly, and the Reviewer reads the same lines instead of trusting a status flag.
 
+## Write specs: a full, checkable plan before any code
+
+Choose **Write specs** for an app and, after you describe it, you get one Mission Control card: a few questions written just for this app, plus the same fixed questions every app spec asks (how you use it, who uses it, what it holds, what happens if it stops, your internet connection — and a few more that only show up when they apply, like how many people at once or what happens if its data were lost). Answer what you want and press **Continue**; anything you skip is not guessed silently — NMHP infers it from your description when it can, otherwise takes the safe first choice, and writes it into the plan as its own "Assumed: ..." line so you can see and correct it.
+
+NMHP never asks you a technical question. From your answers and your description alone it decides the database, the language, the hosting, the security measures and the legal rules, and works out the scale it must handle and what the app does when an outside service is slow, down or wrong — never running an unsafe action (buying, sending, deleting, charging) on incomplete data.
+
+The plan it writes back opens with your answers and the full "Assumed:" list, then the functional part (as before), then fixed technical chapters in order — back end and infrastructure, front end, networking, Latency, Load, Security, Error handling, backup and recovery, maintainability, documentation, and a Support plan chapter when this app gets Support. A chapter that does not apply to a small app is one line: "Not applicable: ...". Every chapter from 2 to 12 ends with a short Targets list, and each Target is always one of four things: a number with its test conditions, a plain yes/no, a named test, or "Not applicable: ..." — never an adjective.
+
+The plan goes through the same review as any other task; press **Not accepted** with what you want changed, and a revised plan comes back. Once you accept it, its Targets are not just documentation — they become real requirements on every later Write-code task for this app. Security and Error handling Targets always apply; every other Target applies when that task touches the part of the app it is about. The hand-in states each applicable Target as met, naming the test, or not met and why — not met is a failed requirement like any other, the same as any other acceptance check. A Latency or Load Target is only ever checked by a test in the app's own suite against a test copy with fake data, never your live server; a backup Target is only met once a real restore has been tried on the test copy. To relax a Target later, change the plan itself.
+
+Typing **"not an app spec"** as the description keeps the old, free-form Write specs path exactly as it is — useful for a deck, a text, or anything that is not an app.
+
 ## When work gets stuck: the CTO first, then you
 
 The board checks every agent all the time, at no cost. A builder or Reviewer that says it is blocked, or that answers two wake-ups with nothing new, is handed to the CTO, and the CTO's instruction is typed straight into that agent's window. If the CTO cannot clear it, the project **pauses itself**, so nothing more is spent, and Mission Control shows one red card, **Blocked, needs you**, with the problem in the agent's own words, what the CTO answered, and what to do. Fix the cause and press **Resume**.
 
 **Warning email (optional).** In **Settings → Warning email**, fill in your address and your mail server (server, port, user name, password; for Gmail: smtp.gmail.com, port 587, your address as the user name, and an app password, not your normal one), press **Save**, then press **Send a test email**. The test uses only what is saved. From then on you get one email when a project is blocked and waiting for you. The password is kept in a file only you can read and is never sent over an unencrypted connection. Clearing the address and the server switches it off.
+
+## Support
+
+A dedicated installation that watches one of your apps for trouble, emailing you at every step. The ten steps, in order:
+
+1. You build an app with NoMoreHappyPath, accept it, and it is uploaded to GitHub and set live on the app's own server, as always.
+2. On a second, dedicated computer you install NoMoreHappyPath again and start it in Support mode. This second copy watches one app only; its settings hold that app's GitHub repository, your notice email, and your mail server.
+3. Support shows a one-time intake address and secret. Put them in the app's `ERROR_SINK_URL` and `ERROR_SINK_TOKEN` settings on the app's own server. From then on the app's errors reach Support, and anyone can also file a plain-words issue report.
+4. Received: every report becomes a case, and you get an email "Received: <one line>" right away.
+5. Support checks the app out of GitHub at the exact reported version — never a guess — and tries to make the problem happen with fake data, following the plan the app was built with. You get an email saying whether it could reproduce the problem or not, and what it tried.
+6. On a reproduced case, one repair runs at a time: Support's own Claude agent makes the fix inside the checked-out app, Support proves it with the plan's reproduce command failing before and passing after, and an independent reviewer from the other vendor (Codex) must say PASS, exactly as every NoMoreHappyPath task is reviewed. Both tools sign in on the Support computer with their own tokens, never with your app's or your main installation's. You get an email saying whether the fix worked, and why not if it did not.
+7. A reviewed fix becomes a pull request against the app's own GitHub repository, and the case shows a button to deploy it, emailed to you with the link.
+8. Deploy: only you can press it. The Support page is read-only until you sign in; the very first visit asks you to choose your own owner key (at least 12 characters, never shown or logged anywhere — only you know it), and every visit after that asks you to sign in with it. Settings, pairing and Deploy all need that sign-in, so no program on the Support computer can press Deploy for you. Support then merges that pull request with your own GitHub credential; the app's existing GitHub deployment does the rest. You can also merge it on GitHub yourself — the case follows either way, and you get a final "Deployed" email.
+9. Tick **This app gets Support** when you start a project (or ask for it on an existing one), and NoMoreHappyPath writes `SUPPORT_PLAN.md` — the paths worth checking, the fake data to use, what Support must never touch — into the app as part of the build.
+
+The flow, end to end: app server → Support → GitHub → app server.
+
+**What Support never does:** it never logs into the app server, it never holds trading, payment or production database credentials, and it never deploys by itself — GitHub's own deployment, already running on the app server, does that. Replication and repair only run once you set a positive spending ceiling in Support's own settings; without one, Support only receives and shows reports. See `docs/support/SUPPORT_LINUX_INSTALL.md` for installing the second computer.
 
 ## What the reviewer's browser can and cannot see
 

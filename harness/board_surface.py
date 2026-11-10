@@ -51,7 +51,7 @@ ALL_BOARD_OPERATIONS = {
     "declare-build", "collect-build",
     "create-contract", "contract-evidence", "hook-event", "record-release",
     "attach-workspace", "bind-repository", "reconcile-baseline",
-    "owner-direction", "clear-hold", "reconcile-unmerged-accept", "owner-message", "confirm-requirements", "propose-requirements", "record-finding",
+    "owner-direction", "clear-hold", "reconcile-unmerged-accept", "owner-message", "confirm-requirements", "propose-requirements", "propose-spec-questions", "record-finding",
     "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane",
     "project-history",
     "finding-decision", "execute-challenge", "finding-triage", "finding-resolved", "finding-route-around", "deliverable-waived", "deliverable-file",
@@ -88,6 +88,10 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # need and waited four hours for a CTO that never came. One person on one computer has no separate environment keeper.
     "test-env-set",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
+    # Owner repair 2026-11-09: write-specs-technical-chapters's question card never reached a
+    # real app task — propose-spec-questions was missing here, so Delivery's own command channel
+    # refused it with "board operation is not authorized" and the card never appeared.
+    "propose-spec-questions",
     # 2026-10-23: Delivery reads the Reviewer's early checks as its target.
     "contract-checks", "ask-owner", "contract-check-skip",
     # 2026-11-08: Delivery and the Reviewer look up older accepted work one page or one task at a time (never the CTO).
@@ -189,7 +193,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "project-history", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "propose-spec-questions", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "project-history", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks", "retire-chunk",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "analysis-list", "analysis-crosscheck", "analysis-merge", "review-support", "retained-plan",

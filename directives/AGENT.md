@@ -1100,6 +1100,143 @@ finding is neither fixed nor shown not exploitable with evidence you can check
 missing deliverable in the verdict. One or two decisive Challenge Ledger rows;
 say in the verdict whether you repeated the history scan.
 
+## dedicated-support-plan
+
+Applies only when `support_plan.on` is true in your task's context bundle
+(`poll`) — the owner's "This app gets Support" tick (New project, or a line in
+Give direction for an existing project). It is a project-level choice,
+snapshotted onto the task when the task begins, so a later change to the
+project's choice never retargets a task already building; read it again if
+you begin a fresh task on the same project. When on, the app carries
+`SUPPORT_PLAN.md` at its root, written or refreshed by this task:
+important user paths worth trying to reproduce a report with, how to set up
+fake data for them (never real/production data or credentials), data or
+actions Support must never touch, and the version string (tag or commit) the
+app reports in its error events — the same string a Support installation
+checks the app out of GitHub at to reproduce a reported case. The app's error
+module (chapter `error-sink`) sends that version in every `nmhp-error/1`
+event's `version` field, and sends one `nmhp.support.check` event at startup
+(reusing the contract's event shape, `kind` or `id` set to
+`nmhp.support.check`) so a paired Support installation can confirm intake is
+wired before relying on it. `SUPPORT_PLAN.md` also names ONE fenced shell
+command, under its own heading, run from the repository root: `## Reproduce`
+(exits non-zero exactly when the named user path's problem happens, and zero
+once it no longer does). A Support installation uses that one command twice:
+to tell Replicated from Not replicated, and as the repair's failing-before /
+passing-after check, always reading the plan as it was at the reported
+version. The plan names no repair command and no review command (review round
+3, finding B1: a scripted plan command standing in for either let a case be
+called Fixed with no real fix and no real review). The repair itself is made
+by Support's own Delivery agent (Claude) inside the checked-out app, committed
+by Support on the `support/<case>` branch, and judged by an independent
+reviewer from the other vendor (Codex); a repair that edits `SUPPORT_PLAN.md`
+is refused. Existing-app follow-up tasks refresh `SUPPORT_PLAN.md` the same
+way, from the current state of the app, rather than assuming the paths,
+fake-data setup and reproduce command it already names are still accurate.
+
+## full-app-spec
+
+Applies to a "Write specs" task (`task_kind` `spec`) whose owner direction is an app
+description, not the literal words "not an app spec" (that phrase keeps the old, free-form
+Write specs path exactly as it was — stop reading here and write the document as you always
+did). Everything below produces `SPEC.md` at the project root — that exact filename, because a
+later "Write code" task on the same project recognizes an accepted spec only by that file
+existing (`support_plan.on` is the model this mirrors: snapshotted once per task, from the file
+on disk, at `begin_task`, and read from `poll`'s `project_spec.accepted`).
+
+**1. The one question card.** Before writing anything, call
+`propose-spec-questions --agent <id> --task <task> --questions '<JSON>' [--existing-data]
+[--keeps-data]`: up to five questions only this app needs (2-4 options each, one `recommended`
+index), written only about decisions you cannot make for the owner — money, risk, how he wants
+it to behave, a personal fact you cannot know. Never ask what the description already answers.
+If `propose-spec-questions` itself is refused for any reason (owner repair 2026-11-09: it was
+once missing from the board's own authorized command list, so the card never reached the owner
+at all), stop — do not write SPEC.md, and never silently resolve every question as "Assumed" to
+work around the refusal. Post a status naming the exact refusal and wait; this is a harness
+defect to fix or route, not something to route around by skipping the card. The same rule applies
+to writing the document itself: never hand in SPEC.md for an app task until `poll`'s
+`spec_answers` is actually present for this task (the owner either answered questions or pressed
+Continue with none) — a card that was proposed but never answered blocks the hand-in exactly like
+one that was never shown.
+Pass `--existing-data` when the app replaces something (a spreadsheet, another app) and
+`--keeps-data` when the app keeps data at all — your own judgment call from the description; each
+turns on one or two of the fixed conditional questions below. The five always-asked questions and
+the three conditional ones are fixed, exact wording, never written by you. Every question — the
+app-specific ones, these, and the conditional ones — lets the owner pick more than one option
+(owner 2026-11-10: "it will be used on web hosted and on the phone" is the owner's own example of
+why), so an answer is a list of 1+ chosen option strings, never assumed to be exactly one:
+
+- Always asked: "How do you use it?" (Web page, hosted / Desktop app / Phone app / No screen,
+  just reports); "Who uses it?" (Just me / Me and a few people I invite / The public); "What will
+  it hold?" (Nothing private / My own private information / Other people's personal information /
+  Money, payments or bank access); "If it stops for a day, what happens?" (No big deal / Annoying
+  / It costs me money or customers); "Internet connection?" (Always online / Must also work
+  offline). (The owner dropped the running-cost question on 2026-11-10; do not ask it.)
+- Conditional: "At its busiest, how many people at the same time?" (A few / Dozens / Hundreds or
+  more) — shown by the page itself whenever "Who uses it?" is answered with anything other than
+  "Just me" alone (picking "Just me" together with another option still counts as not-just-me),
+  nothing you need to request. With `--existing-data`: "Is there existing data to bring in?" (No /
+  From spreadsheets or files / From another app). With `--keeps-data`: "If its data were lost,
+  what happens?" (Nothing, it can be rebuilt / I lose some work / Serious loss) and "How much
+  recent data could you afford to lose?" (A day / An hour / Nothing).
+
+Wait for the owner's answers (`poll`'s `spec_answers`, once present — it holds only what was
+actually answered, each value a list of the owner's chosen options). Resolve the full set — every
+question you proposed or named above, each either answered or skipped — by calling
+`harness.spec_questions.resolve_answers(questions, answers, description)` yourself rather than
+re-deriving its rule by hand: it returns `{"text", "chosen", "assumed"}` per question, "chosen"
+always a list even for a single real or inferred answer, inferring a skipped one from the
+description (case-insensitive, and for "What will it hold?" specifically also from
+safety-relevant keywords — "password", "payment", "customer" and the like — never silently
+defaulting a plainly sensitive app to its least-sensitive option just because the description
+does not repeat an option's exact wording) or, failing that, its first listed option (review r1
+B1: a guessed default must never be the least safe one). When writing the owner's own answers
+into the document, join a multi-choice "chosen" list with ", " (e.g. "How do you use it? — Web
+page, hosted, Phone app"). Write every `assumed` one into the document as its own line, "Assumed:
+<question> — <chosen, joined>" (`harness.spec_questions.assumed_lines` builds this list
+directly), placed under the owner's own answers, before any chapter.
+
+**2. No technical question, ever.** Decide the database, language, hosting, security measures and
+legal rules yourself, from the answers and the description. State, in the document, the Scale you
+worked out (items × data per item × how often, checked against the time you have and each outside
+service's real limit — call it live with the owner's own saved key when he gave you one, never
+guess it) and the Failure behavior (what the app does when an outside service is down, slow, or
+returns incomplete data; an unsafe action — buying, sending, deleting, charging — never runs on
+incomplete data).
+
+**3. The document's fixed shape.** `SPEC.md`, in order: the owner's answers and the full
+"Assumed:" list, then twelve numbered chapters: 1 Functional (write this exactly as you always
+have for Write specs); 2 Back end and infrastructure; 3 Front end; 4 Networking; 5 Latency; 6
+Load; 7 Security; 8 Error handling; 9 Backup and recovery (what is backed up, how often, where —
+never only on the same machine, how long kept, how to restore, what takes over if the main
+machine fails); 10 Maintainability; 11 Documentation; 12 Support plan — only when `poll`'s
+`support_plan.on` is true; its content is identical to the `SUPPORT_PLAN.md` chapter `dedicated-
+support-plan` already asks for, saved both as chapter 12 and as that separate file. A chapter that
+does not apply to this app is exactly one line: "Not applicable: <reason>" — a very small app is
+mostly such lines, and that is correct, not a shortcut.
+
+**4. Targets.** Chapters 2-12 each end with a short Targets list. Each line is exactly one of:
+a number with its test conditions ("checkout page under 300 ms for 95 of 100 requests with 50
+users and 10,000 fake orders"); a yes/no ("passwords never stored in clear: yes"); a named test
+("full restore from latest backup under 30 minutes, tested on the test copy:
+test_restore_from_backup"); or "Not applicable: <reason>". No adjectives, ever. Targets follow
+the card's own answers — what it holds sets Security Targets; "if it stops" and "if data were
+lost" set Backup-and-recovery and monitoring Targets. Before you finish, run each chapter's
+Targets lines through `harness.spec_document.validate_targets` (import it; it takes a chapter's
+lines, without their leading "- ", and returns one violation sentence per line that is not one
+of the four forms) and fix anything it flags.
+
+**5. Later Write-code work on the same project.** When your own `poll` shows
+`project_spec.accepted` true, open `SPEC.md` yourself before proposing requirements: carry into
+your requirements proposal every Target relevant to what this task actually touches, and always
+the Security and Error-handling Targets regardless of what is touched. State, at hand-in, each
+carried Target as met (naming the test) or not met (why) — not met is a failed requirement like
+any other, the same as any other acceptance criterion. Verify a Latency or Load Target only with
+a test in the app's own suite, on a test copy with fake data — never a live server or a real
+outside service. Verify a Backup-and-recovery Target only with an actual restore performed on the
+test copy; a backup that was never restored does not satisfy it. A Target is relaxed only by the
+owner editing `SPEC.md` itself — never by a later task quietly dropping or loosening one.
+
 ## scope-control
 
 Compare every newly discovered issue with the exact owner direction and the
