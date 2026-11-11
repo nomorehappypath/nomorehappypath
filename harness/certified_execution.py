@@ -433,6 +433,7 @@ def run(
     unable_not_failure: bool = False,
     workdir: str = ".",
     scrub: Any = None,
+    baseline_commit: str = "",
 ) -> dict[str, Any]:
     """Run one governed command. `workdir` is the folder (relative to the candidate) the project's declared test environment runs from and is part
     of the command's identity; `scrub` removes declared secret values from the output before anything is stored or shown."""
@@ -564,6 +565,12 @@ def run(
             exit_code = 4
             problem = f"the screen check could not run: {blocked}"
         count = _test_count(output)
+        if (exit_code != 0 and raw_exit != 0 and baseline_commit and count and not final_check and not blocked
+                and not process_audit["problems"] and not unable_not_failure):
+            from harness import inherited_failures      # local: only a failing run pays for the baseline re-run
+            inherited = inherited_failures.judge(command, output, execution_root, baseline_commit, workdir=workdir or ".", environment=environment)
+            if inherited:
+                exit_code, output = 0, output + "\n\n" + inherited["note"]
         if unable_not_failure and not final_check and not process_audit["problems"] and _clean_run(output) and (
             (blocked and raw_exit == 0) or (count == 0 and raw_exit in (0, 5)) or (raw_exit == 0 and count is None)
         ):   # a CLEAN empty run only: Python 3.12 exits 5 when no test ran; any error, failure or traceback stays a failure

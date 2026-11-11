@@ -10221,6 +10221,17 @@ def _execute_internal_qa(
         ) from error
 
 
+def _task_baseline_head(certification: dict[str, Any]) -> str:
+    """The commit the task started from, for the delivery and review test runs only (never a contract, red-proof or revert-proof check)."""
+    try:
+        if str(certification.get("gate") or "").startswith(("contract-check", "red-proof", "revert-proof")):
+            return ""
+        state = _read_state(certification["board_root"])
+        return str(((state.get("task_baselines") or {}).get(str(certification.get("task") or "")) or {}).get("head") or "")
+    except Exception:  # noqa: BLE001 - no baseline known: the run is judged as before
+        return ""
+
+
 def _run_internal_qa(
     command: str, root: Path, *, measurement: dict[str, Any] | None = None,
     certification: dict[str, Any] | None = None, live_board_root: Path | None = None,
@@ -10260,6 +10271,7 @@ def _run_internal_qa(
             browser=certification.get("browser"),
             reuse=reuse,
             unable_not_failure=bool(certification.get("unable_not_failure")),
+            baseline_commit=_task_baseline_head(certification),
             **({"timeout_seconds": int(certification["timeout_seconds"])} if certification.get("timeout_seconds") else {}),
         )
         if measurement is not None:
@@ -13152,7 +13164,7 @@ def _mark_reintegration_required(state: dict[str, Any], task: str, reason: str, 
         return False, session_id, delivery
     markers[task] = {
         "task": task, "reason": reason, "source": source, "recorded_at": now(),
-        "next_action": "Delivery runs reintegrate-main, re-tests, then requests a fresh final review.",
+        "next_action": "Delivery runs reintegrate-main, re-tests only the files it changed or merged (never the whole suite), then requests a fresh final review.",
         "owner_line": "Other approved work changed the app while this task was underway. Delivery is combining the changes and will test again before the final review. Nothing for you to do.",
     }
     _event(state, "git_reintegration_required", delivery, {
@@ -14598,7 +14610,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             route_reintegration(root, stale_task, "main moved since this task branched", source="request-review")
             raise ValueError(
                 "main has moved since this task branched; run reintegrate-main (then --finish if it reports "
-                "conflicts), re-run the full suite, and request final review again"
+                "conflicts), re-test only the files you changed or merged (the Reviewer runs the whole suite once), and request final review again"
             )
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
@@ -16769,6 +16781,13 @@ def idle_task_cards(root: Path, current: datetime | None = None) -> list[dict[st
                     continue        # the owner's own Stop: the Story says "You stopped the builder" already
                 since = seen.strftime("%H:%M UTC")
                 terminal_live = bool(last.get("active")) and str(last.get("session_id") or "") in live_terminals
+                if terminal_live:
+                    try:
+                        busy = control.session_busy(root, str(last.get("session_id") or ""), current)
+                    except Exception:  # noqa: BLE001 - no busy signal only means the old rule applies
+                        busy = False
+                    if busy:
+                        continue    # its window reports it is working (a long test run is silent on the board): not abandoned
                 if terminal_live:
                     gone_words = (f"The last builder ({last.get('id')}) still has its window open but has not checked the board since {since}. ")
                 else:
