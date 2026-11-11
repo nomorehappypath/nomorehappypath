@@ -227,6 +227,21 @@ are insufficient. Check `codex --version`, `claude --version` and `agy --version
 shell before installing the service. Run `bash install.sh --check` under the
 same Linux account to confirm the app can find the CLIs for its service.
 
+### Keep the computer awake while NMHP works
+
+NoMoreHappyPath, its agents and every test run live on the computer where you started it. If that computer goes to sleep
+(or the lid closes, or the battery runs out), the agents and the test that is running stop, and the project can break or
+close. Before you start a task, make sure the computer never sleeps while NMHP is working, and stays plugged in.
+
+- **macOS:** System Settings, Lock Screen, set "Turn display off on power adapter when inactive" to a long time, and in
+  Battery (or Energy), Options, turn on "Prevent automatic sleeping on power adapter when the display is off". Keep the lid
+  open, or use an external display with the power adapter connected.
+- **Linux:** Settings, Power, set "Automatic suspend" to Off.
+- **Windows (a test machine):** Settings, System, Power, set "Screen and sleep" to Never.
+
+Sleep on a screen saver alone is fine; it is system sleep that stops the work. When you leave for a long time, press
+**Pause project** first.
+
 ### Claude agent authentication
 
 Harness-launched Claude agents require a dedicated one-year token created with

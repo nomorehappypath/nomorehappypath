@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import smtplib
 import ssl
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -119,6 +119,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+IDLE_CARD_EMAIL_DELAY_MINUTES = 30
+
+
+def _too_new_to_email(card: dict[str, Any]) -> bool:
+    """A "nobody is working" card may be a long silent run; email only if it is still open after a while (owner, 2026-11-11)."""
+    if not card.get("idle_task"):
+        return False
+    try:
+        opened = datetime.fromisoformat(str(card.get("recorded_at")))
+    except (TypeError, ValueError):
+        return False
+    return datetime.now(timezone.utc) - opened < timedelta(minutes=IDLE_CARD_EMAIL_DELAY_MINUTES)
+
+
 def notify_blocked_cards(root: Path, home: Path | None, project_name: str = "", address: str = "") -> list[dict[str, Any]]:
     """Email the owner once for each open blocked card that has not been emailed. Called after every self-heal pass.
 
@@ -133,7 +147,8 @@ def notify_blocked_cards(root: Path, home: Path | None, project_name: str = "", 
     if not global_settings.warning_email_is_on(settings):
         return []
     waiting = [card_id for card_id, card in (board.snapshot(root).get("owner_actions") or {}).items()
-               if card.get("status") == "open" and card.get("blocked") and not card.get("warning_email_at")]
+               if card.get("status") == "open" and card.get("blocked") and not card.get("warning_email_at")
+               and not _too_new_to_email(card)]
     results = []
     for card_id in waiting:
         with board.locked_state(root, allow_paused=True, operation="warning email: mark card") as state:

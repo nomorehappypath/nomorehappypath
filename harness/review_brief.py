@@ -197,6 +197,8 @@ def build(
         },
         "risk_and_scope": {
             "required_review_scope": "complete full suite" if request.get("phase") == "final_acceptance" else _text(request.get("test_scope") or "full"),
+            # owner 2026-11-11: the Reviewer's one whole-suite run is the only whole run; a failure that also fails at the task's start is inherited
+            "whole_suite_rule": "You run the whole suite once. A failing test that also fails at the commit the task started from is inherited (the board marks it \"INHERITED FAILURES\" in the output): it is not a finding and not a reason to fail the review. Only a failure this task causes is a finding.",
             "narrowed_scope_decisions": _bounded(narrowed),
             "unresolved_findings": _bounded([{
                 "title": _text(value.get("title")), "description": _text(value.get("description")),

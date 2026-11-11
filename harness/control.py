@@ -1255,6 +1255,56 @@ def live_session_ids(root: Path) -> set[str]:
     return live
 
 
+BUSY_WINDOW_MINUTES = 90
+BUSY_CPU_PERCENT = 1.0
+
+
+def _child_cpu_busy(pid: Any) -> bool:
+    """True when a command is running under the window's process and is using CPU (a test run, a build). Works for every
+    provider, because it asks the machine, not the agent. Any failure means "not known busy"."""
+    try:
+        import subprocess
+        rows = subprocess.run(["ps", "-axo", "pid=,ppid=,pcpu="], capture_output=True, text=True, timeout=5).stdout.splitlines()
+        tree: dict[int, list[tuple[int, float]]] = {}
+        for row in rows:
+            parts = row.split()
+            if len(parts) == 3:
+                tree.setdefault(int(parts[1]), []).append((int(parts[0]), float(parts[2])))
+        pending, total = [int(pid)], 0.0
+        seen: set[int] = set()
+        while pending:
+            parent = pending.pop()
+            for child, cpu in tree.get(parent, []):
+                if child not in seen:
+                    seen.add(child)
+                    total += cpu
+                    pending.append(child)
+        return total >= BUSY_CPU_PERCENT
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def session_busy(root: Path, session_id: str, current: datetime | None = None, minutes: int = BUSY_WINDOW_MINUTES) -> bool:
+    """True when the window is still running and is doing work: its own hook says "working" (Claude, Gemini), or a command under
+    it is using CPU (any provider, for example Codex running the whole test suite), seen within `minutes` of its last sign of
+    life. Read without the lock, like live_session_ids. A silent long run is work, not abandonment (owner, 2026-11-11)."""
+    session = (_read_state(root).get("sessions") or {}).get(session_id) or {}
+    pid = session.get("pid")
+    if session.get("status") not in ACTIVE_STATUSES or not pid or not _pid_is_alive(pid):
+        return False
+    if session.get("turn_state") == "working":
+        stamps = []
+        for key in ("turn_state_at", "last_output_at"):
+            try:
+                stamps.append(datetime.fromisoformat(str(session.get(key))))
+            except (TypeError, ValueError):
+                pass
+        current = current or datetime.now(timezone.utc)
+        if stamps and current - max(stamps) < timedelta(minutes=minutes):
+            return True
+    return _child_cpu_busy(pid)
+
+
 def cli_session(root: Path, session_id: str) -> dict[str, Any]:
     """Return the CLI session bookkeeping (cli_session_id, provider, launch counts) for `session_id` under `root`.
 

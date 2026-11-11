@@ -401,6 +401,13 @@ and document files the task does not touch.
    an application it may begin only after every subtask acceptance passes; for
    a chunked task only after every chunk passes. It is the only review required
    for an atomic task.
+9. **The whole test suite is run once, by the Reviewer, never by you (owner's rule, every project and task).**
+   You run only the tests of the files you changed or merged, and the `--test-command` you give the board is that
+   narrow command. Do not run the project's whole suite before a review request, after a merge of main, or to
+   "check once"; a project note that says to run it before review does not apply to you. A test that fails in the
+   Reviewer's one whole run and also fails at the commit this task started from is inherited: the board records it
+   as not caused by this task, and nobody repairs it inside the task. Only a failure this task causes is fixed.
+
    Before requesting final acceptance, start the whole app from the candidate
    and walk the owner's path end to end yourself; the request summary names that
    path and the expected result in plain words, because the Independent
