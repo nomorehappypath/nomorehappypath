@@ -3161,6 +3161,240 @@ def project_support_plan_state(state: dict[str, Any]) -> dict[str, Any]:
     return {"on": bool(entry.get("on")), "updated_at": str(entry.get("updated_at") or "")}
 
 
+# task build-wish-list: a per-project list of the owner's own ideas, beside Advanced (SPEC.md
+# chapters 1-2). Order in the stored list is display order (newest appended at the end; drag
+# reorders the whole list), and every write replaces the whole list through locked_state, which
+# already writes to a temp file and renames it into place — the same all-or-nothing save every
+# other project-level choice here already gets, so an interrupted save never leaves a
+# half-written list.
+# Owner repair 2026-11-10: "Not enough: 2000 words; we need much more" — raised to the same
+# limit the directive (Give direction) box itself already uses, not an arbitrary new number.
+MAX_WISH_TEXT_LENGTH = MAX_REASON_LENGTH
+MAX_WISH_TITLE_LENGTH = 80
+MAX_PROJECT_WISHES = 200
+
+
+def _find_wish(wishes: list[dict[str, Any]], wish_id: str) -> dict[str, Any] | None:
+    """Return the wish with this id from wishes, or None if it is not (or no longer) there."""
+    return next((entry for entry in wishes if entry.get("id") == wish_id), None)
+
+
+def _store_wish_attachments(root: Path, wish_id: str, prepared: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Write each of one wish's prepared attachments to durable storage keyed by wish_id — the
+    same validated shape and all-or-nothing rollback as _store_owner_message_attachments, in its
+    own "wishes" folder because a wish is not an owner message. Return value: the stored
+    attachment metadata (never the raw bytes, which the state file never holds)."""
+    if not prepared:
+        return []
+    storage_dir = board_dir(root) / "wishes" / wish_id
+    written: list[Path] = []
+    metadata: list[dict[str, Any]] = []
+    try:
+        for item in prepared:
+            stored_name = f"{secrets.token_hex(16)}{item['extension']}"
+            stored_path = storage_dir / stored_name
+            _write_attachment(stored_path, item["data"])
+            written.append(stored_path)
+            metadata.append({
+                "attachment_id": secrets.token_hex(12),
+                "display_name": item["display_name"],
+                "content_type": item["content_type"],
+                "size": len(item["data"]),
+                "stored_name": stored_name,
+                "sha256": hashlib.sha256(item["data"]).hexdigest(),
+            })
+    except Exception:
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
+    return metadata
+
+
+def wish_attachment_file(root: Path, wish_id: str, attachment_id: str) -> tuple[Path, str, str] | None:
+    """Look up one wish's one stored attachment, for serving it back to the owner's browser.
+
+    Return: (file path, content type, display name), or None when the wish or the attachment
+    no longer exists (the wish was removed, or the attachment_id is stale)."""
+    wishes = project_wishes_state(snapshot(root))
+    wish = _find_wish(wishes, str(wish_id or ""))
+    if wish is None:
+        return None
+    for item in wish.get("attachments") or []:
+        if item.get("attachment_id") == attachment_id:
+            path = board_dir(root) / "wishes" / str(wish_id) / str(item.get("stored_name", ""))
+            return path, str(item.get("content_type") or "application/octet-stream"), str(item.get("display_name") or "attachment")
+    return None
+
+
+def _bounded_wish_text(text: Any) -> str:
+    """Strip and bound one wish's text; raise ValueError naming the limit when it is empty or too long."""
+    text = str(text or "").strip()
+    if not text:
+        raise ValueError("a wish needs some text")
+    if len(text) > MAX_WISH_TEXT_LENGTH:
+        raise ValueError(f"a wish is at most {MAX_WISH_TEXT_LENGTH} characters")
+    return text
+
+
+def _bounded_wish_title(title: Any) -> str:
+    """Strip and bound one wish's short title (owner repair 2026-11-11 round 4: "an 80-character
+    title that will be shown in the list"); raise ValueError naming the limit when it is empty
+    or too long."""
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("a wish needs a title")
+    if len(title) > MAX_WISH_TITLE_LENGTH:
+        raise ValueError(f"a wish title is at most {MAX_WISH_TITLE_LENGTH} characters")
+    return title
+
+
+def add_project_wish(root: Path, title: Any, text: Any, attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Add one wish to this project's list (R2, R6; attachments per owner repair 2026-11-10;
+    title per owner repair 2026-11-11 round 4).
+
+    Args:
+        title: the short (at most 80 characters) label shown on the collapsed list; blank is
+            refused.
+        text: the owner's own words, the full description shown only in Edit; blank or
+            whitespace-only is refused, and so is a project already holding MAX_PROJECT_WISHES
+            wishes.
+        attachments: 0-5 supporting documents or screenshots, the same shape and limits
+            (count, type, size) as the Give-direction composer's own attachments.
+
+    Return: the new wish, {"id", "title", "text", "done", "added_at", "attachments"}.
+    """
+    bounded_title = _bounded_wish_title(title)
+    bounded = _bounded_wish_text(text)
+    prepared = _prepare_owner_message_attachments(attachments or [])
+    # Validated and written to disk before the lock (file I/O never happens while state is
+    # locked); rolled back below if the project is already full, so a refused add never leaves
+    # an orphaned file behind.
+    wish_id = secrets.token_hex(8)
+    stored = _store_wish_attachments(root, wish_id, prepared)
+    with locked_state(root) as state:
+        wishes = state.setdefault("project_wishes", [])
+        if len(wishes) >= MAX_PROJECT_WISHES:
+            if stored:
+                shutil.rmtree(board_dir(root) / "wishes" / wish_id, ignore_errors=True)
+            raise ValueError(f"a project holds at most {MAX_PROJECT_WISHES} wishes")
+        entry = {"id": wish_id, "title": bounded_title, "text": bounded, "done": False, "added_at": now(), "attachments": stored}
+        wishes.append(entry)
+        return dict(entry)
+
+
+def edit_project_wish(
+    root: Path, wish_id: Any, title: Any, text: Any,
+    attachments: list[dict[str, Any]] | None = None, remove_attachment_ids: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Change one wish's title and whole text in place, and/or its attachments, in the same one
+    edit dialog (R3, R6; attachments per owner repair 2026-11-11 round 3 — "I need to be able to
+    edit the whole description and not just a line... change the whole description and upload or
+    remove existing files"; title per owner repair 2026-11-11 round 4). Its id and added date
+    are unchanged.
+
+    Args:
+        title: the new short (at most 80 characters) label; blank is refused.
+        text: the new words, replacing the old in full (not merged with them).
+        attachments: 0-5 new supporting documents or screenshots to add, same validated shape as
+            add_project_wish's; together with whatever existing attachments survive
+            remove_attachment_ids, the total stays within the same count and size limits.
+        remove_attachment_ids: ids of this wish's own existing attachments to delete; an id
+            already gone, or naming a different wish's attachment, is ignored, not refused.
+
+    Return: the whole list afterward. A wish_id no longer on the list (removed in another tab)
+    is answered calmly: the current list is returned, unchanged, rather than refused (R6).
+    """
+    wish_id = str(wish_id or "")
+    bounded_title = _bounded_wish_title(title)
+    bounded = _bounded_wish_text(text)
+    remove_ids = {str(item) for item in (remove_attachment_ids or [])}
+    prepared = _prepare_owner_message_attachments(attachments or [])
+    current = _find_wish(project_wishes_state(snapshot(root)), wish_id)
+    if current is None:
+        return project_wishes_state(snapshot(root))
+    surviving = [item for item in (current.get("attachments") or []) if str(item.get("attachment_id")) not in remove_ids]
+    if len(surviving) + len(prepared) > MAX_ATTACHMENTS:
+        raise ValueError(f"a wish can have at most {MAX_ATTACHMENTS} attachments")
+    if sum(int(item.get("size", 0)) for item in surviving) + sum(len(item["data"]) for item in prepared) > MAX_TOTAL_ATTACHMENT_BYTES:
+        raise ValueError("the attachments are too large")
+    # Written to disk before the lock, like add_project_wish's own attachments; rolled back below
+    # if the wish is gone by the time the lock is held, so a no-op edit never leaves a file behind.
+    stored_new = _store_wish_attachments(root, wish_id, prepared)
+    with locked_state(root) as state:
+        wishes = state.setdefault("project_wishes", [])
+        entry = _find_wish(wishes, wish_id)
+        if entry is None:
+            for item in stored_new:
+                (board_dir(root) / "wishes" / wish_id / item["stored_name"]).unlink(missing_ok=True)
+            return list(wishes)
+        removed = [item for item in (entry.get("attachments") or []) if str(item.get("attachment_id")) in remove_ids]
+        remaining = [item for item in (entry.get("attachments") or []) if str(item.get("attachment_id")) not in remove_ids]
+        entry["title"] = bounded_title
+        entry["text"] = bounded
+        entry["attachments"] = remaining + stored_new
+        result = list(wishes)
+    for item in removed:
+        (board_dir(root) / "wishes" / wish_id / str(item.get("stored_name", ""))).unlink(missing_ok=True)
+    return result
+
+
+def set_project_wish_done(root: Path, wish_id: Any, done: Any) -> list[dict[str, Any]]:
+    """Mark one wish done or not done (R3); it stays on the list either way.
+
+    Return: the whole list afterward (a missing wish_id is answered calmly, as in edit_project_wish).
+    """
+    if not isinstance(done, bool):
+        raise ValueError("done must be true or false")
+    with locked_state(root) as state:
+        wishes = state.setdefault("project_wishes", [])
+        entry = _find_wish(wishes, str(wish_id or ""))
+        if entry is not None:
+            entry["done"] = done
+        return list(wishes)
+
+
+def remove_project_wish(root: Path, wish_id: Any) -> list[dict[str, Any]]:
+    """Remove one wish for good (R3); removing an id already gone is answered calmly (R6): the
+    list simply comes back as it already was, never refused. Any attachments it held are
+    deleted from disk too, outside the state lock (plain file I/O needs none)."""
+    wish_id = str(wish_id or "")
+    with locked_state(root) as state:
+        wishes = state.setdefault("project_wishes", [])
+        removed = _find_wish(wishes, wish_id)
+        remaining = [entry for entry in wishes if entry.get("id") != wish_id]
+        state["project_wishes"] = remaining
+    if removed is not None:
+        shutil.rmtree(board_dir(root) / "wishes" / wish_id, ignore_errors=True)
+    return list(remaining)
+
+
+def reorder_project_wishes(root: Path, order: Any) -> list[dict[str, Any]]:
+    """Put the project's wishes in the exact order of wish ids the owner dragged them into (R3).
+
+    Args:
+        order: every wish id, in the new order the owner wants. A wish whose id is missing from
+            order (a stale drag from another tab) keeps its old relative position, appended after
+            the named ones, rather than being dropped.
+
+    Return: the whole list in its new order.
+    """
+    if not isinstance(order, list) or not all(isinstance(item, str) for item in order):
+        raise ValueError("order must be a list of wish ids")
+    with locked_state(root) as state:
+        wishes = state.setdefault("project_wishes", [])
+        by_id = {entry["id"]: entry for entry in wishes}
+        reordered = [by_id[wish_id] for wish_id in order if wish_id in by_id]
+        named = {wish_id for wish_id in order if wish_id in by_id}
+        reordered += [entry for entry in wishes if entry.get("id") not in named]
+        state["project_wishes"] = reordered
+        return list(reordered)
+
+
+def project_wishes_state(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """This project's wish list, newest-added last unless the owner dragged it into a new order."""
+    return list(state.get("project_wishes") or [])
+
+
 def set_project_support_plan(root: Path, on: Any) -> dict[str, Any]:
     """Record the owner's project-level "This app gets Support" choice (New project tick, or a
     Give-direction line for an existing project). Takes effect for every task begun after this call;
@@ -4573,6 +4807,49 @@ def _display_storage_path(root: ProjectRoot, path: Path) -> str:
         return str(path.resolve())
 
 
+SUPPORTING_DOCUMENTS_DIRNAME = "supporting-documents"
+
+
+def _copy_attachments_into_task_workspace(root: Path, workspace: Path, attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy each already-stored owner-message attachment into workspace's
+    supporting-documents/ folder, under its original display name (a number
+    added only on a name clash, never overwriting). A direction's or
+    clarification's attachments otherwise sit only in the project's own data
+    folder, which a task's isolated workspace (and the builder working in it)
+    cannot see. Raises ValueError naming the file if a copy cannot be
+    completed, so a file is never silently dropped. Return value: attachments
+    with an added "workspace_path" (the relative path to tell the builder)
+    per item.
+    """
+    if not attachments:
+        return []
+    target_dir = workspace / SUPPORTING_DOCUMENTS_DIRNAME
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        taken = {entry.name for entry in target_dir.iterdir()}
+    except OSError as error:
+        raise ValueError(f"could not create the task's {SUPPORTING_DOCUMENTS_DIRNAME} folder: {error}") from error
+    copied: list[dict[str, Any]] = []
+    for item in attachments:
+        display = str(item.get("display_name") or "the attachment")
+        try:
+            source_path = _ledger_path(root, str(item.get("stored_path") or ""))
+            if not source_path.is_file():
+                raise OSError("file is missing from storage")
+            name = _safe_attachment_name(display)
+            stem, suffix = os.path.splitext(name)
+            candidate, n = name, 1
+            while candidate in taken:
+                n += 1
+                candidate = f"{stem}-{n}{suffix}"
+            taken.add(candidate)
+            shutil.copyfile(source_path, target_dir / candidate)
+        except OSError as error:
+            raise ValueError(f"could not copy the attachment {display} into the task's workspace: {error}") from error
+        copied.append({**item, "workspace_path": f"{SUPPORTING_DOCUMENTS_DIRNAME}/{candidate}"})
+    return copied
+
+
 def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False) -> dict[str, Any]:
     """Record one atomic owner message and route it to a Delivery terminal.
 
@@ -4676,13 +4953,25 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
             if task == AWAITING_OWNER_DIRECTION:
                 state.setdefault("pending_owner_clarifications", {}).setdefault(session_id, []).append(message)
             else:
+                # The task's workspace already exists (it was begun before this
+                # clarification), so the copy happens now, before the message is
+                # routed, and the agent is told the real path inside its own
+                # workspace instead of a path into the project's data folder.
+                workspace_value = str((state.get("task_workspaces") or {}).get(task) or "")
+                if workspace_value and metadata:
+                    metadata = _copy_attachments_into_task_workspace(root, Path(workspace_value), metadata)
+                    message["attachments"] = metadata
                 state.setdefault("owner_clarifications", {}).setdefault(task, []).append(message)
             # P6: same as above -- only the event's own copy is redacted.
             event = _event(state, "owner_clarification_received", agent, {
                 "task": task, "message": "owner clarification recorded from Mission Control",
                 "clarification": redaction.redact(text), "owner_message_id": message_id, "attachments": metadata,
             })
-    attachment_lines = "".join(f"\n- {item['display_name']} ({item['stored_path']})" for item in message["attachments"])
+    attachment_lines = "".join(
+        f"\n- {item['display_name']} ({item['workspace_path']})" if item.get("workspace_path")
+        else f"\n- {item['display_name']} (will be copied into this task's own {SUPPORTING_DOCUMENTS_DIRNAME}/ folder once it begins)"
+        for item in message["attachments"]
+    )
     label = "OWNER DIRECTION" if message_type == "direction" else f"OWNER CLARIFICATION for {message['task']}"
     routed = f"{label}:\n{text}"
     if attachment_lines:
@@ -9272,6 +9561,23 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
             for clarification in pending_clarifications:
                 clarification["task"] = task
             state.setdefault("owner_clarifications", {}).setdefault(task, []).extend(pending_clarifications)
+        # The direction's (and any clarification sent before this task existed)
+        # attachments were only ever saved under the project's own data folder;
+        # the task's own isolated workspace could not see them. Copy them in
+        # now that the workspace exists, so the builder gets real files at a
+        # relative path inside its own workspace, never just a reference to
+        # storage outside it.
+        copied_attachments: list[dict[str, Any]] = []
+        if workspace is not None:
+            if agent.get("session_id") and direction.get("attachments"):
+                copied = _copy_attachments_into_task_workspace(root, workspace, direction["attachments"])
+                direction["attachments"] = copied
+                copied_attachments.extend(copied)
+            for clarification in pending_clarifications:
+                if clarification.get("attachments"):
+                    copied = _copy_attachments_into_task_workspace(root, workspace, clarification["attachments"])
+                    clarification["attachments"] = copied
+                    copied_attachments.extend(copied)
         state.setdefault("task_baselines", {})[task] = baseline
         state.setdefault("task_owner_directions", {})[task] = contract.normalize_owner_direction(direction_text)
         state.setdefault("task_security", {}).setdefault(task, {"enhanced": False, "locked": False, "revision": 0, "updated_at": now()})
@@ -9300,8 +9606,13 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         inherited_count = len(baseline.get("dirty_files", []))
         binding = "owner-named Git repository on an isolated broker branch" if owner_repository else "isolated broker task worktree"
         message = f"Product Management defined the internal task in its {binding}; captured {inherited_count} inherited dirty files for internal attribution; owner action is not required"
+        if copied_attachments:
+            message += f"\nSupporting documents copied into this task's own {SUPPORTING_DOCUMENTS_DIRNAME}/ folder:" + "".join(
+                f"\n- {item['display_name']} ({item['workspace_path']})" for item in copied_attachments
+            )
         begun = _event(state, "task_begun", agent, {"task": task, "message": message, "owner_direction": direction_text, "inherited_dirty_files": inherited_count,
-                                                   "open_reference": reference_chapters.reference_hint("delivery-workflow", *(["inherited-changes"] if inherited_count else [])), "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding})
+                                                   "open_reference": reference_chapters.reference_hint("delivery-workflow", *(["inherited-changes"] if inherited_count else [])), "task_workspace": str(workspace) if workspace else "", "task_branch": branch_record.get("branch", ""), "repository": str(repository) if repository else "", "repository_binding": binding,
+                                                   "supporting_documents": [item["workspace_path"] for item in copied_attachments]})
         # the Project brief rides on this result only (never stored with the event, never in a poll): computed from the live state, never blocks the start
         brief = project_memory.brief_for(root, state, workspace or repository)
     return {**begun, "project_brief": brief}
