@@ -951,7 +951,9 @@ function securityHtml(state,name){
 // effect of stopping an agent. Only unfinished work can be cancelled.
 function cancelTaskHtml(state,name){
   const releaseStatus=(state.releases||{})[name]?.status;
-  if(['VISUAL_TEST_REQUIRED','ACCEPTED'].includes(releaseStatus)||(state.release_decisions||{})[name]?.decision==='accepted'||(state.accepted_tasks||[]).includes(name))return '';
+  // a release the owner answered "Not accepted" is back in repair: unfinished work, so Cancel is offered (the server allows it too)
+  const ownerRejected=(state.release_decisions||{})[name]?.decision==='not_accepted';
+  if((['VISUAL_TEST_REQUIRED','ACCEPTED'].includes(releaseStatus)&&!ownerRejected)||(state.release_decisions||{})[name]?.decision==='accepted'||(state.accepted_tasks||[]).includes(name))return '';
   return `<div class="task-actions"><button type="button" class="stop cancel-task" onclick="confirmCancelTask(${esc(JSON.stringify(name))})">Cancel task</button><small>Abandon this task for good. Stopping an agent never does this.</small></div>`;
 }
 
