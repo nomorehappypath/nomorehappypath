@@ -22,3 +22,7 @@ build/
 # Per-project runtime board state. It is durable locally but never source code.
 .harness/
 evals/results/
+
+# Files a direction or clarification attached, copied into the task's own
+# workspace so a builder can read them. Not part of the delivered application.
+supporting-documents/

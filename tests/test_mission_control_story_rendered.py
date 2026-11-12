@@ -98,7 +98,7 @@ out.tabs = [...document.querySelectorAll('[role=tab]')].map(b => b.textContent.t
         self.assertEqual(shown[17], ("done", "Done"))
         self.assertEqual(shown[8], ("gap", "Not covered"), "a coverage gap is never shown as Done")
         self.assertEqual(shown[20], ("next", "Next"))
-        self.assertEqual(result["tabs"], ["Story", "Advanced"])
+        self.assertEqual(result["tabs"], ["Story", "Advanced", "Wish list"])
         self.assertEqual(result["step10"], "Tests checked on the empty project")
         self.assertIn("1 of 3 requirements have a test so far", result["step8"])
         self.assertIn("The builder is fixing the 2 problems", result["nowText"])
@@ -154,7 +154,7 @@ out.requirementsTile = text(document.querySelector('[data-story-requirements]'))
 out.proofLink = !!document.querySelector('[data-mc-goto="proof"]');
 """
         result = self.run_probe(self.url(root), body, wait=120)
-        self.assertEqual(result["tabs"], ["Story", "Advanced"])
+        self.assertEqual(result["tabs"], ["Story", "Advanced", "Wish list"])
         self.assertFalse(result["proofPanel"])
         self.assertIn("1 / 3 proven", result["requirementsTile"])
         self.assertFalse(result["proofLink"])

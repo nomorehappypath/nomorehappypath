@@ -75,6 +75,7 @@ class RenderedTaskPageTests(RenderedCase):
 await until(() => document.querySelectorAll('#agent-strip .mc-agent').length === 3 && document.querySelector('[data-story-now]'));
 const visible = selector => { const node = document.querySelector(selector); return !!node && !node.closest('[hidden]') && node.getBoundingClientRect().width > 0; };
 out.tabs = {story: document.querySelector('#tab-story').hidden, advanced: document.querySelector('#tab-advanced').hidden,
+            wish: document.querySelector('#tab-wish').hidden,
             selected: [...document.querySelectorAll('[role=tab]')].map(b => b.getAttribute('aria-selected'))};
 out.now = {text: document.querySelector('[data-story-now]').textContent, next: document.querySelector('[data-story-next]').textContent,
            step: document.querySelector('[data-story-step]').textContent, bar: document.querySelector('#story-now [role=progressbar]').getAttribute('aria-valuenow'),
@@ -90,7 +91,7 @@ out.pwned = window.pwned === undefined;
 out.builderText = document.querySelector('#agent-strip [data-agent-role=builder] .mc-doing').textContent;
 """.replace("${STAYING}", json.dumps(STAYING)).replace("${MOVED}", json.dumps(MOVED))
         result = self.run_probe(self.url(root), body)
-        self.assertEqual(result["tabs"], {"story": False, "advanced": True, "selected": ["true", "false"]})
+        self.assertEqual(result["tabs"], {"story": False, "advanced": True, "wish": True, "selected": ["true", "false", "false"]})
         self.assertEqual(result["now"]["text"], "The builder is planning the work.")
         self.assertIn("Step 12 of 26 · Plan made", result["now"]["step"])
         self.assertEqual(result["now"]["bar"], "12")
@@ -179,7 +180,7 @@ await wait(100);
 out.afterHome = {selected: [...document.querySelectorAll('[role=tab]')].map(b => b.getAttribute('aria-selected')), focus: document.activeElement.id};
 """
         result = self.run_probe(self.url(root), body)
-        self.assertEqual(result["afterArrow"]["selected"], ["false", "true"])
+        self.assertEqual(result["afterArrow"]["selected"], ["false", "true", "false"])
         self.assertEqual(result["afterArrow"]["focus"], "tab-advanced-btn")
         self.assertFalse(result["afterArrow"]["panel"])
         self.assertTrue(result["afterArrow"]["story"])
@@ -191,7 +192,7 @@ out.afterHome = {selected: [...document.querySelectorAll('[role=tab]')].map(b =>
         for label in ("View agent", "Send clarification", "Message the CTO", "View status", "Conversation", "Stop terminal"):
             self.assertIn(label, flat)
         self.assertTrue(result["launchDialogOpen"], "the launch buttons still open the launch dialog from Advanced")
-        self.assertEqual(result["afterHome"], {"selected": ["true", "false"], "focus": "tab-story-btn"})
+        self.assertEqual(result["afterHome"], {"selected": ["true", "false", "false"], "focus": "tab-story-btn"})
 
     def test_a_draft_survives_the_pages_refresh_and_the_empty_project_button_opens_the_composer(self):
         root = self.empty_board()
@@ -238,7 +239,7 @@ out.give = document.querySelector('#give-direction').disabled;
 out.stopAll = document.querySelector('#stop-all').disabled;
 """
         result = self.run_probe(self.url(root), body, wait=120)
-        self.assertEqual(result["tabs"], [False, False], "the owner can still look around a paused project")
+        self.assertEqual(result["tabs"], [False, False, False], "the owner can still look around a paused project")
         self.assertFalse(result["tell"])
         self.assertTrue(all(result["strip"]), "messaging an agent is off while paused (the server refuses it too)")
         self.assertTrue(result["advancedShown"])

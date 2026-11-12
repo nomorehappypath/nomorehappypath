@@ -76,7 +76,7 @@ PAGE = r"""<!doctype html>
 .upload-card .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@media (prefers-reduced-motion: reduce){.upload-card .spin{animation-duration:2.4s}}
 .release-preview .view-app .spin{display:inline-block;width:12px;height:12px;margin-right:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:view-app-spin .8s linear infinite;vertical-align:-2px}@keyframes view-app-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.release-preview .view-app .spin{animation-duration:2.4s}}.release-preview .preview-log-details{margin-top:6px}.release-preview .preview-log-details summary{cursor:pointer}
 .release-preview .preview-where{margin:8px 0 0;word-break:break-all}.release-preview .preview-where small{color:var(--muted)}.release-preview.failed{border-color:#d58b82;background:var(--red-soft)}.release-preview.failed strong{color:var(--red)}.release-preview p{margin:5px 0 8px;color:var(--muted)}.release-preview .preview-link{display:inline-block;padding:9px 16px;border-radius:8px;background:var(--green);color:#fff;font-weight:700;text-decoration:none}.release-preview .preview-link:focus-visible{outline:3px solid #174ea6;outline-offset:2px}.preview-log{max-height:140px;margin:8px 0;padding:8px 10px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.preview-setup{display:flex;gap:8px;flex-wrap:wrap}.preview-setup input{flex:1;min-width:240px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.preview-hint{font-size:12px}
-.modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}
+.modal label{display:block;margin-top:14px;font-size:13px}.modal textarea{display:block;width:100%;min-height:150px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;resize:vertical}.modal input[type=file]{display:block;width:100%;margin-top:6px}.modal small{display:block;margin-top:6px}.directive-file-panel{margin-top:14px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc}.directive-file-panel label{margin-top:0}.input-valid{color:var(--green)}.input-error{color:var(--red)}.wish-list-items{list-style:none;margin:14px 0 0;padding:0}.wish-item{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}.wish-item:last-child{border-bottom:0}.wish-number{color:var(--muted);font-weight:700;min-width:1.6em}.wish-attachments{display:block;margin-top:4px;font-size:12px}.wish-attachments a{color:var(--blue);text-decoration:none}.wish-attachments a:hover{text-decoration:underline}
 .terminal-color{display:inline-flex;align-items:center;gap:5px;margin-top:5px;color:var(--muted);font-size:12px}.terminal-color-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid #8994a0;vertical-align:-1px}
 .history-panel{margin-top:18px}.history-details>summary{display:flex;justify-content:space-between;align-items:center;gap:16px;cursor:pointer}.history-count{color:var(--muted);font-size:13px;font-weight:600}.history-intro{margin:8px 0 0;color:var(--muted);font-size:13px}.history-search{width:min(100%,560px);margin-top:12px;border:1px solid #b8c4cf;border-radius:8px;padding:9px 11px;font:inherit}.history-search-status{margin:6px 0;color:var(--muted);font-size:13px}.history-list{height:520px;max-height:60vh;overflow-y:scroll;overscroll-behavior:contain;margin-top:10px;border:1px solid var(--line);border-radius:9px;padding:0 12px;background:#fbfcfe}.history-date-group{border-top:1px solid var(--line)}.history-date-group:first-child{border-top:0}.history-date-group>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;padding:13px 2px;color:var(--blue);font-size:12px;font-weight:800;text-transform:uppercase}.history-date-count{color:var(--muted);text-transform:none}.history-date-items{padding-left:16px}.history-item{border-top:1px solid var(--line);padding:13px 0}.history-item:first-child{border-top:0}.history-item-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.history-item h3{font-size:15px}.history-item .task-key{margin-top:2px}.history-time{color:var(--muted);font-size:12px;white-space:nowrap}.history-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:13px}.history-empty{border:1px dashed #c7d1db;border-radius:10px;padding:18px;color:var(--muted);text-align:center;margin:12px 0}.history-match{margin-top:9px;padding:8px 10px;border-radius:7px;background:var(--amber-soft);font-size:13px}.history-match mark{background:#ffd98b}.history-directive{margin-top:10px;border:1px solid var(--line);border-radius:8px;background:#fff}.history-directive-title{padding:8px 11px;color:#27476f;font-size:12px;font-weight:800;border-bottom:1px solid var(--line)}.history-directive-body{height:150px;max-height:150px;overflow-y:scroll;overscroll-behavior:contain;padding:10px 14px 14px;font-size:13px}.history-directive-body h4{font-size:14px;margin:10px 0 5px}.history-directive-body p{margin:5px 0;color:var(--ink)}.history-directive-body ul,.history-directive-body ol{margin:5px 0 8px;padding-left:22px}.history-directive-body li{margin:3px 0}.history-directive-body code{background:#edf1f4;border-radius:3px;padding:1px 3px}.findings-panel{margin-top:18px}.findings-intro{margin:8px 0 0;color:var(--muted);font-size:13px}.finding-card{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:12px;background:#fff}.finding-card h3{font-size:15px;margin:0 0 4px}.finding-card p{margin:6px 0;color:var(--ink)}.finding-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px}.finding-evidence{margin-top:8px;padding:8px 10px;border-radius:7px;background:#f8fafc;color:var(--muted);font-size:12px}.finding-card .actions{margin-top:11px}.finding-card.queued{border-color:#b8c9e8;background:#f7faff}.finding-card.dismissed{border-color:#b6dfc8;background:var(--green-soft)}.finding-limit{margin-top:10px;color:var(--muted);font-size:12px}
 .settings-panel{margin-top:18px}.settings-details>summary{display:flex;justify-content:space-between;gap:16px;align-items:center;cursor:pointer}
@@ -194,7 +194,7 @@ PAGE = r"""<!doctype html>
 <section id="machine-card" class="panel section owner-actions" role="alert" hidden></section>
 <section id="owner-actions" class="panel section owner-actions" aria-live="polite" hidden></section>
 <section id="harness-actions" class="panel section harness-actions" aria-live="polite" hidden></section>
-<div class="mc-tabs" role="tablist" aria-label="Views of this project" id="mc-tablist"><button type="button" role="tab" id="tab-story-btn" aria-controls="tab-story" aria-selected="true" data-mc-keep="1" data-mc-tab="story">Story</button><button type="button" role="tab" id="tab-advanced-btn" aria-controls="tab-advanced" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="advanced">Advanced</button></div>
+<div class="mc-tabs" role="tablist" aria-label="Views of this project" id="mc-tablist"><button type="button" role="tab" id="tab-story-btn" aria-controls="tab-story" aria-selected="true" data-mc-keep="1" data-mc-tab="story">Story</button><button type="button" role="tab" id="tab-advanced-btn" aria-controls="tab-advanced" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="advanced">Advanced</button><button type="button" role="tab" id="tab-wish-btn" aria-controls="tab-wish" aria-selected="false" tabindex="-1" data-mc-keep="1" data-mc-tab="wish">Wish list</button></div>
 <div class="mc-panel" id="tab-story" role="tabpanel" aria-labelledby="tab-story-btn">
 <section class="panel mc-now" id="story-now" aria-label="Now"></section>
 <section class="mc-agents" id="agent-strip" aria-label="Agents"></section>
@@ -208,6 +208,10 @@ PAGE = r"""<!doctype html>
 <section id="attention" class="panel section" aria-live="polite"></section>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
 <aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside>
+</div>
+<div class="mc-panel" id="tab-wish" role="tabpanel" aria-labelledby="tab-wish-btn" hidden>
+<section class="panel wish-list-panel"><h2>Wish list</h2><p>Ideas for this project, in your own words. They stay here, on this project's page only, until you build one or remove it. A wish is at most 20,000 characters; a project holds at most 200 wishes.</p><button type="button" id="wish-add-open">Add to wish list</button><ul id="wish-list-items" class="wish-list-items"></ul></section>
+<dialog id="wish-add-dialog" aria-labelledby="wish-add-title"><form class="modal" id="wish-add-form"><h2 id="wish-add-title">Add to wish list</h2><p id="wish-add-help">Write the wish in your own words. Add a document or a screenshot if that helps explain it. Nothing is sent until you press Add.</p><label for="wish-title-input"><strong>Title</strong></label><input id="wish-title-input" type="text" maxlength="80" required placeholder="A short title shown in the list (up to 80 characters)"><small id="wish-title-count">0 of 80 characters used.</small><label for="wish-add-text"><strong>What do you wish this project had?</strong></label><textarea id="wish-add-text" rows="6" required placeholder="Type a wish…"></textarea><small id="wish-add-count">0 of 20,000 characters used.</small><div id="wish-existing-attachments" hidden><strong>Already attached</strong><ul id="wish-existing-attachments-list"></ul></div><label for="wish-add-attachments" id="wish-add-attachments-label"><strong>Supporting documents or screenshots</strong></label><input id="wish-add-attachments" type="file" multiple accept=".pdf,.md,.txt,.rtf,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,text/markdown"><small id="wish-add-attachments-help">Up to 5 files total, 10 MB each. Choosing files again adds to this list rather than replacing it. Nothing is sent until you press Add.</small><ul id="wish-pending-attachments-list"></ul><p id="wish-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="wish-add-cancel">Cancel</button><button type="submit" id="wish-add-button">Add to wish list</button></div></form></dialog>
 </div>
 <dialog id="status-dialog" aria-labelledby="status-dialog-title"><div class="modal"><h2 id="status-dialog-title" tabindex="-1">Agent status</h2><div id="status-dialog-body"></div><div class="modal-actions"><button class="secondary" id="status-dialog-close">Close</button></div></div></dialog>
 <dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This color identifies this CLI window in Mission Control. Cancel launches with the standard black background.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use black</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
@@ -246,6 +250,14 @@ let historyLoading=false;
 let pendingLaunchKind='';
 let directionAfterLaunch=false;   // Give direction with no Delivery agent running opens the Start dialog first, then the direction box
 let pendingDirectionLaunch=null;  // 2026-11-08: the launch choices wait until the direction is read and accepted; a pasted screen starts nothing
+// task build-wish-list, review cycle 1 finding: Build this must still carry the wish's text
+// into the box after the no-agent-yet launcher's provider/color step, which reopens this same
+// dialog on its own schedule; a one-shot override read (and cleared) only where the box is
+// actually filled survives that hand-off without disturbing the launcher's own choice flow.
+let pendingWishBuildText=null;
+let pendingWishAttachmentSource=null;   // {wishId, attachments:[{id,name}]}, persisted into writePendingDirection; see buildThisWish
+let pendingWishBuildAttachments=[];   // File objects fetched from the wish's own attachments, consumed the same one-shot way as pendingWishBuildText
+let lastWishes=[];   // the project_wishes array from the last render, read by Build this and the edit dialog
 let lastManaged=null;   // the latest /api/control snapshot, for the launch dialog's provider list
 let ownerMessageAgentId='';
 const waitingForReview=new Set();   // 'task:version' the owner chose to wait for the reviewer on (2026-10-28: the click showed nothing)
@@ -1782,7 +1794,9 @@ async function submitOwnerMessage(event){
     try{await call('/api/direction-check',{text:validated.text});}catch(failure){error.textContent=failure.message;return false;}
     const launch=pendingDirectionLaunch;pendingDirectionLaunch=null;
     if(launch){const ok=await start(launch.kind,launch.color,launch.choice);if(!ok){error.textContent='Delivery could not be started; your words are kept in this browser.';}}
-    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now()});
+    pendingDirectionAttachments=Array.from(el('#owner-message-attachments').files||[]);
+    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now(),wishAttachmentSource:pendingWishAttachmentSource});
+    pendingWishAttachmentSource=null;
     try{await call('/api/support-plan',{on:el('#owner-message-support-plan-check')?.checked===true});}catch(failure){/* project-level choice only; the direction itself is still sent */}
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
@@ -2058,6 +2072,7 @@ function render(data,managed){
   renderTimeline(data.story);
   renderProof(data.story);
   renderMachineCard(data.test_machine);
+  renderWishList(state.project_wishes);
   renderHarnessActions(state);
   const unresponsive=agents.filter(agent=>agent.active&&agent.role==='cto'&&agent.recovery_state==='unresponsive');
   const stalled=agents.filter(agent=>agent.active&&agent.liveness==='stalled'&&!reviewExecutionActive(agent)&&!(recentOutputActive(agent)&&!agent.stall_exhausted)&&agent.recovery_state!=='reset_requested'&&agent.recovery_state!=='unresponsive');
@@ -2173,7 +2188,7 @@ async function submitSpecQuestions(event){
 // ---- Mission Control story (2026-10-27): the Now section, the agent strip and the tabs. Every sentence comes from harness/story.py
 // through the dashboard's `story`; the page only draws it (escaped) and wires the buttons to the routes that already exist. ----
 let mcTab='story',mcStartLinkDone=false;
-const mcTabs=['story','advanced'];
+const mcTabs=['story','advanced','wish'];
 function showTab(name,focus){
   mcTab=mcTabs.includes(name)?name:'story';
   for(const id of mcTabs){
@@ -2198,6 +2213,235 @@ function wireTabs(){
   let remembered='story';try{remembered=sessionStorage.getItem('nmhp-mc-tab')||'story';}catch(error){}
   showTab(['#history','#project-chat','#tasks','#start-direction'].includes(location.hash)?'story':remembered,false);
   if(location.hash==='#history'&&el('#history'))el('#history').open=true;
+}
+// ---- Wish list (task build-wish-list, SPEC.md): a plain per-project list of the owner's own
+// ideas, drawn from state.project_wishes and kept entirely by the existing /api/wishes* routes.
+// No client-side state of its own beyond an in-progress drag or edit, which refresh() replaces. ----
+function renderWishList(wishes){
+  const list=el('#wish-list-items');if(!list)return;
+  const items=Array.isArray(wishes)?wishes:[];
+  lastWishes=items;
+  list.innerHTML=items.map((wish,index)=>{
+    // Owner repair 2026-11-11 round 4: "we do not show the attachments [on the collapsed row].
+    // only when we press edit we see all" — the row shows only the short title; the full
+    // description and the attachment list are in the Edit dialog only (openWishDialog below).
+    const id=esc(wish.id),done=Boolean(wish.done);
+    const title=esc(wish.title||wish.text.slice(0,80));
+    let added='';try{added=new Date(wish.added_at).toLocaleDateString();}catch(error){}
+    return `<li class="wish-item${done?' wish-done':''}" draggable="true" data-wish-id="${id}">`+
+      `<span class="wish-handle" aria-hidden="true" title="Drag to reorder">&#8942;&#8942;</span>`+
+      `<span class="wish-number">${index+1}.</span>`+
+      `<span class="wish-text">${title}</span><small class="wish-date">${esc(added)}</small>`+
+      `<button type="button" class="secondary wish-edit" data-wish-id="${id}">Edit</button>`+
+      `<button type="button" class="secondary wish-done-toggle" data-wish-id="${id}">${done?'Un-done':'Done'}</button>`+
+      `<button type="button" class="secondary wish-build" data-wish-id="${id}">Build this</button>`+
+      `<button type="button" class="stop wish-remove" data-wish-id="${id}">Remove</button></li>`;
+  }).join('');
+}
+async function buildThisWish(wish){
+  // The existing Give direction composer, reused exactly as the owner's own "Give direction"
+  // button opens it (R4): a wish never sends anything by itself, only pre-fills the box.
+  // Review finding: when no Delivery agent is running yet, openDirectionStart() shows the
+  // provider/color launcher first and returns immediately; the composer is only filled in
+  // later, when openDirectionStart(true) re-runs after that choice. pendingWishBuildText
+  // survives across that gap and is read (then cleared) exactly where the box is filled, in
+  // both the immediate and the launcher-deferred case, without touching the launcher's own
+  // provider/color choice (writing straight into the persisted-direction storage instead would
+  // have skipped that choice, since its own presence is what the launcher checks to decide
+  // whether to ask).
+  // Owner repair round 10 (Reviewer S-008): a wish attachment that could not be fetched here
+  // used to be silently left out, so Send still went out and reported success with only the
+  // files that happened to work — exactly the silent partial send the owner's own stop-the-send
+  // rule (round 9) forbids. Every attachment is fetched below BEFORE anything is set; on any
+  // failure nothing is set and Give direction is never opened, so there is nothing partial to
+  // send. pendingWishBuildText is set only once every fetch has already succeeded, so a stale
+  // wish is never left pre-filled for some later, unrelated "Give direction" click either.
+  const attachments=Array.isArray(wish.attachments)?wish.attachments:[];
+  const files=[];
+  for(const item of attachments){
+    let response;
+    try{response=await fetch(apiPath(`/api/wishes/${encodeURIComponent(wish.id)}/attachments/${encodeURIComponent(item.attachment_id)}`));}
+    catch(error){response=null;}
+    if(!response||!response.ok){
+      el('#notice').textContent=`Could not fetch the attachment ${item.display_name}; Build this was not opened and nothing was sent.`;
+      return;
+    }
+    const blob=await response.blob();
+    files.push(new File([blob],item.display_name,{type:item.content_type||'application/octet-stream'}));
+  }
+  pendingWishBuildText=wish.text||'';
+  // Owner repair 2026-11-11 round 4: "the attachments are not passed. They should be passed as
+  // Separate supporting documents or screenshots" — fetched above (before the launcher's own
+  // async gap, same reasoning as the text) and consumed, once, at the same place the text is
+  // filled in, purely so the owner sees them in the composer before Send.
+  // Owner repair round 8: that in-memory copy alone is not enough — on the no-agent path the
+  // owner may wait (or reload) for longer than a live File list survives, while the saved
+  // *text* keeps going through writePendingDirection's own localStorage round trip. So this also
+  // records a small, JSON-safe reference (the wish and attachment ids, not their bytes) that
+  // rides along inside that same persisted direction; the real send re-fetches fresh bytes from
+  // it if the in-memory copy is gone (see advanceDirectionStart), the files themselves being
+  // already durably stored under this wish regardless of what happens to this tab.
+  pendingWishAttachmentSource=attachments.length
+    ?{wishId:wish.id,attachments:attachments.map(item=>({id:item.attachment_id,name:item.display_name}))}
+    :null;
+  pendingWishBuildAttachments=files;
+  openDirectionStart();
+}
+async function fetchWishAttachmentFiles(source){
+  // Rebuilds the File list from a persisted wishAttachmentSource reference (see buildThisWish),
+  // used when the in-memory pendingDirectionAttachments copy did not survive (a reload, or a
+  // long wait past this tab's own lifetime) to the moment the direction actually gets sent.
+  // Owner repair round 9: a file that cannot be fetched here must stop the send with a plain
+  // message, not go out silently without it — advanceDirectionStart's own catch already does
+  // that (the direction stays saved, nothing is lost) as long as this throws instead of skipping.
+  const files=[];
+  if(!source)return files;
+  for(const item of source.attachments||[]){
+    let response;
+    try{response=await fetch(apiPath(`/api/wishes/${encodeURIComponent(source.wishId)}/attachments/${encodeURIComponent(item.id)}`));}
+    catch(error){throw new Error(`could not fetch the attachment ${item.name}`);}
+    if(!response.ok)throw new Error(`could not fetch the attachment ${item.name}`);
+    const blob=await response.blob();
+    files.push(new File([blob],item.name,{type:blob.type||'application/octet-stream'}));
+  }
+  return files;
+}
+async function wishAction(path,body){
+  const error=el('#wish-error');error.textContent='';
+  try{await call(path,body||{});await refresh();}
+  catch(failure){error.textContent=failure.message;}
+}
+function updateWishAddCount(){
+  const count=el('#wish-add-count');if(!count)return;
+  const length=el('#wish-add-text').value.length;
+  count.textContent=`${length.toLocaleString()} of 20,000 characters used.`;
+  count.className=length>20000?'input-error':'';
+}
+function updateWishTitleCount(){
+  const count=el('#wish-title-count');if(!count)return;
+  const length=el('#wish-title-input').value.length;
+  count.textContent=`${length} of 80 characters used.`;
+  count.className=length>80?'input-error':'';
+}
+// Owner repair 2026-11-11 round 3: "I need to be able to edit similar to create the new item in
+// the wish list and be able to remove an attachment or add an attachment" — Edit now opens this
+// same dialog, pre-filled with the wish's own text and a removable list of its own attachments,
+// instead of a one-line inline box. wishDialogEditId is null while adding, or the wish's id
+// while editing; wishAttachmentsToRemove collects ids the owner removed in this dialog session.
+// wishPendingFiles holds files picked for upload across more than one use of the file picker —
+// owner repair round 4: "any additional upload replaces the original file ... instead of adding
+// to it," since a plain <input type=file> always replaces its own selection; this list is kept
+// in script instead and is what is actually sent, not the input's own (overwritten) .files.
+let wishDialogEditId=null;
+const wishAttachmentsToRemove=new Set();
+let wishPendingFiles=[];
+function renderWishPendingFiles(){
+  const list=el('#wish-pending-attachments-list');if(!list)return;
+  list.innerHTML=wishPendingFiles.map((file,index)=>
+    `<li>${esc(file.name)} <button type="button" class="secondary wish-pending-remove" data-index="${index}">Remove</button></li>`
+  ).join('');
+}
+function openWishDialog(wish){
+  wishDialogEditId=wish?wish.id:null;
+  wishAttachmentsToRemove.clear();
+  wishPendingFiles=[];
+  el('#wish-add-title').textContent=wish?'Edit wish':'Add to wish list';
+  el('#wish-add-help').textContent=wish
+    ?'Change the title, the words, remove an attachment, or add another. Nothing is sent until you press Save.'
+    :'Give it a short title, write the wish in your own words, and add a document or a screenshot if that helps explain it. Nothing is sent until you press Add.';
+  el('#wish-add-button').textContent=wish?'Save':'Add to wish list';
+  el('#wish-title-input').value=wish?(wish.title||''):'';
+  el('#wish-add-text').value=wish?wish.text:'';
+  el('#wish-add-attachments').value='';
+  el('#wish-error').textContent='';
+  const existing=el('#wish-existing-attachments'),list=el('#wish-existing-attachments-list');
+  const attachments=wish&&Array.isArray(wish.attachments)?wish.attachments:[];
+  list.innerHTML=attachments.map(item=>`<li data-attachment-id="${esc(item.attachment_id)}">${esc(item.display_name)} `+
+    `<button type="button" class="secondary wish-attachment-remove" data-attachment-id="${esc(item.attachment_id)}">Remove</button></li>`).join('');
+  existing.hidden=attachments.length===0;
+  renderWishPendingFiles();
+  updateWishAddCount();
+  updateWishTitleCount();
+  el('#wish-add-dialog').showModal();
+}
+function wireWishList(){
+  const openButton=el('#wish-add-open');
+  if(openButton)openButton.addEventListener('click',()=>openWishDialog(null));
+  const cancelButton=el('#wish-add-cancel');
+  if(cancelButton)cancelButton.addEventListener('click',()=>el('#wish-add-dialog').close());
+  const textarea=el('#wish-add-text');
+  if(textarea)textarea.addEventListener('input',updateWishAddCount);
+  const titleInput=el('#wish-title-input');
+  if(titleInput)titleInput.addEventListener('input',updateWishTitleCount);
+  const existingList=el('#wish-existing-attachments-list');
+  if(existingList)existingList.addEventListener('click',event=>{
+    const button=event.target.closest('.wish-attachment-remove');if(!button)return;
+    wishAttachmentsToRemove.add(button.dataset.attachmentId);
+    button.closest('li')?.remove();
+  });
+  const attachmentsInput=el('#wish-add-attachments');
+  if(attachmentsInput)attachmentsInput.addEventListener('change',()=>{
+    // Owner repair round 4: choosing files again must add to wishPendingFiles, not replace it
+    // (a plain <input type=file> always replaces its own .files, so that list — not the
+    // input's — is what is actually kept and sent).
+    wishPendingFiles.push(...Array.from(attachmentsInput.files||[]));
+    attachmentsInput.value='';
+    renderWishPendingFiles();
+  });
+  const pendingList=el('#wish-pending-attachments-list');
+  if(pendingList)pendingList.addEventListener('click',event=>{
+    const button=event.target.closest('.wish-pending-remove');if(!button)return;
+    wishPendingFiles.splice(Number(button.dataset.index),1);
+    renderWishPendingFiles();
+  });
+  const form=el('#wish-add-form');
+  if(form)form.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const title=el('#wish-title-input').value,text=el('#wish-add-text').value,error=el('#wish-error');
+    error.textContent='';
+    if(!title.trim()){error.textContent='A wish needs a title; a blank title is not added.';return;}
+    if(!text.trim()){error.textContent='A wish needs some text; a blank wish is not added.';return;}
+    const formData=new FormData();
+    formData.append('title',title);
+    formData.append('text',text);
+    for(const file of wishPendingFiles)formData.append('attachments',file,file.name);
+    if(wishDialogEditId)formData.append('remove_attachments',JSON.stringify([...wishAttachmentsToRemove]));
+    try{
+      const path=wishDialogEditId?`/api/wishes/${encodeURIComponent(wishDialogEditId)}/edit`:'/api/wishes';
+      await callMultipart(path,formData);
+      el('#wish-add-dialog').close();
+      await refresh();
+    }catch(failure){error.textContent=failure.message;}
+  });
+  const list=el('#wish-list-items');if(!list)return;
+  list.addEventListener('click',async event=>{
+    const button=event.target.closest('button[data-wish-id]');if(!button)return;
+    const id=button.dataset.wishId,li=button.closest('li');
+    if(button.classList.contains('wish-remove')){
+      if(confirm('Are you sure?'))await wishAction(`/api/wishes/${encodeURIComponent(id)}/remove`,{});
+    }else if(button.classList.contains('wish-done-toggle')){
+      await wishAction(`/api/wishes/${encodeURIComponent(id)}/done`,{done:!li.classList.contains('wish-done')});
+    }else if(button.classList.contains('wish-build')){
+      await buildThisWish(lastWishes.find(wish=>wish.id===id)||{id,text:'',attachments:[]});
+    }else if(button.classList.contains('wish-edit')){
+      openWishDialog(lastWishes.find(wish=>wish.id===id)||{id,text:'',attachments:[]});
+    }
+  });
+  let draggedId=null;
+  list.addEventListener('dragstart',event=>{
+    const li=event.target.closest('li[data-wish-id]');if(li)draggedId=li.dataset.wishId;
+  });
+  list.addEventListener('dragover',event=>{if(draggedId)event.preventDefault();});
+  list.addEventListener('drop',async event=>{
+    const target=event.target.closest('li[data-wish-id]');
+    if(!target||!draggedId||target.dataset.wishId===draggedId)return;
+    event.preventDefault();
+    const order=[...list.querySelectorAll('li[data-wish-id]')].map(li=>li.dataset.wishId);
+    const from=order.indexOf(draggedId),to=order.indexOf(target.dataset.wishId);
+    order.splice(to,0,order.splice(from,1)[0]);
+    draggedId=null;
+    await wishAction('/api/wishes/reorder',{order});
+  });
 }
 function storyTile(label,value,note){return `<div class="mc-tile"><span>${esc(label)}</span><strong>${esc(value)}</strong>${note?`<small>${esc(note)}</small>`:''}</div>`;}
 // The owner must always be able to abandon a task from the first screen (2026-10-28: the button lived only in the Advanced task cards).
@@ -2486,6 +2730,14 @@ const DIRECTION_TRUST_NOTE='Your terminal may ask you to trust this folder; choo
 const DIRECTION_START_WAIT_MS=90000;   // another open window that started the agents this recently is given time to finish
 const directionKey='pending-direction:'+apiPrefix;
 let pendingDirectionMemory=null, directionAdvancing=false;
+// Owner repair 2026-11-11 round 5: Build this's attachments reached #owner-message-attachments
+// (round 4), but on the no-agent "first direction" path, Send only ever persisted {text,...} to
+// writePendingDirection — these File objects cannot go through that JSON/localStorage round
+// trip (no reload survival is promised here either; the same was already true of the files
+// themselves before the owner's first direction had any attachments at all), so they are kept
+// in memory only, read at Send and consumed at the one later point this task's own deferred
+// send actually posts the direction (advanceDirectionStart).
+let pendingDirectionAttachments=[];
 let directionStorageBroken=false;   // this browser would not keep the words: they live only in this page until sent
 function readPendingDirection(){
   if(directionStorageBroken)return pendingDirectionMemory;
@@ -2552,7 +2804,24 @@ function openDirectionStart(launched){
   const saved=readPendingDirection();
   {const kind=saved&&(saved.taskKind||(saved.documentOnly?'spec':''));if(kind)storeTaskKind(kind);setTaskKindField(true);}
   {const split=el('#owner-message-split');if(split){split.hidden=false;el('#owner-message-allow-split').checked=!!(saved&&saved.allowSplit===true);}}   // the first direction may allow a split too (stranger run 2026-11-05: the box was hidden here)
-  el('#owner-message-text').value=saved?saved.text:''; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
+  el('#owner-message-text').value=pendingWishBuildText!==null?pendingWishBuildText:(saved?saved.text:''); pendingWishBuildText=null; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
+  // Owner repair 2026-11-11 round 4: Build this carries the wish's own attachments in as this
+  // first message's "Separate supporting documents or screenshots" — the one case this first
+  // message's attachments field is shown for, since setAttachmentFields(false) just above still
+  // hides it for every other first direction (owner 2026-11-07: "Documents are not part of this
+  // first message" for the general case, unchanged).
+  if(pendingWishBuildAttachments.length){
+    setAttachmentFields(true);
+    // The usual help says documents are not part of the first message; with a wish's own files
+    // attached below that sentence would be false, so say what really happens.
+    el('#owner-message-help').textContent=el('#owner-message-help').textContent.replace('Documents are not part of this first message: add them with Send clarification once Delivery is running.','The files of this wish are attached below and are sent with this message; Delivery gets them in its task folder.');
+    const transfer=new DataTransfer();
+    for(const file of pendingWishBuildAttachments)transfer.items.add(file);
+    el('#owner-message-attachments').files=transfer.files;
+  }else{
+    el('#owner-message-attachments').value='';
+  }
+  pendingWishBuildAttachments=[];
   el('#owner-message-dialog').showModal();
 }
 function developerAgents(state){return Object.values(state.agents||{}).filter(agent=>agent.active&&['engineering','development'].includes(agent.role));}
@@ -2590,7 +2859,28 @@ async function advanceDirectionStart(){
     const sessionHasDirection=agent=>Boolean((state.owner_directions||{})[agent.session_id]?.text);
     const waiting=developerAgents(state).find(agent=>agent.task==='AWAITING_OWNER_DIRECTION'&&!sessionHasDirection(agent));
     if(waiting){
-      await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec',allow_split:pending.allowSplit===true});
+      // Owner repair 2026-11-11 round 5: "Build this" attached documents reach this point too.
+      // Round 8: pendingDirectionAttachments is in-memory only and does not survive a reload or
+      // a long wait past this tab's own lifetime, unlike pending.text (which already goes
+      // through writePendingDirection's own localStorage round trip) — so when that in-memory
+      // copy is gone, the files are rebuilt fresh from pending.wishAttachmentSource (the wish and
+      // attachment ids, persisted alongside the text), reading them back from this wish's own
+      // durable storage rather than from this tab's memory.
+      const attachmentFiles=pendingDirectionAttachments.length?pendingDirectionAttachments:await fetchWishAttachmentFiles(pending.wishAttachmentSource);
+      if(attachmentFiles.length){
+        // Sent as part of this same direction message, the same way the ordinary
+        // (agent-already-running) Send path already attaches files to a direction.
+        const form=new FormData();
+        form.append('message_type','direction'); form.append('text',pending.text);
+        form.append('task_kind',pending.taskKind||(pending.documentOnly?'spec':'development'));
+        form.append('document_only',(pending.taskKind||(pending.documentOnly?'spec':''))==='spec'?'1':'');
+        form.append('allow_split',pending.allowSplit===true?'1':'');
+        for(const file of attachmentFiles)form.append('attachments',file,file.name);
+        await callMultipart('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',form);
+        pendingDirectionAttachments=[];
+      }else{
+        await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec',allow_split:pending.allowSplit===true});
+      }
       writePendingDirection(null); renderDirectionNote(null);
       el('#notice').textContent='Your complete direction was sent to Delivery.';
       await startMissingAgents(); return;
@@ -2747,6 +3037,7 @@ function rememberPanel(id){
 rememberPanel('settings-details');
 rememberPanel('history');
 wireTabs();
+wireWishList();
 wireStory();
 refresh().then(()=>{if(location.hash==='#start-direction'&&!mcStartLinkDone){mcStartLinkDone=true;openStartDirection();}});
 setInterval(refresh,2000);
@@ -2907,6 +3198,19 @@ if(chatForm){
 }
 </script>
 </body></html>"""
+
+
+def content_disposition(kind: str, name: str) -> str:
+    """Build a Content-Disposition header value that is safe for any file name.
+
+    HTTP headers carry latin-1 only; a name such as a macOS screenshot's
+    ("Screenshot ... 10.37.05\u202fAM.png", with a narrow no-break space) used to
+    crash the reply, so the browser got nothing. The plain filename= part is an
+    ASCII stand-in; filename*= (RFC 5987) carries the real name, percent-encoded.
+    """
+    name = str(name or "attachment").replace("\r", " ").replace("\n", " ")
+    plain = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in name) or "attachment"
+    return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
 def viewer_version() -> str:
@@ -4647,6 +4951,7 @@ def parse_release_multipart(raw: bytes, content_type: str) -> tuple[dict[str, st
         elif name in {
             "decision", "reason", "text", "message_type",
             "directive_source", "directive_filename", "document_only", "task_kind", "allow_split",
+            "remove_attachments", "title",
         }:
             try:
                 fields[name] = data.decode("utf-8", errors="strict")
@@ -4812,6 +5117,40 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            wish_attachment_match = re.fullmatch(r"/api/wishes/([^/]+)/attachments/([^/]+)", path)
+            if wish_attachment_match:
+                # Owner repair 2026-11-10: a wish's own attached doc or screenshot, served back
+                # to the owner's browser so it can be viewed/downloaded, the same way a build
+                # download is served above — never a path from the browser, only a lookup by id.
+                found = board.wish_attachment_file(root, unquote(wish_attachment_match.group(1)), unquote(wish_attachment_match.group(2)))
+                if found is None:
+                    body = json.dumps({"error": "that attachment no longer exists"}).encode("utf-8")
+                    self.send_response(404)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                file_path, content_type, display_name = found
+                try:
+                    data = file_path.read_bytes()
+                except OSError:
+                    body = json.dumps({"error": "that attachment no longer exists"}).encode("utf-8")
+                    self.send_response(404)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Disposition", content_disposition("inline", display_name))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path.startswith("/api/releases/") and path.endswith("/findings"):
                 # Stage 6b: the FINDINGS.md of an Analyze code task, read from the release's own commit.
                 status, body, media = serve_findings_report(root, path)
@@ -4837,7 +5176,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 try:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/octet-stream")
-                    self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                    self.send_header("Content-Disposition", content_disposition("attachment", name))
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.send_header("Content-Length", str(size))
@@ -5056,6 +5395,79 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                         raise ValueError('send a JSON object with "on": true or false')
                     result = board.set_project_support_plan(root, data.get("on"))
                     self.send_json(201, result); return
+                # task build-wish-list: the Wish list view's own five routes, next to
+                # /api/support-plan because they are the same kind of thing — a project-level
+                # record kept and written the same way.
+                if path == "/api/wishes":
+                    # Owner repair 2026-11-10: a wish can now carry attachments too, the same
+                    # multipart-or-JSON dual path as /api/agents/<id>/owner-message below.
+                    length = int(self.headers.get("Content-Length", "0"))
+                    content_type = self.headers.get("Content-Type", "")
+                    if length < 0 or length > board.MAX_TOTAL_ATTACHMENT_BYTES + 512 * 1024:
+                        raise ValueError("the wish and its attachments are too large")
+                    raw = self.rfile.read(length)
+                    if len(raw) != length:
+                        raise ValueError("wish upload is incomplete")
+                    if content_type.lower().startswith("multipart/form-data"):
+                        fields, attachments = parse_release_multipart(raw, content_type)
+                        result = board.add_project_wish(root, fields.get("title"), fields.get("text"), attachments)
+                    else:
+                        data = json.loads(raw or b"{}")
+                        if not isinstance(data, dict):
+                            raise ValueError('send a JSON object with "title" and "text"')
+                        result = board.add_project_wish(root, data.get("title"), data.get("text"))
+                    self.send_json(201, result); return
+                wish_prefix = "/api/wishes/"
+                if path.startswith(wish_prefix) and path.endswith("/edit"):
+                    # Owner repair 2026-11-11 round 3: the one edit dialog (the same shape as
+                    # the add dialog) can also add new attachments and remove existing ones, the
+                    # same multipart-or-JSON dual path as /api/wishes itself.
+                    wish_id = unquote(path[len(wish_prefix):-len("/edit")])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    content_type = self.headers.get("Content-Type", "")
+                    if length < 0 or length > board.MAX_TOTAL_ATTACHMENT_BYTES + 512 * 1024:
+                        raise ValueError("the wish and its attachments are too large")
+                    raw = self.rfile.read(length)
+                    if len(raw) != length:
+                        raise ValueError("wish upload is incomplete")
+                    if content_type.lower().startswith("multipart/form-data"):
+                        fields, attachments = parse_release_multipart(raw, content_type)
+                        try:
+                            remove_ids = json.loads(fields.get("remove_attachments") or "[]")
+                        except json.JSONDecodeError:
+                            raise ValueError('"remove_attachments" must be a JSON array of attachment ids')
+                        if not isinstance(remove_ids, list):
+                            raise ValueError('"remove_attachments" must be a JSON array of attachment ids')
+                        result = board.edit_project_wish(root, wish_id, fields.get("title"), fields.get("text"), attachments, remove_ids)
+                    else:
+                        data = json.loads(raw or b"{}")
+                        if not isinstance(data, dict):
+                            raise ValueError('send a JSON object with "title" and "text"')
+                        result = board.edit_project_wish(root, wish_id, data.get("title"), data.get("text"))
+                    self.send_json(200, {"wishes": result}); return
+                if path.startswith(wish_prefix) and path.endswith("/done"):
+                    wish_id = unquote(path[len(wish_prefix):-len("/done")])
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError('send a JSON object with "done": true or false')
+                    result = board.set_project_wish_done(root, wish_id, data.get("done"))
+                    self.send_json(200, {"wishes": result}); return
+                if path.startswith(wish_prefix) and path.endswith("/remove"):
+                    wish_id = unquote(path[len(wish_prefix):-len("/remove")])
+                    result = board.remove_project_wish(root, wish_id)
+                    self.send_json(200, {"wishes": result}); return
+                if path == "/api/wishes/reorder":
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError('send a JSON object with "order": [wish ids]')
+                    result = board.reorder_project_wishes(root, data.get("order"))
+                    self.send_json(200, {"wishes": result}); return
                 req_prefix, req_suffix = "/api/tasks/", "/requirements-decision"
                 if path.startswith(req_prefix) and path.endswith(req_suffix):
                     task = unquote(path[len(req_prefix):-len(req_suffix)])
