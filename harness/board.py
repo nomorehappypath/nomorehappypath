@@ -19598,7 +19598,13 @@ def cancel_task(root: Path, task: str) -> dict[str, Any]:
             raise ValueError("unknown task")
         if task in _accepted_task_ids(state):
             raise ValueError("this task is accepted and already in main; there is nothing to cancel")
-        if state.get("releases", {}).get(task, {}).get("status") in RELEASED_STATUSES:
+        # A released task the owner answered "Not accepted" is back in repair, not waiting for
+        # a test: it is unfinished work and Cancel must work on it (owner, 2026-11-12: the
+        # page said "Owner rejected / repair required" while Cancel answered "waiting for
+        # your test"). A new candidate clears that answer, so it only ever speaks for the
+        # current one.
+        owner_rejected = ((state.get("release_decisions") or {}).get(task) or {}).get("decision") == "not_accepted"
+        if state.get("releases", {}).get(task, {}).get("status") in RELEASED_STATUSES and not owner_rejected:
             raise ValueError("this task is waiting for your test; answer it with Accept or Not accepted")
         requests = list(_task_requests(state, task))
         artifact_values = [
