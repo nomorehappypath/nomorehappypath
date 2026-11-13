@@ -151,7 +151,7 @@ def agent_writable_roots(execution_root, data_root, workspace_root,
     return [str(path) for path in granted]
 
 
-def agent_protected_roots(project_root, data_root, workspace_root) -> list[str]:
+def agent_protected_roots(project_root, data_root, workspace_root, harness_root=None) -> list[str]:
     """Harness-owned storage no managed agent may write, even where a grant covers it.
 
     The board state, Completion Contracts, reviews, control records (session
@@ -163,11 +163,21 @@ def agent_protected_roots(project_root, data_root, workspace_root) -> list[str]:
     scaffolded or legacy project it sits INSIDE the project checkout, which
     is always granted, so the confinement must deny it explicitly. Returned
     resolved, so a symlinked name cannot slip past the deny.
+
+    `harness_root` adds NMHP's own shared skill library (spec
+    SKILL_LIBRARY_SPEC.md section 3: "agents cannot change the library").
+    Ordinarily that folder lives in NMHP's own install, which is simply
+    outside any project's grant and needs no explicit deny; it is denied
+    here too for the one case where it is not — a project built ON NMHP's
+    own source (this project is one), whose code root already grants writes
+    into the very folder the library lives in.
     """
     from harness import project_memory  # local: project_memory imports the board, which this module must not
+    from harness import skill_library
 
     context = context_module.context_from_roots(project_root, data_root, workspace_root)
     roots = [_resolved(context.data_root), _resolved(context.board_backup_root),
-             _resolved(project_memory.external_backup_root(context))]
+             _resolved(project_memory.external_backup_root(context)),
+             _resolved(skill_library.library_root(harness_root))]
     return [str(path) for path in dict.fromkeys(roots)]
 

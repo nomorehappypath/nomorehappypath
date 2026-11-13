@@ -20,7 +20,7 @@ OLD_TITLE_IDS = ["help-start-title", "help-reviewer-first-title", "help-setup-ti
                  "help-windows-tools-title", "help-reach-title", "help-key-title", "help-settings-title", "help-direction-title", "help-go-title", "help-direct-title",
                  "help-buttons-title", "help-progress-title", "help-accept-title", "help-history-title", "help-lifecycle-title", "help-limits-title", "help-trouble-title",
                  "help-legal-title", "help-chat-title"]
-GROUPS = ["Getting started", "Who does the work", "Talking to agents", "Windows programs", "Costs and limits", "When something is stuck", "Legal"]
+GROUPS = ["Getting started", "Who does the work", "Talking to agents", "Skill Library", "Windows programs", "Costs and limits", "When something is stuck", "Legal"]
 
 BODY = r"""
 await until(() => document.querySelector('#help-page') && !document.querySelector('#help-page').hidden && document.querySelector('#help-search'));
@@ -79,11 +79,11 @@ class RenderedHelpWalkthroughTests(RenderedCase):
         self.assertEqual(result["groups"], GROUPS)
         self.assertTrue(all(present for _id, present in result["oldIds"]), [i for i, present in result["oldIds"] if not present])
         self.assertTrue(all(present for _id, present in result["anchors"]))
-        self.assertEqual(result["sectionCount"], 24, "every old section is still there, plus the project page tabs (2026-11-03)")
-        self.assertEqual(sum(count for _g, count in result["inGroups"]), 24)
+        self.assertEqual(result["sectionCount"], 25, "every old section is still there, plus the project page tabs (2026-11-03) and the Skill Library section")
+        self.assertEqual(sum(count for _g, count in result["inGroups"]), 25)
         self.assertTrue(all(count >= 1 for _g, count in result["inGroups"]))
         self.assertEqual(result["search"], {"label": "Search help", "type": "search"})
-        self.assertEqual(result["allShown"], 24)
+        self.assertEqual(result["allShown"], 25)
         # search
         self.assertIn("help-windows-vm-title", result["windows"]["sections"])
         self.assertNotIn("help-start-title", result["windows"]["sections"])
@@ -95,9 +95,9 @@ class RenderedHelpWalkthroughTests(RenderedCase):
         self.assertFalse(result["windows"]["topics"], "the topic cards give way to the matches")
         self.assertEqual(result["none"], {"sections": 0, "status": "No help topic matches. Try fewer or different words.", "groups": 0})
         self.assertIn("help-go-title", result["words"], "every word must match: 'requirements go ahead' finds the Go ahead section")
-        self.assertEqual(result["cleared"], {"sections": 24, "status": "", "how": True, "topics": True})
+        self.assertEqual(result["cleared"], {"sections": 25, "status": "", "how": True, "topics": True})
         self.assertTrue(all(present for _href, present in result["links"]))
-        self.assertEqual(len(result["links"]), 7)
+        self.assertEqual(len(result["links"]), 8)
         self.assertGreaterEqual(result["linkHeight"], 43.5)
         self.assertTrue(result["afterLink"]["target"], "a topic card takes the owner to its group")
         self.assertEqual(result["lowContrast"], [], "every new word has at least 4.5:1 contrast")

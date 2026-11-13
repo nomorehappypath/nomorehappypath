@@ -205,6 +205,7 @@ PAGE = r"""<!doctype html>
 <section class="panel mc-advanced-intro" style="margin-top:18px"><h2>Advanced</h2><p>Everything for running the agents by hand: start and stop them, give direction, see every terminal and the review queue, and where this project’s AI access lives. Nothing here is needed for a normal task.</p></section>
 <section class="panel launch"><div><h2>Start visible work</h2><p>Open a role now. Give Delivery direction through its safe composer; its Product Manager designs the objective and plan. The Delivery button first asks what kind of work this is (Write code, Analyze code or Write specs), then lets you pick the provider, model and effort for this launch only (pre-filled from Settings); choose a terminal color to identify it; Cancel uses Settings' values and standard black.</p></div><div class="actions"><button id="codex">CODEX CLI · Delivery Agent</button><button class="secondary" id="claude">CLAUDE CLI · Reviewer</button><button class="secondary" id="cto">CTO (CLAUDE)</button><button class="stop" id="stop-all" disabled>Stop all agents</button><button class="secondary" id="relaunch-preserved" hidden>Relaunch preserved agents</button></div><div class="direction-start" id="direction-start"><button type="button" class="secondary" id="give-direction" title="Write what you want built. Delivery, the Independent Reviewer and the CTO start by themselves and Delivery receives it.">Give direction (starts the agents)</button><p class="launch-choice-note" id="direction-start-note" role="status" aria-live="polite" hidden></p><button type="button" class="secondary" id="direction-discard" hidden disabled title="Nothing is saved to discard. When you save a direction (also while the project is paused) this forgets it; nothing has been sent.">Discard the saved direction</button></div></section>
 <section class="panel settings-panel"><details class="settings-details" id="access-details"><summary><span><strong>AI access for this project</strong></span><span class="summary-end"><span class="history-count">Where this project’s provider permissions live</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="access-notice" class="notice" role="status" aria-live="polite"></div><div class="settings-provider"><strong>Claude — project permissions file</strong><code id="access-claude-path">Loading…</code><div>Applies only to this project folder. Bypass mode retains the deny guardrails for destructive commands and force-pushes.</div></div><div class="settings-provider"><strong>Codex — project trust entry</strong><code id="access-codex-path">Loading…</code><div>The global file carries one trust entry per project — this project’s is shown. Approval and sandbox access are passed per launch to this project’s agents and are never written globally, so they cannot leak into other projects or your own codex sessions.</div></div><div class="settings-provider"><strong>Gemini — operating-system write limits</strong><code>No project file</code><div>Gemini’s agents run inside the same operating-system write limit as the others: they can write this project’s folders and Gemini’s own sign-in folder, nothing else. Your own Gemini settings and controls (~/.gemini/config and settings.json) cannot be changed by an agent. Gemini uses your Google subscription sign-in; nothing is written for it when a project opens.</div></div><p class="history-intro">Access is configured automatically every time this project opens — nothing to click. This panel only shows where it lives.</p></details></section>
+<section class="panel settings-panel"><details class="settings-details" id="skill-library-details"><summary><span><strong>Skill library</strong></span><span class="summary-end"><span class="history-count">Shared written guides your builder and reviewer can use</span><i class="summary-caret" aria-hidden="true"></i></span></summary><div id="skill-library-notice" class="notice" role="status" aria-live="polite"></div><label><input type="checkbox" id="skill-library-switch" checked> Use the skill library</label><p class="history-intro">Twelve written guides (screens, server code, data, security, payments, testing, deployment and more) live inside NMHP itself. For each task your builder proposes which ones it needs, with a reason; you tick the ones you agree with on that task's Go ahead card, and only those are given to the agents, by Claude or Codex, for that whole task. A guide steers the work; it does not guarantee the result. Task details show, per agent, what was really opened: a guide it read in full, one it opened without agreeing to first (opened, not agreed), one whose file could not be read, or one the record simply does not know about (not known). A builder on Gemini gets no block at all for that task (Skills: not available, the builder runs on Gemini); a Claude or Codex builder with a Gemini reviewer still gets its list, and Skills used says "Reviewer: not available for Gemini." The CTO is never given a guide. Turning this off removes the block from the next task you propose; a task you already agreed to keeps its list to the end.</p></details></section>
 <section id="attention" class="panel section" aria-live="polite"></section>
 <section class="stats"><div class="panel stat"><strong id="active">0</strong><span>active board agents</span></div><div class="panel stat"><strong id="open">0</strong><span>reviews waiting</span></div><div class="panel stat"><strong id="claimed">0</strong><span>reviews in QA</span></div><div class="panel stat"><strong id="passed">0</strong><span>review passes</span></div></section>
 <aside class="panel active-panel"><h2>Active agents and terminals</h2><p>Each agent appears once with its exact task, board status, terminal color, and controls.</p><div id="agents"></div><h2 style="margin-top:24px">Review queue</h2><p>Independent reviewers claim these items.</p><div id="queue"></div></aside>
@@ -871,6 +872,54 @@ function noTestCountHtml(proposal){
   if(proposal.document_only||(proposal.task_kind&&proposal.task_kind!=='development')||!list.length||!missing)return'';
   return `<p class="no-test-count" data-no-test-count>${missing} of ${list.length} criteria have no test yet.</p>`;
 }
+// task build-skill-library: the library's own plain name + one-line owner description for
+// the card's "Other skills in the library" fold, in the fixed order of SKILL_LIBRARY_SPEC.md
+// section 4 — mirrors harness/skill_library.py's SKILLS tuple (12 fixed entries, rarely changed).
+const SKILL_LIBRARY_CATALOGUE=[
+  ['requirements-architecture','Requirements and architecture','Turns the idea into clear requirements and a design sized to the job.'],
+  ['ux-ui-design','Screen and experience design','Decides what the user sees and does, in every state of every screen.'],
+  ['frontend','Screens (front end)','Builds screens that work on phone and desktop, with real data.'],
+  ['backend','Server (back end)','Builds the server side: rules, checks on input, clear errors.'],
+  ['data-databases','Data and databases','Stores data safely and changes it without losing any.'],
+  ['integrations','Outside services','Connects to other services so that slowness or failure does no harm.'],
+  ['payments','Payments and subscriptions','Takes money safely: no double charge, access follows payment.'],
+  ['security','Security and sign-in','Sign-in, permissions, private data, and trying to break them.'],
+  ['qa-testing','QA and testing','Proves it works and looks for where it does not.'],
+  ['cloud-devops','Cloud and deployment','Gets the app deployed, watched, backed up and able to roll back.'],
+  ['code-review-maintenance','Code review and upkeep','Reviews changes and keeps existing code healthy.'],
+  ['support-troubleshooting','Troubleshooting','Finds the true cause of a reported problem and resolves it.'],
+];
+function skillsBlockHtml(proposal,name){
+  // spec SKILL_LIBRARY_SPEC.md section 2a: placed after requirements/"What will be tested",
+  // before the "Small change" tick and the buttons.
+  // switch-vendor-legacy-v2 repair: the switch off or a Gemini builder (frozen on the
+  // proposal at the moment it was filed, in skills_unavailable) means no block at all -
+  // never "0 of 12 chosen" with every guide foldable, which still invited a tick.
+  if(proposal.skills_unavailable)return'';
+  const proposed=proposal.skills_proposed||[];
+  const dropped=proposal.skills_dropped||[];
+  const broken=proposal.skills_broken||[];
+  const brokenNames=new Set(broken);
+  const proposedSlugs=new Set(proposed.map(item=>item.slug));
+  // Final review (B2): the fold used to come from a fixed 12-entry client-side list, so a
+  // guide added to the library after this file was written never appeared. The real, current
+  // catalogue is frozen on the proposal itself (skills_catalogue, set when it was filed);
+  // SKILL_LIBRARY_CATALOGUE is kept only as the fallback for a proposal filed before this fix.
+  const catalogue=(proposal.skills_catalogue&&proposal.skills_catalogue.length?proposal.skills_catalogue.map(item=>[item.slug,item.plain_name,item.owner_description]):SKILL_LIBRARY_CATALOGUE);
+  const rest=catalogue.filter(([slug,plainName])=>!proposedSlugs.has(slug)&&!brokenNames.has(plainName));
+  const count=proposed.length;
+  const total=proposed.length+rest.length;
+  // The owner's ticks and the fold survive a redraw of the same proposal (data-keep, read by keepOwnerState): the early review
+  // finishing rewrites this card, and without a key the ticks went back to the builder's proposal and Go ahead froze that list
+  // (final review B1). The key carries the task and the proposal version, so a new proposal starts again from its own list.
+  const keepKey=slug=>`skill-${name}-${proposal.version||1}-${slug}`;
+  const proposedRows=proposed.map(item=>`<li class="skill-row"><label><input type="checkbox" checked data-keep="${esc(keepKey(item.slug))}" data-skill-tick="${esc(item.slug)}"> ${esc(item.plain_name)}</label><div class="skill-why">Why: ${esc(item.reason||'')}</div></li>`).join('');
+  const restRows=rest.map(([slug,plainName,description])=>`<li class="skill-row"><label><input type="checkbox" data-keep="${esc(keepKey(slug))}" data-skill-tick="${esc(slug)}"> ${esc(plainName)}</label><div class="skill-why">${esc(description)}</div></li>`).join('');
+  const emptyLine=count===0?'<p>The builder proposed no skill for this task.</p>':'';
+  const droppedLines=dropped.map(name=>`<p class="skill-dropped">Not in the library, left out: ${esc(name)}</p>`).join('');
+  const brokenLines=broken.map(name=>`<p class="skill-broken">Left out because its file is damaged: ${esc(name)}</p>`).join('');
+  return `<div class="skills-block" data-skills-block data-skill-total="${total}"><div class="requirements-title">Skills for this task <span class="skills-count">${count} of ${total} chosen</span></div><p>Skills are written expert guides the agents follow for this task. Tick the ones you want used. The agents are given exactly these.</p><ul class="skill-list">${proposedRows}</ul>${emptyLine}${droppedLines}${brokenLines}<details class="skill-fold" data-keep="${esc(`skillfold-${name}-${proposal.version||1}`)}"><summary>Other skills in the library (${rest.length})</summary><ul class="skill-list">${restRows}</ul></details></div>`;
+}
 function proposalCardHtml(name,proposal){
   const cc=proposal.contract_check||{};
   const status=cc.status||'';
@@ -889,7 +938,7 @@ function proposalCardHtml(name,proposal){
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
     :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review, then start</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. When it is done the work starts by itself, so keep this page open. If the reviewer has questions for you, it asks them first and nothing starts. You can still go ahead without waiting.</p>`:''}`;
-  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${skillsBlockHtml(proposal,name)}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
 // A task card is split into two independently-refreshed regions so the window
@@ -920,7 +969,18 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
     :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.${(proposal.contract_check?.answers||[]).length?` Your answers were added at the end of the requirements under “Decided before coding”${proposal.contract_check.used_recommended?' (the recommended answers were used)':''}.`:''}</div>`
     :'';
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
+  // task build-skill-library, requirement 9: the owner's frozen skill-library agreement,
+  // once Go ahead has recorded one, next to the other confirmed facts of the task.
+  const skillsAgreed=(state.task_skills_agreed||{})[name];
+  const skillsUnavailable=(state.task_skills_unavailable||{})[name];
+  // switch-vendor-legacy-v2: the switch off, or a Gemini builder, means the whole task ran
+  // without a skills block at all - the owner sees the plain reason instead of "Skills agreed".
+  const skillsAgreedLine=skillsUnavailable==='gemini'?'<p class="skills-agreed-line" data-skills-agreed>Skills: not available, the builder runs on Gemini</p>'
+    :skillsUnavailable==='off'?'<p class="skills-agreed-line" data-skills-agreed>Skills: the skill library is off for this project</p>'
+    :skillsAgreed?`<p class="skills-agreed-line" data-skills-agreed>Skills agreed: ${skillsAgreed.length?skillsAgreed.map(item=>esc(item.plain_name)).join(', '):'none'}</p>`:'';
+  const skillsUsedLines=(state.task_skill_usage||{})[name]||[];
+  const skillsUsedLine=skillsUsedLines.length?`<p class="skills-used-line" data-skills-used>Skills used: ${skillsUsedLines.map(esc).join(' ')}</p>`:'';
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}${skillsAgreedLine}${skillsUsedLine}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
@@ -1081,6 +1141,7 @@ function keepOwnerState(node,write){
     if(!target)continue;
     if(target.tagName==='DETAILS')target.open=Boolean(value);else if(target.type==='radio'||target.type==='checkbox')target.checked=Boolean(value);else target.value=value;
   }
+  for(const block of node.querySelectorAll('[data-skills-block]'))refreshSkillCount(block);   // the restored ticks decide the counter
   let again=null;
   if(activeKey)again=node.querySelector(`[data-keep="${CSS.escape(activeKey)}"]`);
   else if(path){again=node;for(const index of path){again=again&&again.children?again.children[index]:null;}}
@@ -2052,6 +2113,30 @@ async function recoverAgent(agentId,task){
   }catch(error){el('#notice').textContent='Could not recover agent: '+error.message;}
 }
 
+let skillLibrarySwitchSaving=false;
+function renderSkillLibrarySwitch(state){
+  const box=el('#skill-library-switch');
+  if(!box||skillLibrarySwitchSaving)return;
+  box.checked=(state.project_skill_library||{}).on!==false;
+}
+(function initSkillLibrarySwitch(){
+  if(typeof document==='undefined')return;   // the page-script tests run these declarations under node without a page
+  const box=el('#skill-library-switch');
+  if(!box)return;
+  box.addEventListener('change',async()=>{
+    const notice=el('#skill-library-notice'),on=box.checked;
+    skillLibrarySwitchSaving=true;
+    try{
+      await fetch(apiPath('/api/skill-library-switch'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});
+      if(notice)notice.textContent=on?'The skill library is on for your next proposed task.':'The skill library is off for your next proposed task; a task already agreed keeps its list.';
+    }catch(error){
+      box.checked=!on;
+      if(notice)notice.textContent='Could not save that change; try again.';
+    }finally{
+      skillLibrarySwitchSaving=false;
+    }
+  });
+})();
 function render(data,managed){
   lastManaged=managed;
   const pausedNow=['paused','resuming'].includes((data.state||{}).project_pause?.status);
@@ -2071,6 +2156,7 @@ function render(data,managed){
   const liveTasks=new Set(data.live_tasks||[]);
   writeText(el('#passed'),reviews.filter(review=>review.status==='passed'&&liveTasks.has(review.task)).length);
   renderOwnerActions(state);
+  renderSkillLibrarySwitch(state);
   maybeOpenSpecQuestions(state);
   renderStory(data.story);
   renderStrip(data.story);
@@ -3150,7 +3236,8 @@ document.addEventListener('click',async event=>{
     const note=el(`#req-decision-note-${CSS.escape(task)}`);
     const box=go.closest('.requirements-proposal');
     try{
-      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||'',small_change:Boolean(box?.querySelector('[data-small-change]')?.checked)});
+      const skills=box?[...box.querySelectorAll('[data-skill-tick]:checked')].map(c=>c.dataset.skillTick):[];
+      await call(`/api/tasks/${encodeURIComponent(task)}/requirements-decision`,{decision:'go_ahead',version:box?.dataset.version,token:box?.dataset.token||'',small_change:Boolean(box?.querySelector('[data-small-change]')?.checked),skills});
       if(note)note.textContent='Recorded. Delivery has been told to record the contract and begin.';
       await refresh();
     }catch(error){if(note)note.textContent='Could not record the decision: '+error.message;go.disabled=false;startedAfterWait.delete(task+':'+((box&&box.dataset.version)||1));}   // a failed press may be tried again
@@ -3225,6 +3312,22 @@ document.addEventListener('change',async event=>{
   }catch(error){securityNotice[task]='Could not save: '+error.message;}
   delete securityPending[task];
   await refresh();
+});
+// task build-skill-library, repair (reviewer finding): the "N of 12 chosen" counter was set
+// once at render time and never updated when the owner ticked or unticked a skill. Recompute it
+// from the real checked boxes on every change, purely client-side (no network call, like the
+// small-change tick already next to it).
+function refreshSkillCount(block){
+  const checked=block.querySelectorAll('[data-skill-tick]:checked').length;
+  const counter=block.querySelector('.skills-count');
+  if(counter)counter.textContent=`${checked} of ${block.dataset.skillTotal||12} chosen`;
+}
+document.addEventListener('change',event=>{
+  const input=event.target.closest?event.target.closest('[data-skill-tick]'):null;
+  if(!input)return;
+  const block=input.closest('[data-skills-block]');
+  if(!block)return;
+  refreshSkillCount(block);
 });
 let requirementsModifyTask='';
 function openRequirementsModify(task){
@@ -5444,6 +5547,18 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                         raise ValueError('send a JSON object with "on": true or false')
                     result = board.set_project_support_plan(root, data.get("on"))
                     self.send_json(201, result); return
+                if path == "/api/skill-library-switch":
+                    # The project-level "Use the skill library" switch (SKILL_LIBRARY_SPEC.md
+                    # "Switching and updating"): takes effect for the next proposal; a task
+                    # already agreed keeps its list to the end.
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 64 * 1024:
+                        raise ValueError("the payload is too large")
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError('send a JSON object with "on": true or false')
+                    result = board.set_project_skill_library(root, data.get("on"))
+                    self.send_json(201, result); return
                 # task build-wish-list: the Wish list view's own five routes, next to
                 # /api/support-plan because they are the same kind of thing — a project-level
                 # record kept and written the same way.
@@ -5527,6 +5642,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                     event = board.record_requirements_decision(
                         root, task, str(data.get("decision", "")), str(data.get("text", "")),
                         version=data.get("version"), answers=data.get("answers"), token=str(data.get("token", "")), small_change=data.get("small_change"),
+                        skills=data.get("skills"),
                     )
                     self.send_json(201, {"decision": event}); return
                 ask_prefix, ask_suffix = "/api/agent-questions/", "/answer"

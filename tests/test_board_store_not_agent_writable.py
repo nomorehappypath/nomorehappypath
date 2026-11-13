@@ -78,8 +78,10 @@ class GrantTests(unittest.TestCase):
         code = self.base / "code"; code.mkdir()
         data = code / ".harness"; data.mkdir()
         protected = agent_grant.agent_protected_roots(code, data, self.base / "workspaces")
+        from harness import skill_library
         self.assertEqual(protected, [_real(data), _real(code / ".harness-backups"),
-                                     _real(code / ".harness-memory-backups")])
+                                     _real(code / ".harness-memory-backups"),
+                                     _real(skill_library.library_root(None))])      # the skill library folder is protected from every agent
 
 
 class ProfileShapeTests(unittest.TestCase):
