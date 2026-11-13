@@ -500,6 +500,7 @@ PAGE = r'''<!doctype html>
           <a href="#help-group-getting-started"><strong>Getting started</strong><span>Install, sign in, your first project and how to read it.</span></a>
           <a href="#help-group-who-does-the-work"><strong>Who does the work</strong><span>Builder, reviewer and CTO, and why the reviewer is from another company.</span></a>
           <a href="#help-group-talking-to-agents"><strong>Talking to agents</strong><span>Say go ahead, message an agent, view its screen, ask about your project.</span></a>
+          <a href="#help-group-skill-library"><strong>Skill Library</strong><span>Shared guides for Claude and Codex, agreed on the Go ahead card.</span></a>
           <a href="#help-group-windows-programs"><strong>Windows programs</strong><span>Connect a test machine and download the tested build.</span></a>
           <a href="#help-group-costs-and-limits"><strong>Costs and limits</strong><span>What happens when Claude or Codex runs out of allowance.</span></a>
           <a href="#help-group-when-stuck"><strong>When something is stuck</strong><span>What the app does by itself, and the rare times it needs you.</span></a>
@@ -730,6 +731,36 @@ PAGE = r'''<!doctype html>
             </ol>
           </section>
 
+        </div>
+
+        <div class="help-group" id="help-group-skill-library" data-help-group>
+          <h2 class="help-group-title">Skill Library</h2>
+          <section class="help-section" data-help-item aria-labelledby="help-skill-library-title">
+            <h2 id="help-skill-library-title">The Twelve Guides, Agreeing Them, And The Off Switch</h2>
+            <p>One shared <strong>Skill Library</strong> lives inside NoMoreHappyPath itself: twelve written guides for the kinds of work that come up in almost every app. Both <strong>Claude</strong> and <strong>Codex</strong> builders and reviewers can use it; Gemini and the CTO are never given a guide.</p>
+            <ul>
+              <li><strong>Requirements and architecture</strong> — turns the idea into clear requirements and a design sized to the job.</li>
+              <li><strong>Screen and experience design</strong> — decides what the user sees and does, in every state of every screen.</li>
+              <li><strong>Screens (front end)</strong> — builds screens that work on phone and desktop, with real data.</li>
+              <li><strong>Server (back end)</strong> — builds the server side: rules, checks on input, clear errors.</li>
+              <li><strong>Data and databases</strong> — stores data safely and changes it without losing any.</li>
+              <li><strong>Outside services</strong> — connects to other services so that slowness or failure does no harm.</li>
+              <li><strong>Payments and subscriptions</strong> — takes money safely: no double charge, access follows payment.</li>
+              <li><strong>Security and sign-in</strong> — sign-in, permissions, private data, and trying to break them.</li>
+              <li><strong>QA and testing</strong> — proves it works and looks for where it does not.</li>
+              <li><strong>Cloud and deployment</strong> — gets the app deployed, watched, backed up and able to roll back.</li>
+              <li><strong>Code review and upkeep</strong> — reviews changes and keeps existing code healthy.</li>
+              <li><strong>Troubleshooting</strong> — finds the true cause of a reported problem and resolves it.</li>
+            </ul>
+            <ol class="help-steps">
+              <li>While preparing its requirements proposal, your Delivery agent is given every guide's real name and full description and proposes only the ones this task needs, each with one short reason — never every guide "to be safe".</li>
+              <li>The Go ahead card shows what was proposed, already ticked on, and the rest of the library in a closed fold you can open; tick or untick any guide before you press Go ahead.</li>
+              <li>Whatever is ticked the moment you press Go ahead is frozen for the whole task and named, by its full file path, in every later message to the builder and the reviewer — a repair, a replacement agent, a resumed task all get the same list.</li>
+              <li>The task's details show two lines: <strong>Skills agreed</strong> (what you ticked) and <strong>Skills used</strong> (what each agent's own real Claude or Codex session record shows it actually opened — never an agent's own claim).</li>
+              <li>A guide steers the work; it does not guarantee the result. Turn the whole feature off in Settings with the <strong>Use the skill library</strong> switch (on by default) — it takes effect for the next task you propose, and a task you already agreed to keeps its list to the end.</li>
+            </ol>
+            <p class="help-callout">The library is NoMoreHappyPath's own: it is never copied into the app being built, never part of what Upload to GitHub sends, and never written into either program's own skill folders or your home folders.</p>
+          </section>
         </div>
 
         <div class="help-group" id="help-group-windows-programs" data-help-group>

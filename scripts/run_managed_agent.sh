@@ -577,11 +577,14 @@ except GrantTooBroad as error:
   fi
   protected_writes_json="[]"
   if [[ -n "$board_surface" ]]; then
+    # NMHP's shared skill library (harness_root/skills) is passed in here too, so it
+    # stays denied even for a project built on NMHP's own source, whose code root
+    # would otherwise grant writes into the very folder the skill library lives in.
     protected_writes_json="$("$python_bin" -E -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
 from harness.agent_grant import agent_protected_roots
-print(json.dumps(agent_protected_roots(sys.argv[2], sys.argv[3], sys.argv[4])))
+print(json.dumps(agent_protected_roots(sys.argv[2], sys.argv[3], sys.argv[4], harness_root=sys.argv[1])))
 ' "$harness_root" "$target_root" "$data_root" "$workspace_root")"
   fi
   # Codex's workspace-write sandbox cannot deny a subpath of a writable root.

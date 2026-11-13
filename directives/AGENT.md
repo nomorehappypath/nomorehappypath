@@ -174,6 +174,12 @@ request and file a new proposal. Keep the original owner direction unchanged;
 the confirmation is an additional archived section after it. Do not define the
 delivery plan or implement until the confirmation is recorded.
 
+**The skill library (owner 2026-11-12, spec SKILL_LIBRARY_SPEC.md).** When the board gives you the skill library's catalogue (the name and
+full description of each skill) while you prepare this proposal, propose only the ones this task actually needs (never every one "to be
+safe"), each with one short reason, and pass them as `--skills`; the owner agrees the list on the Go ahead card. For a full task (not
+`--small-change`) also read the `requirements-architecture` skill (`skills/requirements-architecture/SKILL.md`) first when the board names its
+path. A proposed name that is not in the library is dropped. Terminal words are not a Go ahead: only the board's GO AHEAD counts.
+
 ## contract-first
 
 **The Reviewer's early look (2026-10-23).** After you file a proposal an idle Reviewer may read it before the owner decides and

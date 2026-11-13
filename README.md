@@ -83,6 +83,27 @@ The first run needs a few sign-ins; the sections below explain each one.
 - **Wish list.** A third project-page view, beside Advanced, for ideas you want to keep for this project. Press Add to wish list to open the same kind of box as Give direction: give it a short title (up to 80 characters, shown in the list), write the whole wish, and attach documents or screenshots if that helps explain it (up to 5 files, 10 MB each — choosing files more than once adds to the list instead of replacing it). The list itself shows only the title, not the full wish or its attachments; press Edit to open the same kind of box again, pre-filled, where you see and can rewrite the whole wish, change its title, and add or remove its attachments. Mark a wish done (and un-done) without losing it; drag to reorder the list; or remove it after an "Are you sure?" check (removing a wish also removes anything attached to it). Press Build this on any wish to open Give direction with its words, and any of its attachments, already filled in, ready to send whenever you choose. The list is kept with the project, so it survives a reload and a restart.
 - **Over 4,200 automated tests**, including headless-browser tests that verify what the owner actually sees rendered.
 
+## Skill Library
+
+One shared library, inside NoMoreHappyPath itself, of twelve written guides for the kinds of work that come up in almost every app. Both Claude and Codex builders and reviewers can use it; Gemini and the CTO are never given a guide.
+
+- **Requirements and architecture** — turns the idea into clear requirements and a design sized to the job.
+- **Screen and experience design** — decides what the user sees and does, in every state of every screen.
+- **Screens (front end)** — builds screens that work on phone and desktop, with real data.
+- **Server (back end)** — builds the server side: rules, checks on input, clear errors.
+- **Data and databases** — stores data safely and changes it without losing any.
+- **Outside services** — connects to other services so that slowness or failure does no harm.
+- **Payments and subscriptions** — takes money safely: no double charge, access follows payment.
+- **Security and sign-in** — sign-in, permissions, private data, and trying to break them.
+- **QA and testing** — proves it works and looks for where it does not.
+- **Cloud and deployment** — gets the app deployed, watched, backed up and able to roll back.
+- **Code review and upkeep** — reviews changes and keeps existing code healthy.
+- **Troubleshooting** — finds the true cause of a reported problem and resolves it.
+
+For each task, your builder proposes the guides it thinks that task needs, each with one short reason, from the real name and full description of every guide in the library — never every guide "to be safe". On the Go ahead card you see exactly what was proposed (ticked on) and the rest of the library (ticked off, in a closed fold); tick or untick before you press Go ahead. Whatever is ticked at that moment is frozen for the whole task and named, by its full file path, to every agent that works on it afterwards (a repair, the reviewer, a replacement agent). The task's details then show two lines: **Skills agreed** (what you ticked) and **Skills used** (what each agent's own real Claude or Codex session record shows it actually opened — never an agent's own claim about itself).
+
+A guide steers the work; it does not guarantee the result. A per-project switch (on by default, in Settings) turns the whole feature off for the next task you propose; a task you already agreed to keeps its list to the end. The library is NoMoreHappyPath's own: it is never copied into the app being built, never part of what Upload to GitHub sends, and never written into either program's own skill folders or your home folders, so your own skills and settings are untouched.
+
 ## Before work starts: the reviewer reads your requirements
 
 When Delivery writes down the final requirements, the Reviewer reads them first and writes tests for them before any work starts. If it cannot write a test without guessing, it asks you at most four questions, once, on a single card in Mission Control, each with a recommended answer and an Other box; your answers are added to the requirements under "Decided before coding". You can always go ahead without waiting. Later, each requirement is marked checked, partly checked or not checked in advance. Agents ask you product questions only in Mission Control (a banner at the top counts them), never in their own terminal windows.

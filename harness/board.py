@@ -5143,7 +5143,152 @@ def users_line(text: Any) -> str:
     return ("Users: " + " ".join(found.group(1).split())) if found else USERS_LINE_DEFAULT
 
 
-def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False) -> dict[str, Any]:
+_SKILL_PLAIN_NAME_LINE = re.compile(r"^plain_name:\s*(.+?)\s*$", re.MULTILINE)
+_SKILL_OWNER_DESCRIPTION_LINE = re.compile(r"^owner_description:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _later_added_library_skills(harness_root: Any, already: set[str]) -> list[Any]:
+    """Every usable guide folder the library holds beyond the slugs in `already`,
+    checked by the board itself, in folder-name order.
+
+    Final review (B2): the library module's own fixed table knows the twelve
+    guides this feature shipped with; a guide the owner adds later (spec
+    section 6, "Adding a skill later": add a folder, edit nothing) must still
+    reach every next proposal. The board therefore reads the library folder
+    directly, applying the same checks a shipped guide gets (a real
+    frontmatter block, a ``name:`` matching the folder, a ``description:``,
+    no file linking outside its own folder) so a half-made folder is left
+    off exactly as a damaged shipped guide is.
+
+    Args:
+        harness_root: NMHP's own source root (None = this install).
+        already: slugs the caller already holds; never listed again here.
+
+    Returns: skill_library.Skill records (problem is None) for each added
+    guide. The plain name and owner line come from the guide's own optional
+    ``plain_name:``/``owner_description:`` frontmatter lines, falling back to
+    a title-cased slug and the real ``description:`` line.
+    """
+    from harness import skill_library
+    root = skill_library.library_root(harness_root)
+    try:
+        folders = sorted(entry for entry in root.iterdir() if entry.is_dir() and (entry / "SKILL.md").is_file())
+    except OSError:
+        return []
+    added: list[Any] = []
+    for folder in folders:
+        slug = folder.name
+        if slug in already:
+            continue
+        path = folder / "SKILL.md"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        frontmatter = skill_library._frontmatter_text(text)
+        if frontmatter is None:
+            continue
+        name_match = skill_library._NAME_LINE.search(frontmatter)
+        description_match = skill_library._DESCRIPTION_LINE.search(frontmatter)
+        if not name_match or name_match.group(1) != slug or not description_match:
+            continue
+        if skill_library._escapes_library(folder, root):
+            continue
+        full_description = description_match.group(1)
+        plain_match = _SKILL_PLAIN_NAME_LINE.search(frontmatter)
+        owner_match = _SKILL_OWNER_DESCRIPTION_LINE.search(frontmatter)
+        plain_name = plain_match.group(1) if plain_match else slug.replace("-", " ").replace("_", " ").title()
+        owner_description = owner_match.group(1) if owner_match else full_description[:140]
+        added.append(skill_library.Skill(slug, plain_name, owner_description, full_description, path, None))
+    return added
+
+
+def _usable_library_skills(harness_root: Any = None) -> list[Any]:
+    """Every usable library guide the board may name: the library module's
+    own usable skills (fixed display order) followed by any later-added guide
+    folder it does not already list (name order), each slug exactly once.
+
+    This is the one list every board surface draws from (the proposal
+    catalogue, a builder's picks, the Go ahead record, the record of use), so
+    a guide added to the library is offered, agreed and counted as opened the
+    same way as a shipped one.
+
+    Args:
+        harness_root: NMHP's own source root (None = this install).
+
+    Returns: skill_library.Skill records with no problem.
+    """
+    from harness import skill_library
+    skills = list(skill_library.usable_skills(harness_root))
+    return skills + _later_added_library_skills(harness_root, {skill.slug for skill in skills})
+
+
+def _find_library_skill(slug: str, harness_root: Any = None) -> Any:
+    """The one usable library guide named slug (shipped or later added), or
+    None when it is missing or damaged."""
+    for skill in _usable_library_skills(harness_root):
+        if skill.slug == slug:
+            return skill
+    return None
+
+
+def skill_library_catalogue(harness_root: Any = None) -> list[dict[str, str]]:
+    """The library's own name and FULL description for every usable skill, in
+    display order — what a builder preparing a proposal is given (spec
+    SKILL_LIBRARY_SPEC.md section 3: the real name and real, full
+    description, never a shortened one-line version). Includes every guide
+    folder added to the library after this feature shipped (final review B2).
+
+    Return: a list of {"slug", "plain_name", "owner_description",
+    "full_description"} dicts, one per usable (unbroken) library skill.
+    """
+    return [
+        {"slug": skill.slug, "plain_name": skill.plain_name, "owner_description": skill.owner_description,
+         "full_description": skill.full_description}
+        for skill in _usable_library_skills(harness_root)
+    ]
+
+
+def _validate_proposed_skills(proposed: Any, harness_root: Any = None) -> tuple[list[dict[str, str]], list[str]]:
+    """Split a builder's proposed skill picks into accepted and dropped.
+
+    Args:
+        proposed: the raw value passed to record_requirement_proposal's
+            `skills` argument — expected to be a list of {"name": <slug>,
+            "reason": <one short line>} dicts (or already-parsed JSON of the
+            same shape); anything else is treated as an empty list rather
+            than refusing the whole proposal over one malformed field.
+        harness_root: passed through to the skill library lookup.
+
+    Returns: (accepted, dropped) where accepted is a list of
+    {"slug", "plain_name", "reason"} dicts for each proposed name that IS in
+    the library (deduplicated, in the order first proposed), and dropped is
+    the list of proposed names that are NOT in the library, in that same
+    order — the card (a separate subtask) names each dropped one.
+    """
+    if not isinstance(proposed, list):
+        return [], []
+    catalogue = {skill.slug: skill for skill in _usable_library_skills(harness_root)}
+    accepted: list[dict[str, str]] = []
+    dropped: list[str] = []
+    seen: set[str] = set()
+    for item in proposed:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        skill = catalogue.get(name)
+        if skill is None:
+            dropped.append(name)
+            continue
+        reason = str(item.get("reason") or "").strip()[:160]
+        accepted.append({"slug": skill.slug, "plain_name": skill.plain_name, "reason": reason})
+    return accepted, dropped
+
+
+def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False, skills: Any = None) -> dict[str, Any]:
     """File the final agreed requirements as a PROPOSAL awaiting the owner.
 
     The owner's go-ahead is a contract signature; it must be a recorded board
@@ -5218,11 +5363,38 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         if no_program and not document_only:
             raise ValueError(DOCUMENT_ONLY_REFUSAL)
         no_program = document_only       # the owner's checkbox decides, never the builder
+        # Owner repair (build-skill-library, requirement 5): the builder's proposed skills,
+        # split into the ones the library actually has (with its reason, kept) and the
+        # names it does not (named in the card as "dropped" by a later subtask). Computed
+        # fresh per proposal version, never carried from an earlier version.
+        # switch-vendor-legacy-v2: the switch off, or a Gemini builder, means no skill is ever
+        # proposed or agreed for this task - never offered, so never validated either. Frozen
+        # here, on the proposal itself, at the moment it is filed: a later switch flip must
+        # never retroactively change an already-filed proposal's own block or decision (repair:
+        # the owner's current ticks were wiped by an unrelated switch change after filing).
+        skills_unavailable = _skills_unavailable_reason(state, agent)
+        skills_proposed, skills_dropped = ([], []) if skills_unavailable else _validate_proposed_skills(skills)
+        # Final-acceptance repair (contract check 2.1): a skill broken when the card is built
+        # (unreadable, no name/description, a link leaving its folder) must be left off the
+        # fold and named with its own plain line (spec section 3, S14's "card time" half) -
+        # frozen here, with the rest of this proposal, so a library change after filing never
+        # changes what this same card already showed the owner.
+        from harness import skill_library as _skill_library_broken
+        skills_broken = [] if skills_unavailable else [item.plain_name for item in _skill_library_broken.broken_skills()]
+        # Final review (B2): the card's fold used a fixed client-side list of exactly the
+        # twelve guides this feature shipped with, so a guide added to the library folder
+        # later never appeared. The real, current catalogue rides on the proposal itself
+        # (frozen with everything else filed here), so the fold always reflects what the
+        # library actually holds right now, not what it held when this file was written.
+        skills_catalogue = [] if skills_unavailable else skill_library_catalogue()
         proposal = {
             "task": task, "agent_id": agent_id, "text": text,
             "owner_direction": direction, "version": version,
             "proposed_at": now(), "status": "awaiting_owner",
             "document_only": document_only, "task_kind": kind,
+            "skills_proposed": skills_proposed, "skills_dropped": skills_dropped,
+            "skills_catalogue": skills_catalogue,
+            "skills_unavailable": skills_unavailable, "skills_broken": skills_broken,
         }
         carried = (state.get("contract_open_questions") or {}).get(task)
         if small_change and carried:
@@ -5263,8 +5435,216 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     return event
 
 
+def project_skill_library_enabled(state: dict[str, Any]) -> bool:
+    """The project-level "Use the skill library" switch (default on)."""
+    entry = state.get("project_skill_library")
+    return bool(entry.get("on", True)) if isinstance(entry, dict) else True
+
+
+def set_project_skill_library(root: Path, on: Any) -> dict[str, Any]:
+    """Turn the project's skill library switch on or off for the NEXT proposal.
+
+    A task already agreed keeps its list to the end (SKILL_LIBRARY_SPEC.md
+    "Switching and updating"): this never touches task_skills_agreed.
+    """
+    with locked_state(root) as state:
+        state["project_skill_library"] = {"on": bool(on), "updated_at": now()}
+        return dict(state["project_skill_library"])
+
+
+def _skills_unavailable_reason(state: dict[str, Any], agent: dict[str, Any]) -> str:
+    """Why a builder preparing a proposal (or whose task is being decided)
+    gets no skill library at all: "off", "gemini", or "" when it IS
+    available. The CTO is handled by its callers never reaching here."""
+    if str(agent.get("vendor") or "") == "Google":
+        return "gemini"
+    if not project_skill_library_enabled(state):
+        return "off"
+    return ""
+
+
+def skills_agreed_for_task(state: dict[str, Any], task: str) -> list[dict[str, str]]:
+    """The owner's frozen skill-library agreement for task, or [] if none (or not yet decided).
+
+    Each item: {"slug", "plain_name", "path"} (the guide's full file path at the
+    moment Go ahead was recorded) — task details and every later brief read
+    this, never the proposal's own (pre-decision) skills_proposed list.
+    """
+    return list((state.get("task_skills_agreed") or {}).get(str(task)) or [])
+
+
+def _skills_brief_block(agreed: list[dict[str, str]]) -> str:
+    """The exact wording of SKILL_LIBRARY_SPEC.md section 2a's agent-facing block."""
+    if not agreed:
+        return "\n\nSKILLS FOR THIS TASK: none. Open no skill from NMHP's library."
+    lines = "\n".join(f"- {item['plain_name']}: {item['path']}" for item in agreed)
+    return (
+        "\n\nSKILLS FOR THIS TASK (agreed by the owner)\n"
+        "Read each of these files now, by the full path given, before you start,\n"
+        "and follow them:\n" + lines + "\n"
+        "Open no other skill from NMHP's library. A skill may point to another\n"
+        "skill that is not on this list: do not open it.\n"
+        "The requirements, your role card and the board's rules come first."
+    )
+
+
+_SKILL_USAGE_ROLE_LABELS = {"development": "Builder", "engineering": "Builder", "qa": "Reviewer"}
+
+
+def _agent_skill_events(root: Path, agent: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """This agent's own real session record, read fresh from the vendor's own
+    store, as SKILL_LIBRARY_SPEC.md section 3 needs: the complete tool call
+    and result pairs. None is the honest "not known" case: no session id,
+    no CLI session recorded for it yet, or a vendor (Gemini) whose record
+    this feature does not read, since Gemini is never given a skill.
+    """
+    from harness import control, conversation
+    session_id = str(agent.get("session_id") or "")
+    if not session_id:
+        return None
+    try:
+        session = control.cli_session(root, session_id)
+    except ValueError:
+        return None
+    provider = str(session.get("cli_session_provider") or "")
+    cli_session_id = str(session.get("cli_session_id") or "")
+    if not provider or not cli_session_id:
+        return None
+    return conversation.read_vendor_tool_events(provider, cli_session_id)
+
+
+def _skill_opening_lines(skill: Any) -> tuple[str, str]:
+    """The exact ``name:`` and ``description:`` lines a real read of skill's
+    own file would show, built from the library's own current record of it
+    (never from what an agent reports)."""
+    return f"name: {skill.slug}", f"description: {skill.full_description}"
+
+
+def _event_reads_skill_file(event: dict[str, Any], skill_path: str) -> bool:
+    """True when event's own path argument is skill_path, or its shell
+    command text names it — the two ways SKILL_LIBRARY_SPEC.md section 3
+    counts a call as reading a library file."""
+    path = event.get("path")
+    if path and str(Path(str(path))) == str(Path(skill_path)):
+        return True
+    command = str(event.get("command") or "")
+    return bool(command) and skill_path in command
+
+
+def classify_skill_usage(events: list[dict[str, Any]] | None, agreed: list[dict[str, str]]) -> dict[str, Any]:
+    """What one agent start's own real session record shows it opened, among
+    the task's agreed skills, per SKILL_LIBRARY_SPEC.md section 3 ("How
+    opened is read") and the record-of-use table (S13).
+
+    `events` is that agent's own `conversation.read_vendor_tool_events`
+    result; `None` means no usable record exists at all. Returns
+    `{"not_known": bool, "by_slug": {slug: status}, "opened_not_agreed": [plain_name, ...]}`,
+    `status` one of "opened", "could_not_be_read", "agreed_not_opened". A
+    call whose result lacks the skill's own opening lines (for example one
+    that only tests the file exists) never counts as opened - the skill
+    simply stays "agreed_not_opened", per spec.
+    """
+    if events is None:
+        return {"not_known": True, "by_slug": {}, "opened_not_agreed": []}
+    by_slug: dict[str, str] = {}
+    for item in agreed:
+        slug = item["slug"]
+        skill = _find_library_skill(slug)
+        if skill is None:
+            by_slug[slug] = "could_not_be_read"
+            continue
+        name_line, description_line = _skill_opening_lines(skill)
+        status = "agreed_not_opened"
+        for event in events:
+            if not _event_reads_skill_file(event, str(skill.path)):
+                continue
+            if not event.get("ok"):
+                status = "could_not_be_read"
+                continue
+            output = str(event.get("output") or "")
+            if name_line in output and description_line in output:
+                status = "opened"
+                break
+        by_slug[slug] = status
+    agreed_slugs = {item["slug"] for item in agreed}
+    opened_not_agreed: list[str] = []
+    for skill in _usable_library_skills():
+        if skill.slug in agreed_slugs:
+            continue
+        name_line, description_line = _skill_opening_lines(skill)
+        for event in events:
+            if not event.get("ok") or not _event_reads_skill_file(event, str(skill.path)):
+                continue
+            output = str(event.get("output") or "")
+            if name_line in output and description_line in output:
+                opened_not_agreed.append(skill.plain_name)
+                break
+    return {"not_known": False, "by_slug": by_slug, "opened_not_agreed": opened_not_agreed}
+
+
+def skill_usage_lines_for_task(root: Path, task: str) -> list[str]:
+    """The "Skills used" lines for task's details (SKILL_LIBRARY_SPEC.md
+    section 2a), built only from each agent's own real session record -
+    never from what an agent says about itself. [] when there is nothing to
+    show yet (no builder or reviewer has started this task).
+    """
+    state = _read_state(root)
+    agreed = skills_agreed_for_task(state, task)
+    plain_name_by_slug = {item["slug"]: item["plain_name"] for item in agreed}
+    agents = [agent for agent in state.get("agents", {}).values()
+              if str(agent.get("task")) == str(task) and agent.get("role") in _SKILL_USAGE_ROLE_LABELS]
+    # Final-acceptance repair (B1): an accepted task's agent is moved out of hot state into
+    # cold archive storage (_archive_terminal_history) once it goes inactive, so this must
+    # also look there - otherwise "Skills used" silently goes blank the moment the owner
+    # accepts, which is exactly when he is most likely to want to read it. Only roles missing
+    # from hot state fall back, so a still-live agent is never shadowed by a stale cold copy.
+    seen_ids = {agent.get("id") for agent in agents}
+    for agent in _read_cold(root, "agents"):
+        if agent.get("id") in seen_ids:
+            continue
+        if str(agent.get("task")) == str(task) and agent.get("role") in _SKILL_USAGE_ROLE_LABELS:
+            agents.append(agent)
+            seen_ids.add(agent.get("id"))
+    if not agents:
+        return []
+    opened_by_role: dict[str, list[str]] = {}
+    opened_not_agreed_by_role: dict[str, list[str]] = {}
+    could_not: list[str] = []
+    not_opened: set[str] = set(plain_name_by_slug.values())
+    known_role_seen = False
+    fragments: list[str] = []
+    for agent in sorted(agents, key=lambda item: str(item.get("role"))):
+        label = _SKILL_USAGE_ROLE_LABELS[agent["role"]]
+        if str(agent.get("vendor") or "") == "Google":
+            fragments.append(f"{label}: not available for Gemini.")
+            continue
+        result = classify_skill_usage(_agent_skill_events(root, agent), agreed)
+        if result["not_known"]:
+            fragments.append(f"{label}: not known.")
+            continue
+        known_role_seen = True
+        opened = [plain_name_by_slug[slug] for slug, status in result["by_slug"].items() if status == "opened"]
+        if opened:
+            opened_by_role[label] = opened
+            not_opened -= set(opened)
+        could_not += [plain_name_by_slug[slug] for slug, status in result["by_slug"].items() if status == "could_not_be_read"]
+        if result["opened_not_agreed"]:
+            opened_not_agreed_by_role.setdefault(label, []).extend(result["opened_not_agreed"])
+    for label, names in opened_by_role.items():
+        fragments.insert(0, f"{label}: {', '.join(names)}.")
+    if could_not:
+        fragments.append("could not be read: " + ", ".join(sorted(set(could_not))) + ".")
+        not_opened -= set(could_not)
+    if known_role_seen and plain_name_by_slug:
+        fragments.append("agreed, not opened: " + (", ".join(sorted(not_opened)) if not_opened else "none") + ".")
+    for label, names in opened_not_agreed_by_role.items():
+        fragments.append(f"opened, not agreed: {label}: {', '.join(names)}.")
+    return fragments
+
+
 def record_requirements_decision(
     root: Path, task: str, decision: str, text: str = "", version: Any = None, answers: Any = None, token: str = "", small_change: Any = None,
+    skills: Any = None,
 ) -> dict[str, Any]:
     """Record the OWNER's decision on a filed requirements proposal.
 
@@ -5372,11 +5752,31 @@ def record_requirements_decision(
                 (state.get("contract_open_questions") or {}).pop(str(task), None)
                 check.update({"status": "answered", "answers": resolved, "used_recommended": used_recommended, "token": secrets.token_hex(4)})
             proposal.update({"status": "accepted", "decided_at": decided_at})
+            # Owner repair (build-skill-library, requirement 8): the owner's exact ticks at Go
+            # ahead - never the proposal's own pre-decision picks - are frozen here for the
+            # whole task, including every later repair/review/replacement/resume brief.
+            # switch-vendor-legacy-v2 repair: use the reason FROZEN on the proposal at the
+            # moment it was filed (set in record_requirement_proposal), never the switch's
+            # live value here - the Reviewer's own check caught this re-checking live and
+            # wiping the owner's current ticks on an in-flight proposal when the (project-wide,
+            # forward-looking) switch happened to change between filing and Go ahead.
+            unavailable = str(proposal.get("skills_unavailable") or "")
+            agreed_slugs = [] if unavailable else [str(slug) for slug in (skills if isinstance(skills, list) else []) if slug]
+            agreed = [
+                {"slug": item.slug, "plain_name": item.plain_name, "path": str(item.path)}
+                for item in _usable_library_skills() if item.slug in set(agreed_slugs)
+            ]
+            state.setdefault("task_skills_agreed", {})[str(task)] = agreed
+            if unavailable:
+                state.setdefault("task_skills_unavailable", {})[str(task)] = unavailable
+            else:
+                (state.get("task_skills_unavailable") or {}).pop(str(task), None)
             routed = (
                 f"[OWNER DECISION] GO AHEAD - the owner accepted your requirements "
                 f"proposal (version {proposal.get('version', 1)}) on the board at {decided_at}. "
                 f"Record the accepted text verbatim with confirm-requirements, then begin delivery."
             )
+            routed += _skills_brief_block(agreed)
             if check.get("answers"):
                 routed += (
                     " The owner's answers to the Reviewer's questions were added to the end of the text under "
@@ -9620,7 +10020,15 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
                                                    "supporting_documents": [item["workspace_path"] for item in copied_attachments]})
         # the Project brief rides on this result only (never stored with the event, never in a poll): computed from the live state, never blocks the start
         brief = project_memory.brief_for(root, state, workspace or repository)
-    return {**begun, "project_brief": brief}
+        # switch-vendor-legacy-v2: the switch (default on) and a Gemini builder both mean no
+        # skill library for this task at all - never even offered to propose from.
+        skills_unavailable = _skills_unavailable_reason(state, agent)
+        catalogue = [] if skills_unavailable else skill_library_catalogue()
+    # Owner repair (build-skill-library, finding B1): skill_library_catalogue() existed but
+    # nothing ever called it where a builder could see it. The catalogue (every usable skill's
+    # real name and FULL description) rides on this same begin_task result, the one place a
+    # builder is guaranteed to read before it prepares its proposal.
+    return {**begun, "project_brief": brief, "skill_library": catalogue, "skill_library_unavailable": skills_unavailable}
 
 
 
@@ -9703,6 +10111,13 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
         session_id = str(agent.get("session_id") or "")
         source_session_id = str(source.get("session_id") or "")
         recovery_instruction = f"Resume {task}. Preserved next action: {next_action} Owner action is not required."
+        # Owner repair round 2 (build-skill-library, requirement 8): a replacement agent has
+        # no memory of the original Go ahead message, so it needs the frozen agreed list
+        # named again here, the same as every other builder/reviewer briefing.
+        # switch-vendor-legacy-v2: a replacement that is itself on Gemini is given none
+        # (SKILL_LIBRARY_SPEC.md "Who gets it"), even when the task's own list is agreed.
+        if str(agent.get("vendor") or "") != "Google":
+            recovery_instruction += _skills_brief_block(skills_agreed_for_task(state, task))
         event = _event(state, "task_resumed", agent, {"task": task, "source_agent_id": source_agent_id, "message": "replacement Delivery Agent resumed preserved task memory; owner action is not required", "next_action": next_action})
         brief = project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))
     if session_id:
@@ -10300,6 +10715,7 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
             deliveries.append({
                 "agent_id": reviewer["id"],
                 "session_id": reviewer.get("session_id", ""),
+                "vendor": reviewer.get("vendor", ""),
                 "request_id": request["id"],
                 "task": request["task"],
                 "reviewed_commit": request.get("reviewed_commit", ""),
@@ -10332,12 +10748,21 @@ def route_open_reviews(root: Path, retry_seconds: int = REVIEW_ROUTE_RETRY_SECON
                 "one minute, post a short board status update before continuing. USER ACTION: None. " + delivery["open_reference"]
             )
         try:
-            decisions = owner_decisions_text(_read_state(root), str(delivery["task"]))
+            routing_state = _read_state(root)
+            decisions = owner_decisions_text(routing_state, str(delivery["task"]))
         except (OSError, ValueError):
-            decisions = ""
+            routing_state, decisions = {}, ""
         if decisions:
             # accept-after-repair R8: the owner's closed findings travel with every later routing of this task, so a restatement is never a surprise
             instruction += " The owner has closed findings on this task (binding; judge without them, never restate them): see requirements.owner_decisions in the brief."
+        # Owner repair (build-skill-library, requirement 8): every later builder/reviewer
+        # message names the owner's frozen agreed skill list - this is the Reviewer's
+        # own copy of it, read fresh rather than carried from when the review was queued.
+        # switch-vendor-legacy-v2: a Gemini reviewer never gets a skill, even when the
+        # builder's own list is agreed (SKILL_LIBRARY_SPEC.md section 3); Skills used
+        # reports this reviewer as "not available for Gemini" instead.
+        if str(delivery.get("vendor") or "") != "Google":
+            instruction += _skills_brief_block(skills_agreed_for_task(routing_state, str(delivery["task"])))
         try:
             queued = control.enqueue_instruction(
                 root, delivery["session_id"], instruction, source="review-assignment",
@@ -19385,6 +19810,13 @@ def snapshot(root: Path) -> dict[str, Any]:
             request.update({"status": "failed", "result": "failed", "integrity_invalidated": True, "result_summary": "PASS invalidated by certified evidence integrity: " + "; ".join(problems)})
             _set_review_scope_status(projected, request, "open")
     projected["critical_path_summaries"] = lifecycle.summaries(projected)
+    # Skills used (record-of-use-impl): recomputed fresh on every read from each
+    # agent's own real session record, never carried in the saved state, since a
+    # new tool call can change it between two polls without any board event.
+    tasks_with_agents = {str(agent.get("task")) for agent in projected.get("agents", {}).values() if agent.get("task")}
+    projected["task_skill_usage"] = {
+        task: lines for task in tasks_with_agents for lines in [skill_usage_lines_for_task(root, task)] if lines
+    }
     for record in (projected.get("analysis_passes") or {}).values():
         if analysis_pass.stage(record) in {"lists", "crosscheck"}:    # neither side may read the other's list (or marks) early: only the counts leave the board
             for side in record["sides"].values():
@@ -20012,7 +20444,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("test-env-run"); p.description = "Run one command under the project's test environment (the Reviewer's or the CTO's own capture; not certified evidence)."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--cmd", required=True, help="the command to run (no shell operators)")
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True); p.add_argument("--allow-split", action="store_true", help="the owner allowed this task to be split into separately reviewed parts")
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
-    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)")
+    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)"); p.add_argument("--skills", default="[]", help='JSON list of {"name": <skill slug>, "reason": <one short line>} this task needs from the skill library; a name not in the library is dropped, not refused')
     p = sub.add_parser("propose-spec-questions"); p.description = "Delivery's one submission of a Write-specs app task's own question-card part: up to 5 app-specific questions, and whether the two description-only conditional generic questions apply to this app."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--questions", required=True, help="a JSON list of up to 5 {text, options (2-4 strings), recommended (index)} objects; [] if this app needs none"); p.add_argument("--existing-data", action="store_true", help="this app replaces something, so \"Is there existing data to bring in?\" belongs on the card"); p.add_argument("--keeps-data", action="store_true", help="this app keeps data, so both data-loss questions belong on the card")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
@@ -20149,7 +20581,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "test-env-run": out = test_env_run(root, args.agent, args.task, args.cmd)
         elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text, allow_split=args.allow_split)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
-        elif args.command == "propose-requirements": out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change)
+        elif args.command == "propose-requirements":
+            try:
+                skills_arg = json.loads(args.skills) if args.skills else []
+            except json.JSONDecodeError:
+                skills_arg = []
+            out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change, skills=skills_arg)
         elif args.command == "propose-spec-questions": out = propose_spec_questions(root, args.agent, args.task, json.loads(args.questions), include_existing_data=args.existing_data, include_data_loss=args.keeps_data)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)

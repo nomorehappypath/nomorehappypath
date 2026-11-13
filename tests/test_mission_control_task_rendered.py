@@ -144,6 +144,108 @@ out.view = {calls: window.__viewCalls.map(u => u.split('/api/sessions/')[1]), no
         self.assertEqual(result["view"]["calls"], [reviewer_call, builder_call], "Type to the reviewer opens the reviewer's own screen; View its screen opens the builder's")
         self.assertIn("open in Terminal", result["view"]["notice"])
 
+    def test_the_pending_proposals_skills_block_shows_ticked_proposed_and_folded_rest(self):
+        root = self.board(requirements=False)
+        agent_id = next(a["id"] for a in board.snapshot(root)["agents"].values() if a.get("task") == "WEATHER-APP")
+        board.record_requirement_proposal(
+            root, agent_id, "Final agreed requirements: a command prints a greeting.",
+            skills=[{"name": "backend", "reason": "the command needs server code"}, {"name": "not-a-real-skill", "reason": "x"}],
+        )
+        body = r"""
+await until(() => document.querySelector('[data-skills-block]'));
+const block = document.querySelector('[data-skills-block]');
+out.heading = block.querySelector('.requirements-title').textContent;
+out.proposedChecked = [...block.querySelectorAll('.skill-list')[0].querySelectorAll('input[type=checkbox]')].map(c => c.checked);
+out.why = block.querySelector('.skill-why').textContent;
+out.dropped = block.querySelector('.skill-dropped').textContent;
+out.foldLabel = block.querySelector('.skill-fold summary').textContent;
+"""
+        result = self.run_probe(self.url(root), body)
+        self.assertIn("Skills for this task", result["heading"])
+        self.assertIn("1 of 12 chosen", result["heading"])
+        self.assertEqual(result["proposedChecked"], [True])
+        self.assertIn("the command needs server code", result["why"])
+        self.assertIn("not-a-real-skill", result["dropped"])
+        self.assertIn("Other skills in the library (11)", result["foldLabel"])
+
+    def test_the_skills_counter_updates_live_when_a_tick_changes(self):
+        # Reviewer finding: the counter was set once at render time and stayed "1 of 12" after
+        # the owner unticked the only proposed skill.
+        root = self.board(requirements=False)
+        agent_id = next(a["id"] for a in board.snapshot(root)["agents"].values() if a.get("task") == "WEATHER-APP")
+        board.record_requirement_proposal(
+            root, agent_id, "Final agreed requirements: a command prints a greeting.",
+            skills=[{"name": "backend", "reason": "the command needs server code"}],
+        )
+        body = r"""
+await until(() => document.querySelector('[data-skills-block]'));
+const block = document.querySelector('[data-skills-block]');
+const proposedBox = block.querySelector('[data-skill-tick="backend"]');
+proposedBox.checked = false;
+proposedBox.dispatchEvent(new Event('change', {bubbles: true}));
+await wait(50);
+out.afterUntick = block.querySelector('.skills-count').textContent;
+const otherBox = block.querySelector('.skill-fold [data-skill-tick]');
+otherBox.checked = true;
+otherBox.dispatchEvent(new Event('change', {bubbles: true}));
+await wait(50);
+out.afterTickAnother = block.querySelector('.skills-count').textContent;
+"""
+        result = self.run_probe(self.url(root), body)
+        self.assertIn("0 of 12 chosen", result["afterUntick"])
+        self.assertIn("1 of 12 chosen", result["afterTickAnother"])
+
+    def test_a_damaged_guide_is_left_out_of_the_fold_with_a_plain_line(self):
+        # Final-acceptance repair (contract check 2.1): a guide broken when the card is built
+        # must be named with its own "left out" line and never offered in the fold to tick.
+        root = self.board(requirements=False)
+        agent_id = next(a["id"] for a in board.snapshot(root)["agents"].values() if a.get("task") == "WEATHER-APP")
+        board.record_requirement_proposal(
+            root, agent_id, "Final agreed requirements: a command prints a greeting.",
+            skills=[{"name": "backend", "reason": "the command needs server code"}],
+        )
+        with board.locked_state(root) as state:
+            state["requirement_proposals"]["WEATHER-APP"]["skills_broken"] = ["QA and testing"]
+        body = r"""
+await until(() => document.querySelector('[data-skills-block]'));
+const block = document.querySelector('[data-skills-block]');
+out.broken = block.querySelector('.skill-broken').textContent;
+out.foldLabel = block.querySelector('.skill-fold summary').textContent;
+out.foldNames = [...block.querySelectorAll('.skill-fold [data-skill-tick]')].map(c => c.closest('label').textContent);
+"""
+        result = self.run_probe(self.url(root), body)
+        self.assertIn("Left out because its file is damaged: QA and testing", result["broken"])
+        self.assertIn("Other skills in the library (10)", result["foldLabel"])
+        self.assertFalse(any("QA and testing" in name for name in result["foldNames"]))
+
+    def test_a_newly_added_guide_appears_in_the_fold_with_nothing_to_edit(self):
+        # Final review (B2): the fold used to come from a fixed client-side list of exactly
+        # twelve guides, so one added to the library after this feature shipped would never
+        # show. The real catalogue (skills_catalogue), frozen on the proposal when filed,
+        # must drive the fold and the "N of <total> chosen" count instead.
+        root = self.board(requirements=False)
+        agent_id = next(a["id"] for a in board.snapshot(root)["agents"].values() if a.get("task") == "WEATHER-APP")
+        board.record_requirement_proposal(
+            root, agent_id, "Final agreed requirements: a command prints a greeting.",
+            skills=[{"name": "backend", "reason": "the command needs server code"}],
+        )
+        with board.locked_state(root) as state:
+            proposal = state["requirement_proposals"]["WEATHER-APP"]
+            proposal["skills_catalogue"].append(
+                {"slug": "new-guide", "plain_name": "A brand new guide", "owner_description": "Added after this feature shipped."}
+            )
+        body = r"""
+await until(() => document.querySelector('[data-skills-block]'));
+const block = document.querySelector('[data-skills-block]');
+out.heading = block.querySelector('.requirements-title').textContent;
+out.foldLabel = block.querySelector('.skill-fold summary').textContent;
+out.foldNames = [...block.querySelectorAll('.skill-fold [data-skill-tick]')].map(c => c.closest('label').textContent);
+"""
+        result = self.run_probe(self.url(root), body)
+        self.assertIn("1 of 13 chosen", result["heading"])
+        self.assertIn("Other skills in the library (12)", result["foldLabel"])
+        self.assertTrue(any("A brand new guide" in name for name in result["foldNames"]))
+
     def test_a_missing_reviewer_says_so_and_offers_the_plain_way_instead_of_a_dead_button(self):
         root = self.board(reviewer=False, cto=False)
         body = r"""

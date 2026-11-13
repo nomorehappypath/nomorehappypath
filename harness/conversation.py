@@ -664,6 +664,181 @@ def read_vendor_conversation(provider: str, cli_session_id: str) -> list[dict[st
     return read_codex_conversation(path)
 
 
+def _call_path_and_command(arguments: Any) -> tuple[str | None, str | None]:
+    """A tool call's own file path argument and/or shell command text, for
+    skill-library usage (SKILL_LIBRARY_SPEC.md section 3's "How opened is
+    read"): it needs to tell a real file read from a guess, which the
+    shortened ``_tool_line`` text used for the human-readable view cannot do.
+    """
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return None, arguments.strip() or None
+    if not isinstance(arguments, dict):
+        return None, None
+    path = None
+    for key in ("file_path", "path", "AbsolutePath"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            path = value.strip()
+            break
+    command = None
+    for key in ("command", "cmd", "CommandLine"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            command = value.strip()
+            break
+        if isinstance(value, list) and value:
+            command = " ".join(str(item) for item in value)
+            break
+    return path, command
+
+
+def _tool_result_text(content: Any) -> str:
+    """Claude Code's tool_result content, which is a plain string or a list
+    of ``{"type": "text", "text": ...}`` blocks, flattened to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return ""
+
+
+def read_claude_tool_events(path: Path) -> list[dict[str, Any]]:
+    """Every tool call in Claude Code's session file paired with its own
+    result, main chain only — what skill-library usage needs and the
+    shortened, result-dropping ``read_claude_conversation`` cannot give it.
+
+    Each event: ``{"at", "path", "command", "ok", "output"}``. A call with
+    no matching result by the time the file ends is left out: the caller
+    sees no event for it, which is the honest "not known" case.
+    """
+    pending: dict[str, dict[str, Any]] = {}
+    events: list[dict[str, Any]] = []
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return events
+    with handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("isSidechain"):
+                continue
+            message = record.get("message") if isinstance(record.get("message"), dict) else None
+            content = message.get("content") if message else None
+            if not isinstance(content, list):
+                continue
+            at = str(record.get("timestamp") or "")
+            kind = record.get("type")
+            if kind == "assistant":
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        call_path, call_command = _call_path_and_command(block.get("input"))
+                        pending[str(block.get("id") or "")] = {"at": at, "path": call_path, "command": call_command}
+            elif kind == "user":
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        call = pending.pop(str(block.get("tool_use_id") or ""), None)
+                        if call is None:
+                            continue
+                        events.append({
+                            **call, "ok": not bool(block.get("is_error")),
+                            "output": _tool_result_text(block.get("content")),
+                        })
+    return events
+
+
+def read_codex_tool_events(path: Path) -> list[dict[str, Any]]:
+    """Every tool call in Codex's rollout file paired with its own output,
+    the same real evidence read_claude_tool_events reads for Claude Code.
+
+    Each event: ``{"at", "path", "command", "ok", "output"}``.
+    """
+    pending: dict[str, dict[str, Any]] = {}
+    events: list[dict[str, Any]] = []
+    try:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return events
+    with handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("type") != "response_item":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            at = str(record.get("timestamp") or "")
+            payload_type = str(payload.get("type") or "")
+            call_id = str(payload.get("call_id") or "")
+            if payload_type in {"function_call", "custom_tool_call", "local_shell_call"}:
+                arguments = payload.get("action") if payload_type == "local_shell_call" and isinstance(payload.get("action"), dict) \
+                    else (payload.get("arguments") if "arguments" in payload else payload.get("input"))
+                call_path, call_command = _call_path_and_command(arguments)
+                pending[call_id] = {"at": at, "path": call_path, "command": call_command}
+            elif payload_type.endswith("_output") and call_id:
+                call = pending.pop(call_id, None)
+                if call is None:
+                    continue
+                events.append({**call, **_codex_output(payload)})
+    return events
+
+
+def _codex_output(payload: dict[str, Any]) -> dict[str, Any]:
+    """A codex ``*_output`` payload's text and success, which may be a plain
+    string or (for a shell call) a JSON string holding its own metadata."""
+    output = payload.get("output")
+    ok = payload.get("success") is not False
+    if isinstance(output, str):
+        try:
+            decoded = json.loads(output)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, dict):
+            metadata = decoded.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("exit_code") not in (None, 0):
+                ok = False
+            return {"ok": ok, "output": str(decoded.get("output") or decoded.get("content") or output)}
+        return {"ok": ok, "output": output}
+    if isinstance(output, dict):
+        return {"ok": ok, "output": str(output.get("output") or output.get("content") or "")}
+    return {"ok": ok, "output": ""}
+
+
+def read_vendor_tool_events(provider: str, cli_session_id: str) -> list[dict[str, Any]] | None:
+    """Return cli_session_id's real tool call/result events for provider, or
+    None when there is no usable record: a vendor this does not cover
+    (Gemini is never given a skill), no file, or it cannot be read.
+
+    This is skill-library usage's one source of truth for what an agent
+    really opened (SKILL_LIBRARY_SPEC.md section 3): never the agent's own
+    report, and only a vendor whose own session store keeps full tool
+    results, which Gemini's does not need to since it never gets a skill.
+    """
+    if provider not in {"claude", "codex"}:
+        return None
+    path = vendor_conversation_path(provider, cli_session_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return read_claude_tool_events(path) if provider == "claude" else read_codex_tool_events(path)
+    except OSError:
+        return None
+
+
 def _clock(at: str) -> str:
     """Return the HH:MM:SS time of day extracted from an ISO timestamp at, or "--:--:--" if none is found."""
     match = re.search(r"T(\d{2}:\d{2}:\d{2})", at or "")
