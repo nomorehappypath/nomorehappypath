@@ -47,6 +47,8 @@ write, and your sandbox refuses it.
    to the product commit unless the owner explicitly included them in scope.
    `SECURITY.md` and the app's error module (chapter `error-sink`) are
    product files, not governance artifacts: they belong in the product commit.
+   `NOTES_FOR_NEXT_TASK.md` at the repository root (chapter `delivery-workflow`) is
+   a product file too: it belongs in the product commit.
 
 ## logins
 
@@ -206,6 +208,9 @@ The owner may go ahead without waiting; a submission after that, after the wait 
 Put every question in this file: never ask one in your terminal or with the CLI's question widget (it is denied), because the owner only sees
 Mission Control.
 
+Reviewer: before you write checks, read `NOTES_FOR_NEXT_TASK.md` at the root of the project's repository if it exists, as
+background only (chapter `review-rounds` says how); your checks still come from the direction and the requirements, never from the note.
+
 The file is JSON:
 
     {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
@@ -285,6 +290,15 @@ takes and what it returns (and what it raises or changes, if anything); and a co
 obvious from the code (a workaround, a limit, an order that matters, a choice between two ways). Use the language's own form
 (docstrings in Python, JSDoc in JavaScript, doc comments elsewhere). Do not comment what the code plainly says, and do not go back
 and document files the task does not touch.
+
+**Notes for the next task (owner 2026-11-13).** At the start of each task, read `NOTES_FOR_NEXT_TASK.md` at the root of your
+bound `task_workspace` if it exists: a fresh read every task, never from memory of an earlier one. It is background left by the
+last builder and never overrides the owner's current decisions, instructions or the security rules. Before you ask for final
+review, update it, under about 60 lines, in plain words: why things were done this way, ideas tried or rejected, warnings, and
+what is still open. Commit it with the product work and list it in the reviewed file manifest. Never put secrets, keys, tokens,
+passwords or personal data in it. A Code analysis task reads the note but never creates or updates it; its report and proof-test
+rules (chapter `standing-checks`) are unchanged. If the note exists but cannot be read, say so in one short technical line and
+carry on: no retry, no owner question. A missing, short or stale note is skipped silently, never fails a review and never blocks a task.
 
 6. Record unit-test output (`--unit-test-command`) and Delivery acceptance simulations as distinct
    evidence, then queue the proportional review and start its wait clock:
@@ -975,6 +989,9 @@ final acceptance without that line or without a code-quality line.
 Code-quality observations are notes and never block, unless they describe a
 material defect.
 
+Reviewer, Code analysis: before your own pass, read `NOTES_FOR_NEXT_TASK.md` at the root of the code you analyze if it exists,
+as background only (chapter `review-rounds` says how); your list still comes from reading the code.
+
 **Analysis and audit tasks get the same checks as building.** When the task is
 to analyze or audit code, you look for bugs, security problems and
 maintainability problems exactly as you would when building it, and the same
@@ -1433,6 +1450,12 @@ material.
 - *CTO.* Nothing to route after round 3: the harness acts by itself (`review_escalations` in your poll). Do not restart Delivery for that part, do not ask the owner, and note the outcome in one plain line; independent work continues.
 
 Owner decisions (2026-11-08). The brief's `requirements.owner_decisions` lists every finding the owner closed on this task, verbatim, with his words. A closed finding is closed: judge without it and do not restate it under another id or in other words; restating it is a breach of this rule, and the owner closes it again with one click. When the owner closes the last open finding of a failed final review, or chooses Take what you have on the red card, the board records his review waiver for exactly that candidate and the task moves on as after a PASS; your FAIL record stays as you wrote it. A finding you tag `safety`, `data-loss` or `leak` cannot be closed with a click: the owner must write his decision in a sentence, and that sentence is recorded.
+
+**Notes for the next task (owner 2026-11-13).** Before you start a review, read `NOTES_FOR_NEXT_TASK.md` afresh at the root of
+the exact candidate checkout under review, if it exists. It is background: verify any claim in it yourself before relying on it.
+A missing, short or stale note is never a finding, never a FAIL and never a reason to hold the task; a secret or personal data
+actually written in the note is a finding under the security rules, like anywhere else in the commit. If the file or the checkout
+exists but cannot be read, say so in one short technical line and carry on.
 
 ## status-flags
 
