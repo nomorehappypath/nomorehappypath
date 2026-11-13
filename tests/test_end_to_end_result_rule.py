@@ -58,12 +58,12 @@ class EndToEndResultRuleTests(unittest.TestCase):
 class NotRunIsNotPassedRuleTests(unittest.TestCase):
     """2026-10-07: the reviewer said TASK DONE: YES for a step it could not run with a real AI."""
 
-    def test_product_directive_says_not_run_is_not_passed_and_never_asks_the_owner_for_a_token(self):
+    def test_product_directive_says_a_process_limit_is_not_a_stop_and_never_asks_the_owner_for_a_token(self):
         from pathlib import Path
         text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
-        for words in ("Not run is not passed", "TASK DONE: NOT TESTED", "is not a PASS",
-                      "The board refuses to offer the project to the owner without `TASK DONE: YES`",
-                      "never ask the owner to create, copy or paste a token or login"):
+        for words in ("A process limit is not a STOP", "Not run: <the step and why>", "TASK DONE: YES",
+                      "never a defect of the app and never a reason to fail, hold, repair or re-review it",
+                      "Never ask the owner to create, copy or paste a token or login"):
             self.assertIn(words, text)
 
 
@@ -94,7 +94,7 @@ class LongWalkRuleTests(unittest.TestCase):
                       "That is not the board polling the no-loops rule in chapter `board-protocol` is about",
                       "Never stop at ten minutes",
                       "never split the walk into separate pieces and call that the end-to-end test",
-                      "mark the verdict `TASK DONE: NOT TESTED`"):
+                      "write `Not run: <step and why>` in your verdict"):
             self.assertIn(words, text)
 
 

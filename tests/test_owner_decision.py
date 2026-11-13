@@ -204,11 +204,10 @@ class R8CloseAFinding(OwnerDecisionCase):
             self.failed_review([_finding("B3", "New.")], request_id="review-final-06", cycle=6)
             board.owner_finding_close(self.root, TASK, request["id"], "B2")
 
-    def test_the_cto_cannot_clear_the_owners_card_and_the_old_choice_words_still_work(self):
+    def test_the_old_choice_words_still_work(self):
+        # the CTO may now close the card too (owner 2026-11-12, D-018; test_cto_closes_harness_cards.py); the owner's own choice is unchanged
         request = self.failed_review([_finding("B2", "A short owner key can be guessed.")])
         card = self.card()
-        with self.assertRaisesRegex(ValueError, "owner's"):
-            board.clear_owner_action(self.root, self.cto["id"], card["id"], "not required")
         with mock.patch("harness.control.enqueue_instruction", return_value={"id": "q1"}):
             result = board.owner_action_choose(self.root, card["id"], "Try once more")   # the old name is an alias of Fix once more
         self.assertIn("Fix once more", result["message"])

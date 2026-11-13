@@ -23,7 +23,7 @@ class SuiteAtEndRuleTests(unittest.TestCase):
         self.assertIn("never run it twice to\ncompare", self.chapter)
         self.assertIn("never run it on a clean copy of main to build a baseline", self.chapter)
         self.assertIn("rerun only those failing\ntests on a clean copy of main", self.chapter)
-        self.assertIn("reported as not tested, never chased", self.chapter)
+        self.assertIn("noted as `Not run: <step and why>`, never chased", self.chapter)
 
 
 if __name__ == "__main__":

@@ -846,12 +846,24 @@ out.attachmentsFieldHidden = document.querySelector('#owner-message-attachments-
 const input = document.querySelector('#owner-message-attachments');
 out.fileCount = input.files.length;
 out.fileName = input.files[0]?.name;
+const listNames = () => Array.from(document.querySelectorAll('#owner-message-attachments-list li')).map(item => item.firstChild.textContent.trim());
+out.listed = listNames();
+const more = new DataTransfer(); more.items.add(new File(['x'], 'extra.txt', {type: 'text/plain'}));
+input.files = more.files;
+input.dispatchEvent(new Event('change', {bubbles: true}));
+await wait(50);
+out.listedAfterPick = listNames();
+out.heldAfterPick = Array.from(input.files).map(file => file.name);
 """
         result = self.run_probe(target, body, wait=15)
         self.assertTrue(result["composerOpen"])
         self.assertFalse(result["attachmentsFieldHidden"], "Build this must show the attachments field when the wish has one")
         self.assertEqual(result["fileCount"], 1)
         self.assertEqual(result["fileName"], "shot.png")
+        # Owner 2026-11-12: a further pick adds to the wish's own files instead of replacing them.
+        self.assertEqual(result["listed"], ["shot.png"])
+        self.assertEqual(result["listedAfterPick"], ["shot.png", "extra.txt"])
+        self.assertEqual(result["heldAfterPick"], ["shot.png", "extra.txt"])
 
     def test_build_this_without_attachments_still_hides_the_field_as_before(self):
         root = context(self.base)
@@ -969,6 +981,82 @@ if (captured) {
         self.assertTrue(result["captured"], "the direction must still be sent once the agent is ready")
         self.assertEqual(result["fileCount"], 1, "the attachment must be rebuilt from the persisted wish reference")
         self.assertEqual(result["fileName"], "shot.png")
+
+    REMOVAL_CAPTURE = r"""
+let sent = false, names = [];
+const origFetch = window.fetch;
+window.fetch = function(url, opts){
+  if (String(url).includes('/owner-message') && opts) {
+    sent = true;
+    names = opts.body instanceof FormData ? opts.body.getAll('attachments').map(file => file.name) : [];
+  }
+  return origFetch.apply(this, arguments).catch(() => new Response('{}', {status: 200}));
+};
+await until(() => document.querySelector('.wish-build'));
+document.querySelector('.wish-build').click();
+"""
+
+    def test_build_this_a_removed_last_file_is_not_sent(self):
+        """Codex review round 1 (R1-1): Build this, Remove on the wish's only file, Send. The
+        list was empty but the send fetched the wish's file back and sent it anyway."""
+        from harness import control
+        root = context(self.base)
+        board.add_project_wish(
+            root, "Dark mode", "Add dark mode",
+            attachments=[{"filename": "original.txt", "content_type": "text/plain", "data": b"original content"}],
+        )
+        session = control.create(root, "codex_delivery")
+        board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+        target = self.serve(board_viewer.make_handler(root))
+        body = self.REMOVAL_CAPTURE + r"""
+await wait(300);
+document.querySelector('.direction-attachment-remove').click();
+out.listAfterRemove = document.querySelectorAll('#owner-message-attachments-list li').length;
+document.querySelector('#owner-message-form').requestSubmit();
+await wait(1500);
+out.sent = sent; out.names = names;
+"""
+        result = self.run_probe(target, body, wait=15)
+        self.assertEqual(result["listAfterRemove"], 0)
+        self.assertTrue(result["sent"], "the direction itself must still be sent")
+        self.assertEqual(result["names"], [], "a file the owner removed must not be sent")
+
+    def test_build_this_one_of_two_removed_only_the_kept_file_arrives_even_after_the_copy_is_lost(self):
+        """Same class as R1-1: with two wish files and one removed, the kept one still arrives
+        when the in-memory copy is gone before the agent is ready, and the removed one does not."""
+        from harness import control
+        root = context(self.base)
+        board.add_project_wish(
+            root, "Dark mode", "Add dark mode",
+            attachments=[
+                {"filename": "removed.txt", "content_type": "text/plain", "data": b"removed"},
+                {"filename": "kept.txt", "content_type": "text/plain", "data": b"kept"},
+            ],
+        )
+        target = self.serve(board_viewer.make_handler(root))
+
+        def register_later():
+            time.sleep(2)
+            session = control.create(root, "codex_delivery")
+            board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
+
+        threading.Thread(target=register_later, daemon=True).start()
+        body = self.REMOVAL_CAPTURE + r"""
+await wait(300);
+document.querySelector('#color-cancel').click();
+await wait(300);
+document.querySelector('.direction-attachment-remove').click();
+out.listed = Array.from(document.querySelectorAll('#owner-message-attachments-list li')).map(li => li.firstChild.textContent.trim());
+document.querySelector('#owner-message-form').requestSubmit();
+await wait(200);
+pendingDirectionAttachments = [];   // the in-memory copy is gone before the agent is ready
+await wait(4000);
+out.sent = sent; out.names = names;
+"""
+        result = self.run_probe(target, body, wait=20)
+        self.assertEqual(result["listed"], ["kept.txt"])
+        self.assertTrue(result["sent"], "the direction must still be sent once the agent is ready")
+        self.assertEqual(result["names"], ["kept.txt"])
 
     def test_a_file_that_cannot_be_refetched_stops_the_send_with_a_plain_message_not_silently(self):
         """Owner repair round 9: "a file that cannot be fetched also stops the send with a plain

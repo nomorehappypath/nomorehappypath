@@ -44,6 +44,29 @@ class Inherited(unittest.TestCase):
         out = unittest_output(self.repo, self.command)
         self.assertIsNone(inherited_failures.judge(self.command, out, self.repo, self.base))
 
+    def test_the_baseline_keeps_its_git_context_so_a_new_regression_in_git_dependent_code_is_not_inherited(self):
+        # review round 1: a plain archive has no .git, so a test that asks git failed at the baseline for that reason and a real
+        # regression looked inherited. The baseline here is a repository at the commit.
+        (self.repo / "tests" / "test_git_context.py").write_text(
+            "import subprocess, unittest\nimport mod\nclass G(unittest.TestCase):\n"
+            "    def test_describe(self):\n        self.assertEqual(mod.describe(), subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip())\n")
+        (self.repo / "mod.py").write_text("import subprocess\ndef describe():\n    return subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()\n")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", ".")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "git dependent test")
+        base = git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "mod.py").write_text("def describe():\n    return ''\n")           # the task breaks it
+        out = unittest_output(self.repo, self.command)
+        # the old failure is inherited, the git-dependent test passes at the baseline, so the failures are not all inherited: the task's own
+        self.assertIsNone(inherited_failures.judge(self.command, out, self.repo, base))
+
+    def test_the_projects_repository_is_left_exactly_as_it_was(self):
+        out = unittest_output(self.repo, self.command)
+        before = subprocess.run(["find", ".git", "-type", "f", "-exec", "shasum", "{}", "+"], cwd=self.repo, capture_output=True, text=True).stdout
+        self.assertIsNotNone(inherited_failures.judge(self.command, out, self.repo, self.base))
+        after = subprocess.run(["find", ".git", "-type", "f", "-exec", "shasum", "{}", "+"], cwd=self.repo, capture_output=True, text=True).stdout
+        self.assertEqual(sorted(before.splitlines()), sorted(after.splitlines()))
+        self.assertEqual(git(self.repo, "worktree", "list").count("\n"), 0)
+
     def test_unreadable_output_is_never_inherited(self):
         self.assertIsNone(inherited_failures.judge(self.command, "something broke", self.repo, self.base))
         self.assertIsNone(inherited_failures.judge("pytest -q", "FAILED x", self.repo, self.base))

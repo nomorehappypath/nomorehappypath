@@ -300,7 +300,7 @@ class RenderedPauseTests(unittest.TestCase):
         self.assertIn("project-paused", rendered["bodyClass"].split())
         self.assertGreater(rendered["disabledCount"], 0)
         self.assertEqual(rendered["disabledWithoutReason"], [])
-        self.assertEqual(rendered["enabledButtons"], ["Story", "Advanced", "Cancel this task", "Give direction (starts the agents)"],
+        self.assertEqual(rendered["enabledButtons"], ["Story", "Advanced", "Wish list", "Cancel this task", "Give direction (starts the agents)"],
                          "the tabs stay usable so the owner can look around; two deliberate exceptions: Cancel this task (the owner must always be able to abandon a task, even paused) and saving a direction while paused, which keeps the words and starts nothing until Resume")
         self.assertIn("Cancel the task", rendered["cancelPrompt"], "Cancel on a paused project still reaches the cancel confirmation")
         self.assertTrue(rendered["stillPausedAfterCancelClick"], "clicking Cancel does not resume the project")

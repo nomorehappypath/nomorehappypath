@@ -147,13 +147,14 @@ class R2TryOnceMoreAndGiveUp(BoardCase):
             board.owner_action_choose(self.root, card["id"], "Try once more")   # the card is closed
         self.assertEqual(board.clear_owner_action(self.root, self.cto["id"], card["id"], "cleared")["outcome"], "You chose: Stop", "a done card stays as the owner left it")
 
-    def test_the_cto_cannot_clear_the_owners_card(self):
-        self.put_entry()
+    def test_the_cto_may_close_the_card_and_decides_nothing_by_it(self):
+        # owner 2026-11-12 (D-018): the CTO closes any card; the old rule that refused it is gone (see test_cto_closes_harness_cards.py)
+        key = self.put_entry()
         board.harness_cards_pass(self.root)
         card = self.open_cards()[0]
-        with self.assertRaisesRegex(ValueError, "owner's"):
-            board.clear_owner_action(self.root, self.cto["id"], card["id"], "owner action is not required")
-        self.assertEqual(self.open_cards()[0]["id"], card["id"])
+        done = board.clear_owner_action(self.root, self.cto["id"], card["id"], "owner action is not required")
+        self.assertEqual((done["status"], done["outcome"]), ("done", "owner action is not required"))
+        self.assertEqual(self.state()["review_escalations"][key]["status"], "could_not_finish", "closing the card does not close the part")
 
 
 class R3RefusedThreeTimes(BoardCase):
@@ -223,6 +224,9 @@ class R4NobodyWorking(BoardCase):
         self.assertIn(f"nobody is working on {TASK}", cards[0]["title"])
         self.assertIn("visible CLI terminal ended", cards[0]["why"])
         self.assertTrue(self.state()["agents"][self.builder["id"]].get("stopped_by_harness_at"), "Start a new builder must pick this task up (task review r1-2)")
+        with board.locked_state(self.root, operation="test") as state:      # an idle card's email waits out its 30-minute grace
+            for card in state["owner_actions"].values():
+                card["recorded_at"] = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         self.assertEqual(len(self.emails()), 1)
         exc = story.exception_for(self.state(), TASK)
         self.assertEqual(exc["kind"], "nobody_working")
@@ -231,8 +235,6 @@ class R4NobodyWorking(BoardCase):
         with board.locked_state(self.root, operation="test") as state:
             board._event(state, "cto_disposition_recorded", state["agents"][self.cto["id"]], {"task": TASK, "message": "owner action is not required"})
         self.assertEqual(len(self.open_cards()), 1)
-        with self.assertRaisesRegex(ValueError, "owner's"):
-            board.clear_owner_action(self.root, self.cto["id"], cards[0]["id"], "not required")
         # a builder back on the task clears it
         with board.locked_state(self.root, operation="test") as state:
             board._event(state, "board_polled", state["agents"][self.builder["id"]], {"task": TASK, "message": ""})

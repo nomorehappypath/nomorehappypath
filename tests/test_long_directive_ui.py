@@ -120,6 +120,48 @@ def file_validation_script(agent_id: str) -> str:
 """
 
 
+def attachment_picks_script(session_id: str, agent_id: str) -> str:
+    """Owner 2026-11-12: "fix Give direction so a second pick adds to the first"."""
+    return f"""
+<script>
+(async()=>{{
+  const pause=delay=>new Promise(resolve=>setTimeout(resolve,delay));
+  const open=async()=>{{for(let attempt=0;attempt<100;attempt++){{
+    const button=Array.from(document.querySelectorAll('button')).find(item=>item.textContent.trim()==='Give direction');
+    if(button){{button.click();return;}} await pause(100);
+  }}}};
+  await open();
+  const input=document.querySelector('#owner-message-attachments'),list=document.querySelector('#owner-message-attachments-list');
+  const names=()=>Array.from(list.querySelectorAll('li')).map(item=>item.firstChild.textContent.trim());
+  const held=()=>Array.from(input.files).map(file=>file.name);
+  const first=new File(['FIRST-BYTES'],'first.md',{{type:'text/markdown',lastModified:1000}});
+  const second=new File(['SECOND-BYTES'],'second.md',{{type:'text/markdown',lastModified:2000}});
+  const third=new File(['THIRD'],'third.txt',{{type:'text/plain',lastModified:3000}});
+  async function pick(...files){{const transfer=new DataTransfer();for(const file of files)transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{{bubbles:true}}));await pause(50);}}
+  await pick(first); const afterFirst=names();
+  await pick(second); const afterSecond=names(),heldAfterSecond=held();
+  await pick(second); const afterRepeat=names();
+  await pick(third); const afterThird=names();
+  list.querySelectorAll('.direction-attachment-remove')[2].click(); await pause(50);
+  const afterRemove=names(),heldAfterRemove=held();
+  const listVisible=!list.hidden&&list.getBoundingClientRect().height>0;
+  const textarea=document.querySelector('#owner-message-text');
+  textarea.value='Two files in two picks';textarea.dispatchEvent(new Event('input',{{bubbles:true}}));
+  document.querySelector('#owner-message-form').requestSubmit();
+  for(let attempt=0;attempt<100&&document.querySelector('#owner-message-dialog').open;attempt++)await pause(100);
+  const dashboard=await (await fetch('/api/dashboard')).json();
+  const saved=dashboard.state.owner_directions['{session_id}'];
+  openOwnerMessageDialog('{agent_id}','clarification'); await pause(200);
+  const reopened=document.querySelector('#owner-message-dialog').open,afterReopen=names(),heldAfterReopen=held();
+  await fetch('/__layout_result__',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{
+    afterFirst,afterSecond,heldAfterSecond,afterRepeat,afterThird,afterRemove,heldAfterRemove,listVisible,
+    savedNames:(saved?.attachments||[]).map(item=>item.display_name),reopened,afterReopen,heldAfterReopen,
+  }})}});
+}})();
+</script>
+"""
+
+
 def active_render_script(expected: str) -> str:
     encoded = _encoded_js_text(expected)
     return f"""
@@ -281,6 +323,26 @@ class LongDirectiveUITests(unittest.TestCase):
             for sentinel in (HEAD, MIDDLE, TAIL):
                 self.assertIn(sentinel, history["rendered"])
                 self.assertIn(sentinel, history["requirements"])
+        finally:
+            server.shutdown(); thread.join(timeout=3); server.server_close()
+
+    def test_real_browser_second_pick_of_attachments_adds_to_the_first(self):
+        session, agent = self.waiting_agent()
+        server, thread, origin = self.served()
+        try:
+            result = self.render(origin, attachment_picks_script(session["id"], agent["id"]))
+            self.assertEqual(result["afterFirst"], ["first.md"])
+            self.assertEqual(result["afterSecond"], ["first.md", "second.md"], "a second pick must add to the first, not replace it")
+            self.assertEqual(result["heldAfterSecond"], ["first.md", "second.md"])
+            self.assertEqual(result["afterRepeat"], ["first.md", "second.md"], "the same file picked again is listed once")
+            self.assertEqual(result["afterThird"], ["first.md", "second.md", "third.txt"])
+            self.assertEqual(result["afterRemove"], ["first.md", "second.md"])
+            self.assertEqual(result["heldAfterRemove"], ["first.md", "second.md"])
+            self.assertTrue(result["listVisible"])
+            self.assertEqual(result["savedNames"], ["first.md", "second.md"], "both files must be sent with the direction")
+            self.assertTrue(result["reopened"])
+            self.assertEqual(result["afterReopen"], [])
+            self.assertEqual(result["heldAfterReopen"], [])
         finally:
             server.shutdown(); thread.join(timeout=3); server.server_close()
 
