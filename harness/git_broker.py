@@ -1009,7 +1009,13 @@ class GitBroker:
                 if not recovering_materialization:
                     raise RecoveryHoldError("pending subtask worktree changed before its start boundary")
             if subtask_identity.commit != task_identity.commit:
-                if subtask_identity.commit != previous_base:
+                if subtask_identity.commit != previous_base and not self._run_git(
+                    ["merge-base", "--is-ancestor", subtask_identity.commit, task_identity.commit],
+                    cwd=repository, writable=[repository],
+                ).returncode == 0:
+                    # Owner 2026-11-12: a pending branch that was refreshed earlier (the git ref moved, the board's record rolled
+                    # back) sits on an older task head, not on its recorded base. It has no commit of its own when it is an
+                    # ancestor of the task head, so moving it forward loses nothing; a branch with its own commits is still refused.
                     raise RecoveryHoldError("pending subtask branch moved outside its recorded base")
                 self._refuse_tree_filter_attributes(
                     repository, task_identity.commit, "subtask-base-refresh",

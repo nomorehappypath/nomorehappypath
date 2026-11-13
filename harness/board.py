@@ -8896,11 +8896,16 @@ def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) 
             raise ValueError("unknown owner action")
         if action.get("status") == "done":
             return dict(action)
-        if action.get("owner_only_close"):
-            # 2026-11-08: the harness's own red cards (a stopped part, a refused command, nobody working) are the owner's; the CTO
-            # cannot wave them away. They close by the owner's choice, by the task ending, or when a builder is back on the task.
-            raise ValueError("this red card is the owner's: it closes only by the owner's choice on it, when the task ends, or when a builder is working on the task again")
-        action.update({"status": "done", "outcome": outcome, "done_at": now()})
+        # Owner 2026-11-12 (D-018): the CTO has full power over operations, so it may close any card, the board's own red cards
+        # included (2026-11-08 had made them the owner's alone, and an obsolete card then stayed until the task was accepted).
+        # Closing decides nothing: no choice on the card is selected and the state behind it is untouched. A closed card that has an
+        # incident is acknowledged, so the sweep does not raise it again for the same incident (see _harness_card).
+        action.update({"status": "done", "outcome": outcome, "done_at": now(), "resolved_by": "cto"})
+        if action.get("card_key"):
+            # A card raised before this rule has no incident yet: the acknowledgement is "pending" and binds to the incident the
+            # sweep finds next (the closure was for the condition that is true now); harness_cards_pass drops it if none is true.
+            state.setdefault("cto_acknowledged", {})[action["card_key"]] = {
+                "incident": action.get("incident", ""), "action_id": action_id, "pending": not action.get("incident")}
         _event(state, "owner_action_cleared", agent, {
             "task": action.get("task", ""), "action_id": action_id, "outcome": outcome,
             "message": f"owner action done: {action.get('title', '')} — {outcome}",
@@ -16875,7 +16880,7 @@ def _write_owner_review_waiver(root: Path, state: dict[str, Any], task: str, req
         _harness_card(state, f"waiver_blocked:{task}", f"Blocked, needs you: {task} cannot be released yet",
                       blocked_card_text("Your decision is recorded, but the builder's completion step still has these problems: " + "; ".join(result["problems"]),
                                         "A builder has to finish these first: start a new builder for this task from the Story page if none is running. Your decision stays."),
-                      task)
+                      task, incident="; ".join(str(problem) for problem in result["problems"]))
     return result
 
 
@@ -16936,27 +16941,35 @@ def owner_finding_close(root: Path, task: str, request_id: str, finding_id: str,
     return result
 
 
-def _harness_card(state: dict[str, Any], card_key: str, title: str, why: str, task: str, **extra: Any) -> dict[str, Any]:
+def _harness_card(state: dict[str, Any], card_key: str, title: str, why: str, task: str, incident: str = "", **extra: Any) -> dict[str, Any]:
     """One red "Blocked, needs you" card raised by the board itself, identified by card_key (never merged with another card).
 
     `_record_owner_action` merges cards of the same task and kind, which would fold two stopped parts, a refused command and
     "nobody is working" into one card with the wrong words (Codex plan check 2026-11-08, finding 2). A card with the same key is
-    refreshed in place (its email stamp stays, so no second email); any other is a new card. Closed only by the owner's choice,
-    the task ending, or the condition itself ending (owner_only_close)."""
+    refreshed in place (its email stamp stays, so no second email); any other is a new card. Closed by the owner's choice, the
+    task ending, the condition itself ending, or the CTO (D-018). A card the CTO closed stays closed while the same `incident`
+    (a non-empty string naming this occurrence of the condition) is still true; harness_cards_pass forgets the acknowledgement the
+    moment the sweep no longer finds the condition, so the same incident coming back raises a new card and a new email."""
     actions = state.setdefault("owner_actions", {})
     for existing in actions.values():
         if existing.get("status") == "open" and existing.get("card_key") == card_key:
             # the words and the card's own fields (findings, choices) follow the board; the email stamp and identity stay
             # (Codex task review 2026-11-08 r1-1: after the owner closed one finding the card kept showing it)
-            changed = {key: value for key, value in {"why": why, **extra}.items() if existing.get(key) != value}
+            changed = {key: value for key, value in {"why": why, **({"incident": incident} if incident else {}), **extra}.items()
+                       if existing.get(key) != value}
             if changed:
                 existing.update({**changed, "refreshed_at": now()})
             return existing
+    acknowledged = (state.get("cto_acknowledged") or {}).get(card_key) or {}
+    if incident and acknowledged and actions.get(acknowledged.get("action_id", "")) and (
+            acknowledged.get("incident") == incident or acknowledged.get("pending")):
+        acknowledged.update({"incident": incident, "pending": False})
+        return actions[acknowledged["action_id"]]      # the CTO closed this very incident: no new card, no new email
     recorded_at = now()
     action = {
         "id": f"action-{secrets.token_hex(6)}", "title": title, "command": "", "why": why,
         "task": task, "for_agent": "", "kind": "task", "agent_id": HARNESS_AGENT["id"], "status": "open",
-        "recorded_at": recorded_at, "outcome": "", "done_at": "", "blocked": True, "owner_only_close": True, "card_key": card_key, **extra,
+        "recorded_at": recorded_at, "outcome": "", "done_at": "", "blocked": True, "card_key": card_key, "incident": incident, **extra,
     }
     actions[action["id"]] = action
     _event(state, "owner_action_recorded", None, {"task": task, "action_id": action["id"], "title": title, "message": f"owner action needed: {title}"})
@@ -17001,7 +17014,8 @@ def _stopped_scope_card(state: dict[str, Any], entry: dict[str, Any], root: Path
     return _harness_card(
         state, f"review_stop:{entry.get('key')}", f"Blocked, needs you: {task}, {_scope_words(entry)} stopped after repeated failed reviews",
         blocked_card_text(outcome, what_to_do),
-        task, choices=choices, choice_kind="review_stop", scope_key=str(entry.get("key") or ""), findings=findings)
+        task, incident=f"{entry.get('key')}|{(entry.get('request_ids') or [''])[-1]}",
+        choices=choices, choice_kind="review_stop", scope_key=str(entry.get("key") or ""), findings=findings)
 
 
 def stopped_scope_cards(state: dict[str, Any], root: Path | None = None) -> list[dict[str, Any]]:
@@ -17014,6 +17028,31 @@ def stopped_scope_cards(state: dict[str, Any], root: Path | None = None) -> list
             if card:
                 cards.append(card)
     return cards
+
+
+def open_refusal_cards(root: ProjectRoot) -> set[tuple[str, str]]:
+    """The (task, operation) of every open "the board refused the command" card, read from the stored board (so a card raised
+    before a worker restart, or before this feature, is included)."""
+    found: set[tuple[str, str]] = set()
+    for card in (snapshot(root).get("owner_actions") or {}).values():
+        key = str(card.get("card_key") or "")
+        task = str(card.get("task") or "")
+        if card.get("status") == "open" and key.startswith(f"refusal:{task}:") and task:
+            found.add((task, key[len(f"refusal:{task}:"):]))
+    return found
+
+
+def close_refusal_card(root: ProjectRoot, task: str, operation: str) -> bool:
+    """The same step for the same task later succeeded: its refused-command card closes itself (owner 2026-11-12, "must clear when its
+    cause is fixed"). Return: True when a card was closed. Raises ProjectPausedError or OSError when the board cannot be written; the
+    caller keeps the card pending and tries again after the next success."""
+    with locked_state(root, operation="refusal card cleared") as state:
+        closed = False
+        for card in (state.get("owner_actions") or {}).values():
+            if card.get("status") == "open" and card.get("card_key") == f"refusal:{task}:{operation}":
+                _resolve_owner_action(state, card, "Resolved: the same step later succeeded", "refusal_cleared")
+                closed = True
+        return closed
 
 
 def _refusal_card(state: dict[str, Any], task: str, operation: str, error: str, role: str, count: int) -> dict[str, Any]:
@@ -17116,7 +17155,7 @@ def idle_task_cards(root: Path, current: datetime | None = None) -> list[dict[st
                                       ("Stop that builder (Stop on its row) and start a new one from the Story page, or cancel the task if it should not continue."
                                        if terminal_live else
                                        "Start a new builder for this task from the Story page, or cancel the task if it should not continue.")),
-                    task, idle_task=True)
+                    task, incident=f"{last.get('id')}|{seen.isoformat()}", idle_task=True)
                 cards.append(json.loads(json.dumps(card)))
             return cards
     except ProjectPausedError:
@@ -17131,6 +17170,12 @@ def harness_cards_pass(root: Path, current: datetime | None = None) -> list[dict
         with locked_state(root, operation="stopped part cards") as state:
             cards = [json.loads(json.dumps(c)) for c in stopped_scope_cards(state, root)] + cards
             expire_dead_agent_questions(state)
+            # D-018: a card the CTO closed stays closed only while its condition is still true; the sweep returns a card for every
+            # true condition, the acknowledged one included, so an acknowledgement not among them belongs to an ended incident.
+            still_true = {str(card.get("card_key") or "") for card in cards}
+            acknowledged = state.get("cto_acknowledged") or {}
+            for key in [key for key in acknowledged if key not in still_true]:
+                del acknowledged[key]
     except ProjectPausedError:
         pass
     return cards

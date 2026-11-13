@@ -95,8 +95,8 @@ sign-in or an OpenAI API key; the API key is used only by the project-chat quest
 not have, which means the other vendor's CLI whichever vendor you run as, is not yours to run. Ask the agent of that
 vendor in this task (Delivery, or the Reviewer if the owner swapped the roles) through the board to run that step for
 real and record the real outputs, and open those outputs yourself before you decide. Say in your verdict which steps you
-ran, which the other vendor's agent ran, and which no one ran; a step no one ran makes the verdict
-`TASK DONE: NOT TESTED`. When you are asked to run such a step, run it for real and record what happened, never a
+ran, which the other vendor's agent ran, and which no one ran; a step no one ran is not a STOP: say so in one
+`Not run: <step and why>` line (chapter `not-tested`). When you are asked to run such a step, run it for real and record what happened, never a
 stand-in.
 
 ## board-protocol
@@ -271,7 +271,7 @@ suite once, when the work is complete and just before you ask for review. Never 
 compare, and never run it on a clean copy of main to build a baseline. If that one run shows failures, rerun only those failing
 tests on a clean copy of main: a test that fails there too was already failing before your work, so report it by name and leave
 it alone unless the owner's direction says to fix it. A failure that appears only with your work is yours to fix. Failures that
-come only from your own sandbox (it cannot start a process, a browser or a git worktree) are reported as not tested, never chased.
+come only from your own sandbox (it cannot start a process, a browser or a git worktree) are noted as `Not run: <step and why>`, never chased.
 
 **Code you write documents itself (owner 2026-11-03).** This is for whoever maintains the code after you. In every file you
 create or change: the file opens with a short note saying what it does; every function or method you add or change says what it
@@ -461,7 +461,7 @@ report, a document, a data file, a command-line result) or the contract says no 
 deliverable exactly as the owner receives it and comparing it with the confirmed requirements. No `screen-check`, no browser
 and no rendered page is required, and a Challenge Ledger row needs no `screen-...` id. A capture tool that cannot run here
 (for example a browser the board refuses) is never a reason to hand the final review back: if the task has a screen, mark
-that step `TASK DONE: NOT TESTED` in your verdict; if it has none, there is nothing missing. A Code analysis never starts the app: its final review opens FINDINGS.md as the owner receives it and checks the findings against the code.
+that step `Not run: <step and why>` in your verdict and pass the rest; if it has none, there is nothing missing. A Code analysis never starts the app: its final review opens FINDINGS.md as the owner receives it and checks the findings against the code.
 
 **The end-to-end walk takes the time it takes (owner, 2026-10-07).** Walking a whole task from the start to the finished
 result can take twenty minutes or more. Your Bash tool allows a command up to two hours (the app sets that limit for
@@ -469,7 +469,7 @@ you), so run the walk as one command with an explicit long `timeout` on that too
 the walk itself that you check with bounded commands and stop when it ends. That is not the board polling the no-loops
 rule in chapter `board-protocol` is about. Never stop at ten minutes, never split the walk into separate pieces and call that the end-to-end
 test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one
-and mark the verdict `TASK DONE: NOT TESTED`.
+and write `Not run: <step and why>` in your verdict; it is not a STOP (chapter `not-tested`).
 
 ## release
 
@@ -1268,8 +1268,8 @@ and your route question is its evidence. The existing
 card paths stay as written and name what they name, not your tool: the
 unproven owner-path scope card of the rendered-proof rule, the CTO-pinned card
 for a security check that could not run, and the sanctioned token routes. The
-Reviewer's twin: a step it cannot run for a limit of its own makes the verdict
-`TASK DONE: NOT TESTED` (chapter `final-acceptance`), never a finding or a card.
+Reviewer's twin: a step it cannot run for a limit of its own is a
+`Not run: <step and why>` line in its verdict (chapter `not-tested`), never a finding, a card or a failed review.
 
 Behavior an Independent Reviewer has already accepted — including anything it
 marked non-blocking — is out of scope for the rounds that follow. Repairing a
@@ -1419,7 +1419,7 @@ material.
   `c` an agreed requirement materially unmet (`criterion` is its number from the confirmed list or a verbatim quote; `evidence_ref` shows what you ran or opened; a requirement the owner waived does not count), or
   `d` safety, data loss or a leak (`harm_tag`). Send every blocker with its `letter`. Anything else you found goes in the summary as a note, or as a finding with `"letter": "new"`: the board keeps it as a note and,
   when nothing else blocks and your first line says `TASK DONE: YES`, records PASS with notes and tells you why; your verdict text is never edited. A malformed finding is refused with the exact fix; fix it and submit again.
-  `TASK DONE: NO` and `TASK DONE: NOT TESTED` are never turned into a PASS. Run `retained-plan --agent <id> --request <id>`, confirm the round-1 checks in your ledger (add rows for the repair's changed paths), run `execute-challenge` once, and still form a fresh semantic verdict
+  `TASK DONE: NO` is never turned into a PASS. Run `retained-plan --agent <id> --request <id>`, confirm the round-1 checks in your ledger (add rows for the repair's changed paths), run `execute-challenge` once, and still form a fresh semantic verdict
   (the whole path for final acceptance). The board runs nothing for you beforehand. A different Reviewer uses the retained commands as prefill only and writes its own scenario meaning.
 - *Delivery.* After a FAIL with findings, resolve every finding in ONE repair (`resolve-repair-package`, one `--resolution` per id) and run each reproduction yourself before you request review; the board refuses a review request while any finding is open.
   After the third failed review of a scope the harness starts one fresh Delivery attempt with a precise brief (your poll shows it as `review_recovery`); that attempt reads the brief, fixes everything in one repair and does not ask the owner anything.
@@ -1473,11 +1473,12 @@ fonts) stays non-material.
 
 ## not-tested
 
-**Not run is not passed (owner, 2026-10-07).** If any step of the owner's path could not be executed for real
-- for example it needs a real Claude or Codex and you cannot run one - your verdict starts
-`TASK DONE: NOT TESTED - <the step you could not run and why>` and is not a PASS. The board refuses to offer the
-project to the owner without `TASK DONE: YES`. Never claim YES for a step you did not run, and never ask the owner to
-create, copy or paste a token or login: say what was not tested and stop.
+**A process limit is not a STOP (owner, 2026-11-12, D-017; it replaces "Not run is not passed" of 2026-10-07).** Only a bug
+in the app that stops it working for its owner in normal use, or a security leak, fails a review. A step you could not run
+for a reason of the process (your own sandbox, a tool, a process or a browser you cannot start, a sign-in you lack, a real
+Claude or Codex you cannot run) is never a defect of the app and never a reason to fail, hold, repair or re-review it.
+Write one line `Not run: <the step and why>` in your verdict, give `TASK DONE: YES` for what you did check, and go on.
+Never ask the owner to create, copy or paste a token or login: say what was not run and go on.
 
 ## reviewer-token
 
@@ -1489,9 +1490,9 @@ command: `CLAUDE_CODE_OAUTH_TOKEN="$HARNESS_REVIEWER_CLAUDE_TOKEN" claude ...`. 
 into any file or evidence, and never ask the owner to create or paste one. Commands the board executes for you
 (`execute-challenge`) run in a clean environment without it, so walk the real end-to-end path yourself and record what
 you saw. That evidence is separate from the hermetic certification and from screen captures: a screen capture alone never
-proves a real provider workflow. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that, mark
-the verdict `TASK DONE: NOT TESTED`, and ask only for your terminal to be relaunched from Mission Control. If instead
-Claude rejects the token or the service is unavailable, say exactly that, mark the verdict `TASK DONE: NOT TESTED`, and
+proves a real provider workflow. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that in a
+`Not run: <step and why>` line and ask only for your terminal to be relaunched from Mission Control. If instead
+Claude rejects the token or the service is unavailable, say exactly that in a `Not run:` line, and
 use the app's own sign-in controls (the attention card in Mission Control) rather than asking for repeated relaunches.
 
 ## handoff

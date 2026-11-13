@@ -125,7 +125,7 @@ class RenderedBuildTests(support.MachineFixture):
         with urlopen(f"{base}/api/builds/{self.manifest_id}/why.bin", timeout=20) as response:
             body = response.read()
             self.assertEqual(body, support.CONTENT["why.bin"])
-            self.assertEqual(response.headers["Content-Disposition"], 'attachment; filename="why.bin"')
+            self.assertEqual(response.headers["Content-Disposition"], 'attachment; filename="why.bin"; filename*=UTF-8\'\'why.bin')
             self.assertEqual(response.headers["Content-Type"], "application/octet-stream")
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
             self.assertEqual(response.headers["Content-Length"], str(len(body)))

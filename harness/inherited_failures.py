@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
+from harness import git_process
+
 _FAILED = re.compile(r"^(?:FAIL|ERROR): (\S+) \(([\w.]+)\)\s*$", re.M)
 _SUMMARY = re.compile(r"FAILED \((?:failures=(\d+))?(?:, )?(?:errors=(\d+))?(?:, )?(?:skipped=\d+)?(?:, )?(?:expected failures=\d+)?(?:, )?(?:unexpected successes=\d+)?\)")
 MAX_LISTED = 40
@@ -53,13 +55,19 @@ def judge(command: str, output: str, execution_root: Path, baseline_commit: str,
         return None
     temp = tempfile.mkdtemp(prefix="nmhp-baseline-")
     folder = Path(temp) / "base"
-    added = False
     try:
-        made = subprocess.run(["git", "worktree", "add", "--detach", str(folder), baseline_commit], cwd=execution_root,
-                              capture_output=True, text=True, timeout=120)
+        # The baseline is a copy of the project's repository at that commit: a shared clone (it only reads the project's objects, it
+        # adds nothing to the project's repository, no worktree entry, no ref) switched to the commit, made through the sanitized git
+        # boundary. It keeps the git history and tags, so a baseline test that asks git (a version, a describe) runs in its real context.
+        # If the copy cannot be made the answer is None: the failures are then the task's own, never inherited by default.
+        made = git_process.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(execution_root), str(folder)],
+                               cwd=temp, capture_output=True, text=True, timeout=120)
         if made.returncode != 0:
             return None
-        added = True
+        switched = git_process.run(["git", "switch", "--quiet", "--detach", baseline_commit], cwd=folder,
+                                   capture_output=True, text=True, timeout=120)
+        if switched.returncode != 0:
+            return None
         ran = subprocess.run(["python3", "-m", "unittest", *ids], cwd=folder / (workdir if workdir and workdir != "." else "."),
                              capture_output=True, text=True, timeout=timeout_seconds, env=dict(environment) if environment else None)
         again = failed_ids(ran.stdout + ran.stderr)
@@ -68,8 +76,6 @@ def judge(command: str, output: str, execution_root: Path, baseline_commit: str,
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
-        if added:
-            subprocess.run(["git", "worktree", "remove", "--force", str(folder)], cwd=execution_root, capture_output=True, text=True)
         subprocess.run(["rm", "-rf", temp], capture_output=True)
     listed = "\n".join(f"  - {item}" for item in ids[:MAX_LISTED]) + (f"\n  ... and {len(ids) - MAX_LISTED} more" if len(ids) > MAX_LISTED else "")
     note = (f"INHERITED FAILURES: {len(ids)} test(s) failed in this run and fail the same way at the commit this task started from "

@@ -884,6 +884,7 @@ class CommandGateway:
     # Owner's order 2026-10-28: the third identical refusal is a harness defect, never a reason to stop the work (it used to be a
     # fifth refusal and froze the task behind a red hold).
     REFUSAL_HOLD_THRESHOLD = 3
+    _pending_refusal_cards: set[tuple[str, str]] | None = None     # per instance once loaded; see _clear_refusal_card
     REFUSAL_WINDOW_SECONDS = 45 * 60.0
 
     def __init__(self, root: ProjectRoot, authority: SessionTokenAuthority):
@@ -904,6 +905,9 @@ class CommandGateway:
         self.nonce_thread_lock = _project_nonce_lock(authority.project_id)
         self._refusals: dict[tuple[str, str, str], list[float]] = {}
         self._refusal_holds: set[tuple[str, str, str]] = set()
+        # (task, operation) of each unresolved refused-command card; None until first needed, then read from the stored
+        # board so a card raised before a worker restart is cleared by a later success too (owner 2026-11-12)
+        self._pending_refusal_cards: set[tuple[str, str]] | None = None
 
     def _track_refusal(self, identity, operation: str, error: str, arguments: Sequence[str] = ()) -> str:
         """A repeated identical refusal is a harness defect, not a reason to stop the work (owner's order 2026-10-28).
@@ -946,9 +950,38 @@ class CommandGateway:
             try:
                 from harness import board
                 board.record_refusal_defect(self.context, task, operation, error, len(window), str(agent.get("role") or ""))
+                if self._pending_refusal_cards is not None:
+                    self._pending_refusal_cards.add((task, operation))
             except (OSError, ValueError):
                 pass
         return told
+
+    def _clear_refusal_card(self, identity, operation: str, arguments: Sequence[str]) -> None:
+        """The same operation for the same task succeeded: close its refused-command card and forget the refusal counters, so three
+        new refusals later raise a new card (owner 2026-11-12: a card must clear when its cause is fixed).
+
+        A command that already succeeded is never reported as failed because of this: any failure to read or write the board is
+        swallowed, and the card stays pending for the next success. Counters are dropped only after the card is closed."""
+        try:
+            from harness import board
+            if self._pending_refusal_cards is None:
+                self._pending_refusal_cards = board.open_refusal_cards(self.context)
+            if not any(pending[1] == operation for pending in self._pending_refusal_cards):
+                return
+            state = board.snapshot(self.context)
+            agent = next((
+                value for value in (state.get("agents") or {}).values()
+                if value.get("session_id") == identity.session_id
+            ), None) or {}
+            task = _refusal_task(state, agent, operation, arguments)
+            if (task, operation) not in self._pending_refusal_cards:
+                return                  # another task, or the same operation for no refused task: nothing to close
+            board.close_refusal_card(self.context, task, operation)
+            self._pending_refusal_cards.discard((task, operation))
+            for key in [key for key in self._refusals if key[0] == task and key[1] == operation]:
+                del self._refusals[key]
+        except (OSError, ValueError):
+            pass
 
     def _consume_nonce(self, session_id: str, nonce: int) -> None:
         """Record nonce as used for session_id, rejecting a duplicate or out-of-order value.
@@ -1313,6 +1346,7 @@ class CommandGateway:
                     raise SurfaceProtocolError(str(refusal) + told) from refusal
                 raise
             recorded = True
+            self._clear_refusal_card(identity, operation, arguments)
             return {
                 "result": _sanitized_value(output, self.context),
                 "identity": identity.public(),
