@@ -6,6 +6,8 @@ NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for buil
 
 Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years building and selling commercial fintech software.
 
+<p align="center"><img src="https://nomorehappypath.com/assets/nmhp-7-layers.gif" width="480" alt="NoMoreHappyPath in seven layers: the project, the departments, the workforce, the rulebook, the path, the controls and the CEO's desk"></p>
+
 ## See it working
 
 ![Mission Control during a real task: what is happening now, the step, the cost so far, and each agent](https://nomorehappypath.com/assets/mc-where-we-are.png)
