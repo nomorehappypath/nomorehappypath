@@ -183,6 +183,41 @@ SESSION_COLORS = {
     "red": {"label": "Brick red", "hex": "#5A2525", "rgb": (0x5A, 0x25, 0x25)},
     "amber": {"label": "Dark amber", "hex": "#5A4314", "rgb": (0x5A, 0x43, 0x14)},
 }
+# Issue #92: the colour each role wears in Mission Control (its name, its row, its screen). `hex` draws bars and
+# borders; `ink` is the same colour dark enough for the role's name to keep 4.5:1 on white. Owners choose from this
+# list in Settings, so every choice stays readable.
+ROLE_COLOR_CHOICES = {
+    "teal": {"label": "Teal", "hex": "#14b8a6", "ink": "#0f766e"},
+    "coral": {"label": "Coral", "hex": "#f97361", "ink": "#b8392a"},
+    "purple": {"label": "Purple", "hex": "#8b7cf6", "ink": "#5b4bc4"},
+    "blue": {"label": "Blue", "hex": "#3b82f6", "ink": "#1d4ed8"},
+    "green": {"label": "Green", "hex": "#22c55e", "ink": "#15803d"},
+    "amber": {"label": "Amber", "hex": "#f59e0b", "ink": "#b45309"},
+    "pink": {"label": "Pink", "hex": "#ec4899", "ink": "#be185d"},
+}
+DEFAULT_ROLE_COLORS = {"delivery": "teal", "reviewer": "coral", "cto": "purple"}
+
+
+def validated_role_colors(value: Any, *, repair: bool = False) -> dict[str, str]:
+    """Return one colour id from ROLE_COLOR_CHOICES for every role, the role's default where none is given.
+
+    `value` maps role to colour id (None or a missing role means the default). An unknown role or colour raises
+    ValueError, unless `repair` is set (a stored document), when that role falls back to its default instead.
+    """
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        if repair:
+            return dict(DEFAULT_ROLE_COLORS)
+        raise ValueError("role colors must be an object")
+    result = dict(DEFAULT_ROLE_COLORS)
+    for role, color in value.items():
+        if role not in DEFAULT_ROLE_COLORS or color not in ROLE_COLOR_CHOICES:
+            if repair:
+                continue
+            raise ValueError("unknown role color; choose one of: " + ", ".join(ROLE_COLOR_CHOICES))
+        result[role] = color
+    return result
 
 
 def session_identity(kind: str, provider: str) -> dict[str, str]:

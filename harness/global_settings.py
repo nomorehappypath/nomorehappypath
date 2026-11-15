@@ -252,6 +252,7 @@ def _default() -> dict[str, Any]:
         "agent_settings": control.default_agent_settings(),
         "recovery_models": control.validated_recovery_models(None),
         "reviewer_retry_models": control.validated_recovery_models(None),
+        "role_colors": control.validated_role_colors(None),
         "connectivity": {},
         "plumbing": default_plumbing(),
         "owner_questions": default_owner_questions(),
@@ -300,6 +301,9 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
         "recovery_models": _tolerant_recovery_models(value.get("recovery_models")),
         # "If the review can't be completed, retry once with" (2026-10-25): same shape, same default, same tolerance.
         "reviewer_retry_models": _tolerant_recovery_models(value.get("reviewer_retry_models")),
+        # Issue #92: each role's Mission Control colour. Older documents have none and get the defaults; an unknown
+        # value falls back to that role's default rather than refusing the document.
+        "role_colors": control.validated_role_colors(value.get("role_colors"), repair=True),
         "connectivity": connectivity,
         "plumbing": _validated_plumbing(value.get("plumbing")),
         "owner_questions": _validated_owner_questions(value.get("owner_questions")),
@@ -969,7 +973,8 @@ def provider_environment(
     return environment
 
 
-def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: Any = None, reviewer_retry_models: Any = None) -> dict[str, Any]:
+def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: Any = None, reviewer_retry_models: Any = None,
+                          role_colors: Any = None) -> dict[str, Any]:
     """Validate and save a new agent_settings document (and optionally recovery_models/reviewer_retry_models) to home.
 
     Args:
@@ -977,6 +982,7 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
         value: the raw agent_settings to validate via control._validated_agent_settings before saving.
         recovery_models: the raw recovery_models to validate and save, or None to leave the stored value unchanged.
         reviewer_retry_models: the raw reviewer_retry_models to validate and save, or None to leave the stored value unchanged.
+        role_colors: the raw role -> colour id map to validate and save, or None to leave the stored value unchanged.
 
     Returns: the saved settings document, or raises ValueError when a role's provider is unavailable or the settings are invalid.
     """
@@ -984,6 +990,7 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
     validated = control._validated_agent_settings(value, notices=save_notices)
     validated_recovery = control.validated_recovery_models(recovery_models) if recovery_models is not None else None
     validated_reviewer_retry = control.validated_recovery_models(reviewer_retry_models) if reviewer_retry_models is not None else None
+    validated_colors = control.validated_role_colors(role_colors) if role_colors is not None else None
     from harness import cli_capabilities
     for role, entry in validated.items():
         availability = cli_capabilities.provider_availability(home, entry["provider"])
@@ -1007,6 +1014,8 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
             current["recovery_models"] = validated_recovery
         if validated_reviewer_retry is not None:
             current["reviewer_retry_models"] = validated_reviewer_retry
+        if validated_colors is not None:
+            current["role_colors"] = validated_colors
         current["notices"] = save_notices      # an explicit save clears older repair notices
         _write(home, current)
         return json.loads(json.dumps(current))

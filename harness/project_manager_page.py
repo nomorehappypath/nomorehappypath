@@ -137,6 +137,7 @@ PAGE = r'''<!doctype html>
     .settings-card h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
     .settings-card-copy { min-height: 40px; margin: -8px 0 0; color: var(--muted); font-size: 12px; }
     .settings-card .field { margin: 0; }
+    .role-color-swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; vertical-align: -1px; }
     .settings-card select, .settings-card input { width: 100%; min-height: 42px; border: 1px solid #cfd7e2; border-radius: 10px; padding: 8px 10px; color: var(--ink); background: white; }
     .connection-result { min-height: 58px; padding: 10px 11px; border-radius: 10px; color: var(--muted); background: #f6f8fb; font-size: 12px; }
     .connection-result.ok { color: var(--green); background: var(--green-soft); }
@@ -1212,6 +1213,12 @@ PAGE = r'''<!doctype html>
         effort: q(`[data-setting-effort="${role}"]`).value,
       };
     };
+    // Issue #92: each role's Mission Control colour, from the fixed list the server keeps; the role's default is marked.
+    const colorOptions = (role) => {
+      const chosen = settingsCatalog?.role_colors?.[role] || settingsCatalog?.role_color_defaults?.[role] || '';
+      const fallback = settingsCatalog?.role_color_defaults?.[role] || '';
+      return Object.entries(settingsCatalog?.role_color_choices || {}).map(([id, color]) => `<option value="${esc(id)}"${id === chosen ? ' selected' : ''}>${esc(color.label)}${id === fallback ? ' (default)' : ''}</option>`).join('');
+    };
     const modelOptions = (provider, selected = '') => {
       const models = settingsCatalog?.provider_models?.[provider] || [];
       const current = models.includes(selected) ? selected : '__custom__';
@@ -1367,6 +1374,7 @@ PAGE = r'''<!doctype html>
           <div class="field"><label for="model-${role.id}">Model</label><select id="model-${role.id}" data-setting-model-choice="${role.id}">${modelOptions(selected.provider, selected.model)}</select></div>
           <div class="field" data-setting-custom="${role.id}"${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? ' hidden' : ''}><label for="custom-model-${role.id}">Custom model ID</label><input id="custom-model-${role.id}" data-setting-model="${role.id}" value="${(value.provider_models?.[selected.provider] || []).includes(selected.model) ? '' : esc(selected.model || '')}" autocomplete="off" placeholder="Provider model ID"></div>
           <div class="field"><label for="effort-${role.id}">Effort</label><select id="effort-${role.id}" data-setting-effort="${role.id}">${effortOptions(selected.provider, selected.effort)}</select></div>
+          <div class="field"><label for="color-${role.id}"><i class="role-color-swatch" data-setting-color-swatch="${role.id}" aria-hidden="true"></i>Color in Mission Control</label><select id="color-${role.id}" data-setting-color="${role.id}">${colorOptions(role.id)}</select></div>
           <button class="button secondary" type="button" data-settings-test="${role.id}">Test ${esc(value.providers?.[selected.provider]?.short || 'the')} connection</button>
           <div class="connection-result ${resultClass}" data-settings-result="${role.id}" role="status" aria-live="polite">${esc(resultText)}</div>
           <p class="settings-card-copy settings-switch" data-settings-switch="${role.id}" role="status" hidden></p>
@@ -1386,6 +1394,8 @@ PAGE = r'''<!doctype html>
       };
       document.querySelectorAll('[data-setting-model-choice]').forEach((select) => select.onchange = () => { syncCustomModel(select.dataset.settingModelChoice); markRetest(select.dataset.settingModelChoice); });
       document.querySelectorAll('[data-setting-effort]').forEach((select) => select.addEventListener('change', () => markRetest(select.dataset.settingEffort)));
+      // Issue #92: the colour is display only, so changing it never asks for a new connection test.
+      document.querySelectorAll('[data-setting-color]').forEach((select) => { const paint = () => { q(`[data-setting-color-swatch="${select.dataset.settingColor}"]`).style.background = settingsCatalog.role_color_choices?.[select.value]?.hex || 'transparent'; }; select.onchange = paint; paint(); });
       document.querySelectorAll('[data-setting-custom] input').forEach((input) => input.addEventListener('input', () => markRetest(input.closest('[data-setting-custom]').dataset.settingCustom)));
       // Delivery and Reviewer must be different AI companies. Picking the other one's company moves the other one aside
       // at once (to the company this role just left when possible) and says so, so a refused Save never surprises.
@@ -1463,7 +1473,7 @@ PAGE = r'''<!doctype html>
       q('#settings-error').textContent = '';
       save.disabled = true;
       try {
-        renderSettings(await api('/api/settings', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({agent_settings: agentSettings, recovery_models: Object.fromEntries([...document.querySelectorAll('[data-recovery-model]')].map((select) => [select.dataset.recoveryModel, select.value])), reviewer_retry_models: Object.fromEntries([...document.querySelectorAll('[data-reviewer-retry-model]')].map((select) => [select.dataset.reviewerRetryModel, select.value]))})}));
+        renderSettings(await api('/api/settings', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({agent_settings: agentSettings, recovery_models: Object.fromEntries([...document.querySelectorAll('[data-recovery-model]')].map((select) => [select.dataset.recoveryModel, select.value])), reviewer_retry_models: Object.fromEntries([...document.querySelectorAll('[data-reviewer-retry-model]')].map((select) => [select.dataset.reviewerRetryModel, select.value])), role_colors: Object.fromEntries([...document.querySelectorAll('[data-setting-color]')].map((select) => [select.dataset.settingColor, select.value]))})}));
         status('Global agent settings saved. They will apply to new sessions in every project.');
       } catch (error) {
         const plain = /different providers/.test(error.message) ? 'The builder and the independent reviewer must be different AI companies. Change one of them, then press Save again.' : error.message;

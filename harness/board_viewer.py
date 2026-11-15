@@ -123,8 +123,8 @@ PAGE = r"""<!doctype html>
 .mc-cancel{margin-top:12px;min-height:40px}
 .mc-agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:18px}
 .mc-agent{background:#fff;border:1px solid var(--line);border-top:4px solid var(--mc-teal);border-radius:14px;padding:16px 18px;min-width:0}
-/* Issue #92: one fixed colour per role (builder, reviewer, CTO), used wherever that agent appears: its name, its row and its screen. The -ink tone is for text and keeps 4.5:1 on white. */
-.mc-builder{--mc-role:var(--mc-teal);--mc-role-ink:#0f766e}.mc-reviewer{--mc-role:var(--mc-coral);--mc-role-ink:#b8392a}.mc-cto{--mc-role:var(--mc-purple);--mc-role-ink:#5b4bc4}
+/* Issue #92: one colour per role (builder, reviewer, CTO), used wherever that agent appears: its name, its row and its screen. The owner picks it in Settings (applyRoleColors); these are the defaults. The -ink tone is for text and keeps 4.5:1 on white. */
+.mc-builder{--mc-role:var(--mc-builder-color,var(--mc-teal));--mc-role-ink:var(--mc-builder-ink,#0f766e)}.mc-reviewer{--mc-role:var(--mc-reviewer-color,var(--mc-coral));--mc-role-ink:var(--mc-reviewer-ink,#b8392a)}.mc-cto{--mc-role:var(--mc-cto-color,var(--mc-purple));--mc-role-ink:var(--mc-cto-ink,#5b4bc4)}
 .mc-agent[data-agent-role]{border-top-color:var(--mc-role)}.mc-agent[data-agent-role] .mc-agent-head strong{color:var(--mc-role-ink)}
 .agent-row[data-agent-role]{border-left:4px solid var(--mc-role);padding-left:12px}.agent-row[data-agent-role]>.row>div>strong{color:var(--mc-role-ink)}
 #agent-view-dialog[data-agent-role]{border-top:6px solid var(--mc-role)}#agent-view-dialog[data-agent-role] #agent-view-title{color:var(--mc-role-ink)}
@@ -1640,7 +1640,13 @@ async function submitRejection(event){
   return false;
 }
 
-// Issue #92: the role whose fixed colour an agent wears, as story._role_of_agent and story._role_of_kind decide it.
+// Issue #92: the colours the owner chose in Settings ({builder|reviewer|cto: {hex, ink}}, from the server's fixed list).
+function applyRoleColors(colors){
+  const style=typeof document!=='undefined'&&document.documentElement&&document.documentElement.style;
+  if(!style||!colors)return;
+  for(const role of ['builder','reviewer','cto']){const color=colors[role];if(!color)continue;style.setProperty(`--mc-${role}-color`,color.hex);style.setProperty(`--mc-${role}-ink`,color.ink);}
+}
+// Issue #92: the role whose colour an agent wears, as story._role_of_agent and story._role_of_kind decide it.
 function agentColorRole(agent,session){
   if(agent){const role=String(agent.role||'');return role==='qa'?'reviewer':role==='cto'?'cto':'builder';}
   const kind=String(session?.kind||'');
@@ -2159,6 +2165,7 @@ function render(data,managed){
   if(pausedNow!==renderWasPaused){layoutEpoch+=1;renderWasPaused=pausedNow;}   // pausing or resuming re-renders every box once, so controls recover
   const writesBefore=domWrites;
   const state=data.state||{},contracts=data.contracts||{},agents=Object.values(state.agents||{}),reviews=Object.values(state.qa_requests||{});
+  applyRoleColors(data.role_colors);
   const projectPaused=['paused','resuming'].includes(state.project_pause?.status);
   state.live_tasks=Array.isArray(data.live_tasks)?[...data.live_tasks]:[];
   state.in_scope_findings=Array.isArray(data.in_scope_findings)?[...data.in_scope_findings]:[];
@@ -4690,6 +4697,8 @@ def dashboard_payload(
     }
     # 2026-10-27 Mission Control story: computed on the FULL state (events, every request) before the compaction below drops them,
     # with the same runtime facts the gate uses, so Ready/Accept is offered only when the ported gate allows it. Display only.
+    global_value = global_settings.load(settings_home) if settings_home is not None else None
+    result["role_colors"] = role_color_view(global_value)
     try:
         full = data["state"]
         story_agents = [
@@ -4702,11 +4711,21 @@ def dashboard_payload(
         result["story"] = story.for_page(
             full, live_contracts, live_tasks, {"commit": str((runtime or {}).get("commit", "")), "managed": bool(managed)},
             agents=story_agents, sessions=list(sessions_by_id.values()), cost=cost_center.summarize(board.board_dir(root)),
-            settings=global_settings.load(settings_home) if settings_home is not None else None, redact=board._redact_secrets, ledgers=test_ledgers)
+            settings=global_value, redact=board._redact_secrets, ledgers=test_ledgers)
     except Exception as error:   # noqa: BLE001 - the story is a display; the page still works from the old panels without it
         result["story"] = {"error": f"The summary could not be computed ({type(error).__name__}).", "empty": False, "agents": [], "tasks": {}, "order": []}
     result["state"] = _compact_dashboard_state(data["state"], live_tasks, live_session_ids, root=root)
     return result
+
+
+def role_color_view(settings: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    """Issue #92: the colour each story role (builder, reviewer, cto) wears in Mission Control, as {role: {hex, ink}}.
+
+    Takes the global settings document (None when this board has none: the defaults are used).
+    """
+    chosen = control.validated_role_colors((settings or {}).get("role_colors"), repair=True)
+    return {story_role: {key: control.ROLE_COLOR_CHOICES[chosen[role]][key] for key in ("hex", "ink")}
+            for story_role, role in (("builder", "delivery"), ("reviewer", "reviewer"), ("cto", "cto"))}
 
 
 def _harness_actions(state: dict[str, Any]) -> list[dict[str, Any]]:

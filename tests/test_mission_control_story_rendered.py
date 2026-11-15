@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import unittest
 
-from harness import board, board_viewer, control
+from harness import board, board_viewer, control, global_settings
 from tests.mission_control_support import RenderedCase
+from tests.pinned_settings import old_settings
 from tests.requirements_support import agreed_requirements
 from tests.test_requirements_contract import context, delivery_with_direction
 from tests.test_story import TASK, contract, fresh_request, request
@@ -233,6 +234,26 @@ out.lowContrast = lowContrast(['#agent-strip .mc-agent-head strong', '#agents .a
             self.assertEqual(result["strip"][role], result["screen"][role], f"{role}: its screen wears the same colour")
         self.assertEqual(len({tuple(result["strip"][role]) for role in roles}), 3, "the three roles are told apart")
         self.assertEqual(result["lowContrast"], [], "a coloured name keeps 4.5:1")
+
+    def test_a_color_chosen_in_settings_is_the_one_mission_control_shows(self):
+        root = self.board()
+        global_settings.update_agent_settings(root / ".harness" / "home", old_settings(), None, None, {"cto": "blue"})
+        body = r"""
+await until(() => document.querySelectorAll('#agent-strip .mc-agent[data-agent-role]').length >= 3);
+document.querySelector('#tab-advanced-btn').click();
+await until(() => document.querySelector('#agents .agent-row[data-agent-role=cto]'));
+const css = node => getComputedStyle(node);
+const card = document.querySelector('#agent-strip [data-agent-role=cto]'), row = document.querySelector('#agents .agent-row[data-agent-role=cto]');
+out.card = [css(card.querySelector('.mc-agent-head strong')).color, css(card).borderTopColor];
+out.row = [css(row.querySelector(':scope > .row > div > strong')).color, css(row).borderLeftColor];
+out.builder = css(document.querySelector('#agent-strip [data-agent-role=builder]')).borderTopColor;
+out.lowContrast = lowContrast(['#agent-strip .mc-agent-head strong', '#agents .agent-row > .row > div > strong']);
+"""
+        result = self.run_probe(self.url(root), body, wait=120)
+        self.assertEqual(result["card"], ["rgb(29, 78, 216)", "rgb(59, 130, 246)"], "the CTO wears the blue chosen in Settings")
+        self.assertEqual(result["row"], result["card"])
+        self.assertEqual(result["builder"], "rgb(20, 184, 166)", "a role left alone keeps its default")
+        self.assertEqual(result["lowContrast"], [])
 
 
 if __name__ == "__main__":

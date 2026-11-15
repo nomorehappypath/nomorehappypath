@@ -818,6 +818,8 @@ class ProjectManager:
             "provider_efforts": control.PROVIDER_EFFORTS,
             "provider_models": control.PROVIDER_MODELS,
             "recovery_defaults": control.STRONGEST_MODELS,
+            "role_color_choices": control.ROLE_COLOR_CHOICES,
+            "role_color_defaults": control.DEFAULT_ROLE_COLORS,
             "provider_model_descriptions": control.PROVIDER_MODEL_DESCRIPTIONS,
             "provider_availability": {name: cli_capabilities.provider_availability(self.home, name) for name in control.PROVIDERS},
             "openai": global_settings.openai_status(self.home),
@@ -2199,6 +2201,7 @@ def make_handler(manager: ProjectManager):
                     value = self._body()
                     updated = global_settings.update_agent_settings(
                         manager.home, value.get("agent_settings", value), value.get("recovery_models"), value.get("reviewer_retry_models"),
+                        value.get("role_colors"),
                     )
                     payload = manager.settings_payload()
                     # `updated` carries the raw saved document; the page needs the card's status view (with password_saved) instead.
