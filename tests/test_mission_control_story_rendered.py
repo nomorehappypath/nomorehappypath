@@ -204,6 +204,36 @@ out.tabHeight = document.querySelector('#tab-advanced-btn').getBoundingClientRec
         self.assertGreaterEqual(result["summaryHeight"], 43.5, "every step is a target at least 44px tall")
         self.assertGreaterEqual(result["tabHeight"], 43.5)
 
+    def test_each_role_has_one_fixed_color_on_its_name_its_row_and_its_screen(self):
+        # Issue #92: builder, reviewer and CTO each wear one colour wherever they appear, and the name stays readable.
+        root = self.board()
+        body = r"""
+await until(() => document.querySelectorAll('#agent-strip .mc-agent[data-agent-role]').length >= 3);
+document.querySelector('#tab-advanced-btn').click();
+await until(() => document.querySelectorAll('#agents .agent-row[data-agent-role]').length >= 3);
+const css = node => getComputedStyle(node);
+out.strip = {}; out.rows = {}; out.screen = {};
+for (const node of document.querySelectorAll('#agent-strip .mc-agent[data-agent-role]'))
+  out.strip[node.dataset.agentRole] = [css(node.querySelector('.mc-agent-head strong')).color, css(node).borderTopColor];
+for (const node of document.querySelectorAll('#agents .agent-row[data-agent-role]'))
+  out.rows[node.dataset.agentRole] = [css(node.querySelector(':scope > .row > div > strong')).color, css(node).borderLeftColor];
+const dialog = document.querySelector('#agent-view-dialog');
+for (const kind of ['codex_delivery', 'claude_reviewer', 'claude_cto']) {
+  paintAgentRole(dialog, agentColorRole(null, {kind}));   // what viewAgent does when it opens that session's screen
+  out.screen[dialog.dataset.agentRole] = [css(document.querySelector('#agent-view-title')).color, css(dialog).borderTopColor];
+}
+out.lowContrast = lowContrast(['#agent-strip .mc-agent-head strong', '#agents .agent-row > .row > div > strong']);
+"""
+        result = self.run_probe(self.url(root), body, wait=120)
+        roles = ["builder", "reviewer", "cto"]
+        for surface in ("strip", "rows", "screen"):
+            self.assertEqual(sorted(result[surface]), sorted(roles), f"{surface}: every role is coloured")
+        for role in roles:
+            self.assertEqual(result["strip"][role], result["rows"][role], f"{role}: the row wears the strip's colour")
+            self.assertEqual(result["strip"][role], result["screen"][role], f"{role}: its screen wears the same colour")
+        self.assertEqual(len({tuple(result["strip"][role]) for role in roles}), 3, "the three roles are told apart")
+        self.assertEqual(result["lowContrast"], [], "a coloured name keeps 4.5:1")
+
 
 if __name__ == "__main__":
     unittest.main()

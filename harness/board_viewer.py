@@ -123,7 +123,11 @@ PAGE = r"""<!doctype html>
 .mc-cancel{margin-top:12px;min-height:40px}
 .mc-agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:18px}
 .mc-agent{background:#fff;border:1px solid var(--line);border-top:4px solid var(--mc-teal);border-radius:14px;padding:16px 18px;min-width:0}
-.mc-agent.mc-reviewer{border-top-color:var(--mc-coral)}.mc-agent.mc-cto{border-top-color:var(--mc-purple)}
+/* Issue #92: one fixed colour per role (builder, reviewer, CTO), used wherever that agent appears: its name, its row and its screen. The -ink tone is for text and keeps 4.5:1 on white. */
+.mc-builder{--mc-role:var(--mc-teal);--mc-role-ink:#0f766e}.mc-reviewer{--mc-role:var(--mc-coral);--mc-role-ink:#b8392a}.mc-cto{--mc-role:var(--mc-purple);--mc-role-ink:#5b4bc4}
+.mc-agent[data-agent-role]{border-top-color:var(--mc-role)}.mc-agent[data-agent-role] .mc-agent-head strong{color:var(--mc-role-ink)}
+.agent-row[data-agent-role]{border-left:4px solid var(--mc-role);padding-left:12px}.agent-row[data-agent-role]>.row>div>strong{color:var(--mc-role-ink)}
+#agent-view-dialog[data-agent-role]{border-top:6px solid var(--mc-role)}#agent-view-dialog[data-agent-role] #agent-view-title{color:var(--mc-role-ink)}
 .mc-agent-head{display:flex;justify-content:space-between;gap:8px;align-items:center}.mc-agent-head span{font-size:12px;color:var(--mc-muted)}
 .mc-doing{margin-top:8px;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
 .mc-agent small{display:block;margin-top:8px;color:var(--mc-muted);font-size:12.5px;overflow-wrap:anywhere}
@@ -1636,6 +1640,18 @@ async function submitRejection(event){
   return false;
 }
 
+// Issue #92: the role whose fixed colour an agent wears, as story._role_of_agent and story._role_of_kind decide it.
+function agentColorRole(agent,session){
+  if(agent){const role=String(agent.role||'');return role==='qa'?'reviewer':role==='cto'?'cto':'builder';}
+  const kind=String(session?.kind||'');
+  return !kind?'':kind.includes('reviewer')?'reviewer':kind.includes('cto')?'cto':'builder';
+}
+function paintAgentRole(node,role){
+  // className and dataset only, so the plain stand-in elements the unit tests use work too.
+  node.className=String(node.className||'').split(/\s+/).filter(name=>name&&!/^mc-(builder|reviewer|cto)$/.test(name)).concat(role?['mc-'+role]:[]).join(' ');
+  if(node.dataset){if(role)node.dataset.agentRole=role;else delete node.dataset.agentRole;}
+}
+
 function sessionColorHtml(session){
   const color=session?.color_hex||'#000000', label=session?.color_label||'Standard black';
   return `<span class="terminal-color"><i class="terminal-color-swatch" style="background:${esc(color)}" aria-hidden="true"></i>Terminal color: ${esc(label)}</span>`;
@@ -1729,7 +1745,7 @@ async function viewAgent(session){
     await loadTerminalAssets();
     const dialog=el('#agent-view-dialog');
     clearTimeout(agentViewTimer);agentViewGeneration++;const generation=agentViewGeneration;agentViewSession=session.id;
-    el('#agent-view-title').textContent=session.role||session.label||'Live agent';el('#agent-view-error').textContent='';
+    el('#agent-view-title').textContent=session.role||session.label||'Live agent';el('#agent-view-error').textContent='';paintAgentRole(dialog,agentColorRole(null,session));
     if(agentTerminal)agentTerminal.dispose();el('#agent-terminal').replaceChildren();
     agentTerminal=new Terminal({cols:80,rows:24,fontSize:14,screenReaderMode:true,convertEol:true,theme:{background:'#111827'}});
     // Ctrl+Shift+C copies the selection (the Linux terminal convention; the browser would otherwise open its inspector).
@@ -1778,7 +1794,7 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
     const session=sessionsById.get(agent.session_id); if(session)representedSessions.add(session.id);
     const task=humanTask(agent,state), stage=humanStage(agent,state,contracts), wording=agentStatusSummary(agent,state,contracts);
     const row=document.createElement('div');
-    row.className='agent-row';
+    row.className='agent-row';paintAgentRole(row,agentColorRole(agent,session));
     row.dataset.agentId=agent.id; row.dataset.sessionId=session?.id||''; row.dataset.task=task;
     const provider=agent.vendor||session?.vendor||'Provider not recorded', model=session?.model||'Model not recorded', effort=session?.effort?(session.effort==='xhigh'?'extra high':session.effort):'';
     const chosen=session?.launch_choice?' (chosen for this launch)':'';
@@ -1820,7 +1836,7 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
   }
   for(const session of visibleSessions.sort((left,right)=>String(left.id||'').localeCompare(String(right.id||'')) )){
     if(representedSessions.has(session.id))continue;
-    const row=document.createElement('div');row.className='agent-row session-starting';row.dataset.sessionId=session.id;row.dataset.task=session.task||'';
+    const row=document.createElement('div');row.className='agent-row session-starting';paintAgentRole(row,agentColorRole(null,session));row.dataset.sessionId=session.id;row.dataset.task=session.task||'';
     const superseded=Boolean(session.superseded_by_agent_id||session.read_only);
     const task=objectiveSummary(session.superseded_task||session.task||(superseded?'Recovered task':'Waiting to attach to a board agent'));
     const stage=superseded?'REPLACED, CLOSING':unmatchedSessionStage(session);

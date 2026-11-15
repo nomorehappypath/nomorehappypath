@@ -1237,6 +1237,41 @@ process.stdout.write(JSON.stringify({count:nodes.agents.children.length,html:nod
         self.assertIn("Terminal color: Ocean blue", result["html"])
         self.assertIn("Stop terminal", result["buttons"])
 
+    def test_each_agent_row_wears_its_roles_fixed_color(self):
+        # Issue #92: builder, reviewer and CTO each have one fixed colour; the row carries it, and a terminal
+        # that has not attached yet takes it from its session kind. The terminal colour the owner chose stays shown.
+        def agent(agent_id, role):
+            return {"id": agent_id, "role": role, "vendor": "OpenAI", "display_name": agent_id, "task": "TASK-ONE",
+                    "session_id": "session-" + agent_id, "active": True, "status": "working", "last_status_at": "2026-08-12T12:00:00Z"}
+        state = {"agents": {name: agent(name, role) for name, role in (("cto", "cto"), ("eng", "engineering"), ("dev", "development"), ("qa", "qa"))},
+                 "qa_requests": {}, "task_chunks": {}, "delivery_plans": {}}
+        sessions = [{"id": "session-" + name, "label": name, "status": "running", "task": "", "color_hex": "#123B5D", "color_label": "Ocean blue"}
+                    for name in ("cto", "eng", "dev", "qa")]
+        sessions.append({"id": "session-new", "kind": "claude_reviewer", "label": "CLAUDE CLI", "status": "launching", "task": "", "color_hex": "#000000", "color_label": "Standard black"})
+        invocation = """
+const nodes={agents:{children:[],replaceChildren(){this.children=[]},append(...items){this.children.push(...items)}}};
+globalThis.document={querySelector(selector){return nodes[selector.slice(1)]||null;},createElement(tag){return {tagName:tag,className:'',dataset:{},innerHTML:'',textContent:'',children:[],append(...items){this.children.push(...items)}};}};
+openAgents(%s,{},%s);
+const repainted={className:'agent-row mc-cto',dataset:{agentRole:'cto'}};paintAgentRole(repainted,'reviewer');
+const cleared={className:'mc-builder',dataset:{agentRole:'builder'}};paintAgentRole(cleared,'');
+process.stdout.write(JSON.stringify({
+  rows:nodes.agents.children.map(row=>[row.dataset.agentId||row.dataset.sessionId,row.dataset.agentRole,row.className,/Terminal color: /.test(row.innerHTML)]),
+  kinds:['codex_delivery','claude_reviewer','claude_cto',''].map(kind=>agentColorRole(null,{kind})),
+  repainted:[repainted.className,repainted.dataset.agentRole],cleared:[cleared.className,'agentRole' in cleared.dataset]
+}));
+""" % (json.dumps(state), json.dumps(sessions))
+        result = self.run_node(invocation)
+        self.assertEqual(result["rows"], [
+            ["cto", "cto", "agent-row mc-cto", True],
+            ["dev", "builder", "agent-row mc-builder", True],
+            ["eng", "builder", "agent-row mc-builder", True],
+            ["qa", "reviewer", "agent-row mc-reviewer", True],
+            ["session-new", "reviewer", "agent-row session-starting mc-reviewer", True],
+        ])
+        self.assertEqual(result["kinds"], ["builder", "reviewer", "cto", ""], "an unknown session wears no role colour rather than a wrong one")
+        self.assertEqual(result["repainted"], ["agent-row mc-reviewer", "reviewer"], "a repaint replaces the previous role, never adds a second")
+        self.assertEqual(result["cleared"], ["", False])
+
     def test_paused_unattached_session_is_not_shown_as_starting_terminal(self):
         sessions = [{
             "id": "codex-paused", "label": "CODEX CLI", "status": "paused",
