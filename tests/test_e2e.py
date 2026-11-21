@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, cto, control
-from tests.requirements_support import agreed_requirements
+from tests.requirements_support import agreed_requirements, setup_checked
 
 
 class EndToEndHarnessTests(unittest.TestCase):
@@ -67,6 +67,7 @@ class EndToEndHarnessTests(unittest.TestCase):
             board.qa_result(root, reviewer["id"], review["id"], "passed", summary, str(execution_evidence))
             board.complete(root, developer["id"], "all implementation deliverables complete")
 
+            setup_checked(root, "TASK-E2E")        # NMHP's setup check passed (owner 2026-11-21); a list with no AI tool
             return cto.release_check(root, "TASK-E2E", ledger, root, profile, execute_health=True)
 
     def test_clean_main_requires_and_accepts_the_full_release_contract(self):

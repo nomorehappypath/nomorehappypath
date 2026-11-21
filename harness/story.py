@@ -689,6 +689,23 @@ def _task_started(state: dict[str, Any], task: str) -> str:
     return min(requested, default="")
 
 
+def setup_check_words(state: dict[str, Any], task: str) -> tuple[str, str] | None:
+    """Owner 2026-11-21: while NMHP checks the project's setup, the contract is not shown yet; Story says so in plain words."""
+    proposal = _dict(_dict(state.get("requirement_proposals")).get(task))
+    if proposal.get("status") != "checking_setup":
+        return None
+    run = _dict(_dict(_dict(_dict(state.get("environment_checks")).get(task)).get("runs")).get("contract"))
+    failed = [item for item in run.get("items") or [] if isinstance(item, dict) and not item.get("ok")]
+    if run.get("status") == "failed" and failed:
+        mine = [item["label"] for item in failed if item.get("who") != "builder"]
+        theirs = [item["label"] for item in failed if item.get("who") == "builder"]
+        return ("Checking your project's setup: " + ", ".join(item["label"] for item in failed) + " did not pass.",
+                "Next: " + ("fix what the red cards ask (" + ", ".join(mine) + "), then press Check again" if mine else "the builder fixes "
+                            + ", ".join(theirs)) + "; the contract is shown to you once everything passes.")
+    return ("Checking your project's setup (agents, folders, tools, libraries and the AI tools your app uses) before showing you the contract.",
+            "Next: the contract is shown to you once everything passes.")
+
+
 def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, runtime: dict[str, Any] | None = None, *,
           agents: list[dict[str, Any]] | None = None, sessions: list[dict[str, Any]] | None = None, cost: dict[str, Any] | None = None,
           now: datetime | None = None, redact: Callable[[Any], Any] = lambda value: value, detail: bool = True,
@@ -713,6 +730,9 @@ def build(state: dict[str, Any], contracts: dict[str, Any] | None, task: str, ru
     else:
         facts_g = g
     now_text, next_text = sentences(state, task, step, facts_g, facts)
+    setup = setup_check_words(state, task)
+    if setup and facts_g["status"] == "AWAITING FINAL REQUIREMENTS":
+        now_text, next_text = setup
     if facts_g["status"] == "DEVELOPMENT IN PROGRESS":      # a Code analysis in its two passes: say which phase in plain words (spec 2026-10-29)
         now_text, next_text = analysis_pass.story_now(_dict(_dict(state.get("analysis_passes")).get(task))) or (now_text, next_text)
     needs_owner, action, who = False, "", step_who(step)

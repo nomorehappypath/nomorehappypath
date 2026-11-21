@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from harness import board, git_process, test_env, workspace_settings
+from harness import board, git_process, owner_env, test_env, workspace_settings
 from harness.project_context import project_context
 from harness import platform_support
 from harness import browser_acceptance
@@ -77,21 +77,32 @@ def _start_token(pid: int) -> str:
     return browser_acceptance._start_token(pid)
 
 
-def preview_environment(source, extra=None):
-    """The environment a candidate preview is started with: PATH and whatever this preview launch
-    itself declares in `extra` (PORT, BROWSER) — nothing else from the worker's own environment, so
-    a worker-only credential (the Claude sign-in token, the manager's own proxy token) never reaches
-    a candidate preview (P1).
+def preview_environment(source, extra=None, owner=None):
+    """The environment a candidate preview is started with: the owner's own login-shell environment (`owner`, from
+    owner_env.read — what his app gets when he starts it from his Terminal, his Claude sign-in included; owner 2026-11-21),
+    PATH, and whatever this preview launch itself declares in `extra` (PORT, BROWSER) — nothing else from the worker's own
+    environment, so a worker-only credential (the agents' Claude token, the manager's own proxy token) never reaches a
+    candidate preview (P1).
 
-    The worker's PATH comes first and loses nothing; the folders the harness already
+    The owner's PATH comes first, then the worker's, and loses nothing; the folders the harness already
     searches for the owner's tools (Homebrew, ~/.local/bin, /usr/local/bin ...) follow,
     only where they exist, without repeats."""
-    values = dict(extra or {})
-    folders = [item for item in str(source.get("PATH", "")).split(os.pathsep) if item]
+    values = dict(owner or {})
+    values.update(extra or {})
+    folders = [item for item in str((owner or {}).get("PATH", "")).split(os.pathsep) if item]
+    folders += [item for item in str(source.get("PATH", "")).split(os.pathsep) if item and item not in folders]
     tools = (*platform_support.discovery().owner_tool_directories(), *platform_support.discovery().GOVERNED_PATH_SUFFIX)
     folders += [item for item in tools if item not in folders and os.path.isdir(item)]
     values["PATH"] = os.pathsep.join(dict.fromkeys(folders))
     return values
+
+
+def owner_preview_environment() -> tuple[dict[str, str], str]:
+    """(the owner's own environment, "") or ({}, the plain reason it could not be read)."""
+    try:
+        return owner_env.read(), ""
+    except owner_env.OwnerEnvError as error:
+        return {}, str(error)
 
 
 def _free_port() -> int:
@@ -329,7 +340,10 @@ def open_app_bundle(root: Any, task: str) -> dict[str, Any]:
         or not (app_path / "Contents").is_dir()
     ):
         raise ValueError("the recorded app bundle is no longer present; rebuild or use the workspace path")
-    completed = subprocess.run(["/usr/bin/open", str(app_path)], capture_output=True, text=True, timeout=30)
+    # owner 2026-11-21: a bundle gets the owner's own environment too (`open --env`), as when he starts it himself
+    owner_values, _ = owner_preview_environment()
+    settings = [part for name, value in sorted(owner_values.items()) for part in ("--env", f"{name}={value}")]
+    completed = subprocess.run(["/usr/bin/open", "-n", *settings, str(app_path)], capture_output=True, text=True, timeout=30)
     if completed.returncode != 0:
         raise ValueError(f"the app could not be opened: {completed.stderr.strip()[:200]}")
     return {"opened": True, "app_path": str(app_path), "app_name": app_path.stem}
@@ -722,6 +736,8 @@ class ReleasePreviewSupervisor:
         declared = None
         failure = ""
         run_yourself = ""
+        owner_values: dict[str, str] = {}
+        hide = lambda text: owner_env.redactor(owner_values)(text) if owner_values else text
         try:
             self._materialize(preview, workspace)
             detected = requested == VIEW_APP and not command
@@ -754,8 +770,9 @@ class ReleasePreviewSupervisor:
             # for every start, the owner's own command included: the worker is
             # started by launchd with only the system folders, so `npm` (Homebrew)
             # was "not found" for any Node project on a normal Mac.
+            owner_values, owner_problem = owner_preview_environment()
             environment = preview_environment(
-                os.environ, {"PORT": str(preview.port), "BROWSER": "true"} if detected else None,
+                os.environ, {"PORT": str(preview.port), "BROWSER": "true"} if detected else None, owner_values,
             )
             if detected:
                 # 2026-11-05 (stranger run): the owner's try-it runs in the project's declared test environment (its interpreter
@@ -775,6 +792,8 @@ class ReleasePreviewSupervisor:
             )
             with preview.log_path.open("ab") as log:
                 log.write(f"\n=== preview launch {board.now()} | {rendered}\n".encode())
+                if owner_problem:
+                    log.write(f"=== your own setup could not be read, so the app starts without it: {owner_problem}\n".encode())
                 log.flush()
                 preview.process = subprocess.Popen(
                     rendered, shell=True, cwd=preview.source, env=environment,
@@ -790,8 +809,8 @@ class ReleasePreviewSupervisor:
             # repeat it, and the board record is read by agents. Scrubbed before it is stored (Codex R1-1, 2026-11-05).
             self._record(task, {
                 "status": "failed", "command": command, "head_commit": head_commit,
-                "workspace": workspace, "branch": branch, "error": test_env.scrub(failure, declared),
-                "log_tail": test_env.scrub(_log_tail(preview.log_path), declared), "requested": requested or None,
+                "workspace": workspace, "branch": branch, "error": hide(test_env.scrub(failure, declared)),
+                "log_tail": hide(test_env.scrub(_log_tail(preview.log_path), declared)), "requested": requested or None,
                 "run_yourself": run_yourself or None,
             })
             return

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control, cto
-from tests.requirements_support import agreed_requirements
+from tests.requirements_support import agreed_requirements, setup_checked
 
 
 class AdaptivePlanningSimulationTests(unittest.TestCase):
@@ -165,6 +165,7 @@ class AdaptivePlanningSimulationTests(unittest.TestCase):
     def test_real_board_cli_runs_named_unit_test_gate_before_atomic_acceptance(self):
         agent = self.delivery("CLI-ATOMIC")
         board.define_delivery_plan(self.root, agent["id"], "atomic", "One cohesive CLI task")
+        setup_checked(self.root, "CLI-ATOMIC")
         command = [
             sys.executable, str(Path(board.__file__)), "--root", str(self.root),
             "request-review", "--agent", agent["id"], "--ledger", self.ledger("cli-atomic"),

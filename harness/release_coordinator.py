@@ -437,5 +437,11 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
 
 def coordinate(root: Path, crash_after: str = "", crash_before_journal: str = "") -> list[dict[str, Any]]:
     """Single-flight public coordinator entry used by startup, events, and timer."""
+    try:
+        # owner 2026-11-21: a final pass of an app that calls an AI tool gets NMHP's fresh release setup check (real calls and the
+        # app's real run) first; its result is the release's environment_ready product check
+        board.request_release_environment_checks(root)
+    except (OSError, ValueError):
+        pass
     with _coordination_lock(root):
         return _coordinate_locked(root, crash_after, crash_before_journal)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from harness import board, contract_check, control
 from tests.test_contract_first_checks import TEST_FILE, TASK, ledger, plain_ready, write_json
+from tests.requirements_support import NO_SETUP, setup_checked
 from tests.test_requirements_contract import context, delivery_with_direction
 
 GOOD_BLOCK = "In plain words:\nA forecast page will show the next five days.\nYou will see a high and a low for each day.\nNothing for you to do."
@@ -112,11 +113,12 @@ class ProposalCommandTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = context(Path(self._tmp.name))
         self.agent = delivery_with_direction(self.root, TASK)
+        setup_checked(self.root, TASK)
 
     def propose(self, text):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text])
+            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", NO_SETUP])
         return code, out.getvalue() + err.getvalue()
 
     def test_missing_too_long_or_developer_blocks_are_refused_with_the_fix(self):

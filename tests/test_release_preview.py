@@ -792,7 +792,8 @@ class AppBundleTests(PreviewFixture):
         self.assertEqual(result["app_name"], "Weather")
         opened = run.call_args[0][0]
         self.assertEqual(opened[0], "/usr/bin/open")
-        self.assertTrue(opened[1].endswith("Weather.app"))
+        self.assertTrue(opened[-1].endswith("Weather.app"))     # the owner's environment rides on `open -n --env` before it (2026-11-21)
+        self.assertEqual([part for part in opened if part.endswith(".app")], [opened[-1]])
 
     def test_open_endpoint_refuses_without_a_recorded_bundle(self):
         self.seed_release()

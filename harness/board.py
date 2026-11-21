@@ -5307,7 +5307,7 @@ def _validate_proposed_skills(proposed: Any, harness_root: Any = None) -> tuple[
     return accepted, dropped
 
 
-def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False, skills: Any = None) -> dict[str, Any]:
+def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False, skills: Any = None, needs: Any = None, needs_required: bool = False) -> dict[str, Any]:
     """File the final agreed requirements as a PROPOSAL awaiting the owner.
 
     The owner's go-ahead is a contract signature; it must be a recorded board
@@ -5319,6 +5319,9 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     check): metadata on the proposal, never a QA request. The owner's Go ahead
     is not held by it (see record_requirements_decision).
     """
+    from harness import environment_check
+    # owner 2026-11-21: the contract carries the setup it needs; NMHP checks it before the owner ever sees the contract
+    parsed_needs = environment_check.parse_needs(needs) if needs is not None and str(needs).strip() not in {"", "null"} else None
     text = contract.normalize_owner_direction(text)
     if not text or len(text) > 12000:
         raise ValueError("the requirements proposal is required and must be 12000 characters or fewer")
@@ -5382,6 +5385,14 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         if no_program and not document_only:
             raise ValueError(DOCUMENT_ONLY_REFUSAL)
         no_program = document_only       # the owner's checkbox decides, never the builder
+        if parsed_needs is not None:
+            problem = environment_check.needs_problem(state, task, parsed_needs)
+            if problem:
+                raise ValueError(problem)
+            environment_check.record_needs(state, task, parsed_needs, agent_id, now())
+        elif needs_required and not ((state.get("environment_checks") or {}).get(task) or {}).get("needs"):
+            raise ValueError(f"the contract needs its setup list before it can be shown to the owner: {environment_check.NEEDS_FORMAT}")
+        setup_held = bool(((state.get("environment_checks") or {}).get(task) or {}).get("needs")) and not environment_check.passed(state, task, "contract")
         # Owner repair (build-skill-library, requirement 5): the builder's proposed skills,
         # split into the ones the library actually has (with its reason, kept) and the
         # names it does not (named in the card as "dropped" by a later subtask). Computed
@@ -5437,11 +5448,18 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
                 "questions": json.loads(json.dumps(carried)), "submitted_at": now(), "carried_questions": True,
             }
             reviewer = None
+        if setup_held:
+            # the contract waits for NMHP's setup check; the owner sees it (and the Reviewer's early look starts) only once it passed
+            proposal["status"] = "checking_setup"
+            environment_check.request(state, task, "contract", now())
         state["requirement_proposals"][task] = proposal
-        agent.update({"status": "requirements_proposed", "status_note": "final requirements proposed; waiting for the owner's Go ahead on the board", "last_status_at": now()})
+        agent.update({"status": "requirements_proposed", "status_note": (
+            "final requirements drafted; NMHP is checking the project's setup before showing them to the owner" if setup_held
+            else "final requirements proposed; waiting for the owner's Go ahead on the board"), "last_status_at": now()})
         event = _event(state, "requirements_proposed", agent, {
             "task": task, "version": version,
-            "message": "final agreed requirements filed; the owner decides Go ahead or Modify on the board",
+            "message": ("final requirements drafted; NMHP checks the project's setup first, then shows them to the owner" if setup_held
+                        else "final agreed requirements filed; the owner decides Go ahead or Modify on the board"),
         })
         if reviewer:
             brief = project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))
@@ -5449,10 +5467,226 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
                 "task": task, "version": version, "session_id": str(reviewer.get("session_id") or ""), "reviewer_id": reviewer["id"],
                 "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or ""), brief),
             }
+        if setup_held and wake:
+            proposal["held_wake"] = wake     # sent when the setup check passes (record_environment_result)
+            wake = {}
     if wake:
         _send_contract_check_wake(root, wake)
+    if setup_held:
+        environment_check.run_due(root)
     return event
 
+
+
+def _setup_card_key(task: str, stage: str, item: dict[str, Any]) -> str:
+    """One card per failed setup item, per task and stage."""
+    return f"setup:{task}:{stage}:{item.get('kind', '')}:{item.get('label', '')}"
+
+
+def record_environment_result(root: Path, task: str, stage: str, run_id: str, items: list[dict[str, Any]], identity: str) -> dict[str, Any]:
+    """Record one setup-check run (owner 2026-11-21): one card per failed item saying who resolves it, every card of a fixed
+    item closed, and on a passed contract check the contract is put in front of the owner and the Reviewer's early look starts."""
+    from harness import environment_check
+    contract_wake: dict[str, Any] = {}
+    builder_wake: tuple[str, str] = ("", "")
+    if pause_state(root).get("status") not in {"active", None, ""}:
+        return {"recorded": False}      # paused while it ran: it stays requested and runs again after Resume (Codex plan check R1-4)
+    with locked_state(root) as state:
+        record = (state.get("environment_checks") or {}).get(task) or {}
+        run = (record.get("runs") or {}).get(stage)
+        if not run or run.get("run_id") != run_id or run.get("status") != "checking":
+            return {"recorded": False}      # replaced, re-requested or discarded while it ran
+        at = now()
+        if task in (state.get("cancelled_tasks") or {}):
+            run.update(status="discarded", finished_at=at)
+            return {"recorded": False}
+        ok = all(item.get("ok") for item in items)
+        run.update(status="passed" if ok else "failed", items=items, identity=identity, finished_at=at)
+        failed = [item for item in items if not item.get("ok")]
+        _event(state, "environment_check_finished", None, {
+            "task": task, "stage": stage, "passed": ok, "commit": run.get("commit", ""),
+            "message": (f"setup check ({stage}) passed" if ok else f"setup check ({stage}) found {len(failed)} problem(s): "
+                        + "; ".join(environment_check.failed_lines(run))[:600]),
+        })
+        keys = {_setup_card_key(task, stage, item) for item in failed}
+        for action in (state.get("owner_actions") or {}).values():
+            key = str(action.get("card_key") or "")
+            if action.get("status") == "open" and key.startswith(f"setup:{task}:{stage}:") and key not in keys:
+                _resolve_owner_action(state, action, "the setup check passed", "environment_check")
+        for item in failed:
+            title, why = environment_check.card_text(item, stage)
+            card = _harness_card(state, _setup_card_key(task, stage, item), title, why, task,
+                                 choices=[environment_check.CHECK_AGAIN], choice_kind="setup_check", setup_stage=stage,
+                                 setup_commit=str(run.get("commit") or ""), blocked=item.get("who") != environment_check.BUILDER)
+            card.update({"why": why, "title": title})
+        proposal = (state.get("requirement_proposals") or {}).get(task) or {}
+        if stage == "contract" and ok and proposal.get("status") == "checking_setup":
+            proposal.update({"status": "awaiting_owner", "setup_passed_at": at})
+            check = proposal.get("contract_check") or {}
+            if check.get("status") == "reading":
+                check.update({"started_at": at, "deadline_at": (datetime.fromisoformat(at) + timedelta(seconds=contract_check.wait_seconds())).isoformat()})
+            contract_wake = proposal.pop("held_wake", None) or {}
+            _event(state, "requirements_proposed", None, {
+                "task": task, "version": proposal.get("version", 1),
+                "message": "the project's setup check passed; the final requirements are shown to the owner for Go ahead or Modify",
+            })
+        builders = [a for a in (state.get("agents") or {}).values()
+                    if isinstance(a, dict) and a.get("role") in DEVELOPER_ROLES and a.get("active") and str(a.get("task") or "") == task]
+        builder = max(builders, key=lambda a: str(a.get("spawned_at") or "")) if builders else None
+        if builder and (not ok and any(item.get("who") == environment_check.BUILDER for item in failed) or ok and stage == "review"
+                        or ok and stage == "contract"):
+            lines = environment_check.failed_lines(run)
+            text = ("[SETUP CHECK] " + (
+                f"NMHP's setup check passed for {task}" + (f" on {str(run.get('commit') or '')[:12]}: request the review again now."
+                                                          if stage == "review" else ": the contract is now shown to the owner.")
+                if ok else f"NMHP's setup check for {task} ({stage}) failed: " + " | ".join(lines)[:1500]
+                + ". Fix what is yours (libraries into the project, the app's real_run, the setup list with set-needs), commit, and "
+                  "request again; the owner fixes the items marked for him.") + " USER ACTION: None.")
+            builder_wake = (str(builder.get("session_id") or ""), text)
+    if contract_wake:
+        _send_contract_check_wake(root, contract_wake)
+    if builder_wake[0]:
+        try:
+            from harness import control
+            control.enqueue_instruction(root, builder_wake[0], builder_wake[1], source="setup-check")
+        except (OSError, ValueError):
+            pass
+    return {"recorded": True, "passed": all(item.get("ok") for item in items)}
+
+
+def set_needs(root: Path, agent_id: str, needs: Any) -> dict[str, Any]:
+    """A task already past its contract files its setup list (owner 2026-11-21); NMHP checks it before the next review."""
+    from harness import environment_check
+    parsed = environment_check.parse_needs(needs)
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or not agent.get("active"):
+            raise ValueError("only the task's builder files its setup list")
+        task = str(agent.get("task") or "")
+        problem = environment_check.needs_problem(state, task, parsed)
+        if problem:
+            raise ValueError(problem)
+        at = now()
+        changed = environment_check.record_needs(state, task, parsed, agent_id, at)
+        if changed or not environment_check.passed(state, task, "contract"):
+            environment_check.request(state, task, "contract", at)
+            proposal = (state.get("requirement_proposals") or {}).get(task) or {}
+            if proposal.get("status") == "awaiting_owner":
+                # Codex review R1-2: a changed setup list takes the waiting contract back until the new list passes
+                proposal["status"] = "checking_setup"
+        for action in (state.get("owner_actions") or {}).values():
+            if action.get("status") == "open" and action.get("card_key") == f"setup:{task}:release:missing":
+                _resolve_owner_action(state, action, "the setup list was filed", "environment_check")
+        event = _event(state, "environment_needs_recorded", agent, {
+            "task": task, "message": "the task's setup list was filed; NMHP checks it before the next review",
+        })
+    environment_check.run_due(root)
+    return event
+
+
+def environment_review_gate(root: Path, agent_id: str) -> None:
+    """Before any review request (owner 2026-11-21): the setup list is filed, NMHP's setup check passed, and — for an app that
+    calls an AI tool — NMHP ran the app's real run on this very commit. Raises ValueError saying what runs or what failed."""
+    from harness import environment_check
+    state = snapshot(root)
+    agent = (state.get("agents") or {}).get(agent_id) or {}
+    task = str(agent.get("task") or "")
+    if not task or agent.get("role") not in DEVELOPER_ROLES:
+        return
+    record = (state.get("environment_checks") or {}).get(task) or {}
+    needs = record.get("needs")
+    if not needs:
+        raise ValueError("before any review, file this task's setup list once: set-needs --agent " + agent_id
+                         + " --needs '<JSON>' (NMHP then checks it and runs your app's real run). " + environment_check.NEEDS_FORMAT)
+    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
+    ident = environment_check.identity(root, task, workspace, needs)
+    head = environment_check._git_head(workspace) if workspace else ""
+    wanted = [("contract", "")]
+    if environment_check.real_run_required(state, task, needs):
+        wanted.append(("review", head))
+    if all(environment_check.passed(state, task, stage, commit, ident) for stage, commit in wanted):
+        return
+    lines: list[str] = []
+    with locked_state(root) as locked:
+        for stage, commit in wanted:
+            if environment_check.passed(locked, task, stage, commit, ident):
+                continue
+            current = environment_check.run_of(locked, task, stage)
+            same = current.get("commit", "") == commit and current.get("needs_hash") == ((locked.get("environment_checks") or {}).get(task) or {}).get("needs_hash")
+            if same and current.get("status") == "failed" and current.get("identity") == ident and ident:
+                lines.append(f"the {stage} setup check failed: " + "; ".join(environment_check.failed_lines(current)))
+                continue
+            environment_check.request(locked, task, stage, now(), commit=commit, identity=ident, force=same and current.get("status") != "checking")
+            lines.append(f"NMHP is running the {stage} setup check" + (f" (your app's real run on {commit[:12]})" if stage == "review" else ""))
+    environment_check.run_due(root)
+    raise ValueError("this review cannot be requested yet: " + " | ".join(lines)
+                     + ". You are told on your terminal when it finishes; fix what failed, commit, then request the review again.")
+
+
+def request_release_environment_checks(root: Path) -> None:
+    """Before a release is offered (owner 2026-11-21): the AI-tool calls and the app's real run, fresh on the release commit."""
+    from harness import environment_check
+    state = snapshot(root)
+    wanted = []
+    missing, tell = [], []
+    for task, review in unreleased_final_passes(state):
+        needs = (((state.get("environment_checks") or {}).get(task) or {}).get("needs"))
+        if not needs:
+            if not any(a.get("status") == "open" and a.get("card_key") == f"setup:{task}:release:missing"
+                       for a in (state.get("owner_actions") or {}).values()):
+                missing.append(task)        # once: the card and the builder's line are not repeated on every tick
+            continue
+        if not (needs.get("ai_tools") or environment_check.real_run_required(state, task, needs)):
+            continue
+        commit = str(review.get("reviewed_commit") or "")
+        run = environment_check.run_of(state, task, "release")
+        # one fresh run per release commit; a failed one waits for Check again (or a new commit), never re-runs on every tick
+        if run.get("commit") != commit or run.get("needs_hash") != ((state.get("environment_checks") or {}).get(task) or {}).get("needs_hash"):
+            wanted.append((task, commit))
+    if wanted or missing:
+        with locked_state(root) as locked:
+            for task, commit in wanted:
+                environment_check.request(locked, task, "release", now(), commit=commit)
+            for task in missing:
+                _harness_card(locked, f"setup:{task}:release:missing", f"Setup check: {task} has no setup list — the builder files it",
+                              "This task was reviewed before NMHP checked setups. Its release waits until the builder files the setup "
+                              "list (set-needs) and NMHP's check passes; the builder is told in its window.", task, blocked=False)
+                builders = [a for a in (locked.get("agents") or {}).values() if isinstance(a, dict) and a.get("role") in DEVELOPER_ROLES
+                            and a.get("active") and str(a.get("task") or "") == task and a.get("session_id")]
+                for builder in builders[-1:]:
+                    tell.append((str(builder["session_id"]), f"[SETUP CHECK] {task} passed its final review but has no setup list, so "
+                                 "its release waits. File it now with set-needs --agent " + str(builder["id"]) + " --needs '<JSON>' "
+                                 "(the setup the app needs, and its real_run if it calls an AI tool). USER ACTION: None."))
+    for session_id, text in tell:
+        try:
+            from harness import control
+            control.enqueue_instruction(root, session_id, text, source="setup-check")
+        except (OSError, ValueError):
+            pass
+    environment_check.run_due(root)
+
+
+def environment_release_status(state: dict[str, Any], task: str, review: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    """The release-time product check: (ready, problems). A task with no setup list, or whose setup check has not passed, is
+    held; one whose app calls no AI tool has nothing more to run here."""
+    from harness import environment_check
+    record = (state.get("environment_checks") or {}).get(task) or {}
+    needs = record.get("needs")
+    if not needs:
+        # Codex review R1-4: a task that never filed its setup list is held here too, not only at its next review
+        return False, ["the task has no setup list: its builder files it with set-needs, NMHP checks it, then the release goes on"]
+    if not environment_check.passed(state, task, "contract"):
+        return False, ["NMHP's setup check for this task has not passed: " + ("; ".join(environment_check.failed_lines(
+            environment_check.run_of(state, task, "contract"))) or "it is running")]
+    if not (needs.get("ai_tools") or environment_check.real_run_required(state, task, needs)):
+        return True, []
+    commit = str((review or {}).get("reviewed_commit") or "")
+    if environment_check.passed(state, task, "release", commit):
+        return True, []
+    run = environment_check.run_of(state, task, "release")
+    if run.get("commit") == commit and run.get("status") == "failed":
+        return False, ["the release setup check failed: " + "; ".join(environment_check.failed_lines(run))]
+    return False, ["NMHP is running the release setup check (real AI-tool calls and your app's real run) on this commit"]
 
 def project_skill_library_enabled(state: dict[str, Any]) -> bool:
     """The project-level "Use the skill library" switch (default on)."""
@@ -5711,6 +5945,10 @@ def record_requirements_decision(
             raise ValueError("no requirements proposal is filed for this task")
         if proposal.get("status") != "awaiting_owner":
             raise ValueError("this proposal is not awaiting an owner decision")
+        if decision in {"go_ahead", "answer"} and ((state.get("environment_checks") or {}).get(str(task)) or {}).get("needs"):
+            from harness import environment_check
+            if not environment_check.passed(state, str(task), "contract"):
+                raise ValueError("NMHP is still checking this project's setup; the contract can be accepted once that check passes")
         check = proposal.get("contract_check") or {}
         if version is not None and str(version) != str(proposal.get("version", 1)):
             raise ValueError("the requirements changed since you looked at them; look at the current card and decide again")
@@ -18001,6 +18239,7 @@ def owner_action_choose(root: Path, action_id: str, choice: str) -> dict[str, An
     choice = " ".join(str(choice or "").split())
     choice = REVIEW_STOP_ALIASES.get(choice, choice)
     finish: dict[str, Any] = {}
+    result: dict[str, Any] = {}
     task_of_card = ""
     with locked_state(root) as state:
         card = (state.get("owner_actions") or {}).get(str(action_id or ""))
@@ -18070,11 +18309,24 @@ def owner_action_choose(root: Path, action_id: str, choice: str) -> dict[str, An
                 review_rounds.give_up_by_owner(entry, at)
                 message = f"{entry['task']}: the owner pressed Stop (Give up); this part stays closed and is not reviewed again"
                 _event(state, "review_given_up_by_owner", None, {"task": entry["task"], "message": message})
+        elif card.get("choice_kind") == "setup_check":
+            # owner 2026-11-21: Check again re-runs this stage's setup check; the card stays until the check passes
+            from harness import environment_check
+            stage = str(card.get("setup_stage") or "contract")
+            environment_check.request(state, task_of_card, stage, at, commit=str(card.get("setup_commit") or ""), force=True)
+            card.update({"why": "Checking again now. This card goes away by itself when the check passes.", "refreshed_at": at})
+            message = f"{task_of_card}: checking the project's setup again"
+            _event(state, "environment_check_requested", None, {"task": task_of_card, "stage": stage, "message": message})
+            result = {"card": json.loads(json.dumps(card)), "message": message, "check_again": True}
         else:
             raise ValueError("this card's choice is not one the board knows how to carry out")
-        if card.get("status") == "open":
-            _resolve_owner_action(state, card, f"You chose: {choice}", "owner_choice")
-        result = {"card": json.loads(json.dumps(card)), "message": message}
+        if card.get("choice_kind") != "setup_check":
+            if card.get("status") == "open":
+                _resolve_owner_action(state, card, f"You chose: {choice}", "owner_choice")
+            result = {"card": json.loads(json.dumps(card)), "message": message}
+    if result.get("check_again"):
+        from harness import environment_check
+        environment_check.run_due(root)
     if finish.get("completed"):
         _after_development_complete(root, task_of_card, finish.get("cto_session", ""), finish.get("cto_item", ""), finish.get("cto_suffix", ""))
     return result
@@ -18961,7 +19213,7 @@ RELEASE_REQUIRED_CHECKS = {
     "main_branch", "git_clean", "main_pushed", "main_health_verified",
     "task_artifact_release_verified",
     "owner_artifacts_readable", "contract_scope_intact", "completion_product_ready",
-    "ready_for_owner_test",
+    "environment_ready", "ready_for_owner_test",
 }
 
 BROKER_RELEASE_REQUIRED_CHECKS = {
@@ -18975,7 +19227,7 @@ BROKER_RELEASE_REQUIRED_CHECKS = {
     "candidate_health_verified", "task_artifact_release_verified",
     "main_fast_forward_safe", "mirror_candidate_verified",
     "runtime_verification_scope_correct", "owner_artifacts_readable", "contract_scope_intact",
-    "completion_product_ready", "ready_for_owner_test",
+    "completion_product_ready", "environment_ready", "ready_for_owner_test",
 }
 
 
@@ -20910,7 +21162,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("test-env-run"); p.description = "Run one command under the project's test environment (the Reviewer's or the CTO's own capture; not certified evidence)."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--cmd", required=True, help="the command to run (no shell operators)")
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True); p.add_argument("--allow-split", action="store_true", help="the owner allowed this task to be split into separately reviewed parts")
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
-    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)"); p.add_argument("--skills", default="[]", help='JSON list of {"name": <skill slug>, "reason": <one short line>} this task needs from the skill library; a name not in the library is dropped, not refused')
+    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)"); p.add_argument("--skills", default="[]", help='JSON list of {"name": <skill slug>, "reason": <one short line>} this task needs from the skill library; a name not in the library is dropped, not refused'); p.add_argument("--needs", default=None, help="JSON: the setup this contract needs (ai_tools the app calls, folders, programs, libraries, real_run); NMHP checks it before the owner sees the contract")
+    p = sub.add_parser("set-needs"); p.add_argument("--agent", required=True); p.add_argument("--needs", required=True, help="JSON: the task's setup list (same format as propose-requirements --needs)")
     p = sub.add_parser("propose-spec-questions"); p.description = "Delivery's one submission of a Write-specs app task's own question-card part: up to 5 app-specific questions, and whether the two description-only conditional generic questions apply to this app."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--questions", required=True, help="a JSON list of up to 5 {text, options (2-4 strings), recommended (index)} objects; [] if this app needs none"); p.add_argument("--existing-data", action="store_true", help="this app replaces something, so \"Is there existing data to bring in?\" belongs on the card"); p.add_argument("--keeps-data", action="store_true", help="this app keeps data, so both data-loss questions belong on the card")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
@@ -21080,7 +21333,9 @@ def main(argv: list[str] | None = None) -> int:
                 skills_arg = json.loads(args.skills) if args.skills else []
             except json.JSONDecodeError:
                 skills_arg = []
-            out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change, skills=skills_arg)
+            out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change, skills=skills_arg,
+                                              needs=args.needs, needs_required=True)
+        elif args.command == "set-needs": out = set_needs(root, args.agent, args.needs)
         elif args.command == "propose-spec-questions": out = propose_spec_questions(root, args.agent, args.task, json.loads(args.questions), include_existing_data=args.existing_data, include_data_loss=args.keeps_data)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
@@ -21099,8 +21354,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "finding-route-around": out = route_around_finding(root, args.finding, args.reason)
         elif args.command == "deliverable-waived": out = waive_deliverable(root, args.agent, args.task, args.deliverable, args.owner_message, args.owner_words, args.part, args.note)
         elif args.command == "findings": out = {"findings": list_findings(root, args.include_resolved)}
-        elif args.command == "request-qa": out = request_qa(root, args.agent, args.ledger, args.summary, args.changes)
-        elif args.command == "request-independent-review": out = request_independent_review(root, args.agent, args.summary)
+        elif args.command == "request-qa":
+            environment_review_gate(root, args.agent)
+            out = request_qa(root, args.agent, args.ledger, args.summary, args.changes)
+        elif args.command == "request-independent-review":
+            environment_review_gate(root, args.agent)
+            out = request_independent_review(root, args.agent, args.summary)
         elif args.command == "define-plan": out = define_delivery_plan(root, args.agent, args.mode, args.rationale)
         elif args.command == "declare-subtasks":
             subtasks = []
@@ -21128,7 +21387,9 @@ def main(argv: list[str] | None = None) -> int:
             chunks = [tuple(raw.split(":", 1)) if ":" in raw else ("", "") for raw in args.chunk]
             out = declare_chunks(root, args.agent, chunks, args.reason)
         elif args.command == "retire-chunk": out = retire_chunk(root, args.agent, args.chunk, args.reason, args.into)
-        elif args.command == "request-review": out = request_review(root, args.agent, args.ledger, args.summary, args.phase, args.chunk, args.changes, test_command=args.test_command, subtask=args.subtask, test_scope=args.test_scope, scope_reason=args.scope_reason, repair_package_id=args.repair_package, saved_data=args.saved_data)
+        elif args.command == "request-review":
+            environment_review_gate(root, args.agent)
+            out = request_review(root, args.agent, args.ledger, args.summary, args.phase, args.chunk, args.changes, test_command=args.test_command, subtask=args.subtask, test_scope=args.test_scope, scope_reason=args.scope_reason, repair_package_id=args.repair_package, saved_data=args.saved_data)
         elif args.command == "claim-qa": out = claim_qa(root, args.agent, args.request, args.challenge_ledger)
         elif args.command == "reserve-qa": out = reserve_qa(root, args.agent, args.request)
         elif args.command == "review-brief": out = review_brief(root, args.request, args.agent)

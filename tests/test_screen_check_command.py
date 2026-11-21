@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 from harness import board, browser_acceptance, control, owner_location
+from tests.requirements_support import setup_checked
 from harness.board_surface import (
     PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority, SurfaceAuthorizationError, SurfaceProtocolError,
 )
@@ -364,6 +365,7 @@ class ScreenCheckLedgerSourceTests(ScreenCheckFixture):
         code = self.git_tree()
         _agent, token, result = self.capture(role)
         task = self.task_of(result["id"])
+        setup_checked(self.context, task)          # NMHP's setup check passed (owner 2026-11-21); this test is about the citation
         ledger = code / "SCENARIO_LEDGER.md"
         ledger.write_text("| S-1 | counter | " + result["id"] + " showed 1 |\n")
         return code, token, result, task, ledger

@@ -98,6 +98,8 @@ def tick(root: Path, stale_after: int = board.AGENT_STALE_SECONDS) -> dict[str, 
     review_routes = board.route_open_reviews(root)
     owner_alerts = board.due_owner_alerts(root)
     release_outcomes = release_coordinator.coordinate(root)
+    from harness import environment_check
+    environment_check.run_due(root)     # owner 2026-11-21: a requested setup check survives a restart; it starts again here
     stalled = board.mark_stalled(root, stale_after)
     return {
         "status": "active", "recovered": recovered,

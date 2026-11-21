@@ -182,6 +182,21 @@ safe"), each with one short reason, and pass them as `--skills`; the owner agree
 `--small-change`) also read the `requirements-architecture` skill (`skills/requirements-architecture/SKILL.md`) first when the board names its
 path. A proposed name that is not in the library is dropped. Terminal words are not a Go ahead: only the board's GO AHEAD counts.
 
+**The setup list, checked by NMHP before the owner sees the contract (owner 2026-11-21).** Every `propose-requirements` carries
+`--needs '<JSON>'`: the setup this contract needs, read from the requirements. `{"ai_tools": [...], "folders": [...], "programs": [...],
+"libraries": [...], "real_run": "..."}` — `ai_tools` the AI tools the APP ITSELF calls (`claude`, `codex`, `gemini`; `[]` when none);
+`folders` every folder outside the project the work reads or writes (`{"path": "/abs", "access": "read"|"write"}`); `programs` the languages,
+compilers, build and test tools (`{"name": "python3", "min_version": "3.11"}`); `libraries` per language (`{"language": "python"|"node",
+"name": "..."}`); `real_run`, for an app that calls an AI tool, ONE command that runs the app's own code end to end on a small sample
+(never the owner's live data) and makes a real call of every listed AI tool by name from PATH. NMHP adds the project's agents itself.
+The board refuses a proposal without the list. NMHP (never an agent) then checks every item, as the owner, in his own environment,
+with real calls; the contract is shown to the owner only when all pass. A failed item becomes a card saying who fixes it: the owner
+(sign-in, folder, program) or you (a library into the project, a wrong list: file the proposal again with the corrected list). You are told
+on your terminal when the check finishes. After the GO AHEAD, build the `real_run` command FIRST: no review request of any kind is
+accepted until NMHP ran it on the commit under review and saw every listed AI tool really called and answered (a stand-in, a mocked
+call or a swallowed error fails it). A task already past its contract files its list once with `set-needs --agent <agent-id> --needs
+'<JSON>'`; its next review request waits for the check. The same calls and the real run run again before the release is offered.
+
 ## contract-first
 
 **The Reviewer's early look (2026-10-23).** After you file a proposal an idle Reviewer may read it before the owner decides and
@@ -1563,6 +1578,10 @@ in the app that stops it working for its owner in normal use, or a security leak
 for a reason of the process (your own sandbox, a tool, a process or a browser you cannot start, a sign-in you lack, a real
 Claude or Codex you cannot run) is never a defect of the app and never a reason to fail, hold, repair or re-review it.
 Write one line `Not run: <the step and why>` in your verdict, give `TASK DONE: YES` for what you did check, and go on.
+**Except the app's real run (owner 2026-11-21).** Your own sandbox not reaching a real Claude or Codex stays a `Not run` line for you,
+but it never stands in for NMHP's own setup check: an app that calls an AI tool is reviewed and released only after NMHP ran its
+`real_run` on that commit with the real tools. A `Not run` never satisfies that check, and a stand-in or mocked AI call is never
+evidence that the app works; say so in your verdict when the app's only proof of its AI calls is a stand-in.
 Never ask the owner to create, copy or paste a token or login: say what was not run and go on.
 
 ## reviewer-token

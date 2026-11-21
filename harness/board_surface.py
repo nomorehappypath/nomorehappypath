@@ -70,6 +70,7 @@ ALL_BOARD_OPERATIONS = {
     "close-released",
     "need-test-machine", "machine-status", "machine-baseline", "reference",
     "test-env-set", "test-env-status", "test-env-run",
+    "set-needs",
 }
 # hook-event: every agent's own CLI reports its lifecycle and asks for tool
 # decisions (plumbing Stage 1); identity is the session's, never the caller's.
@@ -87,6 +88,8 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     # 2026-11-05 (stranger run): Delivery declares the project's test environment itself; it built the virtual environment the tests
     # need and waited four hours for a CTO that never came. One person on one computer has no separate environment keeper.
     "test-env-set",
+    # Owner 2026-11-21: a task already past its contract files the setup NMHP checks before its next review.
+    "set-needs",
     "resume-task", "reconcile-baseline", "confirm-requirements", "propose-requirements", "record-finding",
     # Owner repair 2026-11-09: write-specs-technical-chapters's question card never reached a
     # real app task — propose-spec-questions was missing here, so Delivery's own command channel
@@ -193,7 +196,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "poll", "recover", "status", "offline", "task-brief",
     "migrate-contract-scope", "expand-contract", "declare-build", "collect-build", "create-contract", "contract-evidence", "hook-event", "record-release", "begin-task", "resume-task",
     "attach-workspace", "bind-repository", "reconcile-baseline", "owner-message",
-    "confirm-requirements", "propose-requirements", "propose-spec-questions", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "project-history", "execute-challenge", "request-qa",
+    "confirm-requirements", "propose-requirements", "set-needs", "propose-spec-questions", "contract-check-submit", "contract-check-correct", "contract-checks", "ask-owner", "contract-check-skip", "check-deviation", "send-to-full-lane", "project-history", "execute-challenge", "request-qa",
     "request-independent-review", "define-plan", "declare-subtasks",
     "start-subtask", "declare-subtask-chunks", "git-commit", "declare-chunks", "retire-chunk",
     "request-review", "claim-qa", "reserve-qa", "review-brief", "review-intents", "relinquish-qa", "attach-challenge-ledger", "analysis-list", "analysis-crosscheck", "analysis-merge", "review-support", "retained-plan",

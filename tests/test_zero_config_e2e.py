@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract, cto, control
-from tests.requirements_support import agreed_requirements
+from tests.requirements_support import agreed_requirements, setup_checked
 
 
 class ZeroConfigThreeCliE2E(unittest.TestCase):
@@ -51,6 +51,7 @@ class ZeroConfigThreeCliE2E(unittest.TestCase):
             board.qa_result(root, reviewer["id"], final["id"], "passed", "TASK DONE: YES — the full objective runs end to end vs it did; full objective independently passed", str(evidence))
             board.complete(root, delivery["id"], "all chunks and final acceptance complete")
 
+            setup_checked(root, "TASK-ZERO")       # NMHP's setup check passed (owner 2026-11-21); a list with no AI tool
             result = cto.release_check(root, "TASK-ZERO", ledger, root, execute_health=True, health_command="test -f app.txt")
             self.assertTrue(result["ready_for_owner_test"], result)
             self.assertTrue(result["delivery_chunks_complete"])

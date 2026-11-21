@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from tests.requirements_support import NO_SETUP, setup_checked
 from tests.pinned_settings import old_settings
 from harness import board, control, project_registry, project_worker
 from harness.board_surface import (
@@ -470,9 +471,10 @@ class BoardSurfaceCommandTests(unittest.TestCase):
             "--agent", agent["id"], "--task", "TASK-CARD-GATE-2", "--questions", "[]",
         ], nonce=951))
         board.record_spec_answers(self.context, "TASK-CARD-GATE-2", {})   # the owner pressed Continue with none
+        setup_checked(self.context, "TASK-CARD-GATE-2")
         result = gateway.execute(token, self.request("propose-requirements", [
             "--agent", agent["id"],
-            "--text", self._formatted_requirements("Build the trading app."),
+            "--text", self._formatted_requirements("Build the trading app."), "--needs", NO_SETUP,
         ], nonce=952))["result"]
         self.assertEqual(result["task"], "TASK-CARD-GATE-2")
 
@@ -480,9 +482,10 @@ class BoardSurfaceCommandTests(unittest.TestCase):
         agent, token, gateway = self._seed_app_spec_task(
             "TASK-CARD-GATE-3", "not an app spec: write me a one-page strategy memo.",
         )
+        setup_checked(self.context, "TASK-CARD-GATE-3")
         result = gateway.execute(token, self.request("propose-requirements", [
             "--agent", agent["id"],
-            "--text", self._formatted_requirements("Write the strategy memo."),
+            "--text", self._formatted_requirements("Write the strategy memo."), "--needs", NO_SETUP,
         ], nonce=953))["result"]
         self.assertEqual(result["task"], "TASK-CARD-GATE-3")
 

@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from harness import board, contract_check, control, review_brief
+from tests.requirements_support import NO_SETUP, setup_checked
 from tests.test_contract_first_checks import TASK, TEXT, _Fixture, submission, write_json
 
 PLAIN_TEXT = "In plain words:\nThe button label says Save instead of Submit.\n\nAlready in the project:\nNothing related exists yet.\n\n" + TEXT
@@ -133,9 +134,11 @@ class FastLaneTests(_Fixture):
 
     def test_delivery_proposes_it_with_one_flag_on_the_command(self):
         agent = self.delivery()
+        setup_checked(self.root, TASK)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", agent["id"], "--text", PLAIN_TEXT, "--small-change"])
+            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", agent["id"], "--text", PLAIN_TEXT, "--small-change",
+                               "--needs", NO_SETUP])
         self.assertEqual(code, 0)
         self.assertTrue(self.proposal()["small_change"])
         self.assertEqual(self.proposal()["small_change_by"], "delivery")

@@ -825,6 +825,10 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
     product_problems = board._completion_gate_problems(root, state, task, str((builder or {}).get("id") or "")) if latest_review else ["no final review"]
     checks["completion_product_ready"] = not product_problems
     checks["completion_product_problems"] = product_problems
+    # Owner 2026-11-21: the AI-tool calls and the app's own real run, fresh on the release commit, run by NMHP as the owner
+    environment_ok, environment_problems = board.environment_release_status(state, task, latest_review)
+    checks["environment_ready"] = environment_ok
+    checks["environment_problems"] = environment_problems
     # Owner 2026-10-15: a document the owner must read is reachable before the
     # owner is asked to test; the latest marked file per deliverable must be
     # readable and, when the final review recorded a manifest, be a file that
@@ -965,10 +969,10 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
             "candidate_branch", "git_clean", "candidate_health_verified",
             "task_artifact_release_verified", "main_fast_forward_safe",
             "mirror_candidate_verified", "runtime_verification_scope_correct",
-            "owner_artifacts_readable", "contract_scope_intact", "completion_product_ready",
+            "owner_artifacts_readable", "contract_scope_intact", "completion_product_ready", "environment_ready",
         }
     else:
-        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified", "owner_artifacts_readable", "contract_scope_intact", "completion_product_ready"}
+        required = {"requirements_confirmation_recorded", "requirements_confirmation_scope_match", "delivery_plan_recorded", "product_structure_complete", "development_qa_passed", "unit_tests_passed", "independent_review_passed", "final_acceptance_review_present", "final_review_says_task_done_yes", "delivery_chunks_complete", "scenario_ledger_complete", "reviewer_challenge_ledger_complete", "delivery_scenario_simulations_executed", "reviewer_scenario_simulations_executed", "completion_contract_complete", "owner_direction_recorded", "claim_scope_audit_passed", "development_agents_complete", "main_branch", "git_clean", "main_pushed", "main_health_verified", "task_artifact_release_verified", "owner_artifacts_readable", "contract_scope_intact", "completion_product_ready", "environment_ready"}
     if checks.get("runtime_gate_required"):
         required |= {"deployed_runtime_verified", "deployed_chat_verified"}
     if checks.get("build_required"):

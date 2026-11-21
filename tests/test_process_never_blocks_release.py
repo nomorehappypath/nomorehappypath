@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from harness import board, contract, control_plane, cto, release_coordinator
+from tests.requirements_support import setup_checked
 
 TASK = "lease-contract-analyzer"
 PRODUCT_SETS = {
@@ -82,6 +83,7 @@ class BoardCase(unittest.TestCase):
         enqueue = mock.patch("harness.control.enqueue_instruction", return_value={"id": "route"})
         self.enqueue = enqueue.start()
         self.addCleanup(enqueue.stop)
+        setup_checked(self.root, TASK)        # NMHP's setup check passed (owner 2026-11-21); a list with no AI tool
 
     def final_review(self, *, status="passed", developer="engineering-old", broker=False, completed_at=None, waived=False):
         at = completed_at or board.now()

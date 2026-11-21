@@ -33,3 +33,16 @@ def agreed_requirements(root, agent_id: str, text: str):
                     source=item.get("source", "requeued"),
                 )
     return confirmation
+
+
+NO_SETUP = '{"ai_tools": []}'
+
+
+def setup_checked(root, task: str) -> None:
+    """The task's setup list (nothing outside the project) recorded and NMHP's contract-stage setup check passed, as after a
+    real check (owner 2026-11-21): fixtures that file a contract or request a review through the agent command use it."""
+    from harness import environment_check
+    with board.locked_state(root) as state:
+        environment_check.record_needs(state, task, environment_check.parse_needs(NO_SETUP), "fixture", board.now())
+        run = environment_check.request(state, task, "contract", board.now())
+        run.update(status="passed", finished_at=board.now(), identity=environment_check.TEST_SUITE_IDENTITY)
