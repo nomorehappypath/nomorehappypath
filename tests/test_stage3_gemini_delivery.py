@@ -121,6 +121,12 @@ class Stage3GeminiTests(unittest.TestCase):
         os.close(slave)
         self.master = master
         self.addCleanup(self._stop)
+        # The real launch's runner records the attach; this test starts the supervisor itself, so it does too.
+        # Without it the 30-second attach window ends the session mid-test on a slow machine.
+        control.attach(self.root, self.session["id"], self.process.pid)
+        saved = next(item for item in control.snapshot(self.root)["sessions"] if item["id"] == self.session["id"])
+        self.assertEqual((saved["status"], saved["pid"]), ("running", self.process.pid))
+        self.assertTrue(saved["attached_at"])
         self.output = b""
         self.read_until(b"GEMINI_READY")
 
