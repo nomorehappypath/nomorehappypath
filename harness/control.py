@@ -1700,7 +1700,16 @@ def record_attention(root: Path, session_id: str, reason: str, limit: dict[str, 
             raise ValueError("cannot record attention for an inactive managed session")
         if not session.get("attention_since"):
             session["attention_since"] = now()
+        was_sign_in = attention.needs_sign_in(session)
         session["attention_reason"] = reason[:200]
+        if attention.needs_sign_in(session):
+            if not was_sign_in or not session.get("sign_in_since"):
+                # 2026-11-21: when THIS sign-in reading began (attention_since stays from an earlier reason)
+                session["sign_in_since"] = now()
+                session.pop("sign_in_checked_at", None)
+        else:
+            session.pop("sign_in_since", None)
+            session.pop("sign_in_checked_at", None)
         if limit:
             if session.get("limit_seen_at") != limit.get("seen_at"):
                 for field in ("limit_nudged_at", "limit_nudge_note", "limit_cleared_at"):
@@ -1723,8 +1732,56 @@ def clear_attention(root: Path, session_id: str) -> dict[str, Any]:
             raise ValueError("unknown managed session")
         session["attention_since"] = None
         session["attention_reason"] = None
+        session.pop("sign_in_since", None)
+        session.pop("sign_in_checked_at", None)
         _end_limit_hold(session)
         return {"session_id": session_id, "attention_since": None, "attention_reason": None}
+
+
+def clear_sign_in_after_board_call(root: Path, session_id: str, started_at: str) -> bool:
+    """A board command this session STARTED after its screen was read as signed out has just succeeded: it is signed in.
+
+    2026-11-21 (Lease): the CTO and Delivery were marked signed out by a quoted "Not logged in" while both kept running board
+    commands; the board stopped routing to them and the owner was told to sign in. The agent's model answered and ran a command
+    after the reading began, so live board activity outranks the screen. A command already running when the reading began
+    proves nothing (`sign_in_since`, not `attention_since`, which an earlier reason may have set). Only a sign-in reading is
+    cleared, with the Claude sign-in card the SCREEN made (source "screen"); a card from a real token check stays. One
+    lock-free read first, so a normal command takes no lock; the lock re-checks everything. Return: True when cleared."""
+    from harness import attention
+
+    def disproved(session: dict[str, Any] | None) -> bool:
+        since = str((session or {}).get("sign_in_since") or (session or {}).get("attention_since") or "")
+        return bool(session) and attention.needs_sign_in(session) and bool(started_at) and bool(since) and since <= started_at
+
+    if not disproved(_read_state(root).get("sessions", {}).get(session_id)):
+        return False
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not disproved(session):
+            return False
+        session["attention_since"] = None
+        session["attention_reason"] = None
+        session.pop("sign_in_since", None)
+        session.pop("sign_in_checked_at", None)
+        if (session.get("claude_auth_action") or {}).get("source") == "screen":
+            session.pop("claude_auth_action", None)
+        session["sign_in_disproved_at"] = now()
+        return True
+
+
+def record_sign_in_check(root: Path, session_id: str) -> bool:
+    """The supervisor is about to type its one check-in line into a terminal read as signed out: claim it once per reading.
+    Return: True when this reading had not been checked yet (the caller may type), False otherwise."""
+    from harness import attention
+    with locked_state(root) as state:
+        _reconcile(state)
+        session = state["sessions"].get(session_id)
+        if not session or session.get("status") not in ACTIVE_STATUSES or not attention.needs_sign_in(session) \
+                or session.get("sign_in_checked_at"):
+            return False
+        session["sign_in_checked_at"] = now()
+        return True
 
 
 def limit_state(root: Path, session_id: str) -> dict[str, Any]:

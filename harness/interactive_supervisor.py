@@ -335,6 +335,44 @@ def _maybe_nudge_limit(root: Path, session_id: str, watch, attempts: dict[str, i
     return True
 
 
+def _sign_in_disproved(root: Path, session_id: str, watch, recorded_at: str) -> bool:
+    """The screen still reads as signed out, but a board command the agent started after that reading succeeded (control
+    `sign_in_disproved_at`, written by the board, later than this supervisor's own recording at `recorded_at`): the agent is
+    signed in. The watch treats the unchanged screen as answered, so it neither holds input nor re-raises until the line leaves
+    and comes back (2026-11-21, Lease). Return: True when the hold should be released."""
+    if not recorded_at or not attention.needs_sign_in({"attention_reason": watch.reason}):
+        return False
+    try:
+        session = control._read_state(root).get("sessions", {}).get(session_id) or {}
+    except (OSError, ValueError):
+        return False
+    if attention.needs_sign_in(session) or str(session.get("sign_in_disproved_at") or "") < recorded_at:
+        return False
+    watch.owner_typed()
+    return True
+
+
+def _sign_in_check_due(root: Path, provider: str, watch, recorded_at: str, now_iso: str) -> bool:
+    """A Claude or Codex terminal read as signed out for attention.SIGN_IN_CHECK_SECONDS, with no menu other than that error line
+    on screen (and not Codex's first-run sign-in menu, where Enter picks an option): time for the one check-in line
+    (2026-11-21). Gemini's sign-in screens are interactive waits and are never typed into."""
+    if provider not in ("claude", "codex") or not recorded_at or not attention.needs_sign_in({"attention_reason": watch.reason}):
+        return False
+    text = watch.screen.text()
+    if attention.menu_on_screen(text, except_sign_in=True) or attention.CODEX_SIGN_IN_MENU.search(text):
+        return False
+    try:
+        waited = (datetime.fromisoformat(now_iso) - datetime.fromisoformat(recorded_at)).total_seconds()
+    except ValueError:
+        return False
+    if waited < attention.SIGN_IN_CHECK_SECONDS:
+        return False
+    try:
+        return board.pause_state(root).get("status") == "active"   # a pausing or paused project takes nothing
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def _submit_controller_message(fd: int, source: str, text: str) -> None:
     """Type routed text, then send Enter as a distinct terminal input event.
 
@@ -900,10 +938,13 @@ def run(
                 if provider == "claude" and "/login" in str(reason):
                     from harness import claude_auth
                     with control.locked_state(root) as state:
-                        state["sessions"][session_id]["claude_auth_action"] = claude_auth.action("rejected")
+                        # source "screen": a board call that disproves this reading clears it (2026-11-21)
+                        state["sessions"][session_id]["claude_auth_action"] = {**claude_auth.action("rejected"), "source": "screen"}
                 incident = {key: value for key, value in (watch.incident or {}).items() if not key.startswith("_")}
                 control.record_attention(root, session_id, reason or "is waiting for you",
                                          limit=incident if attention.is_limit_reason(reason) else None)
+                if attention.needs_sign_in({"attention_reason": reason}):
+                    sign_in_watch["recorded_at"] = control.now()
                 transcript.note(f"terminal is waiting for the owner: {reason}"
                                 + (f" (announced {incident.get('resets_at')}, {incident.get('kind')})" if incident and attention.is_limit_reason(reason) else ""))
             else:
@@ -911,6 +952,7 @@ def run(
                 transcript.note("terminal no longer waiting for the owner")
         except ValueError:
             pass
+    sign_in_watch = {"recorded_at": ""}   # when THIS supervisor recorded the current sign-in reading (2026-11-21)
     LIMIT_NUDGE_ATTEMPTS = 2          # one send, and one retry if the write itself failed
     LIMIT_LOOK_SECONDS = 2.0          # the periodic look at the screen and the nudge clock
     nudge_attempts: dict[str, int] = {}
@@ -1183,11 +1225,22 @@ def run(
                 # The screen as it is now, with no new output: a quiet or re-adopted terminal reports the line gone too,
                 # and the one nudge below runs on this clock, not on incoming bytes.
                 note_attention(watch.tick())
+                if input_held and _sign_in_disproved(root, session_id, watch, sign_in_watch["recorded_at"]):
+                    input_held = False     # the board proved the agent signed in: deliver its queued wake-ups again
+                    transcript.note("sign-in reading disproved by a board call; messages are delivered again")
+                elif input_held and _sign_in_check_due(root, provider, watch, sign_in_watch["recorded_at"], control.now()) and \
+                        not owner_keys.undecided and _controller_delivery_allowed(bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at) \
+                        and control.record_sign_in_check(root, session_id):
+                    try:
+                        _submit_controller_message(master, "harness", attention.SIGN_IN_CHECK_TEXT)
+                        transcript.note("typed the one sign-in check-in line")
+                    except OSError:
+                        pass
                 _maybe_nudge_limit(
                     root, session_id, watch, nudge_attempts, LIMIT_NUDGE_ATTEMPTS, transcript, master, typed, last_owner_key_at,
                     owner_keys.undecided, child_output_seen and not (stage3["mux"] is not None and not stage3["fallback"] and stage3["worker"].busy()),
                 )
-            if not input_held:
+            if not input_held and not watch.sign_in_pending():   # an unconfirmed sign-in reading holds too, without a card
                 # A terminal showing a menu the owner must answer (sign-in,
                 # folder trust, permission) takes nothing: its messages stay
                 # queued where the board can still withdraw them (backlog #8, F-8).
@@ -1225,7 +1278,7 @@ def run(
             stage3_delivers = stage3["mux"] is not None and not stage3["fallback"] and not stage3["typing_meanwhile"]
             if stage3_delivers and stage3["worker"].busy():
                 pass                              # one delivery in flight at a time
-            elif child_output_seen and controller_queue and not input_held and not owner_keys.undecided and (
+            elif child_output_seen and controller_queue and not input_held and not watch.sign_in_pending() and not owner_keys.undecided and (
                     provider != "claude" or first_turn_settled or _note_first_turn(
                         not _fresh_launch(root, session_id) or _first_turn_settled(*_turn_state(root, session_id), launched_at, time.time()))) and _controller_delivery_allowed(
                 bytes(typed), last_owner_key_at, time.monotonic(), last_owner_key_at,

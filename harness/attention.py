@@ -75,6 +75,16 @@ GEMINI_QUOTA_PATTERN = re.compile(r"quota reached.{0,160}?Resets in\s*(?:(\d+)h)
 # The patterns are chosen by the session's own provider; a Claude pattern is never tried on a Codex screen.
 LIMIT_REASON_MARK = "usage-limit message"
 LIMIT_RECENT_LINES = 12     # the error and the prompt box with its status rows sit within this
+LOGIN_RECENT_LINES = 12     # a CLI's own sign-in error sits just above its prompt box and status rows, like the limit line
+# 2026-11-21: a Claude terminal read as signed out for this long with no board call gets ONE check-in line; a working agent
+# answers with a board call (which clears the reading), a signed-out CLI only prints its error again.
+SIGN_IN_CHECK_SECONDS = 120
+# 2026-11-21: a sign-in reading counts only once it has stayed on screen this long. Output arriving in pieces can show a quoted
+# "not logged in" as the newest line for a moment; a real signed-out CLI's line stays.
+SIGN_IN_SETTLE_SECONDS = 15
+# Codex's first-run sign-in menu: Enter picks an option there, so the check-in line is never typed while it shows.
+CODEX_SIGN_IN_MENU = re.compile(r"Sign in with ChatGPT|Provide your own API key", re.IGNORECASE)
+SIGN_IN_CHECK_TEXT = "Harness check: if you can read this, run your board poll now (one command), then carry on."
 LIMIT_ESTIMATED_MINUTES = 60       # when the CLI printed no usable time: hold this long, then nudge once
 LIMIT_NUDGE_AFTER_SECONDS = 60     # the line still on screen this long after the announced time: one nudge
 LIMIT_RESUME_GRACE_SECONDS = 120   # after the line clears, nothing restarts or stalls the terminal for this long
@@ -287,9 +297,19 @@ def in_limit_grace(session: dict | None, now: datetime | None = None) -> bool:
     return (now - moment).total_seconds() < LIMIT_RESUME_GRACE_SECONDS
 
 
-def menu_on_screen(text: str) -> bool:
-    """Whether a sign-in, folder-trust or permission menu is on this screen, checked apart from any usage-limit line (detect() returns the limit first)."""
-    return any(pattern.search(text) for pattern, reason in PROMPT_FORMS if holds_harness_input(reason))
+def menu_on_screen(text: str, except_sign_in: bool = False) -> bool:
+    """Whether a sign-in, folder-trust or permission menu is on this screen, checked apart from any usage-limit line (detect() returns the limit first).
+    `except_sign_in`: leave the sign-in error line itself out (the supervisor's one check-in after a sign-in reading, 2026-11-21)."""
+    return any(_form_on_screen(pattern, reason, text) for pattern, reason in PROMPT_FORMS
+               if holds_harness_input(reason) and not (except_sign_in and reason in (LOGIN_REASON, GEMINI_SIGN_IN_REASON)))
+
+
+def _form_on_screen(pattern: re.Pattern[str], reason: str, text: str) -> bool:
+    """Whether one PROMPT_FORMS entry shows on this screen. The login form counts only among the last LOGIN_RECENT_LINES
+    non-empty lines (2026-11-21, Lease: a quoted "Not logged in · Please run /login" further up is the agent's own work)."""
+    if reason in (LOGIN_REASON, GEMINI_SIGN_IN_REASON):
+        text = "\n".join([line for line in text.splitlines() if line.strip()][-LOGIN_RECENT_LINES:])
+    return bool(pattern.search(text))
 
 
 def needs_sign_in(session: dict | None) -> bool:
@@ -417,8 +437,11 @@ def detect(text: str, provider: str | None = None, observed: datetime | None = N
     quota = GEMINI_QUOTA_PATTERN.search(recent)
     if quota:
         return gemini_quota_reason(quota.group(1))
+    # 2026-11-21 (Lease): an agent that quoted the app's own "Not logged in · Please run /login" in its output was marked signed
+    # out while it kept working. A CLI's own sign-in error sits just above its input prompt, so the login form counts only
+    # among the last LOGIN_RECENT_LINES lines, like the quota and limit lines; text quoted further up is the agent's work.
     for pattern, reason in PROMPT_FORMS:
-        if pattern.search(text):
+        if _form_on_screen(pattern, reason, text):
             return reason
     return None
 
@@ -646,6 +669,7 @@ class PromptWatch:
         self.visible: str | None = None
         self.reason: str | None = None
         self.incident: dict | None = None
+        self.sign_in_seen_at: datetime | None = None   # when the current, not yet settled, sign-in reading first showed
 
     def resize(self, height: int | None) -> tuple[str, str | None] | None:
         """The terminal changed size to height rows; resize the underlying screen and re-check it for a prompt. Return: ("waiting", reason), ("cleared", None), or None, as _reconcile reports."""
@@ -675,6 +699,15 @@ class PromptWatch:
         text = self.screen.text()
         found = detect_limit(text, self.provider, observed) if self.provider in LIMIT_PATTERNS else None
         now = limit_reason(self.provider) if found else detect(text)
+        if now and needs_sign_in({"attention_reason": now}) and now != self.visible:
+            # 2026-11-21: a sign-in reading counts only once it has stayed SIGN_IN_SETTLE_SECONDS (the supervisor's periodic
+            # tick() confirms it); a quoted line that the agent's next output pushes up never counts.
+            if self.sign_in_seen_at is None:
+                self.sign_in_seen_at = observed
+            if (observed - self.sign_in_seen_at).total_seconds() < SIGN_IN_SETTLE_SECONDS:
+                now = self.visible if self.visible and not needs_sign_in({"attention_reason": self.visible}) else None
+        elif not (now and needs_sign_in({"attention_reason": now})):
+            self.sign_in_seen_at = None
         was = self.visible
         self.visible = now
         new_incident = False
@@ -689,6 +722,11 @@ class PromptWatch:
             self.reason = None
             return ("cleared", None)
         return None
+
+    def sign_in_pending(self) -> bool:
+        """A sign-in reading is on screen but has not stayed SIGN_IN_SETTLE_SECONDS yet: nothing is typed into the terminal
+        meanwhile (its messages stay queued and withdrawable), but no card is raised either (2026-11-21)."""
+        return self.sign_in_seen_at is not None and not needs_sign_in({"attention_reason": self.visible})
 
     def feed(self, data: bytes) -> tuple[str, str | None] | None:
         """Absorb child output. Returns ("waiting", reason), ("cleared", None) or None."""

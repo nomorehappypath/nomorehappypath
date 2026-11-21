@@ -1302,6 +1302,7 @@ class CommandGateway:
         identity, and a summary of any stored artifacts. Raises a Surface* error
         when authentication, authorization, replay protection, or execution fails.
         """
+        started_at = control.now()   # when the agent's CLI sent this command (2026-11-21: proof it was signed in then)
         nonce, operation, arguments, raw_artifacts = self._validated_request(request)
         # Authentication, replay protection, and byte ingestion are one short
         # transaction. Do not hold the long-command serialization lock here:
@@ -1347,6 +1348,11 @@ class CommandGateway:
                 raise
             recorded = True
             self._clear_refusal_card(identity, operation, arguments)
+            if operation != "hook-event":   # a CLI's local hooks run even when it is signed out: not proof of a working model
+                try:   # live board activity outranks a screen read as signed out; never fails a command that succeeded
+                    control.clear_sign_in_after_board_call(self.context, identity.session_id, started_at)
+                except (OSError, ValueError, TypeError, KeyError):
+                    pass
             return {
                 "result": _sanitized_value(output, self.context),
                 "identity": identity.public(),
