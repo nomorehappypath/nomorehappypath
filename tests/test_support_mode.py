@@ -60,6 +60,9 @@ class CaseStoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = sm.CaseStore(Path(self.tmp.name))
+        # The flood tests make ~600 ingests and must finish inside one UTC minute; fsync on a slow disk
+        # (Linux ext4: ~25 ms per commit) would let the rate window roll over mid-flood.
+        self.store._connection.execute("PRAGMA synchronous=OFF")
         self.addCleanup(self.store.close)
         self.addCleanup(self.tmp.cleanup)
 

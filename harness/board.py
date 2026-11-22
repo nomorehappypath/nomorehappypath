@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -5780,12 +5781,21 @@ def _skill_opening_lines(skill: Any) -> tuple[str, str]:
     return f"name: {skill.slug}", f"description: {skill.full_description}"
 
 
+@functools.lru_cache(maxsize=65536)
+def _normal_path(text: str) -> str:
+    """Takes a path text; returns str(Path(text)), remembered.
+
+    Why: every board read compares every library file with every event path; building two Path objects per comparison made a
+    board read on a long session take up to 0.7 s on Linux (Python 3.12), which the board-read speed test caught."""
+    return str(Path(text))
+
+
 def _event_reads_skill_file(event: dict[str, Any], skill_path: str) -> bool:
     """True when event's own path argument is skill_path, or its shell
     command text names it — the two ways SKILL_LIBRARY_SPEC.md section 3
     counts a call as reading a library file."""
     path = event.get("path")
-    if path and str(Path(str(path))) == str(Path(skill_path)):
+    if path and _normal_path(str(path)) == _normal_path(skill_path):
         return True
     command = str(event.get("command") or "")
     return bool(command) and skill_path in command
@@ -20009,9 +20019,7 @@ def _run_owner_acceptance(root: Path, task: str, recorded_response: dict[str, An
     stopped = stop_accepted_delivery_terminals(root, task)
     if stopped:
         recorded_response["delivery_stopped"] = stopped
-    idle = stop_idle_reviewer_and_cto(root, task)
-    if idle:
-        recorded_response["idle_agents_stopped"] = idle
+    # D-019 (owner 2026-11-12): Accept never stops the Reviewer or the CTO; they stay up for the next task.
     return recorded_response
 
 
@@ -20044,58 +20052,6 @@ def stop_accepted_delivery_terminals(root: Path, task: str) -> list[str]:
                 _event(state, "delivery_stop_after_acceptance_failed", None, {
                     "task": task, "message": f"Task accepted; its Delivery terminal could not be stopped: {error}"[:300],
                 })
-    return stopped
-
-
-# Session kinds that have nothing left to do once the last open task is accepted, and the plain name each is told by.
-IDLE_AFTER_ACCEPT_KINDS = {"claude_reviewer": "Reviewer", "claude_cto": "CTO"}
-
-
-def stop_idle_reviewer_and_cto(root: Path, task: str) -> list[str]:
-    """The owner accepted `task`: stop the running Reviewer and CTO terminals when no other task is still live.
-
-    Takes the project root and the accepted task. Returns the ids of the sessions it stopped (empty when another task is
-    being built, reviewed or waiting for the owner, or when none is running). Each stop is recorded as a plain event
-    ("reviewer_stopped_after_acceptance" / "cto_stopped_after_acceptance"). Why: in a real run both stayed open, idle, for hours
-    after Accept. They start again by themselves when the owner gives the next direction (the page starts every role that is
-    not running). A failure is noted and never undoes or fails the Accept.
-    """
-    from harness import board_viewer, control  # local, as everywhere in this module (import cycle)
-    try:
-        running = control.live_session_ids(root)
-        sessions = [
-            (str(entry["id"]), str(entry["kind"])) for entry in control.snapshot(root).get("sessions", [])
-            if entry.get("kind") in IDLE_AFTER_ACCEPT_KINDS and entry.get("id") in running
-        ]
-    except (OSError, ValueError):
-        return []
-    if not sessions:
-        return []
-    with locked_state(root) as state:
-        # The same definition of "live" the page uses for its task list; the accepted task itself may still show
-        # (for example while its upload finishes) and is not another task.
-        other_live = set(board_viewer._live_task_names(state, {})) - {task}
-    if other_live:
-        return []
-    stopped: list[str] = []
-    for session_id, kind in sessions:
-        name = IDLE_AFTER_ACCEPT_KINDS[kind]
-        try:
-            stop_session(root, session_id)
-            control.stop(root, session_id)
-        except (OSError, ValueError) as error:
-            with locked_state(root) as state:
-                _event(state, "idle_agent_stop_after_acceptance_failed", None, {
-                    "task": task, "message": f"Task accepted; the {name} terminal could not be stopped: {error}"[:300],
-                })
-            continue
-        message = f"Task accepted and nothing else is open, so the {name} was stopped. It starts again when you give the next direction."
-        with locked_state(root) as state:
-            agent = next((value for value in state.get("agents", {}).values() if value.get("session_id") == session_id), None)
-            if agent:
-                agent["status_note"] = message
-            _event(state, f"{name.lower()}_stopped_after_acceptance", agent, {"task": task, "message": message})
-        stopped.append(session_id)
     return stopped
 
 

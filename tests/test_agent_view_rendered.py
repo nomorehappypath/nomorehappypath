@@ -116,11 +116,16 @@ class AgentViewRenderedTests(unittest.TestCase):
         port, path = browser_acceptance._devtools(self.base / 'browser', time.monotonic() + 15)
         self.browser = browser_acceptance._DevToolsSocket(port, path, timeout=15)
         self.addCleanup(self.browser.close)
+        self.wait("document.querySelector('#tab-advanced-btn') !== null")
+        self.click('#tab-advanced-btn')                      # the launch buttons and agent rows live on the Advanced tab
+        self.wait("!document.querySelector('#tab-advanced').hidden")
         if manager_mode:
             self.wait("document.querySelector('#codex') !== null")
             for index, button in enumerate(('#codex', '#claude', '#cto')):
                 self.click(button)
                 self.wait("document.querySelector('#color-dialog').open")
+                if button == '#codex':     # the Delivery dialog grows once Settings fill it; click Cancel after that
+                    self.wait("document.querySelector('#launch-choice-origin').textContent.startsWith('Pre-filled')")
                 self.click('#color-cancel')
                 self.wait("!document.querySelector('#color-dialog').open")
                 self.wait("document.querySelectorAll('#agents .agent-row').length === " + str(index + 1))
@@ -250,11 +255,18 @@ class AgentViewRenderedTests(unittest.TestCase):
         if 'setting up uid map: Permission denied' not in result.stderr:
             self.skipTest('host does not restrict the unprofiled executable through AppArmor')
         before = subprocess.check_output(['tmux', 'list-sessions', '-F', '#{session_name}'], text=True)
-        with patch.dict(os.environ, {'HARNESS_BWRAP_BIN': str(copied)}):
+        # The Delivery button now starts Claude by default, whose sign-in check would stop the launch before the
+        # sandbox is reached; this test is about the sandbox, so the sign-in step is skipped.
+        with patch.dict(os.environ, {'HARNESS_BWRAP_BIN': str(copied)}), \
+                patch('harness.claude_auth.prepare_launch', return_value=''):
             self.click('#codex')
             self.wait("document.querySelector('#color-dialog').open")
+            # The Delivery dialog fills its provider and model lists from Settings after it opens and grows; a click
+            # aimed before that lands where the button used to be (Codex review r1, Linux: the dialog stayed open).
+            self.wait("document.querySelector('#launch-choice-origin').textContent.startsWith('Pre-filled')")
             self.click('#color-cancel')
-            self.wait("document.querySelector('#notice').textContent.includes('apparmor-profiles')")
+            # The refused sandbox start is reported only after the launch attempt; under a full-suite load that took over 15 s on Linux.
+            self.wait("document.querySelector('#notice').textContent.includes('apparmor-profiles')", seconds=60)
             message = self.browser.evaluate("document.querySelector('#notice').textContent")
             self.assertIn('bwrap-userns-restrict', message)
             self.assertIn('apparmor_parser -r', message)

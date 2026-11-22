@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import plistlib
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -373,10 +374,16 @@ class ServiceTakedownTests(unittest.TestCase):
         self.service.plist.write_bytes(plistlib.dumps({"Label": _ShimmedService.LABEL}))
 
     def test_stop_all_deactivates_and_deliberately_leaves_the_unit(self):
-        completed = subprocess.run(
-            ["bash", str(STOPPER)], capture_output=True, text=True, timeout=120,
-            env=self.service.environment(), cwd=str(ROOT),
-        )
+        # Run a COPY of the stop script from an empty folder: the real one stops every NMHP process started from the
+        # checkout it lives in, so running it here killed a live NMHP worker running from this checkout (2026-11-21).
+        with tempfile.TemporaryDirectory() as copy_root:
+            (Path(copy_root) / "scripts").mkdir()
+            for name in ("stop_all.sh", "platform_support.sh"):
+                shutil.copy2(ROOT / "scripts" / name, Path(copy_root) / "scripts" / name)
+            completed = subprocess.run(
+                ["bash", str(Path(copy_root) / "scripts" / "stop_all.sh")], capture_output=True, text=True, timeout=120,
+                env=self.service.environment(), cwd=copy_root,
+            )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("auto-start service stopped", completed.stdout)
         self.assertIn("bash install.sh", completed.stdout, "it must say how to get the service back")

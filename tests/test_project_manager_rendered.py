@@ -126,6 +126,14 @@ def chrome_binary() -> str:
 
 
 class SafeBrowserResolutionTests(unittest.TestCase):
+    def setUp(self):
+        # These tests set CHROME_BIN themselves; a HARNESS_BROWSER_BIN set by the machine running the suite (the Linux recipe
+        # sets it so the rendered tests can find Chrome) would win over it and make them test the machine, not the rule.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("HARNESS_BROWSER_BIN", None)
+
     def executable(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("browser", encoding="utf-8")

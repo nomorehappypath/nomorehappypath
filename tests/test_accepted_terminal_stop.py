@@ -103,8 +103,8 @@ class AcceptStopsTheTerminalTests(Fixture):
         self.assertEqual(response["git_acceptance"], {"status": "accepted"})
 
 
-class AcceptStopsReviewerAndCtoTests(Fixture):
-    """With nothing else open, Accept also stops the idle Reviewer and CTO; with another task live it stops neither."""
+class AcceptKeepsReviewerAndCtoTests(Fixture):
+    """D-019 (owner 2026-11-12): Accept stops only the accepted task's builder; the Reviewer and the CTO keep running."""
 
     def setUp(self):
         super().setUp()
@@ -122,44 +122,16 @@ class AcceptStopsReviewerAndCtoTests(Fixture):
         with mock.patch.object(board, "accept_owner_release", side_effect=lambda root, task: {"status": "accepted"}):
             return board._run_owner_acceptance(self.root, TASK, {})
 
-    def test_nothing_else_open_stops_the_reviewer_and_the_cto_and_records_each_in_plain_words(self):
+    def test_nothing_else_open_still_keeps_the_reviewer_and_the_cto_running(self):
         response = self.accept_now()
-        self.assertEqual(set(response["idle_agents_stopped"]), {session["id"] for session, _ in self.idle.values()})
-        kinds = {event["kind"]: event for event in board.snapshot(self.root)["events"]}
-        self.assertIn("reviewer_stopped_after_acceptance", kinds)
-        self.assertIn("cto_stopped_after_acceptance", kinds)
-        self.assertIn("starts again when you give the next direction", kinds["cto_stopped_after_acceptance"]["message"])
-        for _session, process in self.idle.values():
-            process.wait(timeout=10)
-            self.assertIsNotNone(process.poll(), "the terminal received the stop")
-        # The next direction starts them again: the page starts every role with no live terminal, and the control layer accepts it.
-        for kind in ("claude_reviewer", "claude_cto", "codex_delivery"):
-            self.assertEqual(control.create(self.root, kind)["status"], "launching")
-
-    def test_another_live_task_keeps_the_reviewer_and_the_cto_running(self):
-        other = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI")
-        with board.locked_state(self.root) as state:      # a second task is being built
-            state["agents"][other["id"]].update(task="OTHER-TASK", active=True, status="working")
-        response = self.accept_now()
-        self.assertNotIn("idle_agents_stopped", response)
         self.assertEqual(response["delivery_stopped"], [self.session["id"]], "the accepted task's own builder still stops")
+        self.assertNotIn("idle_agents_stopped", response)
         time.sleep(0.3)
         for _session, process in self.idle.values():
-            self.assertIsNone(process.poll())
+            self.assertIsNone(process.poll(), "Accept must not stop the Reviewer or the CTO (D-019)")
         kinds = [event["kind"] for event in board.snapshot(self.root)["events"]]
         self.assertNotIn("reviewer_stopped_after_acceptance", kinds)
-
-    def test_a_failure_to_stop_them_never_fails_the_accept(self):
-        real_stop = control.stop
-        def stop(root, session_id):
-            if session_id in {session["id"] for session, _ in self.idle.values()}:
-                raise OSError("signal failed")
-            return real_stop(root, session_id)
-        with mock.patch.object(control, "stop", side_effect=stop):
-            response = self.accept_now()
-        self.assertEqual(response["git_acceptance"], {"status": "accepted"})
-        self.assertNotIn("idle_agents_stopped", response)
-        self.assertIn("idle_agent_stop_after_acceptance_failed", [event["kind"] for event in board.snapshot(self.root)["events"]])
+        self.assertNotIn("cto_stopped_after_acceptance", kinds)
 
 
 if __name__ == "__main__":

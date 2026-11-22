@@ -154,10 +154,16 @@ class StopAllScriptTests(unittest.TestCase):
         self.assertNotIn("force-stopped", completed.stdout)
 
     def test_stop_run_with_nothing_running_touches_nothing(self):
+        import shutil
         import tempfile
-        with tempfile.TemporaryDirectory() as home:
+        # A COPY of the script in an empty folder: the real one stops every NMHP process started from this checkout, so
+        # running it here killed a live NMHP worker running from the checkout under test (2026-11-21).
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as copy_root:
+            (Path(copy_root) / "scripts").mkdir()
+            for name in ("stop_all.sh", "platform_support.sh"):
+                shutil.copy2(ROOT / "scripts" / name, Path(copy_root) / "scripts" / name)
             completed = subprocess.run(
-                ["bash", str(self.SCRIPT)], capture_output=True, text=True,
+                ["bash", str(Path(copy_root) / "scripts" / "stop_all.sh")], capture_output=True, text=True,
                 timeout=15, env={"PATH": "/usr/bin:/bin", "HOME": home},
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)

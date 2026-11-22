@@ -51,8 +51,8 @@ class FolderBrowserRenderedTests(unittest.TestCase):
         self.addCleanup(self.browser.close)
         self.wait("document.querySelectorAll('.project').length > 0")
 
-    def wait(self, expression):
-        deadline = time.monotonic() + 15
+    def wait(self, expression, seconds=15):
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if self.browser.evaluate(expression):
                 return
