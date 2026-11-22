@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from harness import board, contract, control, git_broker, release_coordinator
+from tests.requirements_support import setup_checked
 from harness.git_broker import AuthorizationError, BrokerError
 from tests import test_git_broker, test_git_model_board
 from tests.requirements_support import agreed_requirements
@@ -273,6 +274,7 @@ class CoordinatorStaleBaseTests(unittest.TestCase):
                 "poll_counter": 0, "status_note": "done", "last_status_at": board.now(),
             }
             board._event(state, "development_complete", state["agents"]["dev"], {"task": "STALE", "message": "done"})
+        setup_checked(self.root, "STALE")   # v0.29.1: the release waits for NMHP's setup check
 
     def test_stale_base_is_marked_once_and_incidents_are_not_repeated(self):
         checks = {key: True for key in board.BROKER_RELEASE_REQUIRED_CHECKS}

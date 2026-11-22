@@ -537,20 +537,34 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
 
 
 def run_due(root: Path) -> list[str]:
-    """Start (in the background) every requested run that is not already running. Returns the started task:stage names."""
+    """Start (in the background) every requested run that is not already running. Returns the started task:stage names.
+    Never raises: it is called at the end of board commands and by the watchdog's tick, and a failure here must not fail the
+    command that already recorded its work, nor stop the watchdog (v0.29.1: a real project's root is a ProjectContext, which
+    `Path()` refused, so the check never started and the tick died)."""
+    try:
+        return _run_due(root)
+    except Exception as error:  # best effort by design: the run stays requested and the next tick tries again
+        print(f"HARNESS SETUP CHECK | could not start: {str(error)[:300]}", flush=True)
+        return []
+
+
+def _run_due(root: Path) -> list[str]:
+    """run_due's body (see there)."""
     from harness import board
+    from harness.project_context import project_context
     try:
         if board.pause_state(root).get("status") not in {"active", None, ""}:
             return []
         state = board.snapshot(root)
     except (OSError, ValueError):
         return []
+    project_key = str(project_context(root).data_root)
     started = []
     for task, record in (state.get("environment_checks") or {}).items():
         for stage, run in ((record or {}).get("runs") or {}).items():
             if run.get("status") != "checking":
                 continue
-            key = (str(Path(root)), task, stage)
+            key = (project_key, task, stage)
             with _running_lock:
                 if key in _running:
                     continue

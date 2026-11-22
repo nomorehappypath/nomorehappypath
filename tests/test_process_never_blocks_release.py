@@ -330,3 +330,54 @@ class OwnerFacingWords(BoardCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupCheckRaceV0291(BoardCase):
+    """v0.29.1 — found by the real end-to-end test (D-022): the release coordinator ran its checks while NMHP's release setup
+    check was still running, recorded environment_ready as failed, raised "stuck and on hold" and never looked at the task again;
+    11 seconds later the setup check passed. The release now waits for the setup check, and a task held only by that race is
+    released once it passed."""
+
+    def ai_task(self, release_status: str) -> None:
+        from harness import environment_check
+        with board.locked_state(self.root) as state:
+            environment_check.record_needs(state, TASK, environment_check.parse_needs(
+                '{"ai_tools": ["claude"], "real_run": "make real-run"}'), "dev", board.now())
+            contract = environment_check.request(state, TASK, "contract", board.now())
+            contract.update(status="passed", identity=environment_check.TEST_SUITE_IDENTITY)
+            release = environment_check.request(state, TASK, "release", board.now(), commit=self.reviewed)
+            release.update(status=release_status)
+
+    def coordinate_all_true(self) -> dict:
+        outcomes = self.coordinate(_checks(PRODUCT_SETS["legacy"]))
+        return next(outcome for outcome in outcomes if outcome["task"] == TASK)
+
+    def test_the_release_waits_while_the_setup_check_runs_without_a_hold(self):
+        self.final_review(waived=True)
+        self.builders()
+        self.ai_task("checking")
+        with mock.patch.object(board, "request_release_environment_checks"):
+            outcome = self.coordinate_all_true()
+        self.assertEqual(outcome["status"], "waiting_for_setup_check")
+        st = self.state()
+        self.assertNotIn(TASK, st.get("control_plane_holds") or {})
+        self.assertEqual([c["title"] for c in (st.get("owner_actions") or {}).values() if c.get("status") == "open"], [])
+
+    def test_a_failed_setup_check_waits_on_its_own_cards_not_a_hold(self):
+        self.final_review(waived=True)
+        self.builders()
+        self.ai_task("failed")
+        with mock.patch.object(board, "request_release_environment_checks"):
+            self.assertEqual(self.coordinate_all_true()["status"], "waiting_for_setup_check")
+        self.assertNotIn(TASK, self.state().get("control_plane_holds") or {})
+
+    def test_a_task_held_only_by_the_race_is_released_once_the_check_passed(self):
+        request = self.final_review(waived=True)
+        self.builders()
+        self.ai_task("passed")
+        state = self.state()
+        key = release_coordinator._coordination_identity(state, TASK, request, self.repo)
+        release_coordinator._journal(self.root, {"task": TASK, "commit": self.reviewed, "step": "checks_failed",
+                                                 "coordination_key": key, "failed": ["environment_ready", "ready_for_owner_test"]})
+        with mock.patch.object(board, "request_release_environment_checks"):
+            self.assertEqual(self.coordinate_all_true()["status"], "prepared")

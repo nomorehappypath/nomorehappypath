@@ -73,6 +73,10 @@ def _journal_records(root: Path, task: str, commit: str) -> list[dict[str, Any]]
     return records
 
 
+# A checks_failed row that failed only on the setup check (v0.29.0's race) is retried once the check has passed.
+SETUP_CHECK_ONLY = frozenset({"environment_ready", "ready_for_owner_test"})
+
+
 def _incident(root: Path, task: str, step: str, error: str) -> None:
     """A coordinator failure is a control-plane incident, never product work."""
     board.record_control_plane_hold(
@@ -347,7 +351,14 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
                     "cto_routed": routed,
                 })
                 continue
-            if any(row.get("step") == "checks_failed" for row in matching):
+            # v0.29.1 (found by the real end-to-end test, D-022): NMHP's release setup check runs in the background. While it has
+            # not passed (still running, failed — its own cards say who fixes what — or the setup list is missing), the release
+            # waits and is looked at again on the next pass: never a "stuck and on hold" incident, never a permanent checks_failed.
+            environment_ok, _ = board.environment_release_status(state, task, request)
+            if not environment_ok:
+                outcomes.append({"task": task, "status": "waiting_for_setup_check"})
+                continue
+            if any(row.get("step") == "checks_failed" and not set(row.get("failed") or []) <= SETUP_CHECK_ONLY for row in matching):
                 outcomes.append({"task": task, "status": "unchanged_checks_failed"})
                 continue
             _journal(root, {"task": task, "commit": commit, "step": "begin", "coordination_key": coordination_key})

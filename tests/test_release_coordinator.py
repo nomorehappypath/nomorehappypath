@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, release_coordinator
+from tests.requirements_support import setup_checked
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -75,6 +76,8 @@ class ReleaseCoordinatorTests(unittest.TestCase):
             }
             board._event(state, "development_complete", state["agents"]["dev"],
                          {"task": task, "message": "done with commits unpushed"})
+        # NMHP's setup check passed for the task (v0.29.1: the release waits for it, so a stranded task must have it)
+        setup_checked(self.root, task)
 
     def test_prepared_release_routes_once_per_unchanged_cto_session(self):
         state = board._initial_state()

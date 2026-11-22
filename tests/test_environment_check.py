@@ -444,3 +444,32 @@ class OwnerEnvironment(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealProjectRootV0291(unittest.TestCase):
+    """v0.29.1 — found by the real end-to-end test (D-022): in a real project the board root is a ProjectContext, not a path.
+    run_due turned it into a Path, so propose-requirements failed after recording the contract, the setup check never started
+    (the contract waited for ever) and the watchdog's tick died on the same error."""
+
+    def setUp(self):
+        from harness.project_context import context_from_roots
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        base = Path(self._tmp.name).resolve()
+        (base / "code").mkdir()
+        self.context = context_from_roots(base / "code", base / "data", base / "workspaces")
+        board.snapshot(self.context)
+        with board.locked_state(self.context) as state:
+            environment_check.record_needs(state, "TASK", environment_check.parse_needs('{"ai_tools": []}'), "dev", board.now())
+            environment_check.request(state, "TASK", "contract", board.now())
+
+    def test_a_requested_check_starts_for_a_real_project(self):
+        started = []
+        with mock.patch.object(environment_check, "_work", lambda root, task, stage, run, key: started.append((task, stage, key[0]))):
+            self.assertEqual(environment_check.run_due(self.context), ["TASK:contract"])
+        self.assertEqual(started[0][:2], ("TASK", "contract"))
+        self.assertEqual(started[0][2], str(self.context.data_root))
+
+    def test_run_due_never_raises(self):
+        with mock.patch("harness.board.snapshot", side_effect=TypeError("anything unexpected")):
+            self.assertEqual(environment_check.run_due(self.context), [])
