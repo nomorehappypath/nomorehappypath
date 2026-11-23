@@ -296,7 +296,8 @@ def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_
 
 
 def confine_agent_command(argv: list[str], project_root, *, home: str | Path | None = None,
-                          claude_config_dir: str | None = None, implementation=None) -> list[str]:
+                          claude_config_dir: str | None = None, implementation=None,
+                          extra_writable: list[str] | None = None, path_env: str | None = None) -> list[str]:
     """Run a command an AGENT wrote inside the same write limits as the agent itself.
 
     Security scan 2026-10-04, finding 2 (spec docs/specs/AGENT_ISOLATION.md
@@ -316,13 +317,17 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
     - `claude_config_dir` is the HARNESS's own CLAUDE_CONFIG_DIR (the worker's
       execution environment, never the command's): a relocated login there is
       unreadable too, as under the read guard this replaces.
+    - `extra_writable` / `path_env` (the setup check's role items, task 2026-11-21_not-run-goes-to-repair): a CLI's own state
+      folder (a Codex home) joins the write grant as Claude's does in `wrap`, and the tools are read from the PATH the role's
+      commands get, not from the manager's own.
     """
     from harness import agent_grant
     from harness.project_context import project_context
     if platform_support.browser_host().inside_os_sandbox():
         return list(argv)
     context = project_context(project_root)
-    writable = [str(Path(context.code_root).resolve()), str(Path(context.workspace_root).resolve())]
+    writable = [str(Path(context.code_root).resolve()), str(Path(context.workspace_root).resolve())] + [
+        str(Path(item).expanduser().resolve()) for item in extra_writable or []]
     protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root)
     store = Path(context.storage_path("control"))
     store.mkdir(parents=True, exist_ok=True)
@@ -330,7 +335,7 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
     # (Codex plan check 2026-10-15, finding 1). Dependencies: the tools on PATH, this interpreter, the harness install.
     return wrap(list(argv), writable, store=store, home=home or Path.home(), claude_config_dir=claude_config_dir or None,
                 implementation=implementation, protected_writes=protected, read_confined=True,
-                readable_roots=tool_read_roots([], home=home or Path.home(),
+                readable_roots=tool_read_roots([], home=home or Path.home(), path_env=path_env,
                                                extra=[sys.executable, str(Path(__file__).resolve().parents[1])]))
 
 

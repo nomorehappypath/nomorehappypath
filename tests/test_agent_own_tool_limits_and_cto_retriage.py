@@ -59,8 +59,9 @@ class AgentOwnToolLimits(unittest.TestCase):
         self.assertIn("a finding already on the board whose subject is that limit is the CTO's to resolve (the board gives you no `finding-resolved`), and your route question is its evidence", self.agent)
         # the existing card paths and the Reviewer's NOT TESTED rule are kept, not contradicted
         self.assertIn("The existing card paths stay as written and name what they name, not your tool", self.agent)
-        self.assertIn("a step it cannot run for a limit of its own is a `Not run: <step and why>` line in its verdict", self.agent)
-        self.assertIn("Write one line `Not run: <the step and why>` in your verdict", self.agent)
+        # D-024 (2026-11-22): a requirement it cannot really run is a `Not run for real:` line the CTO gets run, never a FAIL
+        self.assertIn("a limit of its own is never an owner card; an agreed requirement it therefore cannot really run is a `Not run for real:` line", self.agent)
+        self.assertIn("one `Process note: <the step and why>` line", self.agent)
 
     def test_mirrors_carry_the_rule_in_short_form(self):
         self.assertIn("Your own tool, sandbox or session limit", self.spawn)
@@ -68,7 +69,7 @@ class AgentOwnToolLimits(unittest.TestCase):
         self.assertIn("post one route question to the CTO", self.spawn)
         self.assertIn("Inability to run a step is not by itself a product defect", self.spawn)
         self.assertIn("A limit of the reviewer's own tool, sandbox or session", self.reviewer)
-        self.assertIn("is never a finding or an owner card: the step is a `Not run: <step and why>` line", self.reviewer)
+        self.assertIn("is never an owner card (2026-10-14): an agreed requirement it therefore could not really run is a `Not run for real:` line the CTO gets run, never a FAIL", self.reviewer)
 
 
 class CtoRetriageOnLaunchOrResume(unittest.TestCase):

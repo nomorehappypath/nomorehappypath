@@ -1734,6 +1734,8 @@ def clear_attention(root: Path, session_id: str) -> dict[str, Any]:
         session["attention_reason"] = None
         session.pop("sign_in_since", None)
         session.pop("sign_in_checked_at", None)
+        if (session.get("claude_auth_action") or {}).get("source") == "screen":
+            session.pop("claude_auth_action", None)    # the screen reading that made it is gone (Codex review r2-1)
         _end_limit_hold(session)
         return {"session_id": session_id, "attention_since": None, "attention_reason": None}
 
@@ -1750,6 +1752,8 @@ def clear_sign_in_after_board_call(root: Path, session_id: str, started_at: str)
     from harness import attention
 
     def disproved(session: dict[str, Any] | None) -> bool:
+        if session and not attention.needs_sign_in(session) and (session.get("claude_auth_action") or {}).get("source") == "screen":
+            return bool(started_at)       # a screen card left behind after its reading cleared (Codex review r2-1)
         since = str((session or {}).get("sign_in_since") or (session or {}).get("attention_since") or "")
         return bool(session) and attention.needs_sign_in(session) and bool(started_at) and bool(since) and since <= started_at
 
@@ -1760,10 +1764,11 @@ def clear_sign_in_after_board_call(root: Path, session_id: str, started_at: str)
         session = state["sessions"].get(session_id)
         if not disproved(session):
             return False
-        session["attention_since"] = None
-        session["attention_reason"] = None
-        session.pop("sign_in_since", None)
-        session.pop("sign_in_checked_at", None)
+        if attention.needs_sign_in(session):      # an orphaned card alone leaves any other waiting reason as it is
+            session["attention_since"] = None
+            session["attention_reason"] = None
+            session.pop("sign_in_since", None)
+            session.pop("sign_in_checked_at", None)
         if (session.get("claude_auth_action") or {}).get("source") == "screen":
             session.pop("claude_auth_action", None)
         session["sign_in_disproved_at"] = now()

@@ -82,6 +82,11 @@ SIGN_IN_CHECK_SECONDS = 120
 # 2026-11-21: a sign-in reading counts only once it has stayed on screen this long. Output arriving in pieces can show a quoted
 # "not logged in" as the newest line for a moment; a real signed-out CLI's line stays.
 SIGN_IN_SETTLE_SECONDS = 15
+TOOL_OUTPUT_MARK = "⎿"       # Claude Code's mark in front of a tool's output on screen
+# Real runs 4 and 6 (2026-11-22): agents wrote `claude says "Not logged in"` and `(Not logged in · Please run /login)` inside their
+# own sentences. A CLI's own sign-in error starts its line (after its mark, at most one plain word first: "Please", "OAuth"); a
+# mention inside a sentence, a bracket or quotes is the agent's words.
+LINE_LEAD = re.compile(r"[\s⏺●•·■⚠✗✘│>*\-]*")
 # Codex's first-run sign-in menu: Enter picks an option there, so the check-in line is never typed while it shows.
 CODEX_SIGN_IN_MENU = re.compile(r"Sign in with ChatGPT|Provide your own API key", re.IGNORECASE)
 SIGN_IN_CHECK_TEXT = "Harness check: if you can read this, run your board poll now (one command), then carry on."
@@ -308,7 +313,17 @@ def _form_on_screen(pattern: re.Pattern[str], reason: str, text: str) -> bool:
     """Whether one PROMPT_FORMS entry shows on this screen. The login form counts only among the last LOGIN_RECENT_LINES
     non-empty lines (2026-11-21, Lease: a quoted "Not logged in · Please run /login" further up is the agent's own work)."""
     if reason in (LOGIN_REASON, GEMINI_SIGN_IN_REASON):
-        text = "\n".join([line for line in text.splitlines() if line.strip()][-LOGIN_RECENT_LINES:])
+        # a line Claude Code shows as a tool's output ("⎿ Not logged in · Please run /login" from a `claude` the agent ran) is
+        # the child's failure, never the agent's own sign-in (Codex review r2-1, 2026-11-22)
+        lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith(TOOL_OUTPUT_MARK)][-LOGIN_RECENT_LINES:]
+        if reason == LOGIN_REASON:
+            for line in lines:
+                start = line[LINE_LEAD.match(line).end():]
+                found = pattern.search(start)
+                if found and re.fullmatch(r"(?:\w+\s+)?", start[:found.start()]):   # at most one plain word first: "Please", "OAuth"
+                    return True
+            return False
+        text = "\n".join(lines)
     return bool(pattern.search(text))
 
 

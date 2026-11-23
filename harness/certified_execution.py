@@ -405,9 +405,10 @@ class ChecksFailed(ValueError):
     a blocked browser, a timeout — is not (Codex task review 2026-11-08 r5-1: a "Ran 0 tests / OK" discovery had passed as a completed
     failure and the owner could waive it). The board's waiver rule reads this class, never words."""
 
-    def __init__(self, reason: str, output: str = "", exit_code: int = 0, test_count: int = 0):
+    def __init__(self, reason: str, output: str = "", exit_code: int = 0, test_count: int = 0, command_exit: int | None = None):
         super().__init__(reason)
         self.reason, self.output, self.exit_code, self.test_count, self.completed = reason, output, exit_code, test_count, True
+        self.command_exit = command_exit   # what the command itself returned: 0 means only its printed final check failed it
 
 
 class ExecutionIncomplete(ValueError):
@@ -646,7 +647,7 @@ def run(
             )
             # a completed failing run of real tests is a result about the work; anything else that stopped the run is not
             if count and count > 0 and not process_audit["problems"] and not blocked and (raw_exit != 0 or final_check):
-                raise ChecksFailed(message, output, exit_code=exit_code, test_count=count)
+                raise ChecksFailed(message, output, exit_code=exit_code, test_count=count, command_exit=raw_exit)
             raise ValueError(message)
         measurement["final_checks"] = final_check_summary(output)
         return {"output": output, "measurement": measurement}

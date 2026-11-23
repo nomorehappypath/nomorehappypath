@@ -148,6 +148,28 @@ def _pin_stub_clis(run_root: Path) -> None:
     os.environ["PATH"] = str(stub_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
+def _guard_server_shutdown() -> None:
+    """A test's local web server always shuts down (2026-11-22: the Linux full suite stopped for 7 hours in a cleanup's
+    `shutdown()`, whose `serve_forever` thread sat in a blocking `accept()` no client would ever answer). Every listening
+    socket gets a one-second accept timeout, so `serve_forever` returns to its loop and sees the shutdown; an accepted
+    connection stays a normal blocking socket (the socket module resets it when the listener has a timeout)."""
+    import socketserver
+
+    activate = socketserver.TCPServer.server_activate
+    if getattr(activate, "_harness_accept_timeout", False):
+        return
+
+    def server_activate(self):
+        activate(self)
+        self.socket.settimeout(1.0)
+
+    server_activate._harness_accept_timeout = True
+    socketserver.TCPServer.server_activate = server_activate
+
+
+_guard_server_shutdown()
+
+
 if not os.environ.get("HARNESS_TESTS_RUN_ROOT"):
     SYSTEM_TEMP = _run_root_base()
     RUN_ROOT = _pin_run_root()

@@ -28,6 +28,27 @@ FINDING_EXAMPLE = (
     '{"id": "B1", "summary": "what is wrong", "harm": "in normal use the owner would see or lose ...", '
     '"harm_tag": "none", "regression_check": "the command or steps that show it"}'
 )
+# D-023 (owner 2026-11-21, task 2026-11-21_not-run-goes-to-repair): an agreed requirement the Reviewer could not really run is
+# neither a pass nor a block. It is a FAIL whose finding starts "Not run for real:" and passes the (c) checks (a confirmed,
+# unwaived requirement and current evidence), with who can make it run (fix_by). A "Process note:" line (a limit of the process
+# not tied to an agreed requirement, D-017) is never one of these lines.
+NOT_RUN_PREFIX = "Not run for real:"
+FIX_BY = ("builder", "cto")
+_NOT_RUN_LINE = re.compile(r"^[\s>*+\-•#`_\d.)]*not\s+run\b(?:\s+for\s+real\b|[\s*_`]*:)", re.I)
+NOT_RUN_EXAMPLE = ('{"id": "B1", "summary": "Not run for real: <what you tried and what refused>", "criterion": "<requirement number or '
+                   'verbatim quote>", "evidence_ref": "<the command and its refusal>", "harm": "the owner gets an app nobody ran for '
+                   'this requirement", "regression_check": "<how to reproduce>", "fix_by": "builder|cto", "letter": "c"}')
+
+
+def not_run_lines(summary: Any) -> list[str]:
+    """Every line of a verdict that says a step was not run (`Not run:`, `NOT RUN for real`, `Not run for real:`), whatever its
+    case, bullet or indent; `Process note:` lines are not among them."""
+    return [line.strip() for line in str(summary or "").splitlines() if _NOT_RUN_LINE.match(line)]
+
+
+def is_not_run_finding(member: Any) -> bool:
+    """The finding is an agreed requirement the Reviewer could not really run (its summary starts "Not run for real")."""
+    return isinstance(member, dict) and bool(re.match(r"\s*not\s+run\s+for\s+real\b", str(member.get("summary") or ""), re.I))
 
 
 def _env_number(name: str, default: int, minimum: int) -> int:
@@ -191,6 +212,21 @@ def _paired_ok(paired: Any, context: dict[str, Any], request: dict[str, Any]) ->
             and "pass" in str(paired["earlier_result"]).lower() and "fail" in str(paired["repaired_result"]).lower())
 
 
+def _check_agreed(label: str, raw: dict[str, Any], text: str, evidence: str, context: dict[str, Any]) -> None:
+    """The (c) checks: current evidence, a confirmed requirement named by number or verbatim quote, and no owner waiver of it."""
+    criterion = str(raw.get("criterion") or "").strip()
+    if len(evidence) < 8:
+        raise _correction(f"{label} (c) has no current evidence", 'add "evidence_ref": what you ran or opened and what it showed')
+    number = criterion.lstrip("Cc#").strip()
+    quoted = _words(criterion)
+    frozen = bool(number and number in context.get("criteria", set())) or (len(quoted) >= 15 and quoted in _words(context.get("requirements", "")))
+    if not frozen:
+        raise _correction(f"{label} (c) does not name an agreed requirement ({criterion or 'no criterion'})",
+                          'set "criterion" to a requirement number from the confirmed list or a verbatim quote of the confirmed requirements')
+    if any(_words(w.get("deliverable")) and (_words(w.get("deliverable")) in quoted or _words(w.get("deliverable")) in _words(text)) for w in context.get("waivers", [])):
+        raise _correction(f"{label} (c) concerns a deliverable the owner waived", "drop it or list it as a note (letter new)")
+
+
 def _normalize(raw: Any, number: int, base: dict[str, Any] | None, context: dict[str, Any], request: dict[str, Any], summary: str) -> dict[str, Any]:
     """Validate and normalize one submitted finding, raising a correction if malformed.
 
@@ -235,6 +271,16 @@ def _normalize(raw: Any, number: int, base: dict[str, Any] | None, context: dict
     if len(check) < 8:
         raise _correction(f"{label} has no reproduction", 'add "regression_check": the command or steps that show it')
     member["harm"], member["regression_check"] = harm, check
+    if is_not_run_finding(raw):
+        # C1: never accepted on its prefix; the (c) checks apply in every round, round 1 included, and it names who can fix it
+        fix_by = str(raw.get("fix_by") or "").strip().lower()
+        if fix_by not in FIX_BY:
+            raise _correction(f"{label} (not run for real) does not say who can make it run", 'add "fix_by": "builder" or "cto"')
+        member["fix_by"] = fix_by
+        _check_agreed(label, raw, text, evidence, context)
+        if base and str(raw.get("letter") or "").strip().lower().strip("()") not in {"a", "c"}:
+            raise _correction(f"{label} (not run for real) is not letter c (or a, for the same round-1 finding)",
+                              f"send it like {NOT_RUN_EXAMPLE}")
     if not base:
         member["letter"] = ""
         return member
@@ -263,17 +309,7 @@ def _normalize(raw: Any, number: int, base: dict[str, Any] | None, context: dict
                     + (", ".join(sorted(context.get("passing", set()))[:10]) or "none recorded yet")
                     + ') or give "paired": {"command", "earlier_commit" (an earlier reviewed version of this scope), "earlier_result" (passed), "repaired_commit" (this version), "repaired_result" (failed)}')
         elif letter == "c":
-            criterion = str(raw.get("criterion") or "").strip()
-            if len(evidence) < 8:
-                raise _correction(f"{label} (c) has no current evidence", 'add "evidence_ref": what you ran or opened and what it showed')
-            number = criterion.lstrip("Cc#").strip()
-            quoted = _words(criterion)
-            frozen = bool(number and number in context.get("criteria", set())) or (len(quoted) >= 15 and quoted in _words(context.get("requirements", "")))
-            if not frozen:
-                raise _correction(f"{label} (c) does not name an agreed requirement ({criterion or 'no criterion'})",
-                                  'set "criterion" to a requirement number from the confirmed list or a verbatim quote of the confirmed requirements')
-            if any(_words(w.get("deliverable")) and (_words(w.get("deliverable")) in quoted or _words(w.get("deliverable")) in _words(text)) for w in context.get("waivers", [])):
-                raise _correction(f"{label} (c) concerns a deliverable the owner waived", "drop it or list it as a note (letter new)")
+            _check_agreed(label, raw, text, evidence, context)
         elif letter == "d":
             raise _correction(f"{label} is letter d but has no harm_tag", 'add "harm_tag": "safety", "data-loss" or "leak"')
     return member
@@ -315,6 +351,21 @@ def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, sum
         raise _correction("two findings share an id", "give every finding its own id")
     decision["structured"] = True
     decision["blockers"] = normalized
+    open_findings = [m for m in normalized if not base or m["letter"] != "new"]
+    if open_findings and request.get("phase") == "final_acceptance" and not early_fail and all(is_not_run_finding(m) for m in open_findings):
+        # D-024 (owner 2026-11-22: "Only bugs count as failing anything related to process is not fail test"): requirements nobody
+        # could really run are not bugs. The review is recorded as PASS with them listed, in any round; the CTO is woken to get
+        # them run and the owner's test lists them. The verdict text is stored unchanged.
+        if not certified:
+            raise _correction("only requirements nobody could really run are open, so the board would record PASS with that list, "
+                              "but this review has no certified run", "run execute-challenge first, then submit again")
+        notes = [m for m in normalized if m not in open_findings]
+        decision.update(effective_result="passed", blockers=[], notes=open_findings + notes, reclassified=True,
+                        unproven_requirements=[unproven_line(m) for m in open_findings], message=(
+            f"The board recorded this review as PASS with what is not tested for real ({', '.join(m['id'] for m in open_findings)}): "
+            "only bugs fail a review; the CTO is asked to get them run, and the owner's test lists them. "
+            "Your verdict text is stored unchanged."))
+        return decision
     if not base:
         decision["message"] = f"Recorded as round 1: {len(normalized)} blocking finding(s) ({', '.join(ids)}). Later rounds may block only on these, on something the repair broke, on an agreed requirement that is unmet, or on a safety, data-loss or leak problem."
         return decision
@@ -344,9 +395,17 @@ def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, sum
     return decision
 
 
+def unproven_line(member: dict[str, Any]) -> str:
+    """The owner's plain line for one requirement nobody could really run: "Not tested for real: <requirement> — <why>"."""
+    why = re.sub(r"^\s*not\s+run\s+for\s+real\s*:?\s*", "", str(member.get("summary") or ""), flags=re.I).strip()
+    return f"Not tested for real: {str(member.get('criterion') or '').strip()} — {why}"[:600]
+
+
 def request_fields(decision: dict[str, Any], summary: str, submitted: list[dict[str, Any]] | None) -> dict[str, Any]:
-    """What the board writes on the request: the verdict as submitted (never edited) and the board's own decision, apart."""
-    return {
+    """What the board writes on the request: the verdict as submitted (never edited) and the board's own decision, apart; and,
+    for a last round recorded as passed on not-run findings only (C5), the unproven requirements."""
+    extra = {"unproven_requirements": list(decision["unproven_requirements"])} if decision.get("unproven_requirements") else {}
+    return extra | {
         "review_round": max(1, int(decision["round"])),
         "submitted_verdict": {"result": decision["submitted_result"], "summary": summary, "findings": list(submitted or [])},
         "board_decision": {

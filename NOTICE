@@ -5,3 +5,9 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 Contact: license@kpiminds.com
 
 The browser agent terminal includes @xterm/xterm 6.0.0, distributed under the MIT license. Its copyright and license are retained in harness/assets/xterm/LICENSE.
+
+The UX and UI design guide (skills/ux-ui-design) includes the reference chapters of the UX Designer skill by Szilárd Hajba
+(https://github.com/szilu/ux-designer-skill), distributed under the MIT license; its copyright and license are retained in
+skills/ux-ui-design/references/LICENSE. The guide's own text was written for NoMoreHappyPath and draws on ideas from Impeccable
+by Paul Bakaus (https://github.com/pbakaus/impeccable) and Anthropic's frontend-design skill (https://github.com/anthropics/skills),
+both under the Apache License, Version 2.0; no text of either is copied.

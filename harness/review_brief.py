@@ -195,6 +195,10 @@ def build(
             "users": board.users_line(_text(confirmation.get("text"))),
             # accept-after-repair R8: findings the owner closed on earlier reviews of this task; binding, never restated
             "owner_decisions": board.owner_decisions_text(state, task),
+            # owner 2026-11-21: the screens are part of the contract; the final review compares the real app with each design
+            # (one Challenge Ledger row per design name with its rendered screen id) — see skills/ux-ui-design/SKILL.md, Workflow 3
+            "screens": [{"name": item["name"], "file": str(board.screens_folder(root, task) / item["file"]), "sha256": item["sha256"]}
+                        for item in board.agreed_screens(state, task)],
         },
         "risk_and_scope": {
             "required_review_scope": "complete full suite" if request.get("phase") == "final_acceptance" else _text(request.get("test_scope") or "full"),
@@ -338,7 +342,11 @@ def build(
                 "Code documentation is the exception (owner 2026-11-15): in a file this task created or changed, a missing opening "
                 "note on what the file does, a missing takes-and-returns line on a function added or changed, or a missing why-comment "
                 "where the reason is not obvious is a bug: FAIL, naming each gap by file:line. The wording or style of a note that is "
-                "there, and files the task did not touch, are never a finding."
+                "there, and files the task did not touch, are never a finding. "
+                "Only bugs fail a review (D-024, owner 2026-11-22). An agreed requirement you could not really run is never a FAIL "
+                "and never an owner card: write a line 'Not run for real: <requirement> - <what refused>' and judge the rest; the "
+                "board lists it as not tested for real and the CTO gets it run. A process limit not tied to an agreed requirement is "
+                "a 'Process note:' line."
             ),
         }
         # 2026-11-15 (PropDesk Public): a requirement the Reviewer's early checks did not fully check ("Replace visible PropDesk

@@ -43,7 +43,7 @@ from harness import board, board_surface, cli_capabilities, control, cost_center
 from harness.project_context import context_cli_arguments
 from harness import story, upload_on_accept, workspace_settings
 from harness import test_machine
-from harness import platform_support, web_guard
+from harness import contract_screens, platform_support, web_guard
 from harness import support_mode
 from harness.project_manager_page import PAGE
 
@@ -1945,9 +1945,15 @@ def make_handler(manager: ProjectManager):
 
             Return: None.
             """
-            # Never shown inside another site's frame (security scan 2026-10-04, finding 4).
-            for name, value in web_guard.FRAME_HEADERS:
-                self.send_header(name, value)
+            # Never shown inside another site's frame (security scan 2026-10-04, finding 4). A contract screen design passed
+            # through from the board keeps the board's own SAMEORIGIN + sandbox policy instead (one response only).
+            if getattr(self, "_design_frame_headers", None):
+                headers, self._design_frame_headers = self._design_frame_headers, None
+                for name, value in headers:
+                    self.send_header(name, value)
+            else:
+                for name, value in web_guard.FRAME_HEADERS:
+                    self.send_header(name, value)
             super().end_headers()
 
         def refused(self) -> bool:
@@ -2082,11 +2088,14 @@ def make_handler(manager: ProjectManager):
                     status = response.status
                     content_type = response.headers.get("Content-Type", "application/octet-stream")
                     content_type_options = response.headers.get("X-Content-Type-Options", "")
+                    frame_option = response.headers.get("X-Frame-Options", "")
+                    content_policy = response.headers.get("Content-Security-Policy", "")
                     response_body = response.read(PROXY_BODY_LIMIT + 1)
             except HTTPError as error:
                 status = error.code
                 content_type = error.headers.get("Content-Type", "application/json")
                 content_type_options = error.headers.get("X-Content-Type-Options", "")
+                frame_option, content_policy = "", ""
                 response_body = error.read(PROXY_BODY_LIMIT + 1)
             except OSError as error:
                 if isinstance(getattr(error, "reason", error), TimeoutError):
@@ -2096,6 +2105,10 @@ def make_handler(manager: ProjectManager):
                 return self._send(502, {"error": "the open project's worker is unavailable"})
             if len(response_body) > PROXY_BODY_LIMIT:
                 return self._send(502, {"error": "project worker response is too large"})
+            if frame_option == "SAMEORIGIN" and content_policy == contract_screens.CONTENT_POLICY:
+                # a contract screen design (owner 2026-11-21): framed only by the board page itself, inert under the board's
+                # own policy; without this the design reached the owner unframeable (blank) and without its sandbox policy
+                self._design_frame_headers = (("X-Frame-Options", "SAMEORIGIN"), ("Content-Security-Policy", content_policy))
             if content_type_options:
                 # a delivered document is shown as text, never rendered (owner 2026-10-15)
                 self._send(status, response_body, content_type, extra_headers={"X-Content-Type-Options": content_type_options})

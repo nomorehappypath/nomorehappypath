@@ -69,6 +69,8 @@ class Case(unittest.TestCase):
             mock.patch.object(environment_check, "AGENT_CHECK", lambda provider, model, effort: None),
             mock.patch("harness.control.enqueue_instruction", return_value={"id": "wake"}),
             mock.patch.object(environment_check, "run_due", lambda root: []),     # the tests run each check in this thread
+            # the agents are launched with the same environment as the owner's shell here (a test can give them another one)
+            mock.patch.object(environment_check, "LAUNCH_ENV", lambda: owner_env.read(fresh=True)),
             # where the agents' reads are confined (Linux), the fixture's folders are in their grant, as the owner would set it
             mock.patch.dict(os.environ, {"HARNESS_AGENT_READ_PATHS": str(self.base)}),
         ]
@@ -155,9 +157,10 @@ class ContractIsHeldUntilTheSetupPasses(Case):
         run = self.run_stage("contract")
         self.assertEqual(run["status"], "failed")
         cards = self.open_setup_cards()
-        self.assertEqual(len(cards), 1, cards)
-        card = cards[0]
-        self.assertEqual(card["title"], "Blocked, needs you: Claude for your app")
+        # one card for the owner's own call, and (task 2026-11-21_not-run-goes-to-repair, C0) one per role that calls it the same way
+        self.assertEqual(sorted(c["title"] for c in cards), sorted(["Blocked, needs you: Claude for your app"] + [
+            f"Blocked, needs you: {role} can use Claude" for role in ("Builder", "Reviewer", "CTO")]), cards)
+        card = next(c for c in cards if c["title"] == "Blocked, needs you: Claude for your app")
         self.assertIn(LEASE_ERROR, card["why"])
         self.assertIn("Check again", card["choices"])
         self.assertTrue(card["blocked"])

@@ -57,8 +57,8 @@ class LibraryContentTests(unittest.TestCase):
 
     def test_the_other_eleven_skills_are_word_for_word_unedited(self):
         for slug, _, _ in skill_library.SKILLS:
-            if slug == "qa-testing":
-                continue
+            if slug in {"qa-testing", "ux-ui-design"}:
+                continue      # both rewritten to NMHP's browser route; ux-ui-design replaced at the owner's order 2026-11-21 (skills/CHANGES.md)
             text = skill_library.find(slug).path.read_text(encoding="utf-8")
             self.assertNotIn("screen-check", text)
             self.assertNotIn("screen-script", text)

@@ -158,27 +158,34 @@ def urgent_items(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def request(state: dict[str, Any], reason: str, subject: str, task: str = "", detail: str = "",
-            pending: bool = True, once: bool = False, at: str = "") -> tuple[dict[str, Any] | None, bool]:
+            pending: bool = True, once: bool = False, at: str = "", lines: list[str] | None = None) -> tuple[dict[str, Any] | None, bool]:
     """Open a judgment item for (reason, subject), or merge into the open one. Returns (item, is_new).
 
     A repeat of the same reason and subject never opens a second item or a second wake; the next wake names it again.
-    ``once`` also refuses to reopen an item the CTO already judged (a resume or launch is one wake)."""
+    ``once`` also refuses to reopen an item the CTO already judged (a resume or launch is one wake).
+    ``lines`` (D-023: the "Not run for real" lines of a failed review) travel as their own field, whole: never cut here, in
+    _line or in wake_text."""
     if reason not in REASONS or not has_cto(state):
         return None, False
     items = _items(state)
     detail = " ".join(str(detail or "").split())[:DETAIL_CHARS]
+    lines = [" ".join(str(line).split()) for line in lines or [] if str(line).strip()]
     for item in items.values():
         if item.get("reason") == reason and item.get("subject") == subject and (item.get("status") == "open" or once):
             if item.get("status") == "open":
                 item["repeats"] = int(item.get("repeats", 0)) + 1
                 if detail:
                     item["detail"] = detail
+                if lines:
+                    item["lines"] = lines
             return item, False
     item = {
         "id": f"judge-{secrets.token_hex(4)}", "reason": reason, "subject": subject, "task": task, "detail": detail,
         "opened_at": at or datetime.now(timezone.utc).isoformat(), "status": "open", "wake_pending": bool(pending),
         "wakes": 0, "repeats": 0,
     }
+    if lines:
+        item["lines"] = lines
     items[item["id"]] = item
     closed = sorted((i for i in items.values() if i.get("status") != "open"), key=lambda i: str(i.get("closed_at")))
     for old in closed[:max(0, len(closed) - CLOSED_KEPT)]:
@@ -206,11 +213,31 @@ def from_event(state: dict[str, Any], event: dict[str, Any], agent: dict[str, An
 
 
 def review_failed(state: dict[str, Any], request_row: dict[str, Any], escalation: dict[str, Any]) -> None:
-    """A Reviewer FAIL is a finding; the same part failing again after Delivery's repair is a disputed finding."""
+    """A Reviewer FAIL is a finding; the same part failing again after Delivery's repair is a disputed finding. A requirement
+    nobody could really run (D-023) is the CTO's to clear too: the wake names the request and carries every such line whole."""
+    from harness import review_rounds   # local: review_rounds stays free of this module
     task = str(request_row.get("task") or "")
     repeated = int((escalation or {}).get("failed_judgments") or 0) >= 2
+    lines = [f"{m.get('id', '')} ({m.get('criterion', '')}, fix: {m.get('fix_by', '')}): {m.get('summary', '')} | reproduce: {m.get('regression_check', '')}"
+             for m in request_row.get("structured_findings") or [] if review_rounds.is_not_run_finding(m)]
+    lines += [line for line in review_rounds.not_run_lines(request_row.get("result_summary")) if not any(line in known for known in lines)]
+    if lines:
+        lines.append(f"Not run for real: clear what stands in the way (relaunch the Reviewer so it has its sign-in, or route the builder to "
+                     f"make it runnable with a real run); the next review of {request_row.get('id', '')}'s scope runs it again. Never ask the owner.")
     request(state, "disputed" if repeated else "finding", f"review:{request_row.get('id', '')}", task,
-            str(request_row.get("result_summary") or "the independent review failed"))
+            f"{request_row.get('id', '')} failed: " + str(request_row.get("result_summary") or "the independent review failed"), lines=lines)
+
+
+def not_tested_for_real(state: dict[str, Any], request_row: dict[str, Any]) -> None:
+    """D-024: a review passed with requirements nobody could really run. Not a failure and never the owner's: the CTO is woken with
+    each line whole to get them run (relaunch the Reviewer with its sign-in, or route the builder to make it runnable)."""
+    lines = [str(line) for line in request_row.get("unproven_requirements") or []]
+    if not lines:
+        return
+    lines.append("Get these run for real: clear what stands in the way (relaunch the Reviewer so it has its sign-in, or route the builder "
+                 "to make it runnable with a real run). The app is not held for them and the owner's test lists them. Never ask the owner.")
+    request(state, "finding", f"not-tested:{request_row.get('id', '')}", str(request_row.get("task") or ""),
+            f"{request_row.get('id', '')} passed with requirements not tested for real", lines=lines)
 
 
 def dispose(state: dict[str, Any], item_id: str, outcome: str, note: str, at: str) -> list[dict[str, Any]]:
@@ -340,9 +367,17 @@ def requeue(state: dict[str, Any], item_ids: list[str]) -> None:
             item["wake_pending"] = True
 
 
-def _line(item: dict[str, Any]) -> str:
-    """Return the one-line plain-text rendering of item, truncated to fit a wake message."""
-    return f"[{item['id']}] {PLAIN.get(item['reason'], item['reason'])}: {item.get('detail') or item.get('subject')}"[:DETAIL_CHARS + 40]
+def _line(item: dict[str, Any], whole: bool = True) -> str:
+    """Return the one-line plain-text rendering of item, truncated to fit a wake message; its `lines` (D-023) follow uncut
+    unless whole is False (wake_text then adds them after its own limit)."""
+    head = f"[{item['id']}] {PLAIN.get(item['reason'], item['reason'])}: {item.get('detail') or item.get('subject')}"[:DETAIL_CHARS + 40]
+    return head + (" " + " ".join(item.get("lines") or []) if whole and item.get("lines") else "")
+
+
+def _whole_lines(items: list[dict[str, Any]]) -> str:
+    """The `lines` of these items, whole, for the end of a wake text (counted last: outside its overall limit)."""
+    parts = [f"[{i['id']}] " + " ".join(i["lines"]) for i in items if i.get("lines")]
+    return (" " + " ".join(parts)) if parts else ""
 
 
 def suffix(state: dict[str, Any], waking: list[dict[str, Any]], agent_id: str) -> str:
@@ -354,7 +389,7 @@ def suffix(state: dict[str, Any], waking: list[dict[str, Any]], agent_id: str) -
     text = (f" Judge it, then record the decision with `cto-disposition --agent {agent_id} --item <item id> "
             "--outcome hold|note|route|nothing --note \"<one line>\"`; a poll or a status post does not close an item.")
     if others:
-        text += " Still unjudged: " + "; ".join(_line(i) for i in others[:LISTED_ITEMS]) + (
+        text += " Still unjudged: " + "; ".join(_line(i, whole=False) for i in others[:LISTED_ITEMS]) + (
             f"; and {len(others) - LISTED_ITEMS} more" if len(others) > LISTED_ITEMS else "") + "."
     return text[:TEXT_CHARS]
 
@@ -363,8 +398,8 @@ def wake_text(state: dict[str, Any] | None, agent: dict[str, Any], items: list[d
     """The instruction for a wake the board itself routes (no producer text of its own). The caller adds its notes and USER ACTION."""
     poll_command = f"poll --agent {agent.get('id', '')}"
     names = ", ".join(PLAIN[r] for r in REASONS if any(i["reason"] == r for i in items)) or "a check-in"
-    listed = "; ".join(_line(i) for i in items[:LISTED_ITEMS]) + (f"; and {len(items) - LISTED_ITEMS} more" if len(items) > LISTED_ITEMS else "")
+    listed = "; ".join(_line(i, whole=False) for i in items[:LISTED_ITEMS]) + (f"; and {len(items) - LISTED_ITEMS} more" if len(items) > LISTED_ITEMS else "")
     base = (f"CTO WAKE ({names}){': ' + listed if listed else ''}. Run the board command `{poll_command}` (your launch board command prefix "
             "followed by it) once, then act on what it shows; a poll and a status post alone are not a judgment. "
             "Never wait on the product owner: when only an owner decision is outstanding, record 'awaiting owner decision' and stand by healthy.")
-    return (base + (suffix(state, items, str(agent.get("id", ""))) if state is not None else ""))[:TEXT_CHARS]
+    return (base + (suffix(state, items, str(agent.get("id", ""))) if state is not None else ""))[:TEXT_CHARS] + _whole_lines(items)

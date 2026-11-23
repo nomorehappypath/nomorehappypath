@@ -97,8 +97,9 @@ sign-in or an OpenAI API key; the API key is used only by the project-chat quest
 not have, which means the other vendor's CLI whichever vendor you run as, is not yours to run. Ask the agent of that
 vendor in this task (Delivery, or the Reviewer if the owner swapped the roles) through the board to run that step for
 real and record the real outputs, and open those outputs yourself before you decide. Say in your verdict which steps you
-ran, which the other vendor's agent ran, and which no one ran; a step no one ran is not a STOP: say so in one
-`Not run: <step and why>` line (chapter `not-tested`). When you are asked to run such a step, run it for real and record what happened, never a
+ran, which the other vendor's agent ran, and which no one ran; an agreed requirement no one really ran is a `Not run for real:`
+line the CTO gets run, never a FAIL and never a block (chapter `not-tested`, D-024), and any other step no one ran is a
+`Process note:` line. When you are asked to run such a step, run it for real and record what happened, never a
 stand-in.
 
 ## board-protocol
@@ -501,8 +502,9 @@ spend hours on them — a rare edge case you notice is a non-blocking note.
 report, a document, a data file, a command-line result) or the contract says no UI or report only, the walk is opening that
 deliverable exactly as the owner receives it and comparing it with the confirmed requirements. No `screen-check`, no browser
 and no rendered page is required, and a Challenge Ledger row needs no `screen-...` id. A capture tool that cannot run here
-(for example a browser the board refuses) is never a reason to hand the final review back: if the task has a screen, mark
-that step `Not run: <step and why>` in your verdict and pass the rest; if it has none, there is nothing missing. A Code analysis never starts the app: its final review opens FINDINGS.md as the owner receives it and checks the findings against the code.
+(for example a browser the board refuses) is never a reason to hand the final review back: if the task has a screen, record
+that step as chapter `not-tested` says (a `Not run for real:` finding when an agreed requirement has no other real proof, else a
+`Process note:` line); if it has none, there is nothing missing. A Code analysis never starts the app: its final review opens FINDINGS.md as the owner receives it and checks the findings against the code.
 
 **Saved data (owner, 2026-11-16).** When a task changes the owner's saved data, add the upgrade/go-back row and your
 required `Saved data:` verdict line before judging TASK DONE. Open `saved-data`.
@@ -512,8 +514,8 @@ result can take twenty minutes or more. Your Bash tool allows a command up to tw
 you), so run the walk as one command with an explicit long `timeout` on that tool call, or as one background task of
 the walk itself that you check with bounded commands and stop when it ends. That is not the board polling the no-loops
 rule in chapter `board-protocol` is about. Never stop at ten minutes, never split the walk into separate pieces and call that the end-to-end
-test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one
-and write `Not run: <step and why>` in your verdict; it is not a STOP (chapter `not-tested`).
+test, and never report TASK DONE: YES for a path you did not run as one whole. If a limit truly stops you, say which one:
+the walk is then a `Not run for real:` line for the CTO, never a FAIL and never a block (chapter `not-tested`, D-024).
 
 ## saved-data
 
@@ -1363,8 +1365,8 @@ and your route question is its evidence. The existing
 card paths stay as written and name what they name, not your tool: the
 unproven owner-path scope card of the rendered-proof rule, the CTO-pinned card
 for a security check that could not run, and the sanctioned token routes. The
-Reviewer's twin: a step it cannot run for a limit of its own is a
-`Not run: <step and why>` line in its verdict (chapter `not-tested`), never a finding, a card or a failed review.
+Reviewer's twin: a limit of its own is never an owner card; an agreed requirement it therefore cannot really run is a
+`Not run for real:` line the CTO gets run (chapter `not-tested`, D-024), and any other step is a `Process note:` line.
 
 Behavior an Independent Reviewer has already accepted — including anything it
 marked non-blocking — is out of scope for the rounds that follow. Repairing a
@@ -1573,31 +1575,37 @@ fonts) stays non-material.
 
 ## not-tested
 
-**A process limit is not a STOP (owner, 2026-11-12, D-017; it replaces "Not run is not passed" of 2026-10-07).** Only a bug
-in the app that stops it working for its owner in normal use, or a security leak, fails a review. A step you could not run
-for a reason of the process (your own sandbox, a tool, a process or a browser you cannot start, a sign-in you lack, a real
-Claude or Codex you cannot run) is never a defect of the app and never a reason to fail, hold, repair or re-review it.
-Write one line `Not run: <the step and why>` in your verdict, give `TASK DONE: YES` for what you did check, and go on.
-**Except the app's real run (owner 2026-11-21).** Your own sandbox not reaching a real Claude or Codex stays a `Not run` line for you,
-but it never stands in for NMHP's own setup check: an app that calls an AI tool is reviewed and released only after NMHP ran its
-`real_run` on that commit with the real tools. A `Not run` never satisfies that check, and a stand-in or mocked AI call is never
-evidence that the app works; say so in your verdict when the app's only proof of its AI calls is a stand-in.
-Never ask the owner to create, copy or paste a token or login: say what was not run and go on.
+**Only bugs fail a review; a requirement nobody really ran is not a bug (owner 2026-11-22, D-024: "Only bugs count as failing
+anything related to process is not fail test"; it refines the earlier not-run and process-limit rules).** Only a bug in the app that stops it working for its
+owner in normal use, or a security leak, fails a review. When you cannot really run an agreed (confirmed, not waived) requirement
+(your sandbox cannot reach a real Claude or Codex, a tool, a machine or a sign-in is missing, the app cannot start in your copy),
+that is a process gap, never a FAIL: write one line per requirement in your summary, `Not run for real: <requirement> — <what you
+tried and what refused>`, and judge the rest (PASS when nothing else is wrong). If you send it as a finding instead (summary
+starting `Not run for real:`, with `criterion`, `evidence_ref`, `regression_check`, `fix_by` builder|cto), the board records PASS
+with it when it is the only one open. Either way the board keeps the list, wakes the CTO to get it run (relaunching you with your
+sign-in, or routing the builder to make it runnable), and the owner's test card shows each as "Not tested for real"; the app is
+never held for it and the owner is never asked. A bug next to it still fails as usual. A process limit not tied to an agreed
+requirement (an extra check of your own, a second browser window) is one `Process note: <the step and why>` line.
+**The app's real run (owner 2026-11-21).** An app that calls an AI tool is reviewed and released only after NMHP ran its `real_run`
+on that commit with the real tools; cite it for the app's AI calls. A stand-in or mocked AI call is never evidence that the app
+works; say so in your verdict when the app's only proof of its AI calls is a stand-in.
+Never ask the owner to create, copy or paste a token or login: the builder and the CTO clear what stands in the way.
 
 ## reviewer-token
 
 **Running a real Claude as the Reviewer (owner, 2026-10-07).** Claude Code removes `CLAUDE_CODE_OAUTH_TOKEN` from
 every command you run, so the app also puts the same token in your commands' environment as
-`HARNESS_REVIEWER_CLAUDE_TOKEN` (the Reviewer only). To start the app's test copy, start it normally from your shell:
+`HARNESS_REVIEWER_CLAUDE_TOKEN` (the Reviewer only, whether it runs on Claude, Codex or Gemini). To start the app's test copy, start it normally from your shell:
 it finds the token by itself and its agents can sign in. To run a real `claude` yourself, set the usual name for that one
 command: `CLAUDE_CODE_OAUTH_TOKEN="$HARNESS_REVIEWER_CLAUDE_TOKEN" claude ...`. Never print, echo, log, or write the token
 into any file or evidence, and never ask the owner to create or paste one. Commands the board executes for you
 (`execute-challenge`) run in a clean environment without it, so walk the real end-to-end path yourself and record what
 you saw. That evidence is separate from the hermetic certification and from screen captures: a screen capture alone never
-proves a real provider workflow. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started before this existed: say exactly that in a
-`Not run: <step and why>` line and ask only for your terminal to be relaunched from Mission Control. If instead
-Claude rejects the token or the service is unavailable, say exactly that in a `Not run:` line, and
-use the app's own sign-in controls (the attention card in Mission Control) rather than asking for repeated relaunches.
+proves a real provider workflow. If `HARNESS_REVIEWER_CLAUDE_TOKEN` is empty, your terminal started without it: the requirement it
+blocks is a `Not run for real:` line (chapter `not-tested`, D-024), and ask only for your terminal to be
+relaunched from Mission Control (the CTO does it). If instead Claude rejects the token or the service is unavailable, say exactly
+that in the same finding, and use the app's own sign-in controls (the attention card in Mission Control) rather than asking for
+repeated relaunches.
 
 ## handoff
 
@@ -1616,3 +1624,30 @@ Completed:
 Remaining:
 Evidence:
 ```
+
+## screens
+
+**The screens are part of the contract (owner 2026-11-21).** For a task that builds or changes screens (any development task that
+is not document-only, analysis or a small change), read `skills/ux-ui-design/SKILL.md` (required for every such task, whoever runs
+it) BEFORE you design, then design each screen and each important state as one self-contained HTML file (inline CSS, no scripts,
+no outside links or fonts, images only as `data:image`, realistic content, at most 512 KB): at least the main screen, its empty
+state, a long-running/progress state where work takes time, and its error state. Upload each with `contract-screen --agent <id>
+--name "<screen - state>" --file <design.html>` (the same name replaces it; `--remove --name ...`; `--list`). The contract text
+carries a plain "Screens:" block, one line per screen with its job and its states. The owner opens the designs with "See the
+screens" on the contract card before he says Go ahead. A task with nothing visible says why with `propose-requirements ...
+--no-screens "<why>"`, shown to the owner; a re-filed proposal keeps its designs only with `--keep-screens`. A small change may
+not add a screen. Build exactly what the owner saw: the same screens, states and words. Screens you find you need after the
+contract go to the owner first: upload them and run `propose-screens --agent <id>`; no review is accepted until he approves.
+
+NMHP's house standard (in the guide) holds on the screens the task builds or changes: activity shown within a second, the steps,
+the current step and elapsed time for work over ten seconds, a stop control where stopping is safe; the user's files visible with
+Add and Remove; plain words; a way forward and back; errors that say what to do and keep the input.
+
+**Reviewer.** At final acceptance of a task with agreed designs (the brief's `requirements.screens`, each with its file), render
+the real app in each designed screen and state (`screen-script`, or `screen-check` of a page or test route that shows that
+state) with representative disposable data, and write ONE Challenge Ledger row per design name with its rendered screen id and
+what you saw against the design; the board refuses a PASS without a row for every design. A designed screen or state missing, a
+step of the agreed flow that does not work, a broken house-standard item, misleading or technical wording, or lost input is
+MATERIAL; spacing, fonts or colours that differ a little from the design are notes. `Not run` never completes a design row: a
+state NMHP's browser cannot reach needs its own page or test route, or the owner's decision on it.
+

@@ -58,3 +58,19 @@ and browser-console lines are ordinary good practice, not an instruction
 that conflicts with a stated NMHP rule, so they are left exactly as written;
 an agent following them reports what it could and could not check, the same
 way `qa-testing` now says to). No correction was needed outside `qa-testing`.
+
+## `ux-ui-design`: replaced at the owner's order (2026-11-21)
+
+The owner ordered the screens to be part of the contract and "let the skill be one of the best UX skills out there for the time
+being". The whole of `ux-ui-design/SKILL.md` is replaced by a guide built from the strongest public UX skills of November 2026
+(see its Credits section), adapted to NMHP's own browser route (`screen-check`, `screen-script`) and to the contract's screen
+designs, with NMHP's house standard. The reference chapters in `ux-ui-design/references/` are the UX Designer skill's, kept word
+for word under their MIT license (`references/LICENSE`, `references/SOURCE`).
+
+Old: the 99-line guide delivered in `SKILL_LIBRARY_SKILLS.md` (sections: Use when; First, read what exists; Size it to the task;
+How to work 1-8; Rules an expert does not break; Common failures; Proof to leave; Hand-offs), kept in git history at main 5c69909.
+
+New: `ux-ui-design/SKILL.md` as it stands now (sections: The NMHP house standard; Workflow 1 design the screens before the
+contract; Workflow 2 build to the design; Workflow 3 judge built screens; A small visual system; Generated-looking defaults to
+refuse; Words; Forms; Apps that use AI; Numbers that matter; Rules an expert does not break; Proof to leave; Hand-offs; Reference
+routing; Credits).

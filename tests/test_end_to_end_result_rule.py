@@ -61,8 +61,9 @@ class NotRunIsNotPassedRuleTests(unittest.TestCase):
     def test_product_directive_says_a_process_limit_is_not_a_stop_and_never_asks_the_owner_for_a_token(self):
         from pathlib import Path
         text = " ".join((Path(__file__).resolve().parents[1] / "directives" / "AGENT.md").read_text().split())
-        for words in ("A process limit is not a STOP", "Not run: <the step and why>", "TASK DONE: YES",
-                      "never a defect of the app and never a reason to fail, hold, repair or re-review it",
+        # D-024 (2026-11-22): only bugs fail; a requirement nobody really ran is listed, never a FAIL (refines D-023 and D-017)
+        for words in ("Only bugs fail a review; a requirement nobody really ran is not a bug", "Not run for real:",
+                      "`Process note: <the step and why>`", "the app is never held for it and the owner is never asked",
                       "Never ask the owner to create, copy or paste a token or login"):
             self.assertIn(words, text)
 
@@ -94,7 +95,7 @@ class LongWalkRuleTests(unittest.TestCase):
                       "That is not the board polling the no-loops rule in chapter `board-protocol` is about",
                       "Never stop at ten minutes",
                       "never split the walk into separate pieces and call that the end-to-end test",
-                      "write `Not run: <step and why>` in your verdict"):
+                      "the walk is then a `Not run for real:` line for the CTO"):
             self.assertIn(words, text)
 
 

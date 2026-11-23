@@ -177,7 +177,17 @@ def prepare_launch(root, session: dict) -> str:
     provider = session.get("provider") or control.default_agent_settings()[control.role_for_kind(session["kind"])]["provider"]
     if provider != "claude":
         _clear_cards(root, session)  # a role that moved to another provider no longer needs a Claude sign-in card
-        return ""
+        if control.role_for_kind(session["kind"]) != "reviewer":
+            return ""
+        # A Codex or Gemini Reviewer's test copy of the app must reach a real Claude too (owner 2026-11-21, D-023: "at the
+        # beginning all builder reviewer and cto have access to everything"). Without a usable token it still starts: the
+        # setup check's "Reviewer can use Claude" item says so before the contract.
+        try:
+            token = resolve_token()
+            validate_token(token)
+        except ClaudeAuthRequired:
+            return ""
+        return _handoff(root, session["id"], token)
     # The sign-in check can legitimately take up to two probes of HARNESS_CLAUDE_AUTH_TIMEOUT_SECONDS each, and the three
     # roles' checks run one after another. The terminal's 30-second attach deadline starts only once the check is done.
     _set_launch_deadline(root, session, control.claude_launch_budget_seconds())

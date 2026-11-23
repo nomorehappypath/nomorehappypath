@@ -593,6 +593,8 @@ def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
         return False
     if str(review.get("completed_at") or "")[:10] < END_TO_END_RULE_FROM:
         return True
+    if review.get("status") == "passed" and review.get("unproven_requirements"):
+        return True  # D-023 / C5: the board's own last-round PASS; the owner's test lists what was not tested for real
     text = str(review.get("result_summary") or "").lstrip(" \t\r\n>*-#`\"'")
     return text.upper().startswith("TASK DONE: YES")
 

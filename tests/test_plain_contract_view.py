@@ -118,7 +118,8 @@ class ProposalCommandTests(unittest.TestCase):
     def propose(self, text):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", NO_SETUP])
+            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", NO_SETUP,
+                               "--no-screens", "a fixture task: nothing visible changes"])
         return code, out.getvalue() + err.getvalue()
 
     def test_missing_too_long_or_developer_blocks_are_refused_with_the_fix(self):

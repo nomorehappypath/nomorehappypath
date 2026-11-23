@@ -112,9 +112,10 @@ contract does not require are not progress; layout polish (alignment, spacing,
 fonts) stays non-material.
 A FAIL states, for every blocking finding: the material impact, the executed
 proof, and the required correction. A limit of the reviewer's own tool, sandbox or
-session (a sign-in it lacks, a browser or sandbox refusal) is never a finding
-or an owner card: the step is a `Not run: <step and why>` line in the verdict and is not a STOP; only a
-bug that stops the app, or a security leak, fails a review (2026-10-14; D-017, 2026-11-12). A browser-tool denial is final for that tool (no permission hunt, no retry); the project's own documented API or CLI, or the call its own UI makes, is the sanctioned way to run it, never an alternate route; its run is real-run evidence of the backend only at terminal success with the outputs inspected and secrets redacted, never proof of UI behavior; a real credential, permission, security or host gate is never bypassed; if unsure, ask once.
+session (a sign-in it lacks, a browser or sandbox refusal) is never an owner card (2026-10-14): an agreed requirement
+it therefore could not really run is a `Not run for real:` line the CTO gets run, never a FAIL and never a block
+(D-024, 2026-11-22: only bugs fail); any other step is a `Process note:` line; otherwise only a
+bug that stops the app, or a security leak, fails a review (D-017, 2026-11-12). A browser-tool denial is final for that tool (no permission hunt, no retry); the project's own documented API or CLI, or the call its own UI makes, is the sanctioned way to run it, never an alternate route; its run is real-run evidence of the backend only at terminal success with the outputs inspected and secrets redacted, never proof of UI behavior; a real credential, permission, security or host gate is never bypassed; if unsure, ask once.
 
 A final acceptance review ends with the whole app, end to end (owner,
 2026-09-30): start it from the candidate, walk the owner's path from start to

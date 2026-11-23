@@ -8,10 +8,12 @@ all of it BEFORE the contract is shown to him; any problem is a card to resolve 
 (real Claude/Codex calls through the app's code, observed by NMHP) must pass before any review and again before release.
 
 Three stages, one record per task (state["environment_checks"][task]):
-  contract  every item of the needs list + the project's agents; holds the contract back from the owner until it passes
+  contract  every item of the needs list + the project's agents + each role's own reach of every AI tool, program and folder
+            (check_roles: inside the agents' confinement, with the role's own sign-in); holds the contract back until it passes
   review    the app's real-run command on the commit under review (only when the app calls an AI tool)
   release   the AI-tool calls and the real run again, fresh, on the release commit; a product check that holds the release
-Every check runs here, in the manager, as the owner, in his own environment (owner_env) — never in an agent.
+Every check runs here, in the manager, as the owner, in his own environment (owner_env) — never in an agent; the role items
+start from that environment and run as each role's commands run.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from typing import Any
@@ -239,12 +242,17 @@ def _last_line(text: str) -> str:
     return (lines[-1] if lines else "")[:300]
 
 
-def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str]) -> dict[str, Any]:
-    """One real, minimal call of tool in the owner's environment, as his app would make it."""
-    label = {"claude": "Claude for your app", "codex": "Codex for your app", "gemini": "Gemini for your app"}[tool]
+def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str], role: str = "",
+                  confine: Callable[[list[str]], list[str]] | None = None, label: str = "") -> dict[str, Any]:
+    """One real, minimal call of tool in the owner's environment, as his app would make it. With `role` and `confine` (C0 of
+    task 2026-11-21_not-run-goes-to-repair) the same call runs as that role's commands run: `values` is the role's
+    environment and sign-in, `confine` wraps the call in the agents' confinement; the item is "<role> can use <Tool>"."""
+    label = label or f"{role} can use {tool.title()}" if role else {"claude": "Claude for your app", "codex": "Codex for your app", "gemini": "Gemini for your app"}[tool]
+    kind = "role_access" if role else "ai_tool"
+    whom = f"the {role} from its protected area with the sign-in NMHP gives it" if role else "for your app"
     executable = tool_executable(tool, values)
     if not executable:
-        return _item("ai_tool", label, False, f"the `{tool}` command was not found on this computer; install it, then press Check again", OWNER)
+        return _item(kind, label, False, f"the `{tool}` command was not found on this computer; install it, then press Check again", OWNER)
     with tempfile.TemporaryDirectory(prefix="nmhp-setup-") as folder:
         if tool == "claude":
             argv = [executable, "-p", AI_PROMPT, "--output-format", "json"]
@@ -252,24 +260,32 @@ def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str]
             argv = [executable, "exec", "--skip-git-repo-check", AI_PROMPT]
         else:
             argv = [executable, "-p", AI_PROMPT]
+        problem = ""
+        try:
+            argv = confine(argv) if confine else argv
+        except Exception as error:  # noqa: BLE001 - a platform without the agents' protected area is this item's own failure
+            problem = f"the agents' protected area could not be set up: {str(error)[:300]}"
+        if problem:
+            return _item(kind, label, False, problem, OWNER)
         code, output, timed_out = owner_env.run(argv, cwd=folder, env=values, timeout=AI_CALL_SECONDS)
     if timed_out:
-        return _item("ai_tool", label, False, f"`{tool}` did not answer within {AI_CALL_SECONDS} seconds", OWNER)
+        return _item(kind, label, False, f"`{tool}` did not answer within {AI_CALL_SECONDS} seconds", OWNER)
+    fix = ("Check the agents' sign-in (Settings, Test connection), then press Check again" if role else
+           "In Terminal, run `claude` and sign in (or set your long-lasting sign-in), then press Check again" if tool == "claude" else
+           f"In Terminal, run `{tool}` and sign in, then press Check again")
     if tool == "claude":
         try:
             data = json.loads(output[output.find("{"):]) if "{" in output else {}
         except ValueError:
             data = {}
         if code == 0 and data and not data.get("is_error"):
-            return _item("ai_tool", label, True, "answered", OWNER)
+            return _item(kind, label, True, "answered", OWNER)
         words = scrub(str(data.get("result") or "") or _last_line(output) or f"it exited with code {code}")
-        return _item("ai_tool", label, False, f"Claude did not answer for your app: {words}. In Terminal, run `claude` and sign in "
-                     "(or set your long-lasting sign-in), then press Check again", OWNER)
+        return _item(kind, label, False, f"Claude did not answer {whom}: {words}. {fix}", OWNER)
     if code == 0:
-        return _item("ai_tool", label, True, "answered", OWNER)
+        return _item(kind, label, True, "answered", OWNER)
     words = scrub(_last_line(output) or f"it exited with code {code}")
-    return _item("ai_tool", label, False, f"{tool.title()} did not answer for your app: {words}. In Terminal, run `{tool}` and sign in, "
-                 "then press Check again", OWNER)
+    return _item(kind, label, False, f"{tool.title()} did not answer {whom}: {words}. {fix}", OWNER)
 
 
 def check_folder(item: dict[str, str], workspace: str) -> dict[str, Any]:
@@ -367,6 +383,138 @@ def check_agents(root: Path) -> list[dict[str, Any]]:
             items.append(_item("agent", label, True, "answered", OWNER))
         except (ValueError, OSError) as error:
             items.append(_item("agent", label, False, f"{error}", OWNER))
+    return items
+
+
+# ---------------------------------------------------------------------------------------------------------------- each role
+# C0 (task 2026-11-21_not-run-goes-to-repair; owner: "at the beginning all builder reviewer and cto have access to everything is
+# needed to run the project"). Lease: NMHP's own check reached Claude, but the Reviewer's commands could not, and nobody knew
+# until the final review. Before the contract, each role's commands are tried as they run: inside the agents' confinement, with
+# the environment and sign-in NMHP gives that role. Contract stage only (plan check R3-1): the release check is unchanged.
+ROLE_NAMES = {"delivery": "Builder", "reviewer": "Reviewer", "cto": "CTO"}
+# What scripts/run_managed_agent.sh unsets before it starts any agent: the role's own sign-in is added back below.
+AGENT_UNSET = frozenset({"BASH_ENV", "ENV", "CDPATH", "ZDOTDIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                         "ANTHROPIC_PROFILE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+                         "HARNESS_REVIEWER_CLAUDE_TOKEN"})
+
+
+def _agent_claude_token() -> str:
+    """The setup-token NMHP hands to its Claude agents (claude_auth.resolve_token, as each launch reads it); "" when there is
+    none. Never stored or printed. The test suite never reads the real Keychain: a test injects AGENT_TOKEN."""
+    if ("unittest" in sys.modules or os.environ.get("HARNESS_TESTS_RUN_ROOT")) and not os.environ.get(owner_env.LIVE_TEST_ENV):
+        return ""
+    from harness import claude_auth
+    try:
+        return claude_auth.resolve_token()
+    except claude_auth.ClaudeAuthRequired:
+        return ""
+
+
+AGENT_TOKEN: Callable[[], str] = _agent_claude_token
+# The environment the managed agents are launched with: this process's own (the project worker starts them). Tests patch it.
+LAUNCH_ENV: Callable[[], dict[str, str]] = lambda: dict(os.environ)
+
+
+def role_providers(root: Path) -> dict[str, str]:
+    """Each role's provider from the project's Settings: a role whose agent is not set up (or not running) is checked from them too."""
+    from harness import control
+    try:
+        settings = control.agent_settings(root)
+    except (OSError, ValueError):
+        settings = control.default_agent_settings()
+    return {role: str((settings.get(role) or {}).get("provider") or "") for role in ROLE_NAMES}
+
+
+def role_environment(role: str, provider: str, values: dict[str, str], token: str) -> dict[str, str]:
+    """The environment one role's commands get: the owner's environment without what the launcher unsets, plus the Claude sign-in
+    NMHP gives that role. A Claude agent gets the setup-token; the Reviewer's commands, whichever provider runs it, carry it as
+    HARNESS_REVIEWER_CLAUDE_TOKEN and use it as CLAUDE_CODE_OAUTH_TOKEN (chapter reviewer-token). A Codex or Gemini builder or CTO
+    gets no Claude sign-in; its own Codex home is the CODEX_HOME (else ~/.codex) it is launched with."""
+    env = {name: value for name, value in values.items() if name not in AGENT_UNSET}
+    if token and (provider == "claude" or role == "reviewer"):
+        if role == "reviewer":
+            env["HARNESS_REVIEWER_CLAUDE_TOKEN"] = token
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = env.get("HARNESS_REVIEWER_CLAUDE_TOKEN", token)
+    return env
+
+
+def _run_confined(argv: list[str], env: dict[str, str], confine: Callable[[list[str]], list[str]]) -> tuple[int, str, bool, str]:
+    """Run argv in a temporary folder inside the agents' confinement: (exit code, output, timed out, confinement problem)."""
+    try:
+        wrapped = confine(argv)
+    except Exception as error:  # noqa: BLE001 - a platform without the protected area is the item's own failure
+        return -1, "", False, f"the agents' protected area could not be set up: {str(error)[:300]}"
+    with tempfile.TemporaryDirectory(prefix="nmhp-setup-") as folder:
+        code, output, timed_out = owner_env.run(wrapped, cwd=folder, env=env, timeout=ITEM_SECONDS)
+    return code, output, timed_out, ""
+
+
+def check_role_program(item: dict[str, str], env: dict[str, str], confine: Callable[[list[str]], list[str]], role: str,
+                       scrub: Callable[[str], str]) -> dict[str, Any]:
+    """The role's commands find the program and its version call runs inside the agents' confinement (and meets min_version)."""
+    name, minimum = item["name"], item.get("min_version", "")
+    label = f"{role} can use {name}"
+    found = name if name.startswith("/") and os.access(name, os.X_OK) else shutil.which(name, path=env.get("PATH", ""))
+    if not found:
+        return _item("role_access", label, False, f"the {role}'s commands do not find `{name}`; install it, then press Check again", OWNER)
+    if not minimum:
+        # no version asked: the program is reachable and runnable from the role's protected area (like check_program, no
+        # `--version`: Linux's sh refuses it, Linux full suite 2026-11-22)
+        code, output, timed_out, problem = _run_confined(["/bin/sh", "-c", 'test -x "$1"', "sh", found], env, confine)
+        if problem or timed_out or code != 0:
+            return _item("role_access", label, False, problem or f"the {role} cannot run `{name}` ({found}) from its protected area",
+                         OWNER)
+        return _item("role_access", label, True, found, OWNER)
+    code, output, timed_out, problem = _run_confined([found, "--version"], env, confine)
+    match = re.search(r"\d+(?:\.\d+)+", output)
+    if problem or timed_out or code != 0 and not match:
+        return _item("role_access", label, False, problem or f"`{name} --version` did not run for the {role} in its protected area: "
+                     f"{scrub(_last_line(output)) or ('it did not finish' if timed_out else f'exit {code}')}", OWNER)
+    if minimum and (not match or _version_tuple(match.group(0)) < _version_tuple(minimum)):
+        return _item("role_access", label, False, f"the {role} gets `{name}` {match.group(0) if match else '(version unreadable)'}; "
+                     f"{minimum} or newer is needed. Update it, then press Check again", OWNER)
+    return _item("role_access", label, True, f"{found} {match.group(0) if match else ''}".strip(), OWNER)
+
+
+def check_role_folder(item: dict[str, str], env: dict[str, str], confine: Callable[[list[str]], list[str]], role: str,
+                      scrub: Callable[[str], str]) -> dict[str, Any]:
+    """The role's commands can read (or write, then remove, one probe file in) the folder from inside the agents' confinement."""
+    path, access = item["path"], item["access"]
+    label = f"{role} can use folder {path}"
+    script = 'ls "$1" >/dev/null' + (' && f="$1/.nmhp-access-check-$$" && : > "$f" && rm -f "$f"' if access == "write" else "")
+    code, output, timed_out, problem = _run_confined(["/bin/sh", "-c", script, "sh", path], env, confine)
+    if problem or timed_out or code != 0:
+        return _item("role_access", label, False, problem or f"the {role} cannot {access} this folder from its protected area: "
+                     f"{scrub(_last_line(output)) or f'exit {code}'}", OWNER)
+    return _item("role_access", label, True, f"{access} access", OWNER)
+
+
+def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub: Callable[[str], str]) -> list[dict[str, Any]]:
+    """For each role (builder, Reviewer, CTO): its own sign-in, on every project (owner 2026-11-22: "The sign in should be tested
+    before contract acceptance for any type of project"), then one item per need: every AI tool's minimal real call, every
+    program's version call and every folder's probe, as that role's commands run. A sign-in never reaches an item: it is hidden
+    like the owner's values."""
+    tools = list(needs.get("ai_tools") or [])
+    providers = role_providers(root)
+    token = AGENT_TOKEN() if ("claude" in tools and providers.get("reviewer")) or "claude" in providers.values() else ""
+    hide = (lambda text: scrub(text).replace(token, "<sign-in>")) if token else scrub
+    items: list[dict[str, Any]] = []
+    for role, name in ROLE_NAMES.items():
+        env = role_environment(role, providers.get(role, ""), values, token)
+        provider = providers.get(role, "")
+        codex_home = ([env.get("CODEX_HOME") or str(Path(env.get("HOME") or Path.home()) / ".codex")]
+                      if "codex" in tools or provider == "codex" else [])
+
+        def confine(argv: list[str], codex_home: list[str] = codex_home, env: dict[str, str] = env) -> list[str]:
+            """argv inside the agents' confinement for this project (the role's Codex home writable, its PATH's tools readable)."""
+            from harness import agent_confinement
+            return agent_confinement.confine_agent_command(argv, root, claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None,
+                                                           extra_writable=codex_home, path_env=env.get("PATH", ""))
+        if provider in {"claude", "codex", "gemini"} and provider not in tools:   # a need on the same tool already proves it
+            items.append(check_ai_tool(provider, env, hide, role=name, confine=confine, label=f"{name} is signed in to {provider.title()}"))
+        items += [check_ai_tool(tool, env, hide, role=name, confine=confine) for tool in tools]
+        items += [check_role_program(item, env, confine, name, hide) for item in needs.get("programs") or []]
+        items += [check_role_folder(item, env, confine, name, hide) for item in needs.get("folders") or []]
     return items
 
 
@@ -504,12 +652,16 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
         return [_item("owner_env", "Your own setup (as in your Terminal)", False, f"{error}", OWNER)], ""
     scrub = owner_env.redactor(values)
     python, python_dir, test_scrub = "", "", (lambda text: text)
+    # The role items run with the environment the agents are launched with (this worker's own; Codex review r1-1: the owner's
+    # login shell can point at another home and Codex sign-in), never the owner's shell values.
+    launch = LAUNCH_ENV()
     try:
         from harness import test_env
         resolved = test_env.resolve(root, workspace) if workspace and Path(workspace).is_dir() else None
         if resolved is not None:
             python, python_dir = resolved.python, resolved.python_dir
             values = test_env.apply(values, resolved)
+            launch = test_env.apply(launch, resolved)
             test_scrub = lambda text: test_env.scrub(text, resolved)
     except (ValueError, OSError) as error:
         return [_item("test_env", "The project's declared test environment", False, f"{error}", BUILDER)], ""
@@ -522,6 +674,8 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
         items += [check_program(item, values) for item in needs.get("programs") or []]
         items += [check_library(item, values, workspace, python) for item in needs.get("libraries") or []]
         items += [check_ai_tool(tool, values, both) for tool in tools]
+        launch_scrub = owner_env.redactor(launch)
+        items += check_roles(root, needs, launch, lambda text: launch_scrub(both(text)))
     elif stage in {"review", "release"}:
         if stage == "release":
             items += [check_ai_tool(tool, values, both) for tool in tools]

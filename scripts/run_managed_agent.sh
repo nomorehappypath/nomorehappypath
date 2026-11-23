@@ -332,6 +332,9 @@ launch_visible_cli() {
       credential_prefix+=(--share-with-commands)
     fi
     credential_prefix+=(--)
+  elif [[ "$kind" == *_reviewer && -n "$claude_auth_bootstrap" ]]; then
+    # A Codex or Gemini Reviewer: its commands get the same Claude sign-in (owner 2026-11-21, D-023).
+    credential_prefix=("$python_bin" -E "$harness_root/harness/claude_auth.py" --socket "$claude_auth_bootstrap" --session "$session_id" --share-with-commands --)
   fi
   if [[ -t 0 && -t 1 ]]; then
     supervisor_args=("${context_args[@]}" --session-id "$session_id" --agent-id "$agent_id" --provider "$provider" --execution-root "$execution_root")

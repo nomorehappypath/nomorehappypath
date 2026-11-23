@@ -36,6 +36,7 @@ UPLOAD_ARGUMENTS = {
     "contract-check-submit": ("--submission", "submission", True),
     "contract-check-correct": ("--submission", "submission", True),
     "review-support": ("--submission", "submission", True),
+    "contract-screen": ("--file", "file", False),
 }
 
 

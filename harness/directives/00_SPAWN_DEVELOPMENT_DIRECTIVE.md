@@ -229,7 +229,9 @@ folder and temp space. Nobody can write under the Application Support folder in 
 or start a nested sandbox. If a proof needs that (a real-GPU run, a runtime
 that writes to Application Support), do not record a finding against the CTO
 or the reviewer: post a status note naming the exact command and the output
-path, and the CTO pins it in Mission Control as an owner-run step.
+path. The CTO clears the way (D-024, 2026-11-22): it makes the step runnable by
+an agent (a relaunch, the app's real run) and pins an owner-run step only for
+what only the owner can give (his own sign-in or machine).
 The owner signs in only to the owner's own instance (2026-10-15): a step that
 needs the owner's sign-in runs in the owner's real instance, or you state the
 exact URL the owner opens and prove it answers; never ask the owner, directly
@@ -244,6 +246,7 @@ that do not need it (2026-10-14): post one route question to the CTO (what is
 blocked, the exact refusal with secrets redacted, which deliverables proceed
 without it) and continue on those; the CTO decides whether any owner action
 exists and pins it. Inability to run a step is not by itself a product defect,
-and a step you could not run stays unverified.
+and a step you could not run stays unverified: an agreed requirement left unrun
+at review is listed "Not tested for real" and may come back to you to make runnable; it never fails the review (D-024).
 A browser-tool denial is final for that tool: do not look for a permission setting and do not retry it. The project's own documented API or CLI, or the exact call its own UI makes (Studio: POST /api/run, then poll /api/thread), is the sanctioned way to run it and is never an alternate route. Test: does its own normal UI make this call? A real credential, permission or security gate, and any host or tool restriction, is never bypassed, whatever the documentation says. A run through it is real-run evidence of the backend only when it reached terminal success and you inspected the promised outputs (not a queued, error, fixture or old response), with authorization headers, cookies and tokens redacted; it does not prove UI behavior, which keeps its rendered proof. If the API cannot finish it, continue the other deliverables and route the rest to the CTO. If genuinely unsure, ask once in one message; never refuse the whole task.
 

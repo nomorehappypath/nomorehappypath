@@ -5308,7 +5308,7 @@ def _validate_proposed_skills(proposed: Any, harness_root: Any = None) -> tuple[
     return accepted, dropped
 
 
-def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False, skills: Any = None, needs: Any = None, needs_required: bool = False) -> dict[str, Any]:
+def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program: bool = False, plain_required: bool = False, small_change: bool = False, skills: Any = None, needs: Any = None, needs_required: bool = False, no_screens: str = "", keep_screens: bool = False, screens_required: bool = False) -> dict[str, Any]:
     """File the final agreed requirements as a PROPOSAL awaiting the owner.
 
     The owner's go-ahead is a contract signature; it must be a recorded board
@@ -5394,6 +5394,8 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         elif needs_required and not ((state.get("environment_checks") or {}).get(task) or {}).get("needs"):
             raise ValueError(f"the contract needs its setup list before it can be shown to the owner: {environment_check.NEEDS_FORMAT}")
         setup_held = bool(((state.get("environment_checks") or {}).get(task) or {}).get("needs")) and not environment_check.passed(state, task, "contract")
+        # owner 2026-11-21: the screens are part of the contract; the owner opens them with "See the screens" before Go ahead
+        screens = _proposal_screens(state, task, text, existing, small_change, no_screens, keep_screens, screens_required)
         # Owner repair (build-skill-library, requirement 5): the builder's proposed skills,
         # split into the ones the library actually has (with its reason, kept) and the
         # names it does not (named in the card as "dropped" by a later subtask). Computed
@@ -5449,6 +5451,10 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
                 "questions": json.loads(json.dumps(carried)), "submitted_at": now(), "carried_questions": True,
             }
             reviewer = None
+        if screens is not None:
+            proposal["screens"] = screens
+            if screens.get("manifest"):
+                state.setdefault("contract_screens", {}).setdefault(task, {})["pending"] = []
         if setup_held:
             # the contract waits for NMHP's setup check; the owner sees it (and the Reviewer's early look starts) only once it passed
             proposal["status"] = "checking_setup"
@@ -5478,6 +5484,144 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     return event
 
 
+
+def screens_folder(root: Path, task: str) -> Path:
+    """Where a task's screen designs are stored (content-addressed; board-owned)."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", task)[:60] + "-" + hashlib.sha256(task.encode("utf-8")).hexdigest()[:8]
+    return project_context(root).storage_path("contract-screens", safe)
+
+
+def _proposal_screens(state: dict[str, Any], task: str, text: str, existing: dict[str, Any] | None, small_change: bool,
+                      no_screens: str, keep_screens: bool, required: bool) -> dict[str, Any] | None:
+    """The design set a proposal carries: the pending uploads, the previous version's set (--keep-screens), or the reason no
+    screen changes (--no-screens). A task that builds screens is refused without one (agent command path)."""
+    from harness import contract_screens
+    pending = list(((state.get("contract_screens") or {}).get(task) or {}).get("pending") or [])
+    reason = " ".join(str(no_screens or "").split())[:400]
+    if keep_screens:
+        kept = (existing or {}).get("screens") or {}
+        if not kept.get("manifest"):
+            raise ValueError("--keep-screens: the earlier proposal has no screen designs to keep; upload them with " + contract_screens.FORMAT)
+        screens: dict[str, Any] | None = json.loads(json.dumps(kept))
+    elif pending:
+        screens = {"manifest": pending, "id": contract_screens.manifest_id(pending)}
+    elif reason:
+        screens = {"manifest": [], "no_screens": reason}
+    elif required and contract_screens.ui_task(state, task, small_change):
+        raise ValueError("this task builds or changes screens, so its contract needs the screen designs the owner will see: upload "
+                         "each with " + contract_screens.FORMAT + " (at least the main screen, its empty state, a long-running "
+                         "progress state where work takes time, and its error state; read skills/ux-ui-design/SKILL.md first), then "
+                         "propose again; or say why nothing visible changes with --no-screens \"<why>\"")
+    else:
+        screens = None
+    if screens and screens.get("manifest") and not contract_screens.screens_block_present(text):
+        raise ValueError("the contract carries screen designs, so its text needs a plain \"Screens:\" block: one line per screen with "
+                         "its job and its states")
+    return screens
+
+
+def _with_ux_skill(agreed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The UX guide is agreed for every task with screen designs, whatever the owner ticked, the library switch or the
+    builder's company (Codex plan check R1-2, R2-1, R3-1)."""
+    from harness import contract_screens, skill_library
+    if any(item.get("slug") == contract_screens.UX_SKILL for item in agreed):
+        return agreed
+    found = next((item for item in _usable_library_skills() if item.slug == contract_screens.UX_SKILL), None)
+    path = str(found.path) if found else str(Path(__file__).resolve().parent.parent / skill_library.LIBRARY_DIRNAME / contract_screens.UX_SKILL / "SKILL.md")
+    return [*agreed, {"slug": contract_screens.UX_SKILL, "plain_name": "Screen and experience design", "path": path, "required_by": "NMHP"}]
+
+
+def agreed_screens(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
+    """Every screen design agreed for the task: the confirmed contract's set plus the owner's later approvals."""
+    confirmation = (state.get("requirement_confirmations") or {}).get(task) or {}
+    return list(((confirmation.get("screens") or {}).get("manifest")) or [])
+
+
+def contract_screen(root: Path, agent_id: str, name: str = "", file: str = "", remove: bool = False, list_only: bool = False) -> dict[str, Any]:
+    """Upload, replace (same name), remove or list the task's pending screen designs (owner 2026-11-21)."""
+    from harness import contract_screens
+    stored: dict[str, Any] = {}
+    if not list_only:
+        name = contract_screens.clean_name(name)
+    if not list_only and not remove:
+        if not file:
+            raise ValueError("upload a design with " + contract_screens.FORMAT)
+        data = Path(file).read_bytes()
+        problem = contract_screens.validate(data)
+        if problem:
+            raise ValueError(f"this design cannot be shown to the owner: {problem}. " + contract_screens.FORMAT)
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or not agent.get("active") or agent.get("task") in {"", AWAITING_OWNER_DIRECTION}:
+            raise ValueError("only the task's builder uploads its screen designs")
+        task = str(agent["task"])
+        entry = state.setdefault("contract_screens", {}).setdefault(task, {})
+        pending = entry.setdefault("pending", [])
+        if not list_only and not remove:
+            stored = contract_screens.store(screens_folder(root, task), data)
+            item = {"name": name, **stored, "uploaded_at": now()}
+            index = next((n for n, old in enumerate(pending) if old["name"].lower() == name.lower()), None)
+            if index is None:
+                if len(pending) >= contract_screens.MAX_SCREENS:
+                    raise ValueError(f"at most {contract_screens.MAX_SCREENS} designs per contract")
+                pending.append(item)
+            else:
+                pending[index] = item          # the same name replaces (an upload retried is the same design again)
+        elif remove:
+            if not any(old["name"].lower() == name.lower() for old in pending):
+                raise ValueError(f"no pending design is named {name!r}")
+            entry["pending"] = pending = [old for old in pending if old["name"].lower() != name.lower()]
+        return {"task": task, "pending": [old["name"] for old in pending]}
+
+
+def propose_screens(root: Path, agent_id: str) -> dict[str, Any]:
+    """Screens found after the contract go back to the owner before they are built (Codex plan check R2-2): the pending designs
+    become one "New screens to approve" card; every review request waits until he decides."""
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent["role"] not in DEVELOPER_ROLES or not agent.get("active"):
+            raise ValueError("only the task's builder proposes new screens")
+        task = str(agent.get("task") or "")
+        if not (state.get("requirement_confirmations") or {}).get(task):
+            raise ValueError("before the contract is confirmed, the designs go with propose-requirements")
+        pending = list(((state.get("contract_screens") or {}).get(task) or {}).get("pending") or [])
+        if not pending:
+            raise ValueError("upload the new screens first with contract-screen")
+        state.setdefault("screen_approvals", {})[task] = {"manifest": pending, "status": "awaiting_owner", "requested_at": now(),
+                                                         "agent_id": agent_id}
+        state["contract_screens"][task]["pending"] = []
+        _harness_card(state, f"screens:{task}", f"New screens to approve: {task}",
+                      f"The builder found screens the contract did not show ({', '.join(item['name'] for item in pending)}). "
+                      "Press See the screens, then Approve, or Ask for changes and tell the builder what to change. Nothing "
+                      "is reviewed until you decide.", task, choices=["Approve the screens", "Ask for changes"],
+                      choice_kind="screen_approval", blocked=True, screens=pending)
+        return _event(state, "screens_proposed", agent, {"task": task, "message": f"{len(pending)} new screen design(s) wait for the owner"})
+
+
+def screens_review_gate(root: Path, agent_id: str) -> None:
+    """No review while new screens wait for the owner's approval."""
+    state = snapshot(root)
+    task = str(((state.get("agents") or {}).get(agent_id) or {}).get("task") or "")
+    if ((state.get("screen_approvals") or {}).get(task) or {}).get("status") == "awaiting_owner":
+        raise ValueError("new screens wait for the owner's approval (the New screens card); request the review after he decides")
+
+
+def _screens_coverage_problem(root: Path, state: dict[str, Any], request: dict[str, Any], task: str) -> str:
+    """A final PASS of a task with agreed designs needs the Reviewer's ledger row for every design, with its rendered screen id."""
+    from harness import contract_screens
+    manifest = agreed_screens(state, task)
+    if not manifest:
+        return ""
+    try:
+        path = _task_path_from_state(root, state, task, str(request.get("challenge_ledger") or ""))
+        text = Path(path).read_text(encoding="utf-8", errors="replace") if request.get("challenge_ledger") else ""
+    except (OSError, ValueError):
+        text = ""
+    missing = contract_screens.coverage_problems(text, manifest)
+    if not missing:
+        return ""
+    return ("the agreed screen designs need one row each in your Challenge Ledger naming the design and the screen id of the real "
+            "app rendered in that state (screen-script / screen-check), with what you saw: missing for " + ", ".join(missing))
 
 def _setup_card_key(task: str, stage: str, item: dict[str, Any]) -> str:
     """One card per failed setup item, per task and stage."""
@@ -6040,6 +6184,8 @@ def record_requirements_decision(
                 {"slug": item.slug, "plain_name": item.plain_name, "path": str(item.path)}
                 for item in _usable_library_skills() if item.slug in set(agreed_slugs)
             ]
+            if ((proposal.get("screens") or {}).get("manifest")):
+                agreed = _with_ux_skill(agreed)
             state.setdefault("task_skills_agreed", {})[str(task)] = agreed
             if unavailable:
                 state.setdefault("task_skills_unavailable", {})[str(task)] = unavailable
@@ -6166,6 +6312,10 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
                 confirmation["contract_check"]["lane"] = "small"
             if confirmation["contract_check"].get("checks"):
                 confirmation["contract_check"]["red_proof"] = {"status": "pending"}
+        if proposal.get("screens"):
+            confirmation["screens"] = json.loads(json.dumps(proposal["screens"]))
+            if confirmation["screens"].get("manifest"):
+                state.setdefault("task_skills_agreed", {})[task] = _with_ux_skill(list((state.get("task_skills_agreed") or {}).get(task) or []))
         state["requirement_confirmations"][task] = confirmation
         agent.update({"status": "requirements_confirmed", "status_note": "final requirements confirmed; Product Management may plan delivery", "last_status_at": now()})
         event = _event(state, "requirements_confirmed", agent, {
@@ -11452,6 +11602,7 @@ def _execute_scenario_simulations(
                 "duration_seconds": 0.0,
                 "exit_code": prior.get("exit_code", 0),
                 "cache_decision": "same_request_deduplicated",
+                "said_not_run": bool(prior.get("said_not_run")),
             })
             if prior["outcome"] == "failed":
                 failures.append(f"{scenario['id']}: shared command failed (see {prior['id']})")
@@ -11476,6 +11627,9 @@ def _execute_scenario_simulations(
             # real tests ran and failed: the one failure that is a result about the work
             output = str(failed)
             failures.append(f"{scenario['id']}: {failed}")
+            # the check's own words: a row that says "Not run for real" needs what this clean run lacks (D-024, read by execute_challenge);
+            # only when the command itself succeeded and just its printed final check failed: a failing runner holds a real failure (Codex R4-1)
+            measurement["said_not_run"] = getattr(failed, "command_exit", None) == 0 and bool(review_rounds.not_run_lines(getattr(failed, "output", "")))
         except ValueError as error:
             # zero tests found, a refusal, a process problem, a blocked browser: the command stopped without testing the work (Codex r5-1)
             output = str(error)
@@ -11492,13 +11646,17 @@ def _execute_scenario_simulations(
         command_results[scenario["command"]] = row
         results.append(row)
     if incompletes or not_results:
-        raise ValueError("Scenario Ledger simulations did not reach a result: " + " | ".join(incompletes + not_results)
-                         + (" | also failed: " + " | ".join(failures) if failures else ""))
+        raise ValueError(NO_RESULT_PREFIX + " | ".join(incompletes + not_results)
+                         + (NO_RESULT_ALSO_FAILED + " | ".join(failures) if failures else ""))
     if failures:
         raise ScenarioSimulationsFailed("Scenario Ledger simulations failed: " + " | ".join(failures), results, failures)
     if unable_error is not None:
         raise unable_error
     return results
+
+
+NO_RESULT_PREFIX = "Scenario Ledger simulations did not reach a result: "
+NO_RESULT_ALSO_FAILED = " | also failed: "
 
 
 class ScenarioSimulationsFailed(ValueError):
@@ -15898,6 +16056,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         raise ValueError("ledger and summary are required")
     if phase == "final_acceptance" and standing_checks.hand_in_problem(summary):
         raise ValueError(_hand_in_refusal(root, summary, ledger))
+    if phase == "final_acceptance":
+        _replace_process_stuck_reviews(root, agent_id)
     ledger_path: Path | None = None
     ledger_sha256 = ""
     review_artifact: dict[str, Any] = {}
@@ -16565,6 +16725,51 @@ def _withdraw_open_request(state: dict[str, Any], request: dict[str, Any], reaso
             item["pipeline_status"] = "in_progress"
         item["pipeline_updated_at"] = withdrawn_at
     return developer, scope
+
+
+def _stuck_on_process_only(request: dict[str, Any]) -> bool:
+    """A claimed final review with no certified run whose every failed execution was only a row that could not run in the clean copy
+    (process_only, set by execute_challenge) or never finished: no check about the app ran and failed. Codex task review r3-1
+    (2026-11-22): such a review and Delivery's runnable repair waited on each other and the project never reached release."""
+    attempts = [a for a in (request.get("challenge_execution_attempts") or []) if isinstance(a, dict) and a.get("status") == "failed"]
+    return (request.get("phase") == "final_acceptance" and request.get("status") == "claimed" and not request.get("challenge_execution")
+            and any(a.get("process_only") for a in attempts)
+            and all(a.get("process_only") or not a.get("completed") for a in attempts))
+
+
+def _replace_process_stuck_reviews(root: Path, agent_id: str) -> None:
+    """Delivery is filing a final review while the task's only open final reviews are stuck on rows that cannot run in the clean
+    copy: withdraw them so the new request (Delivery's repair) can start, and send their Reviewer back to the queue. A review in
+    which a real check failed, or that has a certified run, is never replaced; the "another review is active" rule still applies to it."""
+    wakes: list[tuple[str, str]] = []
+    with locked_state(root) as state:
+        developer = (state.get("agents") or {}).get(agent_id) or {}
+        task = str(developer.get("task") or "")
+        active = [r for r in (state.get("qa_requests") or {}).values() if task and r.get("task") == task and r.get("status") not in TERMINAL_QA]
+        if not active or not all(_stuck_on_process_only(r) for r in active):
+            return
+        for request in active:
+            reviewer = (state.get("agents") or {}).get(str(request.get("claimed_by") or "")) or {}
+            _withdraw_open_request(state, request, "its checks could not run in the clean review copy and Delivery filed a new final review")
+            if reviewer:
+                reviewer.update({"task": "REVIEW_QUEUE", "status": "waiting", "last_status_at": now(),
+                                 "status_note": f"Review {request['id']} was replaced by Delivery's new final review; waiting for it."})
+                if reviewer.get("session_id"):
+                    wakes.append((str(reviewer["session_id"]), (
+                        f"[SYSTEM CONTROL review-replaced] REVIEW REPLACED: request {request['id']} for task {task} was withdrawn because "
+                        "its checks could not run in the clean review copy and Delivery has filed a new final review. Nothing failed. "
+                        "Record no verdict on it; stand by for the new request. USER ACTION: None.")))
+            _event(state, "review_replaced_process_only", developer or None, {
+                "task": task, "request_id": request["id"],
+                "message": f"review request {request['id']} withdrawn: none of its checks could run in the clean review copy and no app "
+                           "check failed; Delivery's new final review replaces it. No test failed",
+            })
+    from harness import control  # local, as everywhere in this module (import cycle)
+    for session, text in wakes:
+        try:
+            control.enqueue_instruction(root, session, text, source="review-replaced")
+        except (ValueError, OSError):
+            pass  # the board event and the Reviewer's status still say it
 
 
 def _withdraw_superseded_review(root: Path, request_id: str) -> tuple[str, str]:
@@ -17475,6 +17680,7 @@ def _execute_challenge_locked(
         str(review_request.get("reviewed_tree_hash") or review_request.get("reviewed_worktree_digest") or ""),
         candidate_artifacts,
     )
+    in_reviewer_rows = False
     try:
         with review_execution_lease(root, agent_id, request_id, f"challenge execution: {simulation_path}"):
             with _review_candidate_checkout(root, review_state, review_request, simulation_path) as (candidate_root, candidate_ledger):
@@ -17492,6 +17698,7 @@ def _execute_challenge_locked(
                         "failed attempt)."
                     ) from None
                 started = datetime.now(timezone.utc)
+                in_reviewer_rows = True     # what fails from here to the next line is a row of the Reviewer's own ledger
                 simulations = _execute_scenario_simulations(
                     candidate_root, candidate_ledger, live_board_root=root,
                     certification={
@@ -17505,6 +17712,7 @@ def _execute_challenge_locked(
                         "rerun_source": dict(zip(("workspace", "commit"), map(str, _review_checkout_source(root, review_state, review_request)))),
                     },
                 )
+                in_reviewer_rows = False
                 duration = (datetime.now(timezone.utc) - started).total_seconds()
                 _require_completed_ledger(
                     candidate_root, str(candidate_ledger), "reviewer Scenario Ledger",
@@ -17526,10 +17734,19 @@ def _execute_challenge_locked(
     except certified_execution.RetryableInterruption:
         raise   # waiting behind a run or owner-machine activity is not a failed attempt and needs no repair reason
     except Exception as error:
+        # D-024 (real runs 4 and Codex r3, 2026-11-22): a row that could not run in this clean run at all (a browser that cannot
+        # start, a step that needs a sign-in, a run cut off) fails every execution while it stays in the ledger. Nothing about the
+        # app failed, so the Reviewer is told the way out ("To fix it:", which is not a harness defect for the owner) and the
+        # attempt is marked, so Delivery's next final-review request may replace a review stuck on it (_replace_process_stuck_reviews).
+        failed = [row for row in (getattr(error, "results", None) or []) if row.get("outcome") == "failed"] if in_reviewer_rows else []
+        said_not_run = bool(failed) and all(row.get("said_not_run") for row in failed)
+        no_result = in_reviewer_rows and (str(error).startswith(NO_RESULT_PREFIX) or isinstance(error, certified_execution.CouldNotRun))
+        process_only = said_not_run or (no_result and NO_RESULT_ALSO_FAILED not in str(error))
         with locked_state(root) as state:
             current_request = state.get("qa_requests", {}).get(request_id)
             if current_request and current_request.get("claimed_by") == agent_id:
                 current_request.setdefault("challenge_execution_attempts", []).append({
+                    "process_only": process_only,
                     "status": "failed", "recorded_at": now(), "policy_version": execution_identity.POLICY_VERSION,
                     "ledger_sha256": simulation_digest,
                     "retry_reason": retry_reason.strip(),
@@ -17543,6 +17760,18 @@ def _execute_challenge_locked(
                     "task": current_request.get("task", ""), "request_id": request_id,
                     "message": "certified challenge execution failed; any retry requires a recorded reason",
                 })
+        if said_not_run or no_result:
+            what = (f"{', '.join(str(row.get('id')) for row in failed)} could not really run here" if said_not_run
+                    else str(error)[:600])
+            raise ValueError(
+                f"{what}. To fix it: execute-challenge runs in a clean copy without any sign-in or the owner's browser, so a row that "
+                "cannot run there (a step that needs a sign-in, a browser that cannot start) fails every time it is in the ledger. Take "
+                "that row out of your ledger, attach it again with attach-challenge-ledger --correction-reason \"<why>\", then run "
+                "execute-challenge --retry-reason \"<why>\" (a run that was only cut off may simply be retried that way). Check what "
+                "the row was for yourself where you can (chapter reviewer-token for real AI calls; NMHP's setup check on this commit "
+                "ran your app's real run) and list what nobody could run as a `Not run for real:` finding, which never fails a review "
+                "(D-024)."
+            ) from error
         raise
     identities = []
     scenario_identities = []
@@ -18319,6 +18548,30 @@ def owner_action_choose(root: Path, action_id: str, choice: str) -> dict[str, An
                 review_rounds.give_up_by_owner(entry, at)
                 message = f"{entry['task']}: the owner pressed Stop (Give up); this part stays closed and is not reviewed again"
                 _event(state, "review_given_up_by_owner", None, {"task": entry["task"], "message": message})
+        elif card.get("choice_kind") == "screen_approval":
+            approval = (state.get("screen_approvals") or {}).get(task_of_card) or {}
+            if approval.get("status") != "awaiting_owner":
+                raise ValueError("these screens were already decided")
+            if choice == "Approve the screens":
+                confirmation = (state.get("requirement_confirmations") or {}).get(task_of_card) or {}
+                screens = confirmation.setdefault("screens", {"manifest": []})
+                screens["manifest"] = [*(screens.get("manifest") or []), *approval["manifest"]]
+                from harness import contract_screens
+                screens["id"] = contract_screens.manifest_id(screens["manifest"])
+                state.setdefault("task_skills_agreed", {})[task_of_card] = _with_ux_skill(list((state.get("task_skills_agreed") or {}).get(task_of_card) or []))
+                approval.update(status="approved", decided_at=at)
+                message = f"{task_of_card}: you approved the new screens; the builder may build them"
+            else:
+                approval.update(status="changes_requested", decided_at=at)
+                message = f"{task_of_card}: you asked for changes to the new screens; tell the builder what to change"
+            _event(state, "screens_decided", None, {"task": task_of_card, "message": message})
+            builder = state.get("agents", {}).get(str(approval.get("agent_id") or "")) or {}
+            if builder.get("session_id"):
+                try:
+                    from harness import control
+                    control.enqueue_instruction(root, str(builder["session_id"]), f"[OWNER DECISION] {message}. USER ACTION: None.", source="owner-choice")
+                except (OSError, ValueError):
+                    pass
         elif card.get("choice_kind") == "setup_check":
             # owner 2026-11-21: Check again re-runs this stage's setup check; the card stays until the check passes
             from harness import environment_check
@@ -18413,9 +18666,32 @@ def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, s
     value: the review_rounds judgment dict."""
     requests = _task_requests(state, str(request.get("task") or ""))
     prior = review_rounds.prior_judgments(requests, request)
+    # C5 (task 2026-11-21_not-run-goes-to-repair): whether a FAIL now would reach the round limit (or comes after it)
+    entry = (state.get("review_escalations") or {}).get(review_rounds.lineage_key(request)) or {}
+    live = entry.get("status") not in {None, "closed"}
+    at_limit = live and (int(entry.get("failed_judgments") or 0) + 1 >= review_rounds.limit_for(task_kind(state, str(request.get("task") or "")))
+                         or entry.get("status") in {"recovery", "could_not_finish"} or bool(entry.get("owner_round")))
     return review_rounds.judge(
-        request, prior, result, summary, failure_members, _frozen_scope_context(state, request, requests, prior),
+        request, prior, result, summary, failure_members, {**_frozen_scope_context(state, request, requests, prior), "at_limit": at_limit},
         early_fail=early_fail, certified=bool(request.get("challenge_execution")))
+
+
+def _note_not_run(request: dict[str, Any], judgment: dict[str, Any], summary: str, unrun_screens: str = "") -> None:
+    """D-024 (owner 2026-11-22: "Only bugs count as failing anything related to process is not fail test"): a final PASS whose
+    summary says a requirement was not run for real is recorded; every such line joins its not-tested-for-real list next to the
+    structured not-run findings (Codex review r1-2: none may be dropped), so the CTO is woken with all of them and the owner's
+    test card lists all of them. `Process note:` lines are not counted."""
+    if request.get("phase") != "final_acceptance" or judgment.get("effective_result") != "passed":
+        return
+    found = list(judgment.get("unproven_requirements") or [])
+    for line in review_rounds.not_run_lines(summary):
+        text = re.sub(r"(?i)^[\s>*+\-•#`_\d.)]*not\s+run(\s+for\s+real)?[\s*_`]*:?[\s*_`]*", "", line).strip()
+        if text and not any(text in known for known in found):   # the line of a structured finding is already there
+            found.append("Not tested for real: " + text)
+    if unrun_screens:   # agreed designs with no rendered screen in the review (Codex R5-1)
+        found.append(f"Not tested for real: screen design {unrun_screens} — no rendered screen of it in the review")
+    if found:
+        judgment["unproven_requirements"] = found
 
 
 def _keep_difficulty_note(root: Path, args: argparse.Namespace, out: Any) -> None:
@@ -18473,6 +18749,7 @@ def qa_result(
     review_state: dict[str, Any] | None = None
     review_request: dict[str, Any] | None = None
     submitted_result = result
+    unrun_screens = ""
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state["qa_requests"].get(request_id)
@@ -18500,6 +18777,11 @@ def qa_result(
             problem = _saved_data_verdict_problem(request, summary)
             if problem:
                 raise ValueError(problem)
+            problem = _screens_coverage_problem(root, state, request, task_name_here)
+            if problem and not review_rounds.not_run_lines(summary):
+                raise ValueError(problem)
+            # the Reviewer said what it could not really run: a design it could not capture joins that list, never a hold (D-024, Codex R5-1)
+            unrun_screens = problem.rsplit("missing for ", 1)[-1] if problem else ""
         if (result == "failed" and request and request.get("phase") == "final_acceptance" and standing_checks.enabled()
                 and task_kind(state, str(request.get("task") or ""), root) == "analysis"):
             dispute = standing_checks.disputes_problem(request.get("summary") or "", summary)
@@ -18511,6 +18793,7 @@ def qa_result(
         # Frozen review scope (2026-10-25): decided before the first PASS-specific branch, and decided again in the final transaction.
         judgment = _judge_review(state, request, result, summary, failure_members, early_fail)
         result = judgment["effective_result"]
+        _note_not_run(request, judgment, summary, unrun_screens)
         if finalization and result == "passed" and classification != "accepted":
             raise ValueError("a rejected finalization classification cannot receive a PASS verdict")
         if result == "passed":
@@ -18609,6 +18892,7 @@ def qa_result(
         if again["effective_result"] != result or [m.get("id") for m in again["blockers"]] != [m.get("id") for m in judgment["blockers"]]:
             raise ValueError("the review state changed while the verdict was being checked; submit the verdict again")
         judgment = again
+        _note_not_run(request, judgment, summary, unrun_screens)
         if early_fail:
             # In the same transaction as the FAIL itself: a verdict that is refused leaves the reservation exactly as it was.
             request.update({"status": "claimed", "claimed_by": qa["id"], "claimed_at": now(), "early_fail_from_reservation": True})
@@ -18750,7 +19034,9 @@ def qa_result(
             if request.get("stage") == INDEPENDENT_REVIEW:
                 cto_wakes.review_failed(state, request, (state.get("review_escalations") or {}).get(review_rounds.lineage_key(request)) or {})
             _note_verification_gap(root, state, request, qa, summary)
-        elif result == "passed" and str(request.get("test_scope") or "full") == "full":
+        elif result == "passed" and request.get("unproven_requirements") and request.get("stage") == INDEPENDENT_REVIEW:
+            cto_wakes.not_tested_for_real(state, request)
+        if result == "passed" and str(request.get("test_scope") or "full") == "full":
             _close_gaps_for(state, str(request.get("task") or ""), "Resolved: the scope passed review", _gap_scope_key(request))
         if result == "passed":
             request["resolved_in_scope_findings"] = _resolve_findings_certified_by_final_review(
@@ -19590,6 +19876,8 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
             ),
             "checks": {key: True for key in sorted(required_checks)},
             "owner_test_steps": contract.owner_test_steps(root, task),
+            # D-023 / C5: what the last review round could not run for real, in plain words, on the owner's test card
+            "not_tested_for_real": list((_newest_final_request(state, task) or {}).get("unproven_requirements") or []),
             "lifecycle": lifecycle_record.get("phases", {}),
         }
         if checks.get("build_required"):
@@ -21118,7 +21406,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("test-env-run"); p.description = "Run one command under the project's test environment (the Reviewer's or the CTO's own capture; not certified evidence)."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--cmd", required=True, help="the command to run (no shell operators)")
     p = sub.add_parser("owner-direction"); p.add_argument("--session-id", required=True); p.add_argument("--text", required=True); p.add_argument("--allow-split", action="store_true", help="the owner allowed this task to be split into separately reviewed parts")
     p = sub.add_parser("owner-message"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--type", choices=["direction", "clarification"], default="direction")
-    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)"); p.add_argument("--skills", default="[]", help='JSON list of {"name": <skill slug>, "reason": <one short line>} this task needs from the skill library; a name not in the library is dropped, not refused'); p.add_argument("--needs", default=None, help="JSON: the setup this contract needs (ai_tools the app calls, folders, programs, libraries, real_run); NMHP checks it before the owner sees the contract")
+    p = sub.add_parser("propose-requirements"); p.add_argument("--agent", required=True); p.add_argument("--text", required=True); p.add_argument("--small-change", action="store_true", help="a copy change, a version bump or a config tweak: no tests are written in advance; the owner's Go ahead confirms it"); p.add_argument("--no-program", action="store_true", help="REFUSED unless the owner ticked the document-only box on the new-task screen (then it is applied for you)"); p.add_argument("--skills", default="[]", help='JSON list of {"name": <skill slug>, "reason": <one short line>} this task needs from the skill library; a name not in the library is dropped, not refused'); p.add_argument("--needs", default=None, help="JSON: the setup this contract needs (ai_tools the app calls, folders, programs, libraries, real_run); NMHP checks it before the owner sees the contract"); p.add_argument("--no-screens", default="", help="why nothing visible changes (a task that builds screens files its designs with contract-screen instead)"); p.add_argument("--keep-screens", action="store_true", help="keep the screen designs of the earlier proposal")
+    p = sub.add_parser("contract-screen"); p.add_argument("--agent", required=True); p.add_argument("--name", default="", help='the screen and state as the owner reads it, e.g. "Analysis running"'); p.add_argument("--file", default="", help="one self-contained HTML design (inline CSS, no scripts, no outside links)"); p.add_argument("--remove", action="store_true"); p.add_argument("--list", action="store_true")
+    p = sub.add_parser("propose-screens"); p.add_argument("--agent", required=True)
     p = sub.add_parser("set-needs"); p.add_argument("--agent", required=True); p.add_argument("--needs", required=True, help="JSON: the task's setup list (same format as propose-requirements --needs)")
     p = sub.add_parser("propose-spec-questions"); p.description = "Delivery's one submission of a Write-specs app task's own question-card part: up to 5 app-specific questions, and whether the two description-only conditional generic questions apply to this app."; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--questions", required=True, help="a JSON list of up to 5 {text, options (2-4 strings), recommended (index)} objects; [] if this app needs none"); p.add_argument("--existing-data", action="store_true", help="this app replaces something, so \"Is there existing data to bring in?\" belongs on the card"); p.add_argument("--keeps-data", action="store_true", help="this app keeps data, so both data-loss questions belong on the card")
     p = sub.add_parser("contract-check-submit"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--version", required=True); p.add_argument("--submission", required=True, help="a JSON file: criteria with their checks, and at most 4 product questions")
@@ -21290,7 +21580,10 @@ def main(argv: list[str] | None = None) -> int:
             except json.JSONDecodeError:
                 skills_arg = []
             out = record_requirement_proposal(root, args.agent, args.text, args.no_program, plain_required=True, small_change=args.small_change, skills=skills_arg,
-                                              needs=args.needs, needs_required=True)
+                                              needs=args.needs, needs_required=True, no_screens=args.no_screens,
+                                              keep_screens=args.keep_screens, screens_required=True)
+        elif args.command == "contract-screen": out = contract_screen(root, args.agent, args.name, args.file, args.remove, args.list)
+        elif args.command == "propose-screens": out = propose_screens(root, args.agent)
         elif args.command == "set-needs": out = set_needs(root, args.agent, args.needs)
         elif args.command == "propose-spec-questions": out = propose_spec_questions(root, args.agent, args.task, json.loads(args.questions), include_existing_data=args.existing_data, include_data_loss=args.keeps_data)
         elif args.command == "contract-check-submit": out = record_contract_check_submission(root, args.agent, args.task, args.version, args.submission)
@@ -21311,9 +21604,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "deliverable-waived": out = waive_deliverable(root, args.agent, args.task, args.deliverable, args.owner_message, args.owner_words, args.part, args.note)
         elif args.command == "findings": out = {"findings": list_findings(root, args.include_resolved)}
         elif args.command == "request-qa":
+            screens_review_gate(root, args.agent)
             environment_review_gate(root, args.agent)
             out = request_qa(root, args.agent, args.ledger, args.summary, args.changes)
         elif args.command == "request-independent-review":
+            screens_review_gate(root, args.agent)
             environment_review_gate(root, args.agent)
             out = request_independent_review(root, args.agent, args.summary)
         elif args.command == "define-plan": out = define_delivery_plan(root, args.agent, args.mode, args.rationale)
@@ -21344,6 +21639,7 @@ def main(argv: list[str] | None = None) -> int:
             out = declare_chunks(root, args.agent, chunks, args.reason)
         elif args.command == "retire-chunk": out = retire_chunk(root, args.agent, args.chunk, args.reason, args.into)
         elif args.command == "request-review":
+            screens_review_gate(root, args.agent)
             environment_review_gate(root, args.agent)
             out = request_review(root, args.agent, args.ledger, args.summary, args.phase, args.chunk, args.changes, test_command=args.test_command, subtask=args.subtask, test_scope=args.test_scope, scope_reason=args.scope_reason, repair_package_id=args.repair_package, saved_data=args.saved_data)
         elif args.command == "claim-qa": out = claim_qa(root, args.agent, args.request, args.challenge_ledger)

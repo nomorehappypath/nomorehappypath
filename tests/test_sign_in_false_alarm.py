@@ -44,9 +44,32 @@ class ScreenReading(unittest.TestCase):
         self.assertIsNone(attention.detect(text, "claude"))
         self.assertFalse(attention.menu_on_screen(text), "a quoted line never holds the harness's messages either")
 
+    def test_a_child_tools_sign_in_error_right_above_the_prompt_is_not_a_sign_out(self):
+        # Codex review r2-1 (2026-11-22): the builder ran `claude -p` (Claude Code strips the token from its commands); the child's
+        # "Not logged in" was the newest output above the prompt and stayed while the agent waited, so the agent was read signed out
+        text = screen(AGENT_WORK, "⏺ Bash(./csumm sample.txt)", QUOTED, PROMPT_BOX)
+        self.assertIsNone(attention.detect(text, "claude"))
+        self.assertFalse(attention.menu_on_screen(text))
+
     def test_a_route_note_quoting_it_far_up_is_not_a_sign_out(self):
         note = "⏺ Routed to Delivery: the app's Claude call answers \"Not logged in · Please run /login\"; check its token."
         self.assertIsNone(attention.detect(screen(note, AGENT_WORK, PROMPT_BOX), "claude"))
+
+    def test_an_agent_s_own_report_quoting_it_right_above_the_prompt_is_not_a_sign_out(self):
+        # real runs 4 and 6 (2026-11-22): the CTO's and Delivery's final reports quoted the app's error; each was read signed out for
+        # 2 minutes. A CLI's own error starts its line; these sit inside the agent's sentences.
+        for report in ('  missing solely because Claude says "Not logged in". The red "Blocked, needs',
+                       '  myself: my sandbox\'s claude says "Not logged in", and csumm handled that',
+                       '  bug: the real claude prints “Not logged in · Please run /login”, and a Reviewer real run needs a',
+                       # real run 6 on fa92c048: in brackets, no quotes
+                       '   (Not logged in · Please run /login). I posted this to the CTO as a route'):
+            text = screen(AGENT_WORK, "⏺ OBJECTIVE STATUS: PARTIAL", report, "  (rule 19).", PROMPT_BOX)
+            self.assertIsNone(attention.detect(text, "claude"), report)
+            self.assertFalse(attention.menu_on_screen(text), report)
+
+    def test_a_real_401_with_its_quoted_json_is_still_a_sign_out(self):
+        error = '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login'
+        self.assertEqual(attention.detect(screen(AGENT_WORK, error, PROMPT_BOX), "claude"), attention.LOGIN_REASON)
 
     def test_the_cli_s_own_sign_in_error_above_its_prompt_is_still_a_sign_out(self):
         text = screen(AGENT_WORK, "⏺ API Error: 401 · Please run /login", PROMPT_BOX)
@@ -180,6 +203,29 @@ class BoardActivityOutranksTheScreen(unittest.TestCase):
                 control.record_attention(self.context, self.session["id"], attention.LOGIN_REASON)
                 self.poll()
                 self.assertEqual(bool(self.held().get("claude_auth_action")), kept)
+
+    def test_clearing_the_reading_takes_the_screen_card_with_it_and_keeps_a_token_check_card(self):
+        # Codex review r2-1: clear-attention left the screen's "Claude rejected the setup-token" card behind for good
+        from harness import claude_auth
+        for source, kept in (("screen", False), ("", True)):
+            with self.subTest(source=source):
+                control.record_attention(self.context, self.session["id"], attention.LOGIN_REASON)
+                with control.locked_state(self.context) as state:
+                    card = claude_auth.action("rejected")
+                    state["sessions"][self.session["id"]]["claude_auth_action"] = {**card, "source": source} if source else card
+                control.clear_attention(self.context, self.session["id"])
+                self.assertEqual(bool(self.held().get("claude_auth_action")), kept)
+                with control.locked_state(self.context) as state:
+                    state["sessions"][self.session["id"]].pop("claude_auth_action", None)
+
+    def test_a_screen_card_left_without_its_reading_goes_on_the_next_board_call_and_other_reasons_stay(self):
+        from harness import claude_auth
+        control.record_attention(self.context, self.session["id"], attention.PERMISSION_REASON)
+        with control.locked_state(self.context) as state:
+            state["sessions"][self.session["id"]]["claude_auth_action"] = {**claude_auth.action("rejected"), "source": "screen"}
+        self.poll()
+        self.assertIsNone(self.held().get("claude_auth_action"), "an orphaned screen card is disproved by a working agent")
+        self.assertEqual(self.held()["attention_reason"], attention.PERMISSION_REASON[:200], "another waiting reason stays")
 
     def test_the_supervisor_lets_go_on_its_next_look_and_the_unchanged_screen_stays_released(self):
         watch = attention.PromptWatch(height=40, provider="claude")

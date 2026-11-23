@@ -112,6 +112,32 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(self.seen(), "hidden", f"{kind} must not expose the token to its commands")
 
 
+    def test_a_codex_reviewer_gets_the_token_for_its_commands_and_a_codex_builder_is_not_handed_one(self):
+        # Owner 2026-11-21 (D-023): "at the beginning all builder reviewer and cto have access to everything is needed". With
+        # the default Settings the Reviewer runs on Codex; its test copy of a Claude app must still reach a real Claude.
+        self.require_confinement()
+        self.switch("codex", stage4=False)
+        settings = old_settings()
+        settings["reviewer"] = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"}
+        reviewer = control.create(self.context, "claude_reviewer", settings_override=settings)
+        self.assertEqual(reviewer.get("provider"), "codex")
+        with mock.patch.object(claude_auth, "resolve_token", return_value=TOKEN), mock.patch.object(claude_auth, "validate_token"):
+            socket_path = claude_auth.prepare_launch(self.context, reviewer)
+            self.assertTrue(socket_path, "a Codex Reviewer must be handed the Claude sign-in")
+            builder = {**control.create(self.context, "codex_delivery", settings_override=settings), "provider": "codex"}
+            self.assertEqual(claude_auth.prepare_launch(self.context, builder), "", "a Codex builder is not handed a Claude sign-in")
+        with mock.patch("tests.test_stage4_system_layer.auth_arguments", return_value=["--claude-auth-bootstrap", socket_path]):
+            self.launch(reviewer, "claude_reviewer")
+        self.assertEqual(self.seen(), "shared", "the Codex Reviewer's test copy could not start a real Claude")
+
+    def test_a_codex_reviewer_without_a_usable_token_still_starts(self):
+        settings = old_settings()
+        settings["reviewer"] = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"}
+        reviewer = control.create(self.context, "claude_reviewer", settings_override=settings)
+        with mock.patch.object(claude_auth, "resolve_token", side_effect=claude_auth.ClaudeAuthRequired()):
+            self.assertEqual(claude_auth.prepare_launch(self.context, reviewer), "")
+
+
 class GuardTests(unittest.TestCase):
     def test_evidence_that_contains_a_claude_token_is_refused_and_ordinary_evidence_is_not(self):
         with tempfile.TemporaryDirectory() as temporary:
