@@ -598,6 +598,7 @@ PAGE = r'''<!doctype html>
               <li>Wait until Mission Control explicitly says the reviewed release is ready for your test. Delivery saying it is done is not enough.</li>
               <li>Open the app from the release panel (View app) when one is provided.</li>
               <li>Run the visible checklist shown under <strong>What to test before accepting</strong>. Add your own checks when the task needs them.</li>
+              <li>If the card lists anything under <strong>Not tested for real</strong>, the reviewer could not try it for real (for example no Linux machine, or a loading screen too quick to capture). Only a real problem in the app fails a review, so the work still came to you; the CTO is getting those items tried. You can try them yourself.</li>
               <li>Click <strong>Accepted</strong> only when the reviewed version works for you. Click <strong>Not accepted</strong> when something is wrong and write the reason in ordinary language.</li>
               <li>A local acceptance records the exact reviewed commit. Any remote push is a separate confirmation, unless you turned on upload on accept (below).</li>
             </ol>
@@ -713,6 +714,8 @@ PAGE = r'''<!doctype html>
               <li>Send the initial direction from the Delivery agent row with <strong>Give direction</strong>, or upload a .md or .txt file when the instruction is long. Choose the kind of work (Write code, Analyze code or Write specs) when you start the Delivery agent; if you did not, the Give direction box asks. Delivery never splits a task into parts that are reviewed one by one unless you tick <strong>Allow Delivery to split this task</strong> in that box: one task is one build and one review.</li>
               <li>Delivery may ask clarifying questions in its terminal window — answer there; that conversation shapes the requirements.</li>
               <li>When the requirements are agreed, Delivery <strong>files them on the board</strong>. The task card then shows <strong>"Final agreed requirements — your decision"</strong> with the full text and two buttons. Nothing is built before your decision.</li>
+              <li>Before that card reaches you, NoMoreHappyPath checks that the builder, the reviewer and the CTO can each really sign in and use what the project needs. If something is missing, a card says what, before you are asked to decide.</li>
+              <li>When the work builds or changes screens, the card has a <strong>See the screens</strong> button: one design for each screen and its important states (empty, working, error). They are pictures of the plan, not the working app. If the builder later finds a screen the contract did not show, a <strong>New screens</strong> card asks you to approve it before anything is reviewed.</li>
               <li>Read the text as the task contract it is. Click <strong>Go ahead — this is the contract</strong> when it matches what you want built; click <strong>Modify…</strong> to describe changes — Delivery revises and files a new version for your decision. Every click is recorded with a timestamp; typing "go ahead" in the terminal is not authorization.</li>
               <li>After work starts, use <strong>Send clarification</strong> for necessary corrections. New feature ideas should usually become a new task after the current one is accepted.</li>
             </ol>
