@@ -161,7 +161,8 @@ def _agent_env(executable: str, extra: dict[str, str] | None = None) -> dict[str
     Return: the environment dict.
     """
     env = support_replicate.minimal_env(extra)
-    env["PATH"] = os.pathsep.join([str(Path(executable).resolve().parent), env.get("PATH", "")])
+    # the folder it is called from too: Homebrew's codex resolves into node_modules, where no node is (v0.30.2)
+    env["PATH"] = global_settings.provider_environment(executable, source_environment=env)["PATH"]
     return env
 
 

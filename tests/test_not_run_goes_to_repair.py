@@ -330,6 +330,58 @@ class NotRunAtReview(scope.Rounds):
         self.assertIn("Not tested for real by the review", viewer)
 
 
+class ARoleCheckFindsTheCLIsOwnInterpreter(unittest.TestCase):
+    """v0.30.0 on the owner's Lease project: NMHP's background PATH is only /usr/bin:/bin:/usr/sbin:/sbin, so the role check's
+    `codex` (`#!/usr/bin/env node`) failed with "env: node: No such file or directory" and raised false "can use Codex" cards."""
+
+    def test_a_cli_whose_interpreter_sits_beside_it_answers_with_the_bare_launch_path(self):
+        tools = Path(tempfile.mkdtemp(prefix="nmhp-cli-"))
+        self.addCleanup(shutil.rmtree, tools, True)
+        (tools / "fakenode").write_text("#!/bin/sh\nexit 0\n")
+        (tools / "codex").write_text("#!/usr/bin/env fakenode\n")
+        for name in ("fakenode", "codex"):
+            (tools / name).chmod(0o755)
+        seen = []
+        confine = lambda argv, path_env="": seen.append(path_env) or argv
+        bare = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(tools)}
+        with mock.patch.object(environment_check, "tool_executable", lambda tool, values: str(tools / "codex")):
+            item = environment_check.check_ai_tool("codex", bare, lambda text: text, role="Builder", confine=confine)
+        self.assertTrue(item["ok"], item["detail"])
+        self.assertIn(str(tools), seen[0].split(os.pathsep), "the CLI's folder is readable inside the agents' confinement too")
+
+    def test_an_installed_link_is_called_by_its_real_file(self):
+        # Codex review r1-1 (Linux): ~/.local/bin/codex links into ~/.codex/packages/...; inside the confinement the link's own
+        # chain is not there ("bwrap: execvp ... No such file or directory"), the real file is
+        tools, links = (Path(tempfile.mkdtemp(prefix=f"nmhp-{name}-")) for name in ("cli", "bin"))
+        for folder in (tools, links):
+            self.addCleanup(shutil.rmtree, folder, True)
+        (tools / "codex").write_text("#!/bin/sh\nexit 0\n")
+        (tools / "codex").chmod(0o755)
+        (links / "codex").symlink_to(tools / "codex")
+        called = []
+        confine = lambda argv, path_env="": called.append(argv[0]) or argv
+        with mock.patch.object(environment_check, "tool_executable", lambda tool, values: str(links / "codex")):
+            item = environment_check.check_ai_tool("codex", {"PATH": "/usr/bin:/bin"}, lambda text: text, role="Builder", confine=confine)
+        self.assertTrue(item["ok"], item["detail"])
+        self.assertEqual(called, [str((tools / "codex").resolve())])
+
+    def test_claude_s_answer_is_read_past_a_warning_that_carries_json(self):
+        # Codex review r2-1 (real run): "[claude-code:unrecognized_model] {...}" printed first made NMHP refuse a real "OK"
+        tools = Path(tempfile.mkdtemp(prefix="nmhp-cli-"))
+        self.addCleanup(shutil.rmtree, tools, True)
+        warning = '[claude-code:unrecognized_model] {"model":"x","query_source":"sdk"}'
+        for name, answer in (("ok", '{"type":"result","is_error":false,"result":"OK"}'),
+                             ("refused", '{"type":"result","is_error":true,"result":"Not logged in"}')):
+            (tools / name).write_text(f"#!/bin/sh\necho '{warning}'\necho '{answer}'\n")
+            (tools / name).chmod(0o755)
+        for name, ok in (("ok", True), ("refused", False)):
+            with mock.patch.object(environment_check, "tool_executable", lambda tool, values, name=name: str(tools / name)):
+                item = environment_check.check_ai_tool("claude", {"PATH": "/usr/bin:/bin"}, lambda text: text, role="Builder",
+                                                       confine=lambda argv, path_env="": argv)
+            self.assertEqual(item["ok"], ok, item["detail"])
+        self.assertIn("Not logged in", item["detail"])
+
+
 class RuleTexts(unittest.TestCase):
     """Every rule text says D-024 (only bugs fail; a requirement nobody really ran is listed, never a FAIL)."""
 
@@ -484,7 +536,7 @@ def load_tests(loader, tests, pattern):
     """Only this file's own tests: the fixtures above are subclasses of other suites' test cases, whose tests run in their own files."""
     suite = unittest.TestSuite()
     for case in (EachRoleIsCheckedBeforeTheContract, NotRunAtReview, AStepThatNeedsASignInNeverTrapsTheReview,
-                 AReviewStuckOnARowThatCannotRunNeverHoldsTheRepair, RuleTexts):
+                 AReviewStuckOnARowThatCannotRunNeverHoldsTheRepair, ARoleCheckFindsTheCLIsOwnInterpreter, RuleTexts):
         for name in sorted(n for n in vars(case) if n.startswith("test_")):
             suite.addTest(case(name))
     return suite

@@ -231,6 +231,25 @@ def tool_executable(tool: str, values: dict[str, str]) -> str:
     return ""
 
 
+def _claude_result(output: str) -> dict[str, Any]:
+    """Claude's `--output-format json` answer: its last line that is a JSON object. A warning the CLI prints first may carry JSON
+    of its own ("[claude-code:unrecognized_model] {...}"); reading from the first "{" took that and refused a real answer."""
+    for line in reversed(str(output or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                return data
+    try:   # an answer printed over several lines
+        data = json.loads(output[output.find("{"):]) if "{" in str(output or "") else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _item(kind: str, label: str, ok: bool, detail: str, who: str) -> dict[str, Any]:
     """One checked item."""
     return {"kind": kind, "label": label, "ok": bool(ok), "detail": detail[:600], "who": who}
@@ -253,6 +272,12 @@ def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str]
     executable = tool_executable(tool, values)
     if not executable:
         return _item(kind, label, False, f"the `{tool}` command was not found on this computer; install it, then press Check again", OWNER)
+    if role:
+        # as the real agent launch does: the CLI's own folders on PATH, so `#!/usr/bin/env node` finds node (v0.30.0 false
+        # "can use Codex" cards: NMHP's background PATH is only /usr/bin:/bin:/usr/sbin:/sbin)
+        from harness import global_settings
+        values = global_settings.provider_environment(executable, source_environment=values)
+        executable = str(Path(executable).resolve())   # its real file: a link's own folder may not exist inside the confinement (Linux)
     with tempfile.TemporaryDirectory(prefix="nmhp-setup-") as folder:
         if tool == "claude":
             argv = [executable, "-p", AI_PROMPT, "--output-format", "json"]
@@ -262,7 +287,7 @@ def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str]
             argv = [executable, "-p", AI_PROMPT]
         problem = ""
         try:
-            argv = confine(argv) if confine else argv
+            argv = confine(argv, values.get("PATH", "")) if confine else argv   # the CLI's folders readable inside, as on PATH
         except Exception as error:  # noqa: BLE001 - a platform without the agents' protected area is this item's own failure
             problem = f"the agents' protected area could not be set up: {str(error)[:300]}"
         if problem:
@@ -274,10 +299,7 @@ def check_ai_tool(tool: str, values: dict[str, str], scrub: Callable[[str], str]
            "In Terminal, run `claude` and sign in (or set your long-lasting sign-in), then press Check again" if tool == "claude" else
            f"In Terminal, run `{tool}` and sign in, then press Check again")
     if tool == "claude":
-        try:
-            data = json.loads(output[output.find("{"):]) if "{" in output else {}
-        except ValueError:
-            data = {}
+        data = _claude_result(output)
         if code == 0 and data and not data.get("is_error"):
             return _item(kind, label, True, "answered", OWNER)
         words = scrub(str(data.get("result") or "") or _last_line(output) or f"it exited with code {code}")
@@ -505,11 +527,11 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
         codex_home = ([env.get("CODEX_HOME") or str(Path(env.get("HOME") or Path.home()) / ".codex")]
                       if "codex" in tools or provider == "codex" else [])
 
-        def confine(argv: list[str], codex_home: list[str] = codex_home, env: dict[str, str] = env) -> list[str]:
+        def confine(argv: list[str], path_env: str = "", codex_home: list[str] = codex_home, env: dict[str, str] = env) -> list[str]:
             """argv inside the agents' confinement for this project (the role's Codex home writable, its PATH's tools readable)."""
             from harness import agent_confinement
             return agent_confinement.confine_agent_command(argv, root, claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None,
-                                                           extra_writable=codex_home, path_env=env.get("PATH", ""))
+                                                           extra_writable=codex_home, path_env=path_env or env.get("PATH", ""))
         if provider in {"claude", "codex", "gemini"} and provider not in tools:   # a need on the same tool already proves it
             items.append(check_ai_tool(provider, env, hide, role=name, confine=confine, label=f"{name} is signed in to {provider.title()}"))
         items += [check_ai_tool(tool, env, hide, role=name, confine=confine) for tool in tools]
