@@ -379,6 +379,16 @@ if [[ -n "$cli_path" ]]; then
   esac
   export PATH="$(dirname "$cli_path"):$PATH"
 fi
+# Every AI tool's real folder first on PATH (a Claude Builder or CTO runs Codex):
+# the agent then finds each tool by its real file, as the setup check does, and
+# the Linux box below can read it. Codex's usual Linux install is a link into
+# ~/.codex, which the box hides, so the link itself failed with exit 127.
+tool_path="$("$python_bin" -E -c '
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from harness import global_settings
+print(global_settings.agent_path(os.environ.get("PATH", "")))
+' "$harness_root")" && export PATH="$tool_path"
 
 # The CLI keeps its own memory of a conversation, and the harness keeps the
 # vendor's session id so a relaunch RESUMES that memory instead of starting a

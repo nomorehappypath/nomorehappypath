@@ -476,3 +476,21 @@ class RealProjectRootV0291(unittest.TestCase):
     def test_run_due_never_raises(self):
         with mock.patch("harness.board.snapshot", side_effect=TypeError("anything unexpected")):
             self.assertEqual(environment_check.run_due(self.context), [])
+
+
+class AnUpdateRunsAStaleFailureAgain(unittest.TestCase):
+    """Owner's Lease project 2026-11-23: the "env: node" failure from v0.30.1 was replayed on v0.30.2 forever, because the
+    identity a result is kept under never changed when NMHP's checking code did."""
+
+    def test_new_checking_code_changes_the_identity(self):
+        code = Path(tempfile.mkdtemp(prefix="nmhp-checker-"))
+        self.addCleanup(shutil.rmtree, code, True)
+        (code / "old.py").write_text("old checker")
+        (code / "new.py").write_text("new checker")
+        with mock.patch.object(owner_env, "read", lambda *a, **k: {"PATH": "/usr/bin"}):
+            with mock.patch.object(environment_check, "__file__", str(code / "old.py")):
+                before = environment_check.identity(code, "t1", "", {})
+            with mock.patch.object(environment_check, "__file__", str(code / "new.py")):
+                after = environment_check.identity(code, "t1", "", {})
+        self.assertTrue(before and after)
+        self.assertNotEqual(before, after, "a setup failure kept from older NMHP code is checked again")

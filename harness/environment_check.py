@@ -198,7 +198,9 @@ def identity(root: Path, task: str, workspace: str, needs: dict[str, Any] | None
         return TEST_SUITE_IDENTITY
     except owner_env.OwnerEnvError:
         return ""
-    parts = {"owner_env": owner_env.fingerprint(values)}
+    # the checking code itself (owner's Lease project 2026-11-23: a failure from before the v0.30.2 fix was replayed forever,
+    # because updating NMHP never changed this identity)
+    parts = {"owner_env": owner_env.fingerprint(values), "checker": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]}
     try:
         from harness import test_env
         resolved = test_env.resolve(root, workspace) if workspace and Path(workspace).is_dir() else None
@@ -523,6 +525,9 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
     items: list[dict[str, Any]] = []
     for role, name in ROLE_NAMES.items():
         env = role_environment(role, providers.get(role, ""), values, token)
+        # the PATH the role's agent really gets (Lease project 2026-11-23: "Builder can use node" failed on the bare background PATH)
+        from harness import global_settings
+        env["PATH"] = global_settings.agent_path(env.get("PATH", ""))
         provider = providers.get(role, "")
         codex_home = ([env.get("CODEX_HOME") or str(Path(env.get("HOME") or Path.home()) / ".codex")]
                       if "codex" in tools or provider == "codex" else [])

@@ -949,6 +949,15 @@ def resolved_cli(provider: str, *, source_environment: dict[str, str] | None = N
     return {"path": path, "version": cli_version(path), "source": "discovered"}
 
 
+def agent_path(path: str) -> str:
+    """The PATH a managed agent is launched with (scripts/run_managed_agent.sh) and the setup check's role items use: every
+    installed AI tool's real folder first, then `path`, then the provider search folders."""
+    found = [shutil.which(control.provider_executable_name(name), path=path) or provider_executable(name)
+             for name in control.PROVIDERS]   # the copy the agent's own PATH names comes first; else where NMHP finds it
+    order = [*(str(Path(item).resolve().parent) for item in found if item), *path.split(os.pathsep), *PROVIDER_SEARCH_DIRECTORIES]
+    return os.pathsep.join(dict.fromkeys(item for item in order if item))
+
+
 def provider_environment(
     executable: str, *, source_environment: dict[str, str] | None = None,
 ) -> dict[str, str]:

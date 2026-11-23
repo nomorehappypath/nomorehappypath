@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -380,6 +382,40 @@ class ARoleCheckFindsTheCLIsOwnInterpreter(unittest.TestCase):
                                                        confine=lambda argv, path_env="": argv)
             self.assertEqual(item["ok"], ok, item["detail"])
         self.assertIn("Not logged in", item["detail"])
+
+    def test_a_launched_agent_finds_a_linked_tool_by_its_real_file(self):
+        # Codex review r3-1 (real Linux Builder): ~/.local/bin/codex -> ~/.codex/packages/standalone/current/bin/codex; the
+        # Claude agent's box hides ~/.codex, so `codex` exited 127 while the setup check, run by the real file, passed
+        root = Path(tempfile.mkdtemp(prefix="nmhp-link-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        real = root / "standalone" / "releases" / "1" / "bin"
+        real.mkdir(parents=True)
+        (real / "codex").write_text("#!/bin/sh\nexit 0\n")
+        (real / "codex").chmod(0o755)
+        (root / "standalone" / "current").symlink_to(root / "standalone" / "releases" / "1")
+        (root / "bin").mkdir()
+        (root / "bin" / "codex").symlink_to(root / "standalone" / "current" / "bin" / "codex")
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "run_managed_agent.sh").read_text()
+        code = script.split("tool_path=\"$(\"$python_bin\" -E -c '", 1)[1].split("' \"$harness_root\")\"", 1)[0]
+        env = {**os.environ, "PATH": f"{root / 'bin'}:/usr/bin:/bin", "HARNESS_CODEX_BIN": str(root / "bin" / "codex")}
+        path = subprocess.run([sys.executable, "-E", "-c", code, str(Path(__file__).resolve().parents[1])], env=env,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        found = shutil.which("codex", path=path)
+        self.assertEqual(found, os.path.realpath(found), "the agent runs Codex by its real file, which its box can read")
+
+    def test_a_role_finds_a_program_on_the_path_its_agent_really_gets(self):
+        # owner's Lease project 2026-11-23: "Builder can use node" failed on the bare background PATH; the agents get more
+        tools = Path(tempfile.mkdtemp(prefix="nmhp-prog-"))
+        self.addCleanup(shutil.rmtree, tools, True)
+        (tools / "someprogram").write_text("#!/bin/sh\nexit 0\n")
+        (tools / "someprogram").chmod(0o755)
+        from harness import global_settings
+        with mock.patch.object(global_settings, "PROVIDER_SEARCH_DIRECTORIES", (str(tools),)):
+            path = global_settings.agent_path("/usr/bin:/bin:/usr/sbin:/sbin")
+            item = environment_check.check_role_program({"name": "someprogram"}, {"PATH": path}, lambda argv: argv, "Builder",
+                                                        lambda text: text)
+        self.assertTrue(item["ok"], item["detail"])
+        self.assertIn('env["PATH"] = global_settings.agent_path(', Path(environment_check.__file__).read_text())
 
 
 class RuleTexts(unittest.TestCase):
