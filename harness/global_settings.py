@@ -252,6 +252,7 @@ def _default() -> dict[str, Any]:
         "agent_settings": control.default_agent_settings(),
         "recovery_models": control.validated_recovery_models(None),
         "reviewer_retry_models": control.validated_recovery_models(None),
+        "app_test_models": validated_app_test_models(None),
         "role_colors": control.validated_role_colors(None),
         "connectivity": {},
         "plumbing": default_plumbing(),
@@ -259,6 +260,33 @@ def _default() -> dict[str, Any]:
         WARNING_EMAIL_KEY: default_warning_email(),
         "notices": [],
     }
+
+
+# "Model for testing apps" (owner 2026-11-23: "when testing an app that needs an agent it set the model in the setting"): the model
+# NMHP gives an app's own AI calls when it runs the app live (environment_check.real_run); each provider's cheapest fast model.
+APP_TEST_MODEL_DEFAULTS = {"claude": "haiku", "codex": "gpt-6-luna", "gemini": "gemini-3.8-flash-low"}
+
+
+def validated_app_test_models(value: Any) -> dict[str, str]:
+    """The saved "Model for testing apps" of each provider; blank or missing means its cheapest fast model."""
+    value = {} if value in (None, "") else value
+    if not isinstance(value, dict):
+        raise ValueError("the models for testing apps must be an object with one entry per vendor")
+    return {provider: control.normalize_provider_model(provider, str(value.get(provider) or "").strip() or APP_TEST_MODEL_DEFAULTS[provider])
+            for provider in control.PROVIDERS}
+
+
+def app_test_models(home: Path) -> dict[str, str]:
+    """The models for testing apps from Settings (the defaults when the file is missing or unreadable)."""
+    return dict(load(home).get("app_test_models") or validated_app_test_models(None))
+
+
+def _tolerant(validate: Any, value: Any) -> dict[str, str]:
+    """validate(value), or validate(None) (the defaults) when value itself fails."""
+    try:
+        return validate(value)
+    except ValueError:
+        return validate(None)
 
 
 def _tolerant_recovery_models(value: Any) -> dict[str, str]:
@@ -301,6 +329,7 @@ def _validate_document(value: Any, repairs: list[str] | None = None) -> dict[str
         "recovery_models": _tolerant_recovery_models(value.get("recovery_models")),
         # "If the review can't be completed, retry once with" (2026-10-25): same shape, same default, same tolerance.
         "reviewer_retry_models": _tolerant_recovery_models(value.get("reviewer_retry_models")),
+        "app_test_models": _tolerant(validated_app_test_models, value.get("app_test_models")),
         # Issue #92: each role's Mission Control colour. Older documents have none and get the defaults; an unknown
         # value falls back to that role's default rather than refusing the document.
         "role_colors": control.validated_role_colors(value.get("role_colors"), repair=True),
@@ -983,7 +1012,7 @@ def provider_environment(
 
 
 def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: Any = None, reviewer_retry_models: Any = None,
-                          role_colors: Any = None) -> dict[str, Any]:
+                          role_colors: Any = None, app_test_models: Any = None) -> dict[str, Any]:
     """Validate and save a new agent_settings document (and optionally recovery_models/reviewer_retry_models) to home.
 
     Args:
@@ -992,6 +1021,7 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
         recovery_models: the raw recovery_models to validate and save, or None to leave the stored value unchanged.
         reviewer_retry_models: the raw reviewer_retry_models to validate and save, or None to leave the stored value unchanged.
         role_colors: the raw role -> colour id map to validate and save, or None to leave the stored value unchanged.
+        app_test_models: the raw "Model for testing apps" per vendor, or None to leave the stored value unchanged.
 
     Returns: the saved settings document, or raises ValueError when a role's provider is unavailable or the settings are invalid.
     """
@@ -1000,6 +1030,7 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
     validated_recovery = control.validated_recovery_models(recovery_models) if recovery_models is not None else None
     validated_reviewer_retry = control.validated_recovery_models(reviewer_retry_models) if reviewer_retry_models is not None else None
     validated_colors = control.validated_role_colors(role_colors) if role_colors is not None else None
+    validated_test_models = validated_app_test_models(app_test_models) if app_test_models is not None else None
     from harness import cli_capabilities
     for role, entry in validated.items():
         availability = cli_capabilities.provider_availability(home, entry["provider"])
@@ -1025,6 +1056,8 @@ def update_agent_settings(home: Path, value: dict[str, Any], recovery_models: An
             current["reviewer_retry_models"] = validated_reviewer_retry
         if validated_colors is not None:
             current["role_colors"] = validated_colors
+        if validated_test_models is not None:
+            current["app_test_models"] = validated_test_models
         current["notices"] = save_notices      # an explicit save clears older repair notices
         _write(home, current)
         return json.loads(json.dumps(current))

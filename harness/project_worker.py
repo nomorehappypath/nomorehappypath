@@ -35,7 +35,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from harness import upload_on_accept
-from harness import board, board_viewer, contract_check, control, control_plane, cost_center, cto_wakes, difficulty_note, global_settings, project_chat, project_memory, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
+from harness import board, board_viewer, contract_check, control, control_plane, cost_center, environment_check, cto_wakes, difficulty_note, global_settings, project_chat, project_memory, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
 from harness import platform_support
 from harness.board_surface import (
     MAX_ARTIFACT_WIRE_BYTES, PROTOCOL_VERSION, CommandGateway, SessionTokenAuthority,
@@ -729,6 +729,7 @@ def serve(
     authority = SessionTokenAuthority(root)
     gateway = CommandGateway(root, authority)
     chat = ProjectChatService(root, settings_home, project_id)
+    environment_check.configure(settings_home)     # Settings' test models and sign-in checks follow this worker's --home
     if settings_home:
         # the owner's owner_questions section (deadline and phrase lists for a
         # CTO question to the owner) reaches the board once per worker start

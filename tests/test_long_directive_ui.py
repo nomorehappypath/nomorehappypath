@@ -11,12 +11,13 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness import board, board_viewer, browser_acceptance, contract, control, project_worker
+from harness import environment_check, board, board_viewer, browser_acceptance, contract, control, project_worker
 from harness.board_surface import SessionTokenAuthority
 from tests.test_project_manager_rendered import proxy_handler
 from tests.environment_support import require_loopback
@@ -281,6 +282,9 @@ class LongDirectiveUITests(unittest.TestCase):
             return json.loads(response.read())
 
     def test_real_browser_long_text_reaches_intake_confirmation_task_and_history_exactly(self):
+        run_due = mock.patch.object(environment_check, "run_due", lambda root: [])   # the check's result is given below
+        run_due.start()
+        self.addCleanup(run_due.stop)
         session, agent = self.waiting_agent()
         expected = long_directive()
         server, thread, origin = self.served(managed_worker=True)
@@ -295,6 +299,11 @@ class LongDirectiveUITests(unittest.TestCase):
             message = board.snapshot(self.root)["owner_messages"][0]
             self.assertEqual(message["text"], expected)
             self.assertEqual(len(message["attachments"]), 1)
+            # gate 1 (task 2026-11-23_real-scenario-run): the Builder is woken only once every agent's sign-in passed
+            key = environment_check.agents_key(session["id"])
+            self.assertEqual(control.take_instructions(self.root, session["id"]), [])
+            run = environment_check.run_of(board.snapshot(self.root), key, "agents")
+            board.record_environment_result(self.root, key, "agents", run["run_id"], [], environment_check.TEST_SUITE_IDENTITY)
             instructions = control.take_instructions(self.root, session["id"])
             self.assertEqual(len(instructions), 1)
             self.assertIn(expected, instructions[0]["text"])

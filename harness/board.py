@@ -4726,8 +4726,11 @@ def looks_like_pasted_screen(text: str) -> bool:
     return screen * 2 >= len(lines) and (screen >= 2 or len(lines) == 1)
 
 
-def record_owner_direction(root: Path, session_id: str, text: str, allow_split: bool = False) -> dict[str, Any]:
+def record_owner_direction(root: Path, session_id: str, text: str, allow_split: bool = False, check_agents: bool = False) -> dict[str, Any]:
     """Record the owner's actual terminal input for a managed Delivery session.
+
+    check_agents: gate 1 (task 2026-11-23_real-scenario-run) - NMHP checks every agent's sign-in before the Builder may begin;
+    the real intakes pass True (as needs_required for the setup list).
 
     allow_split: the owner allowed this task to be split into separately reviewed parts; a terminal direction never sets it
     (the box is on Mission Control's Give direction), so the plan stays atomic unless the board command passes --allow-split."""
@@ -4757,7 +4760,22 @@ def record_owner_direction(root: Path, session_id: str, text: str, allow_split: 
             raise ValueError("this Delivery session already has an owner direction")
         direction = {"session_id": session_id, "text": text, "received_at": now(), "consumed": False, "allow_split": bool(allow_split)}
         state.setdefault("owner_directions", {})[session_id] = direction
-        return _event(state, "owner_direction_received", agent, {"task": agent["task"], "message": "owner direction recorded for Product Management", "owner_direction": text})
+        if check_agents:
+            _request_agents_check(state, direction, session_id)
+        event = _event(state, "owner_direction_received", agent, {"task": agent["task"], "message": "owner direction recorded for Product Management", "owner_direction": text})
+    if check_agents:
+        from harness import environment_check
+        environment_check.run_due(root)
+    return event
+
+
+def _request_agents_check(state: dict[str, Any], direction: dict[str, Any], session_id: str) -> None:
+    """Gate 1 (owner 2026-11-23: "test if it has access to the agents to build, spec or review"): a new direction asks NMHP to
+    check every agent and each role's sign-in; the Builder begins only after it passed (begin_task)."""
+    from harness import environment_check
+    key = environment_check.agents_key(session_id)
+    environment_check.request(state, key, "agents", now(), force=True)
+    direction["agents_check"] = key
 
 
 def _prepare_owner_message_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4870,7 +4888,7 @@ def _copy_attachments_into_task_workspace(root: Path, workspace: Path, attachmen
     return copied
 
 
-def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False) -> dict[str, Any]:
+def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False, check_agents: bool = False) -> dict[str, Any]:
     """Record one atomic owner message and route it to a Delivery terminal.
 
     Initial direction messages authorize a waiting Delivery Agent. Clarifications
@@ -4962,6 +4980,8 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
                 "document_only": normalize_task_kind(task_kind, document_only) == "spec",
                 "allow_split": bool(allow_split),    # owner 2026-11-04: only the owner's direction can allow a split into reviewed parts
             }
+            if check_agents:
+                _request_agents_check(state, state["owner_directions"][session_id], session_id)
             # P6: the event log's own copy is redacted; state["owner_directions"][session_id]["text"]
             # above (what begin_task later copies into task_begun's "owner_direction" and what is
             # routed to the agent below) is untouched and stays byte-exact.
@@ -4998,6 +5018,15 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         routed += "\nAttachments saved by Mission Control:" + attachment_lines
     if message_type == "direction":
         routed += "\n" + reference_chapters.reference_hint("requirements")
+    if message_type == "direction" and check_agents:
+        # gate 1: the Builder is not woken until every agent's sign-in passed; the passed check sends this message
+        with locked_state(root) as state:
+            direction = (state.get("owner_directions") or {}).get(session_id) or {}
+            if direction.get("message_id") == message["id"]:
+                direction["held_route"] = routed
+        from harness import environment_check
+        environment_check.run_due(root)
+        return {"message": message, "event": event}
     try:
         from harness import control
         control.enqueue_instruction(root, session_id, routed, source=f"owner-{message_type}")
@@ -5459,6 +5488,9 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
             # the contract waits for NMHP's setup check; the owner sees it (and the Reviewer's early look starts) only once it passed
             proposal["status"] = "checking_setup"
             environment_check.request(state, task, "contract", now())
+        scenario_needs = ((state.get("environment_checks") or {}).get(task) or {}).get("needs") or {}
+        if scenario_needs.get("real_scenario"):
+            proposal["real_scenario"] = {"scenario": scenario_needs["real_scenario"], "files": list(scenario_needs.get("real_data") or [])}
         state["requirement_proposals"][task] = proposal
         agent.update({"status": "requirements_proposed", "status_note": (
             "final requirements drafted; NMHP is checking the project's setup before showing them to the owner" if setup_held
@@ -5675,6 +5707,15 @@ def record_environment_result(root: Path, task: str, stage: str, run_id: str, it
                 "task": task, "version": proposal.get("version", 1),
                 "message": "the project's setup check passed; the final requirements are shown to the owner for Go ahead or Modify",
             })
+        if stage == "agents" and ok:
+            # gate 1 passed: wake the Builder holding this direction (the one it was given to, or its recovered replacement)
+            for candidate in (state.get("agents") or {}).values():
+                direction = (state.get("owner_directions") or {}).get(str(candidate.get("session_id") or "")) or {}
+                if (isinstance(candidate, dict) and candidate.get("role") in DEVELOPER_ROLES and candidate.get("active")
+                        and direction.get("agents_check") == task and not direction.get("consumed")):
+                    builder_wake = (str(candidate["session_id"]), str(direction.pop("held_route", "") or (
+                        "[SETUP CHECK] NMHP checked every agent's sign-in: begin the owner's task now. USER ACTION: None.")))
+                    break
         builders = [a for a in (state.get("agents") or {}).values()
                     if isinstance(a, dict) and a.get("role") in DEVELOPER_ROLES and a.get("active") and str(a.get("task") or "") == task]
         builder = max(builders, key=lambda a: str(a.get("spawned_at") or "")) if builders else None
@@ -10367,6 +10408,16 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
             direction = state.get("owner_directions", {}).get(agent["session_id"])
             if not direction or direction.get("consumed"):
                 raise ValueError("managed Delivery Agent cannot begin a task until owner terminal direction is recorded")
+            from harness import environment_check
+            gate = str(direction.get("agents_check") or "")
+            if gate and not environment_check.passed(state, gate, "agents"):
+                run = environment_check.run_of(state, gate, "agents")
+                raise ValueError("NMHP is checking that every agent can sign in before any work starts"
+                                 + (": " + "; ".join(environment_check.failed_lines(run)) + " (the owner fixes it and presses Check again)"
+                                    if run.get("status") == "failed" else "")
+                                 + ". Wait for the [SETUP CHECK] message, then begin the task. USER ACTION: None.")
+            if gate:
+                state.setdefault("task_agents_check", {})[task] = gate
         else:
             raise ValueError("Delivery Agents require a managed session so the owner direction is recorded verbatim")
         if task in (state.get("cancelled_tasks") or {}):
@@ -18676,6 +18727,34 @@ def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, s
         early_fail=early_fail, certified=bool(request.get("challenge_execution")))
 
 
+def _scenario_verdict_problem(state: dict[str, Any], request: dict[str, Any], summary: str, root: Path | None = None) -> str:
+    """Task 2026-11-23_real-scenario-run: a final PASS of an app that calls an AI tool needs NMHP's passed real run of the owner's
+    scenario on the reviewed commit, and the Reviewer's line naming the saved result it judged; a `Not run for real: real
+    scenario` line is never a PASS. "" when the PASS may be recorded. The judged line may name the saved path, or the trusted://
+    form the Projects command surface hands the Reviewer instead (Codex review R3-1)."""
+    from harness import environment_check
+    task = str(request.get("task") or "")
+    needs = ((state.get("environment_checks") or {}).get(task) or {}).get("needs") or {}
+    if not environment_check.real_run_required(state, task, needs) or not needs.get("real_output"):
+        return ""
+    commit = str(request.get("reviewed_commit") or "")
+    saved = environment_check.evidence_of(state, task, commit)
+    if not saved:
+        return (f"cannot record PASS: NMHP's real run of the owner's scenario has not passed with a saved result on {commit[:12] or 'this commit'}; "
+                "record FAIL (the scenario's real result was not judged)")
+    if review_rounds.SCENARIO_NOT_RUN.search(summary):
+        return ("cannot record PASS with `Not run for real: real scenario`: the owner's main AI path is never 'not tested for real'. "
+                f"Open NMHP's saved result ({saved}) and judge it, or record FAIL")
+    names = {saved}
+    if root is not None:
+        from harness import board_surface
+        names.add(board_surface._sanitized_text(saved, root))
+    if not any(re.search(re.escape(review_rounds.SCENARIO_JUDGED) + r"\s*`?" + re.escape(name), summary) for name in names):
+        return (f"cannot record PASS: the scenario's real result was not judged. Open NMHP's saved result {saved}, judge it as the owner "
+                f"would against the contract, and add the line `{review_rounds.SCENARIO_JUDGED} {saved}` with what you found; or record FAIL")
+    return ""
+
+
 def _note_not_run(request: dict[str, Any], judgment: dict[str, Any], summary: str, unrun_screens: str = "") -> None:
     """D-024 (owner 2026-11-22: "Only bugs count as failing anything related to process is not fail test"): a final PASS whose
     summary says a requirement was not run for real is recorded; every such line joins its not-tested-for-real list next to the
@@ -18775,6 +18854,9 @@ def qa_result(
             if problem:
                 raise ValueError(problem)
             problem = _saved_data_verdict_problem(request, summary)
+            if problem:
+                raise ValueError(problem)
+            problem = _scenario_verdict_problem(state, request, summary, root)
             if problem:
                 raise ValueError(problem)
             problem = _screens_coverage_problem(root, state, request, task_name_here)
@@ -21572,7 +21654,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "test-env-set": out = test_env_set(root, args.declaration, who=(args.agent or "the owner"))
         elif args.command == "test-env-status": out = test_env_status(root, args.task)
         elif args.command == "test-env-run": out = test_env_run(root, args.agent, args.task, args.cmd)
-        elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text, allow_split=args.allow_split)
+        elif args.command == "owner-direction": out = record_owner_direction(root, args.session_id, args.text, allow_split=args.allow_split, check_agents=True)
         elif args.command == "owner-message": out = record_owner_message(root, args.agent, args.text, args.type)
         elif args.command == "propose-requirements":
             try:

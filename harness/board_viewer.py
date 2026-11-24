@@ -964,6 +964,12 @@ function screensButtonHtml(task,screens,source){
   return '';
 }
 
+// task 2026-11-23_real-scenario-run: the owner's whole scenario and its files, which NMHP runs through the app for real before review
+function realScenarioHtml(proposal){
+  const real=proposal.real_scenario||{};
+  if(!real.scenario)return '';
+  return `<div class="delivery-brief" data-real-scenario><strong>Your real test, from start to finish</strong><p>${esc(real.scenario)}</p>${(real.files||[]).length?`<p>Files it uses: ${(real.files||[]).map(esc).join(', ')}</p>`:''}<small>Before each review and before release, NoMoreHappyPath runs this through your app with its real AI tools, on the Settings model for testing apps.</small></div>`;
+}
 function proposalCardHtml(name,proposal){
   const cc=proposal.contract_check||{};
   const status=cc.status||'';
@@ -982,7 +988,7 @@ function proposalCardHtml(name,proposal){
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
     :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review, then start</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. When it is done the work starts by itself, so keep this page open. If the reviewer has questions for you, it asks them first and nothing starts. You can still go ahead without waiting.</p>`:''}`;
-  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${screensButtonHtml(name,proposal.screens,'proposal')}${skillsBlockHtml(proposal,name)}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${realScenarioHtml(proposal)}${screensButtonHtml(name,proposal.screens,'proposal')}${skillsBlockHtml(proposal,name)}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
 // A task card is split into two independently-refreshed regions so the window
@@ -5879,6 +5885,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             document_only=str(fields.get("document_only", "")).strip().lower() in {"1", "true", "on", "yes"},
                             task_kind=str(fields.get("task_kind", "")),
                             allow_split=str(fields.get("allow_split", "")).strip().lower() in {"1", "true", "on", "yes"},
+                            check_agents=True,
                         )
                     else:
                         if length > 128 * 1024:
@@ -5894,6 +5901,7 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             document_only=data.get("document_only") is True,
                             task_kind=str(data.get("task_kind", "")),
                             allow_split=data.get("allow_split") is True,
+                            check_agents=True,
                         )
                     response["input"] = input_metadata
                     self.send_json(201, response); return

@@ -17,6 +17,7 @@ from unittest import mock
 
 from harness import board, board_viewer, browser_acceptance, contract_check, control, standing_checks
 from tests.environment_support import require_loopback
+from tests.environment_support import pass_agents_check
 from tests.test_branding_rendered import probe_proxy
 from tests.test_contract_first_checks import TASK, TEXT, _Fixture, write_json
 from tests.test_requirements_contract import context
@@ -241,6 +242,8 @@ class OpenedByTheApiTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=20):
                 pass
             self.assertIs(board.snapshot(root)["owner_directions"][session2["id"]]["document_only"], True)
+            for opened in (session, session2):      # the sign-in checks these directions started finish before the folder goes
+                pass_agents_check(root, opened["id"])
 
 
 class MultipartPathTests(unittest.TestCase):
@@ -271,6 +274,7 @@ class MultipartPathTests(unittest.TestCase):
             agent = board.register(root, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=session["id"])
             self.send(root, agent, {"message_type": "direction", "text": "Write a spec for the thing (not an app spec).", **fields})
             self.assertIs(board.snapshot(root)["owner_directions"][session["id"]]["document_only"], expected)
+            pass_agents_check(root, session["id"])
             board.begin_task(root, agent["id"], TASK)
             self.assertIs(board.task_document_only(board.snapshot(root), TASK), expected)
             board.record_requirement_proposal(root, agent["id"], TEXT)

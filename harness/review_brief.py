@@ -366,6 +366,20 @@ def build(
                 unchecked.append(entry)
         if unchecked:
             brief["final_stage"]["not_checked_in_advance"] = unchecked[:MAX_ITEMS]
+        # task 2026-11-23_real-scenario-run: NMHP ran the owner's whole scenario through the app with the real AI tools; the
+        # Reviewer judges its saved result (the one not-run exception)
+        from harness import environment_check, review_rounds
+        needs = ((state.get("environment_checks") or {}).get(task) or {}).get("needs") or {}
+        if environment_check.real_run_required(state, task, needs) and needs.get("real_output"):
+            saved = environment_check.evidence_of(state, task, _text(request.get("reviewed_commit")))
+            brief["final_stage"]["real_scenario"] = {
+                "scenario": _text(needs.get("real_scenario")), "files": _bounded(list(needs.get("real_data") or [])),
+                "saved_result": saved, "evidence_folder": str(Path(saved).parent) if saved else "",
+                "rule": ("Open saved_result and judge it as the owner would against the contract: complete, about the given files, no "
+                         "error text, nothing invented. A PASS carries the line '" + review_rounds.SCENARIO_JUDGED + " <saved_result>' "
+                         "with what you found. This is the one exception to not-tested: if you could not judge it, write "
+                         "'Not run for real: real scenario - <why>', which is a FAIL, never a PASS."),
+            }
         # always at the final review (Codex R1-1): the early criteria are not an inventory, a line they left out has no label at all
         brief["final_stage"]["verify_yourself"] = (
                 ("No requirement was checked in advance (no early checks were recorded). " if not labels else

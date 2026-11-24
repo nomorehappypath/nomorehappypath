@@ -98,3 +98,20 @@ def assert_agy_pinned() -> None:
     pinned = os.environ.get("HARNESS_AGY_BIN", "")
     if not pinned or Path(pinned).exists():
         raise AssertionError(f"HARNESS_AGY_BIN must stay pinned to a missing path during the suite, found {pinned!r}")
+
+
+def pass_agents_check(root, session_id: str) -> None:
+    """Gate 1 (task 2026-11-23_real-scenario-run): a direction from the owner's page or terminal holds the Builder until every
+    agent's sign-in check passes. Tests of the later steps record that pass (a fresh run, so a background run cannot overwrite it)."""
+    import time
+    from harness import board, environment_check
+    key = environment_check.agents_key(session_id)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:     # a check this process started in the background finishes first (it writes in root)
+        with environment_check._running_lock:
+            if not any(running[1] == key for running in environment_check._running):
+                break
+        time.sleep(.05)
+    with board.locked_state(root) as state:
+        run = environment_check.request(state, key, "agents", board.now(), force=True)
+    board.record_environment_result(root, key, "agents", run["run_id"], [], environment_check.TEST_SUITE_IDENTITY)

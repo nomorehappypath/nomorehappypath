@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from harness import board, board_viewer, project_manager_page
 from tests.environment_support import require_loopback
+from tests.environment_support import pass_agents_check
 from tests.mission_control_support import RenderedCase
 from tests.test_requirements_contract import context
 
@@ -448,6 +449,7 @@ class WishListPagePathTests(unittest.TestCase):
             ],
         )
         self.assertEqual(status, 201)
+        pass_agents_check(self.root, session["id"])
         begun = board.begin_task(self.root, agent["id"], "WISH-BUILD-1")
         self.assertEqual(
             sorted(begun["supporting_documents"]),
@@ -469,6 +471,7 @@ class WishListPagePathTests(unittest.TestCase):
             f"/api/agents/{agent['id']}/owner-message",
             {"message_type": "direction", "text": "Build the wish", "task_kind": "development"}, [],
         )
+        pass_agents_check(self.root, session["id"])
         begun = board.begin_task(self.root, agent["id"], "WISH-BUILD-2")
         status, response = self._post_multipart(
             f"/api/agents/{agent['id']}/owner-message",
@@ -490,6 +493,7 @@ class WishListPagePathTests(unittest.TestCase):
             {"message_type": "direction", "text": "Build the wish", "task_kind": "development"},
             [("attachments", "shot.png", "image/png", b"original bytes")],
         )
+        pass_agents_check(self.root, session["id"])
         begun = board.begin_task(self.root, agent["id"], "WISH-BUILD-3")
         self._post_multipart(
             f"/api/agents/{agent['id']}/owner-message",

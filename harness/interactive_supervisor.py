@@ -517,7 +517,7 @@ def _record_owner_direction(root: Path, session_id: str, text: str, transcript=N
         # below records direction for the Delivery session only.
         transcript.owner(text)
     try:
-        board.record_owner_direction(root, session_id, text)
+        board.record_owner_direction(root, session_id, text, check_agents=True)
         print("\r\nHARNESS | owner direction recorded; Delivery may now begin its internal task.\r", flush=True)
     except ValueError:
         # Direction is only recorded for one pre-registered Delivery session.

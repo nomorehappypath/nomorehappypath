@@ -188,8 +188,13 @@ path. A proposed name that is not in the library is dropped. Terminal words are 
 "libraries": [...], "real_run": "..."}` — `ai_tools` the AI tools the APP ITSELF calls (`claude`, `codex`, `gemini`; `[]` when none);
 `folders` every folder outside the project the work reads or writes (`{"path": "/abs", "access": "read"|"write"}`); `programs` the languages,
 compilers, build and test tools (`{"name": "python3", "min_version": "3.11"}`); `libraries` per language (`{"language": "python"|"node",
-"name": "..."}`); `real_run`, for an app that calls an AI tool, ONE command that runs the app's own code end to end on a small sample
-(never the owner's live data) and makes a real call of every listed AI tool by name from PATH. NMHP adds the project's agents itself.
+"name": "..."}`); for an app that calls an AI tool, also `real_scenario` (one plain sentence: the owner's main job from start to finished
+result), `real_data` (the files it uses: the owner's own files when he gave them, read in place; else realistic fake files you write
+into the project), `real_output` (the file the run writes the finished result to) and `real_run`, ONE command that runs that whole
+scenario through the app's real entry point (its CLI or its server's HTTP call, never a test helper or a mock), calling every listed AI
+tool by name from PATH, and writes the finished result to `real_output`. A one-call "hello" never passes: NMHP fails a run that writes
+no fresh result. Never put a test model in the app's code or defaults: NMHP gives each of the app's AI calls the Settings "Model for
+testing apps" (Claude: haiku; Fable and Opus are the expensive ones). NMHP adds the project's agents itself.
 The board refuses a proposal without the list. NMHP (never an agent) then checks every item, as the owner, in his own environment,
 with real calls; the contract is shown to the owner only when all pass. A failed item becomes a card saying who fixes it: the owner
 (sign-in, folder, program) or you (a library into the project, a wrong list: file the proposal again with the corrected list). You are told
@@ -1587,7 +1592,11 @@ sign-in, or routing the builder to make it runnable), and the owner's test card 
 never held for it and the owner is never asked. A bug next to it still fails as usual. A process limit not tied to an agreed
 requirement (an extra check of your own, a second browser window) is one `Process note: <the step and why>` line.
 **The app's real run (owner 2026-11-21).** An app that calls an AI tool is reviewed and released only after NMHP ran its `real_run`
-on that commit with the real tools; cite it for the app's AI calls. A stand-in or mocked AI call is never evidence that the app
+on that commit with the real tools; cite it for the app's AI calls. **The one exception to this chapter (owner 2026-11-23):** the
+owner's real scenario. Open NMHP's saved result (the brief's `final_stage.real_scenario.saved_result`) and judge it as the owner would
+against the contract (complete, about the given files, no error text, nothing invented); a PASS carries the line `Scenario result
+judged: <saved_result>`. If you could not judge it, `Not run for real: real scenario — <why>` is a FAIL, never a PASS. A test model
+hard-coded in the app is a finding, not a fix. A stand-in or mocked AI call is never evidence that the app
 works; say so in your verdict when the app's only proof of its AI calls is a stand-in.
 Never ask the owner to create, copy or paste a token or login: the builder and the CTO clear what stands in the way.
 

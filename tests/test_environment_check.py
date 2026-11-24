@@ -101,7 +101,8 @@ class Case(unittest.TestCase):
         _script(self.bin / "claude", f'echo \'{{"type":"result","is_error":true,"result":"{LEASE_ERROR} ({SECRET_URL})"}}\'\nexit 1\n')
 
     def commit_app(self, source: str) -> str:
-        (self.workspace / "realcheck.py").write_text(source)
+        # every sample app writes its finished result first (task 2026-11-23_real-scenario-run: the run must leave one)
+        (self.workspace / "realcheck.py").write_text(RESULT_LINE + source)
         _git(self.workspace, "add", "realcheck.py")
         _git(self.workspace, "commit", "-qm", "app")
         return _git(self.workspace, "rev-parse", "HEAD")
@@ -109,7 +110,8 @@ class Case(unittest.TestCase):
     def needs(self, **extra) -> str:
         value = {"ai_tools": ["claude"], "folders": [{"path": str(self.base), "access": "read"}],
                  "programs": [{"name": "sh"}], "libraries": [{"language": "python", "name": "json"}],
-                 "real_run": f"{sys.executable} realcheck.py"}
+                 "real_run": f"{sys.executable} realcheck.py", "real_scenario": "the lease in, the tenant report out",
+                 "real_data": ["realcheck.py"], "real_output": "out/result.txt"}
         value.update(extra)
         return json.dumps(value)
 
@@ -126,6 +128,9 @@ class Case(unittest.TestCase):
     def open_setup_cards(self) -> list[dict]:
         return [a for a in (self.state().get("owner_actions") or {}).values()
                 if a.get("status") == "open" and str(a.get("card_key") or "").startswith("setup:")]
+
+
+RESULT_LINE = 'import pathlib as _p; _p.Path("out").mkdir(exist_ok=True); _p.Path("out/result.txt").write_text("the report")\n'
 
 
 @unittest.skipUnless(SHELLS, "needs zsh or bash")

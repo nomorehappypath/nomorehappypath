@@ -51,6 +51,16 @@ def is_not_run_finding(member: Any) -> bool:
     return isinstance(member, dict) and bool(re.match(r"\s*not\s+run\s+for\s+real\b", str(member.get("summary") or ""), re.I))
 
 
+SCENARIO_NOT_RUN = re.compile(r"(?im)^[\s>*+\-•#`_\d.)]*not\s+run\s+for\s+real\s*:\s*real\s+scenario\b")
+SCENARIO_JUDGED = "Scenario result judged:"
+
+
+def is_scenario_not_run(member: Any) -> bool:
+    """The finding says the owner's real scenario was not run for real: the one not-run line that never becomes a PASS (task
+    2026-11-23_real-scenario-run; the app's main AI path is never "not tested for real")."""
+    return isinstance(member, dict) and bool(SCENARIO_NOT_RUN.match(str(member.get("summary") or "")))
+
+
 def _env_number(name: str, default: int, minimum: int) -> int:
     """Read an integer environment variable named name, clamped to at least minimum.
 
@@ -351,6 +361,10 @@ def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, sum
         raise _correction("two findings share an id", "give every finding its own id")
     decision["structured"] = True
     decision["blockers"] = normalized
+    if any(is_scenario_not_run(m) for m in normalized):
+        decision["message"] = ("Recorded as FAIL: the owner's real scenario was not run for real. That is never a PASS; NMHP's saved "
+                               "result of the scenario run must be opened and judged.")
+        return decision
     open_findings = [m for m in normalized if not base or m["letter"] != "new"]
     if open_findings and request.get("phase") == "final_acceptance" and not early_fail and all(is_not_run_finding(m) for m in open_findings):
         # D-024 (owner 2026-11-22: "Only bugs count as failing anything related to process is not fail test"): requirements nobody

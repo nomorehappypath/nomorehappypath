@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness import board, contract, control, cto, interactive_supervisor
+from tests.environment_support import pass_agents_check
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +66,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 self._wait_for(lambda: board.snapshot(root).get("owner_directions", {}).get(session["id"], {}).get("text") == "Build a real retry controller")
                 # The exact terminal input unlocks one authorized task, then
                 # the controller can route a later failed-review instruction.
+                pass_agents_check(root, session["id"])
                 board.begin_task(root, agent["id"], "OWNER-TASK")
                 control.enqueue_instruction(root, session["id"], "Resume: review cycle failed; fix and requeue.", "independent-review")
                 output = startup + self._read_until(master, b"RETRY:", timeout=4)
@@ -282,6 +284,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 time.sleep(.05)
                 os.write(master, b"85R\x1b]10;rgb:e6ce/e6ce/e6ce\x07\x1b]11;rgb:05b1/06cf/0923\x07\x1b[?1;2c\x1b[O\x1b[I" + direction.encode() + b"\n")
                 self._wait_for(lambda: board.snapshot(root).get("owner_directions", {}).get(session["id"], {}).get("text") == direction)
+                pass_agents_check(root, session["id"])
                 board.begin_task(root, agent["id"], "OWNER-SCOPE")
                 contract.create_contract(root, "OWNER-SCOPE", direction, ["scope"])
                 proof = root / "scope-proof.txt"
@@ -321,6 +324,7 @@ class InteractiveSupervisorTests(unittest.TestCase):
                 time.sleep(.05)
                 os.write(master, b"passthrough\x9c\n")
                 self._wait_for(lambda: board.snapshot(root).get("owner_directions", {}).get(session["id"], {}).get("text") == direction)
+                pass_agents_check(root, session["id"])
                 board.begin_task(root, agent["id"], "TRAILING-REPLIES")
                 contract.create_contract(root, "TRAILING-REPLIES", direction, ["scope"])
                 proof = root / "scope-proof.txt"

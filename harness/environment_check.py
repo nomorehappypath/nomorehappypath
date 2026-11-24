@@ -7,7 +7,9 @@ the project needs (agents, folders, languages, compilers, tools, libraries, the 
 all of it BEFORE the contract is shown to him; any problem is a card to resolve first. Later, the app's own real run
 (real Claude/Codex calls through the app's code, observed by NMHP) must pass before any review and again before release.
 
-Three stages, one record per task (state["environment_checks"][task]):
+Four stages, one record per task (state["environment_checks"][task]):
+  agents    (gate 1, owner 2026-11-23) on the owner's direction, before the Builder starts: every agent answers and every role is
+            signed in, as it runs; keyed "agents:<session>" until the task has a name (agents_key)
   contract  every item of the needs list + the project's agents + each role's own reach of every AI tool, program and folder
             (check_roles: inside the agents' confinement, with the role's own sign-in); holds the contract back until it passes
   review    the app's real-run command on the commit under review (only when the app calls an AI tool)
@@ -34,7 +36,7 @@ from typing import Any
 
 from harness import git_process, owner_env
 
-STAGES = ("contract", "review", "release")
+STAGES = ("agents", "contract", "review", "release")
 AI_TOOLS = ("claude", "codex", "gemini")
 LIBRARY_LANGUAGES = ("python", "node")
 ITEM_SECONDS = 20
@@ -50,11 +52,16 @@ NEEDS_FORMAT = (
     "--needs takes one JSON object, the setup this contract needs: "
     '{"ai_tools": ["claude", "codex"], "folders": [{"path": "/abs/folder", "access": "read"}], '
     '"programs": [{"name": "python3", "min_version": "3.11"}], "libraries": [{"language": "python", "name": "pypdf"}], '
-    '"real_run": "python3 -m app.realcheck"}. ai_tools: the AI tools the APP itself calls (claude, codex, gemini; [] when none). '
+    '"real_run": "python3 -m app.scenario", "real_scenario": "the lease and the notice in, the tenant report out", '
+    '"real_data": ["samples/lease.pdf"], "real_output": "out/report.md"}. ai_tools: the AI tools the APP itself calls (claude, codex, gemini; [] when none). '
     "folders: every folder the work reads or writes outside the project (access read or write). programs: languages, compilers, "
     "build and test tools (min_version optional). libraries: per language (python or node). real_run: for an app that calls an AI "
-    "tool, one command that runs the app's own code end to end with a small sample input and makes a real call of every listed "
-    "AI tool; build it first. Agents are added by NMHP itself."
+    "tool, one command that runs the owner's whole scenario through the app's real entry point (its CLI or its server's HTTP "
+    "call, never a test helper or a mock) with the real AI tools, and writes the finished result to real_output; build it first. "
+    "real_scenario: one plain sentence naming the owner's main job from start to finished result. real_data: the files it uses "
+    "(the owner's own files when he gave them, else realistic fake files the builder writes into the project). real_output: "
+    "the file the run writes the finished result to. Never put a test model in the app's code: NMHP gives the app the Settings "
+    "\"Model for testing apps\" on each AI call. Agents are added by NMHP itself."
 )
 
 
@@ -71,7 +78,7 @@ def parse_needs(raw: Any) -> dict[str, Any]:
             raise ValueError(f"the setup list is not valid JSON ({error}): {NEEDS_FORMAT}") from error
     if not isinstance(raw, dict):
         raise ValueError(f"the setup list must be a JSON object: {NEEDS_FORMAT}")
-    unknown = set(raw) - {"ai_tools", "folders", "programs", "libraries", "real_run"}
+    unknown = set(raw) - {"ai_tools", "folders", "programs", "libraries", "real_run", "real_scenario", "real_data", "real_output"}
     if unknown:
         raise ValueError(f"the setup list has unknown keys {sorted(unknown)}: {NEEDS_FORMAT}")
     tools = raw.get("ai_tools", [])
@@ -108,8 +115,17 @@ def parse_needs(raw: Any) -> dict[str, Any]:
     real_run = str(raw.get("real_run") or "").strip()
     if len(real_run) > 1000:
         raise ValueError("real_run must be 1000 characters or fewer")
+    # the owner's A-to-Z scenario (task 2026-11-23_real-scenario-run): named in the contract, run by NMHP, judged by the Reviewer
+    scenario, output = str(raw.get("real_scenario") or "").strip(), str(raw.get("real_output") or "").strip()
+    data = raw.get("real_data") or []
+    data = [data] if isinstance(data, str) else data
+    if not isinstance(data, list) or any(not str(item).strip() or len(str(item)) > 1000 for item in data):
+        raise ValueError(f"real_data is a list of file paths (absolute, or inside the project): {NEEDS_FORMAT}")
+    if len(scenario) > 1000 or len(output) > 1000:
+        raise ValueError("real_scenario and real_output must be 1000 characters or fewer")
     return {"ai_tools": sorted({str(tool).strip().lower() for tool in tools}), "folders": folders, "programs": programs,
-            "libraries": libraries, "real_run": real_run}
+            "libraries": libraries, "real_run": real_run, "real_scenario": scenario,
+            "real_data": [os.path.expanduser(str(item).strip()) for item in data], "real_output": output}
 
 
 def needs_hash(needs: dict[str, Any]) -> str:
@@ -128,10 +144,19 @@ def real_run_required(state: dict[str, Any], task: str, needs: dict[str, Any] | 
 
 def needs_problem(state: dict[str, Any], task: str, needs: dict[str, Any]) -> str:
     """A needs list this task cannot use: a real run is required and none is named."""
-    if real_run_required(state, task, needs) and not needs.get("real_run"):
-        return ("this app calls " + ", ".join(needs["ai_tools"]) + ": the setup list must name its real_run command (one command "
-                "that runs the app's own code with a small sample and makes a real call of each of them); build it first. " + NEEDS_FORMAT)
+    if not real_run_required(state, task, needs):
+        return ""
+    missing = [name for name in ("real_run", "real_scenario", "real_data", "real_output") if not needs.get(name)]
+    if missing:
+        return ("this app calls " + ", ".join(needs["ai_tools"]) + ": the setup list must name " + ", ".join(missing) + " (the owner's "
+                "whole scenario, its files, the one command that runs it through the app's real entry point with the real AI tools, and "
+                "the file it writes the finished result to); build it first. " + NEEDS_FORMAT)
     return ""
+
+
+def agents_key(session_id: str) -> str:
+    """The record of gate 1 for one direction: the Builder's session until the task has a name."""
+    return f"agents:{session_id}"
 
 
 # ---------------------------------------------------------------------------------------------------------------- state
@@ -178,6 +203,13 @@ def passed(state: dict[str, Any], task: str, stage: str, commit: str = "", ident
     run = (record.get("runs") or {}).get(stage) or {}
     return (run.get("status") == "passed" and run.get("needs_hash") == record.get("needs_hash") and run.get("commit", "") == commit
             and (identity is None or bool(identity) and run.get("identity") == identity))
+
+
+def evidence_of(state: dict[str, Any], task: str, commit: str) -> str:
+    """The saved scenario result of the passed review real run on commit ("" when there is none)."""
+    if not passed(state, task, "review", commit):
+        return ""
+    return next((str(item["evidence"]) for item in run_of(state, task, "review").get("items") or [] if item.get("evidence")), "")
 
 
 def failed_lines(run: dict[str, Any]) -> list[str]:
@@ -513,7 +545,8 @@ def check_role_folder(item: dict[str, str], env: dict[str, str], confine: Callab
     return _item("role_access", label, True, f"{access} access", OWNER)
 
 
-def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub: Callable[[str], str]) -> list[dict[str, Any]]:
+def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub: Callable[[str], str],
+                signed_in: bool = False) -> list[dict[str, Any]]:
     """For each role (builder, Reviewer, CTO): its own sign-in, on every project (owner 2026-11-22: "The sign in should be tested
     before contract acceptance for any type of project"), then one item per need: every AI tool's minimal real call, every
     program's version call and every folder's probe, as that role's commands run. A sign-in never reaches an item: it is hidden
@@ -537,7 +570,8 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
             from harness import agent_confinement
             return agent_confinement.confine_agent_command(argv, root, claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None,
                                                            extra_writable=codex_home, path_env=path_env or env.get("PATH", ""))
-        if provider in {"claude", "codex", "gemini"} and provider not in tools:   # a need on the same tool already proves it
+        # a need on the same tool already proves it; so does gate 1's passed sign-in check (signed_in)
+        if provider in {"claude", "codex", "gemini"} and provider not in tools and not signed_in:
             items.append(check_ai_tool(provider, env, hide, role=name, confine=confine, label=f"{name} is signed in to {provider.title()}"))
         items += [check_ai_tool(tool, env, hide, role=name, confine=confine) for tool in tools]
         items += [check_role_program(item, env, confine, name, hide) for item in needs.get("programs") or []]
@@ -547,16 +581,16 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
 
 def _real_agent_check(provider: str, model: str, effort: str) -> None:
     """The Settings page's connection test (a real one-word request through the agents' own sign-in)."""
-    from harness import global_settings, project_registry
+    from harness import global_settings
     with tempfile.TemporaryDirectory(prefix="nmhp-setup-") as folder:
-        global_settings.test_connection(project_registry.default_home(), provider, model, effort, Path(folder))
+        global_settings.test_connection(settings_home(), provider, model, effort, Path(folder))
 
 
 AGENT_CHECK: Callable[[str, str, str], None] = _real_agent_check
 
 RECORDER = """#!/bin/sh
 call="{calls}/{tool}.$$"
-printf '%s\\0' "$@" > "$call.args"
+{model}printf '%s\\0' "$@" > "$call.args"
 "{real}" "$@" > "$call.out"
 code=$?
 cat "$call.out"
@@ -587,10 +621,72 @@ def answered(tool: str, code: str, output: str) -> bool:
     return not (tool == "claude" and re.search(r'"is_error"\s*:\s*true', output))
 
 
+def model_flag(tool: str, model: str) -> str:
+    """The recorder's shell lines that put the Settings "Model for testing apps" on each call that asks the AI something (owner
+    2026-11-23: "when testing an app that needs an agent it set the model in the setting"), so the app's code never changes for
+    testing. A model the app names itself is replaced, never doubled (Codex review R1-1: codex refuses a second --model); a
+    version, help or sign-in call is left alone."""
+    if not model:
+        return ""
+    quoted = shlex.quote(model)
+    if tool == "codex":
+        ask = 'case "$1" in exec|e) ask=1;; esac\n'
+    else:
+        flags = "-p|--print" if tool == "claude" else "-p|--prompt"
+        ask = f'for a in "$@"; do case "$a" in {flags}) ask=1;; esac; done\n'
+    short = "" if tool == "claude" else "-m|"
+    return ('ask=""\n' + ask
+            + 'if [ -n "$ask" ]; then\n  skip=""; first=1\n  for a in "$@"; do\n'
+            + '    [ -n "$first" ] && { set --; first=""; }\n'
+            + '    [ -n "$skip" ] && { skip=""; continue; }\n'
+            + f'    case "$a" in {short}--model) skip=1; continue;; --model=*) continue;; esac\n'
+            + '    set -- "$@" "$a"\n  done\n'
+            + f'  set -- "$@" {"--model" if tool == "claude" else "-m"} {quoted}\nfi\n')
+
+
+SETTINGS_HOME: Path | None = None
+
+
+def configure(settings_home: Path | None) -> None:
+    """The project worker's own Settings home (its --home), read by the setup checks (Codex review R1-2)."""
+    global SETTINGS_HOME
+    SETTINGS_HOME = Path(settings_home) if settings_home else None
+
+
+def settings_home() -> Path:
+    """The Settings home this process was started with (the default home when none was given)."""
+    from harness import project_registry
+    return SETTINGS_HOME or project_registry.default_home()
+
+
+def test_models() -> dict[str, str]:
+    """The Settings "Model for testing apps" of each provider (its cheapest fast model by default)."""
+    try:
+        from harness import global_settings
+        return global_settings.app_test_models(settings_home())
+    except (ImportError, OSError, ValueError):
+        from harness import global_settings
+        return dict(global_settings.APP_TEST_MODEL_DEFAULTS)
+
+
+def _save_evidence(folder: Path, output: Path | None, log: str) -> str:
+    """Keep the run's finished result and its last 200 output lines; returns the saved result's path ("" when none)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "run-output.txt").write_text("\n".join(log.splitlines()[-200:]) + "\n", encoding="utf-8")
+    if output is None:
+        return ""
+    saved = folder / ("result-" + output.name)
+    shutil.copyfile(output, saved)
+    return str(saved)
+
+
 def real_run(command: str, tools: list[str], workspace: str, values: dict[str, str], scrub: Callable[[str], str],
-             python_dir: str = "") -> dict[str, Any]:
+             python_dir: str = "", real_output: str = "", evidence: Path | None = None,
+             models: dict[str, str] | None = None) -> dict[str, Any]:
     """Run the app's own real-run command in the owner's environment, with a recorder for each AI tool first on PATH: it
-    passes when the command exits 0 AND every listed tool was really called and answered (Codex plan check R1-2)."""
+    passes when the command exits 0, every listed tool was really called and answered (Codex plan check R1-2), and, when the
+    setup list names real_output, the run wrote the scenario's finished result there (task 2026-11-23_real-scenario-run). The
+    result and the last output lines are kept in `evidence`; the item's "evidence" names the saved result."""
     label = "Your app's real run"
     if not command:
         return _item("real_run", label, False, "the setup list names no real_run command; the builder adds it", BUILDER)
@@ -607,14 +703,19 @@ def real_run(command: str, tools: list[str], workspace: str, values: dict[str, s
                 missing.append(tool)
                 continue
             shim = shims / tool
-            shim.write_text(RECORDER.format(real=executable.replace('"', '\\"'), tool=tool, calls=str(calls_dir)))
+            shim.write_text(RECORDER.format(real=executable.replace('"', '\\"'), tool=tool, calls=str(calls_dir),
+                                            model=model_flag(tool, (models or {}).get(tool, ""))))
             shim.chmod(0o755)
         if missing:
             return _item("real_run", label, False, "not found on this computer: " + ", ".join(missing), OWNER)
         env = dict(values)
         env["PATH"] = os.pathsep.join(part for part in (str(shims), python_dir, values.get("PATH", "")) if part)
         env["TMPDIR"] = folder
+        target = Path(real_output) if Path(real_output).is_absolute() else Path(workspace) / real_output
+        started = target.stat().st_mtime if real_output and target.is_file() else None
         code, output, timed_out = owner_env.run(["/bin/sh", "-c", command], cwd=workspace, env=env, timeout=REAL_RUN_SECONDS)
+        # fresh: the file is there, not empty, and this run changed it (a result left from an earlier run never counts)
+        fresh = bool(real_output) and target.is_file() and target.stat().st_size > 0 and target.stat().st_mtime != started
         called, answered_by = set(), set()
         for args_file in calls_dir.glob("*.args"):
             tool = args_file.name.split(".", 1)[0]
@@ -627,6 +728,12 @@ def real_run(command: str, tools: list[str], workspace: str, values: dict[str, s
             out_text = Path(stem + ".out").read_text(errors="replace") if Path(stem + ".out").exists() else ""
             if answered(tool, code_text, out_text):
                 answered_by.add(tool)
+    saved = ""
+    if evidence is not None:
+        try:
+            saved = _save_evidence(evidence, target if fresh else None, scrub(output))
+        except OSError as error:
+            return _item("real_run", label, False, f"the run's result could not be kept in {evidence}: {error}", OWNER)
     if timed_out:
         return _item("real_run", label, False, f"`{command}` did not finish within {REAL_RUN_SECONDS} seconds", BUILDER)
     if code != 0:
@@ -640,7 +747,14 @@ def real_run(command: str, tools: list[str], workspace: str, values: dict[str, s
     if failed:
         return _item("real_run", label, False, f"`{command}` finished but {', '.join(failed)} did not answer it (the app hid the "
                      f"error): {scrub(_last_line(output))}", BUILDER)
-    return _item("real_run", label, True, f"`{command}` ran and called {', '.join(tools)} for real", BUILDER)
+    if real_output and not fresh:
+        return _item("real_run", label, False, f"`{command}` finished without the scenario's result: {real_output} was not written "
+                     "by this run (or is empty). The real run must take the owner's scenario through the app to its finished result", BUILDER)
+    item = _item("real_run", label, True, f"`{command}` ran and called {', '.join(tools)} for real"
+                 + (f"; the scenario's result is kept at {saved}" if saved else ""), BUILDER)
+    if saved:
+        item["evidence"] = saved
+    return item
 
 
 # ---------------------------------------------------------------------------------------------------------------- running
@@ -695,14 +809,23 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
     both = lambda text: test_scrub(scrub(text))
     items: list[dict[str, Any]] = []
     tools = list(needs.get("ai_tools") or [])
-    if stage == "contract":
+    if stage == "agents":
+        # gate 1: every agent answers and every role is signed in as it runs, before the Builder starts any work
+        launch_scrub = owner_env.redactor(launch)
         items += check_agents(root)
+        items += check_roles(root, {}, launch, lambda text: launch_scrub(both(text)))
+        return items, identity(root, task, workspace, None)
+    if stage == "contract":
+        # gate 1 already proved the agents and their sign-ins under the same identity: not asked a second time
+        gate = str((state.get("task_agents_check") or {}).get(task) or "")
+        signed_in = bool(gate) and passed(state, gate, "agents", "", identity(root, gate, "", None))
+        items += [] if signed_in else check_agents(root)
         items += [check_folder(item, workspace) for item in needs.get("folders") or []]
         items += [check_program(item, values) for item in needs.get("programs") or []]
         items += [check_library(item, values, workspace, python) for item in needs.get("libraries") or []]
         items += [check_ai_tool(tool, values, both) for tool in tools]
         launch_scrub = owner_env.redactor(launch)
-        items += check_roles(root, needs, launch, lambda text: launch_scrub(both(text)))
+        items += check_roles(root, needs, launch, lambda text: launch_scrub(both(text)), signed_in=signed_in)
     elif stage in {"review", "release"}:
         if stage == "release":
             items += [check_ai_tool(tool, values, both) for tool in tools]
@@ -713,7 +836,11 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
         elif _tracked_changes(workspace):
             items.append(_item("real_run", "Your app's real run", False, "the work folder has uncommitted changes; commit them and request again", BUILDER))
         else:
-            items.append(real_run(str(needs.get("real_run") or ""), tools, workspace, values, both, python_dir))
+            from harness.project_context import project_context
+            commit = str(run.get("commit") or _git_head(workspace) or "unknown")
+            evidence = Path(project_context(root).data_root) / "evidence" / "real-run" / task / commit[:40]
+            items.append(real_run(str(needs.get("real_run") or ""), tools, workspace, values, both, python_dir,
+                                  real_output=str(needs.get("real_output") or ""), evidence=evidence, models=test_models()))
     return items, identity(root, task, workspace, needs)
 
 
@@ -787,7 +914,7 @@ def run_now(root: Path, task: str, stage: str) -> None:
 
 def card_text(item: dict[str, Any], stage: str) -> tuple[str, str]:
     """(title, why) of the card for one failed item, saying who resolves it."""
-    when = {"contract": "before your contract is shown to you", "review": "before any review", "release": "before the release is offered to you"}[stage]
+    when = {"agents": "before the builder starts your task", "contract": "before your contract is shown to you", "review": "before any review", "release": "before the release is offered to you"}[stage]
     if item.get("who") == BUILDER:
         return (f"Setup check: {item['label']} — the builder is fixing it",
                 f"{item['detail']}. NMHP checks this {when}. Nothing for you to do: the builder was told and the check runs again after its fix.")

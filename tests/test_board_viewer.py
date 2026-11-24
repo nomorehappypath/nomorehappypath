@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from harness import board, board_viewer, contract, control
 from tests.environment_support import require_loopback
+from tests.environment_support import pass_agents_check
 from tests.requirements_support import agreed_requirements
 
 
@@ -1182,6 +1183,7 @@ process.stdout.write(JSON.stringify({rows:nodes.agents.children.map(row=>({html:
                 response = json.loads(urlopen(request, timeout=3).read())
                 self.assertEqual(response["message"]["type"], "clarification")
                 self.assertIn(session["id"], board.snapshot(root)["pending_owner_clarifications"])
+                pass_agents_check(root, session["id"])
                 board.begin_task(root, agent["id"], "VIEWER-COMPOSER-TASK")
                 moved = board.snapshot(root)["owner_clarifications"]["VIEWER-COMPOSER-TASK"]
                 self.assertEqual(moved[0]["text"], "Go ahead, and preserve the screenshot requirement.")
