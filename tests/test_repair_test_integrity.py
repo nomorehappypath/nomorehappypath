@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from harness import board, contract, control, red_proof
+from tests import examples_first
 from tests import test_repair_context as repair_base
 from tests.test_contract_first_checks import HEADER, TEST_FILE, TEXT, ledger, write_json
 
@@ -71,7 +72,7 @@ class _Project(unittest.TestCase):
         board.record_requirement_proposal(self.root, self.dev["id"], TEXT)
         self.inbox()                                                  # the early-look request is not what these tests are about
         value = {"criteria": [{"text": "Running the program prints the greeting", "checks": checks}]}
-        board.record_contract_check_submission(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
+        examples_first.record(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
         token = board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]["token"]
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=token)
         board.record_requirement_confirmation(self.root, self.dev["id"], TEXT)
@@ -137,11 +138,11 @@ class PassesOnNothingTests(_Project):
         self.confirm([weak()])
         self.inbox()
         fixed = write_json(self.base, "fix.json", {"checks": [sharp()]})
-        board.record_contract_check_correction(self.root, self.qa["id"], TASK, 1, "it passed before any work", fixed)
+        examples_first.correct(self.root, self.qa["id"], TASK, 1, "it passed before any work", fixed)
         self.assertEqual(self.block()["compare"], {"1": red_proof.FAILS_BEFORE})
         # a correction that is still weak stays flagged, and the Reviewer is not asked again
         again = write_json(self.base, "again.json", {"checks": [weak()]})
-        board.record_contract_check_correction(self.root, self.qa["id"], TASK, 1, "I could not make it fail first", again)
+        examples_first.correct(self.root, self.qa["id"], TASK, 1, "I could not make it fail first", again)
         self.assertEqual(self.block()["compare"], {"1": red_proof.PASSES_ON_NOTHING})
         self.assertEqual(self.inbox(), [])
         self.assertEqual(self.block()["red_proof"]["asked"], [1])

@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 # The one wait for the Reviewer's early look (seconds). The owner can go ahead without waiting at any time.
-WAIT_DEFAULT_SECONDS = 900
+WAIT_DEFAULT_SECONDS = 1800      # task 2026-11-24_tdd-examples-first: examples, the asks list and the result list take longer to write; still only a default
 WAIT_MIN_SECONDS = 60
 WAIT_MAX_SECONDS = 3600
 _configured: dict[str, int] = {}
@@ -24,7 +24,7 @@ MAX_QUESTIONS = 4
 MIN_OPTIONS = 2
 MAX_OPTIONS = 4
 MAX_CRITERIA = 30
-MAX_CHECKS = 12
+MAX_CHECKS = 60        # task 2026-11-24_tdd-examples-first: one real check per example must fit (was 12; the 512 KB limit below stays)
 MAX_FILES_PER_CHECK = 20
 # Functions that run a command: a call to one of these whose first argument starts with "git" is a git invocation. Words in
 # strings, assertion data or comments ("the README documents git diff --stat") are not (round 1 of 2026-11-04_checks-no-git).
@@ -76,6 +76,176 @@ NOT_MAPPED_NEW = "not mapped: the reviewer did not say which test covers this"
 GAP_NO_TEST = "gap: no test covers this yet"
 GAP_NORMAL_ONLY = "gap: only the normal case is tested, no failure or unusual case"
 
+# --- Examples first, real tests only (task 2026-11-24_tdd-examples-first) ----------------------------------------------------------------
+# A criterion that carries "examples" follows the new rules: a stored check is COUNTED as a real test only when the Reviewer
+# recorded what it runs and which example it asserts and marked it checked; everything else is stored and run but never
+# counted, and its requirement is tested for real at the final review. A criterion without "examples" is an older record and
+# keeps the older rules untouched (a task past its contract keeps its rules).
+MAX_EXAMPLES = 4
+EXAMPLE_MIN = 20
+EXAMPLE_MAX = 300
+MAX_ASKS = 60
+ASK_CHARS = 200
+MAX_NOT_READ = 20
+MAX_RESULT_ITEMS = 6           # what the owner asked the result to contain, one thing a line; a long expert list made no real result pass (first real run)
+RESULT_ITEM_CHARS = 120
+RUNS_CHARS = 200
+KIND_DOCUMENT = "document"         # a requirement about a delivered document (a licence, a README): checked by reading it
+KIND_SOURCE = "source"             # a requirement that changes the source everywhere (a rename, a removal): checked by reading it
+READING_KINDS = {KIND_DOCUMENT, KIND_SOURCE}
+GAP_NOT_COUNTED = "gap: its checks do not run the program against an example; it is tested for real at the final review"
+# What a check may import and still only be reading files: with nothing but these and no command run, it cannot be running the program.
+_READING_ONLY_MODULES = {"__future__", "unittest", "pathlib", "os", "re", "json", "sys", "io", "typing", "glob", "fnmatch", "hashlib",
+                         "textwrap", "string", "collections", "itertools", "functools", "datetime", "codecs", "difflib"}
+
+
+_FILE_READS = {"read_text", "read_bytes", "open", "is_file", "exists", "is_dir", "iterdir", "glob", "rglob", "listdir"}
+
+
+def only_reads_files(files: dict[str, str]) -> bool:
+    """True when every file of a check is Python that reads files, runs no command and imports nothing beyond file-reading
+    helpers: such a check cannot be running the program. One filter for the obvious case only; passing it proves nothing
+    (Codex plan check R1-1)."""
+    if not files or not all(name.endswith(".py") for name in files):
+        return False
+    reads = False
+    for body in files.values():
+        try:
+            tree = ast.parse(body)
+        except SyntaxError:
+            return False        # the file fails on its own when the board runs it; not this filter's concern
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+                if name in COMMAND_RUNNERS:
+                    return False
+                if name in _FILE_READS:
+                    reads = True
+            elif isinstance(node, ast.Import):
+                if any(alias.name.split(".")[0] not in _READING_ONLY_MODULES for alias in node.names):
+                    return False
+            elif isinstance(node, ast.ImportFrom):
+                if node.level or (node.module or "").split(".")[0] not in _READING_ONLY_MODULES:
+                    return False
+    return reads
+
+
+def check_counted(check: dict[str, Any]) -> bool:
+    """A stored check counts as a real test: marked checked, with the program entry point it runs and the example it asserts."""
+    return check.get("coverage") == "checked" and bool(check.get("runs")) and bool(check.get("example"))
+
+
+def new_rules(criterion: dict[str, Any]) -> bool:
+    """This requirement was recorded with examples, so the examples-first rules apply to it (older records keep theirs)."""
+    return bool(criterion.get("examples"))
+
+
+def criterion_counted(criterion: dict[str, Any]) -> bool:
+    """The requirement has a real stored test: a counted check of its own, or, for a document or source-wide requirement, its reading check."""
+    checks = [] if criterion.get("stale") else (criterion.get("checks") or [])
+    if criterion.get("kind") in READING_KINDS:
+        return bool(checks)
+    return any(check_counted(check) for check in checks)
+
+
+def real_test_line(criteria: list[dict[str, Any]]) -> str:
+    """The one honest count for the owner ("" for an older record): how many requirements about what the app does have a real test before the build."""
+    rows = [item for item in criteria if new_rules(item) and item.get("kind") not in READING_KINDS]
+    if not rows:
+        return ""
+    also = covered_by_others(criteria)
+    counted = sum(1 for item in rows if criterion_counted(item) or also.get(item["n"], 0))
+    return f"{counted} of {len(rows)} requirements have a real test before the build; the others are tested for real at the final review."
+
+
+def parse_examples(item: dict[str, Any], label: str, required: bool) -> list[str]:
+    """The requirement's examples: one to four plain sentences, each saying what goes in or what the user does and the exact result."""
+    raw = item.get("examples")
+    if raw is None and not required:
+        return []
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_EXAMPLES:
+        raise ValueError(f"{label} needs \"examples\": one to {MAX_EXAMPLES} plain sentences, each saying what goes in or what the user does and the exact "
+                         "result (for example: \"Typing Chicago and pressing Check weather shows today's temperature for Chicago.\")")
+    examples = []
+    for position, value in enumerate(raw, 1):
+        problem = plain_problem(value, EXAMPLE_MAX)
+        if not problem and len(" ".join(value.split())) < EXAMPLE_MIN:
+            problem = f"it is too short to be an example ({EXAMPLE_MIN} characters at least)"
+        if problem:
+            raise ValueError(f"{label} example {position} is not a plain example the owner can read: {problem}")
+        examples.append(" ".join(value.split()))
+    return examples
+
+
+def parse_added_requirement(data: dict[str, Any], number: int) -> dict[str, Any]:
+    """A requirement of the accepted text that the early list left out, added by the final Reviewer: its text, its plain line
+    for the owner, its examples and its kind. Raises ValueError with the plain reason."""
+    text = _text(data.get("text"), f"requirement {number} text", CRITERION_CHARS, minimum=5)
+    problem = plain_problem(data.get("plain"))
+    if problem:
+        raise ValueError(f"requirement {number} needs a `plain` sentence the owner can read (at most {PLAIN_LIMIT} characters): {problem}")
+    return {"text": text, "plain": " ".join(data["plain"].split()), "examples": parse_examples(data, f"requirement {number}", True),
+            "kind": requirement_kind(data, text)}
+
+
+def parse_owner_lists(data: dict[str, Any], criteria_count: int, required: bool) -> dict[str, Any]:
+    """The three lists the Reviewer writes from the owner's own direction and files: what he asked for and which requirements
+    cover each ask, any source it could not read, and what the finished result of his scenario must contain at least."""
+    asks_raw = data.get("owner_asks")
+    if asks_raw is None and not required:
+        asks_raw = []
+    if not isinstance(asks_raw, list) or len(asks_raw) > MAX_ASKS or (required and not asks_raw):
+        raise ValueError(f"list under \"owner_asks\" every distinct thing the owner asked for in the direction, the clarifications and the attached files "
+                         f"(one to {MAX_ASKS} plain lines, related ones combined, none dropped), each as {{\"ask\": \"...\", \"requirements\": [<numbers that cover it>]}}; "
+                         "use [] for an ask no requirement covers")
+    asks = []
+    for position, item in enumerate(asks_raw, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"owner ask {position} must be an object with ask and requirements")
+        numbers = item.get("requirements")
+        if not isinstance(numbers, list) or any(isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= criteria_count for n in numbers):
+            raise ValueError(f"owner ask {position}: requirements must list existing requirement numbers (1 to {criteria_count}), or [] when none covers it")
+        asks.append({"ask": _text(item.get("ask"), f"owner ask {position}", ASK_CHARS, minimum=5), "requirements": sorted(set(numbers))})
+    not_read_raw = data.get("not_read") or []
+    if not isinstance(not_read_raw, list) or len(not_read_raw) > MAX_NOT_READ:
+        raise ValueError(f"not_read must list at most {MAX_NOT_READ} sources you could not read (a file name each)")
+    not_read = [_text(value, f"not_read {position}", ASK_CHARS, minimum=2) for position, value in enumerate(not_read_raw, 1)]
+    result_raw = data.get("result_must_contain")
+    if result_raw is None and not required:
+        result_raw = []
+    if not isinstance(result_raw, list) or len(result_raw) > MAX_RESULT_ITEMS or (required and not result_raw):
+        raise ValueError(f"list under \"result_must_contain\" only what the owner asked the finished result of his main scenario to contain: one to "
+                         f"{MAX_RESULT_ITEMS} plain lines, one thing each, in his words; never your own expert answer or its details")
+    result = [_text(value, f"result item {position}", RESULT_ITEM_CHARS, minimum=5) for position, value in enumerate(result_raw, 1)]
+    return {"owner_asks": asks, "not_read": not_read, "result_must_contain": result}
+
+
+def asks_not_covered(asks: list[dict[str, Any]]) -> list[str]:
+    """The owner's asks that no requirement covers, in the Reviewer's plain words."""
+    return [item["ask"] for item in asks or [] if not item.get("requirements")]
+
+
+def asks_line(asks: list[dict[str, Any]], not_read: list[str]) -> str:
+    """The one sentence above Go ahead. "Everything was found" is the Reviewer's finding and is said only when nothing is missing
+    and nothing was left unread; it is never inferred from the length of the list (Codex plan check, answer 4)."""
+    if not asks:
+        return ""
+    missing = asks_not_covered(asks)
+    if missing:
+        return "In your direction, not in the requirements: " + "; ".join(missing)
+    if not_read:
+        return "The reviewer could not read: " + "; ".join(not_read) + ". What it could read is in the requirements."
+    return f"The reviewer found everything you asked for in the requirements ({len(asks)} points)."
+
+
+def asks_request(task: str, missing: list[str]) -> str:
+    """The one message telling the Builder which of the owner's asks the requirements leave out."""
+    return (f"CONTRACT CHECK: task {task}. The Reviewer read the owner's direction and files and found these asks in none of your requirements: "
+            + "; ".join(missing) + ". File a revised proposal with propose-requirements now (it replaces the waiting one, once) that adds each, or says in one "
+            "plain line why it is left out; otherwise do nothing. The owner sees the list on the Go ahead card. USER ACTION: None.")
+
+
 NOT_CHECKED = "not checked in advance"
 PARTLY_CHECKED = "partly checked"
 CHECKED = "checked"
@@ -109,6 +279,8 @@ def requirement_kind(item: dict[str, Any], text: str) -> str:
     """`non-functional` (speed, phone layout, accessibility...) when the requirement says so by `kind` or by a leading
     "Non-functional:" / "Quality requirement:"; anything else, or nothing, is an ordinary requirement. Never refused."""
     kind = " ".join(str(item.get("kind") or "").lower().split())
+    if kind in READING_KINDS:
+        return kind         # checked by reading the delivered document or source, labelled as such, never counted as an app test
     return NON_FUNCTIONAL if kind in _NFR_KINDS or _NFR_PREFIX.match(text) else ""
 
 
@@ -251,8 +423,13 @@ def _relative_path(value: Any) -> str:
     return str(path)
 
 
-def parse_checks(checks_raw: Any, label: str) -> tuple[list[dict[str, Any]], int]:
-    """Validate a list of checks (a ledger plus the test files that assert the result); returns them and their size in bytes."""
+def parse_checks(checks_raw: Any, label: str, *, examples: int | None = None, reading: bool = False) -> tuple[list[dict[str, Any]], int]:
+    """Validate a list of checks (a ledger plus the test files that assert the result); returns them and their size in bytes.
+
+    `examples` is the number of examples of the requirement the checks belong to (None for an older record, which keeps the
+    older rules); `reading` says the requirement is a document or source-wide one. Under the examples-first rules a check
+    marked checked must record what it runs and which example it asserts, and a check for what the app does that only reads
+    files is refused (task 2026-11-24_tdd-examples-first, Change 3)."""
     if not isinstance(checks_raw, list):
         raise ValueError(f"{label} checks must be a list")
     total_bytes = 0
@@ -261,6 +438,16 @@ def parse_checks(checks_raw: Any, label: str) -> tuple[list[dict[str, Any]], int
         where = f"{label} check {position}"
         if not isinstance(check, dict):
             raise ValueError(f"{where} must be an object")
+        if "walk" in check:
+            # a walk (task 2026-11-24_tdd-walks): steps on the app's screens, written as data, stored as this requirement's check
+            from harness import walks
+            number = check.get("example")
+            if examples is None or isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= examples:
+                raise ValueError(f"{where}: a walk shows one of the requirement's examples: add \"example\" (1 to {examples or 1})")
+            entry = {**walks.parse(check["walk"], where), "example": number}
+            total_bytes += sum(len(body.encode("utf-8")) for body in entry["files"].values())
+            checks.append(entry)
+            continue
         coverage = check.get("coverage", CHECKED)
         if coverage not in {"checked", "partly"}:
             raise ValueError(f"{where}: coverage must be checked or partly")
@@ -289,6 +476,22 @@ def parse_checks(checks_raw: Any, label: str) -> tuple[list[dict[str, Any]], int
                 raise ValueError(f"{where}: file {relative} runs git; checks run in a copy of the project with no git. Compare against "
                                  "the stored baseline copy (the files as they were) instead, never through git commands")
         entry = {"coverage": coverage, "ledger": ledger, "files": files}
+        if check.get("runs"):
+            entry["runs"] = _text(check["runs"], f"{where} runs", RUNS_CHARS, minimum=2)
+        if check.get("example") is not None:
+            number = check["example"]
+            if isinstance(number, bool) or not isinstance(number, int) or number < 1 or (examples is not None and number > examples):
+                raise ValueError(f"{where}: example must be the number of one of the requirement's examples (1 to {examples or 1})")
+            entry["example"] = number
+        if examples is not None and not reading:
+            if only_reads_files(files):
+                raise ValueError(f"{where} only reads files, so it cannot show what the program does: a check for an app requirement runs the program "
+                                 "(a command, an address or its own function) and compares the result with an example. If the requirement really is about a "
+                                 "delivered document, or changes the source everywhere, declare it with \"kind\": \"document\" or \"kind\": \"source\"")
+            if coverage == "checked" and not check_counted(entry):
+                raise ValueError(f"{where} is marked checked but does not say what it runs and which example it asserts: add \"runs\" (the command, "
+                                 "address or function of the program it exercises) and \"example\" (1 to " + str(examples) + "), or mark it "
+                                 "\"coverage\": \"partly\" (a syntax check, an install, a start with no example asserted is partly: stored and run, never counted)")
         if "covers" in check:
             covers = check["covers"]
             if not isinstance(covers, list) or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in covers):
@@ -316,6 +519,8 @@ def covered_by_others(criteria: list[dict[str, Any]]) -> dict[int, int]:
         if item.get("stale"):
             continue
         for check in item.get("checks") or []:
+            if new_rules(item) and not check_counted(check):
+                continue        # examples-first: a check that is not itself a counted real test covers nothing else either
             for target in check.get("covers") or []:
                 if target != item["n"]:
                     counts[target] = counts.get(target, 0) + 1
@@ -324,6 +529,10 @@ def covered_by_others(criteria: list[dict[str, Any]]) -> dict[int, int]:
 
 def coverage_line(criterion: dict[str, Any], extra: int = 0) -> str:
     """Mechanical, no judgment: covered, a gap with a plain reason, or not mapped (an older submission that never said)."""
+    if new_rules(criterion) and not (criterion_counted(criterion) or extra):
+        # examples-first: only a counted real test covers a requirement (its own, or another requirement's counted check that
+        # says it also covers this one); nothing else is rounded up to "covered"
+        return GAP_NOT_COUNTED if (criterion.get("checks") and not criterion.get("stale")) else GAP_NO_TEST
     if not (criterion.get("mapped") or extra):
         return NOT_MAPPED_NEW if criterion.get("new") else NOT_MAPPED       # only a submission recorded now is held to the question
     checks = len(criterion.get("checks") or []) + extra
@@ -355,8 +564,11 @@ def coverage_request(task: str, numbers: list[int], criteria: list[dict[str, Any
     )
 
 
-def parse_submission(raw: str) -> dict[str, Any]:
-    """Validate the JSON a Reviewer uploads; raise ValueError with a plain reason, return the normalised form."""
+def parse_submission(raw: str, *, examples_required: bool = True) -> dict[str, Any]:
+    """Validate the JSON a Reviewer uploads; raise ValueError with a plain reason, return the normalised form.
+
+    With `examples_required` (every submission the board records for a full Write-code task) each criterion needs its examples
+    and the submission needs the owner's asks and the result list (task 2026-11-24_tdd-examples-first, Changes 1, 2 and 5)."""
     try:
         data = json.loads(raw)
     except (TypeError, ValueError) as error:
@@ -386,13 +598,15 @@ def parse_submission(raw: str) -> dict[str, Any]:
         problem = plain_problem(plain)
         if problem:
             raise ValueError(f"criterion {number} needs a `plain` sentence the owner can read (what this protects for them, at most {PLAIN_LIMIT} characters): {problem}")
-        checks, check_bytes = parse_checks(checks_raw, f"criterion {number}")
+        examples = parse_examples(item, f"criterion {number}", examples_required)
+        kind = requirement_kind(item, text)
+        checks, check_bytes = parse_checks(checks_raw, f"criterion {number}", examples=len(examples) if examples else None, reading=kind in READING_KINDS)
         paths, none_because, said = parse_failure_paths(item, f"criterion {number}")
         total_bytes += check_bytes
         total_checks += len(checks)
         criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks,
                          "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said,
-                         "kind": requirement_kind(item, text)})
+                         "kind": kind, **({"examples": examples} if examples else {})})
     if total_checks > MAX_CHECKS:
         raise ValueError(f"at most {MAX_CHECKS} checks in one submission")
     if total_bytes > MAX_TOTAL_BYTES:
@@ -429,7 +643,7 @@ def parse_submission(raw: str) -> dict[str, Any]:
             "n": number, "text": _text(item.get("text"), f"question {number} text", QUESTION_CHARS, minimum=5),
             "options": options, "recommended": recommended, "affects": sorted(set(affects_raw)),
         })
-    return {"criteria": criteria, "questions": questions}
+    return {"criteria": criteria, "questions": questions, **parse_owner_lists(data, len(criteria), examples_required)}
 
 
 def resolve_answers(questions: list[dict[str, Any]], answers: Any) -> tuple[list[dict[str, Any]], bool]:
@@ -480,6 +694,8 @@ def criterion_label(criterion: dict[str, Any]) -> str:
     checks = criterion.get("checks") or []
     if criterion.get("stale") or not checks:
         return NOT_CHECKED
+    if new_rules(criterion):
+        return CHECKED if criterion_counted(criterion) else PARTLY_CHECKED
     return CHECKED if all(check.get("coverage") == "checked" for check in checks) else PARTLY_CHECKED
 
 
@@ -487,7 +703,9 @@ def labels(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the owner-facing record for each requirement in criteria: its text, plain sentence, checked/partly/not-checked label, note, reason and coverage line, counting checks other requirements also cover it with. Return the list of per-requirement records."""
     counts = covered_by_others(criteria)
     return [{"n": item["n"], "criterion": item["text"], "plain": item.get("plain", ""), "label": criterion_label(item), "note": item.get("skipped_reason", ""), "reason": item.get("why_not_checked", ""), "kind": item.get("kind", ""),
-             "coverage": coverage_line(item, counts.get(item["n"], 0))} for item in criteria]
+             "coverage": coverage_line(item, counts.get(item["n"], 0)),
+             **({"examples": list(item["examples"]), "counted": criterion_counted(item)} if new_rules(item) else {}),
+             **({"walks": [check["walk"] for check in item["checks"] if check.get("walk")]} if any(check.get("walk") for check in item.get("checks") or []) else {})} for item in criteria]
 
 
 def existing_code_note(repository: str) -> str:
@@ -500,13 +718,27 @@ def existing_code_note(repository: str) -> str:
             "you can find by reading. Leave a requirement unchecked only when, after reading the code, no test can show it, and say in why_not_checked what you read.")
 
 
-def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "", brief: str = "") -> str:
+def owner_sources_note(sources: list[str] | None) -> str:
+    """Where the Reviewer reads what the owner gave: the copies in the task's own work folder, never raw board storage."""
+    listed = [str(item) for item in sources or [] if str(item).strip()]
+    if not listed:
+        return (" Read the owner's direction and clarifications below for every distinct thing he asks for; he attached no file to this task.")
+    return (" Read the owner's direction and clarifications below AND every file he attached, in full (PDFs, documents and screenshots included), "
+            "at these copies in the task's work folder (read only): " + "; ".join(listed) + ". Name any you could not read under \"not_read\".")
+
+
+def reviewer_instruction(task: str, version: int, requirements: str, direction: str, minutes: int, repository: str = "", brief: str = "", sources: list[str] | None = None) -> str:
     """Build the message routing a Reviewer to write contract checks for task at the given requirements version, carrying the owner's original direction, the requirements text, a repository note when repository is given, the minutes allowed before a late submission is refused, and the Project brief when one is given. Return the instruction text to send."""
     return (
         f"CONTRACT CHECK ROUTED: task {task}, requirements version {version}. This is advisory preparation, not a review round: "
         "do not reserve, claim or review anything for it, and the work for this task is not built yet. Read the owner's original direction and the "
         "requirements below and write your checks from them (black box: commands and their printed output, HTTP calls, or visible text "
-        "on a page, each as a test file that asserts the result)." + existing_code_note(repository) + " Then submit ONCE with "
+        "on a page, each as a test file that asserts the result)." + existing_code_note(repository) + owner_sources_note(sources)
+        + " Give every criterion its \"examples\" (what goes in or what the user does, and the exact result), list the owner's asks under "
+        "\"owner_asks\" with the requirement numbers that cover each ([] when none does), and list under \"result_must_contain\" what the finished "
+        "result of his main scenario must contain at least. A check is marked \"checked\" only when it runs the program and asserts one example's result "
+        "(\"runs\" and \"example\"); where the app does not exist yet and you cannot write that, give the examples and no check: the requirement is then "
+        "tested for real at the final review. Then submit ONCE with "
         f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter "
         "`contract-first` (the board command reference --agent <your id> --name contract-first). Ask the owner at most 4 product questions, only where you cannot write "
         "a check without guessing, each with 2 to 4 options and one recommended. The owner may go ahead without waiting and a submission after "

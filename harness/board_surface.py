@@ -65,7 +65,7 @@ ALL_BOARD_OPERATIONS = {
     "reopen-integrity", "watch", "reopen-candidate-scope", "reevaluate-finalization",
     "reintegrate-main",
     "owner-action", "owner-action-done", "cto-disposition",
-    "screen-check", "screen-script", "amend-exclusions",
+    "screen-check", "screen-script", "run-walk", "amend-exclusions",
     "supersede-subtask",
     "close-released",
     "need-test-machine", "machine-status", "machine-baseline", "reference",
@@ -115,7 +115,7 @@ DELIVERY_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "supersede-subtask",
     # Owner 2026-09-29 (option 1): the harness renders the project's own local
     # page outside the agent sandbox; the agent never gets a browser.
-    "screen-check", "screen-script",
+    "screen-check", "screen-script", "run-walk",
     # Recovery valve for the scaffold wedge: --repo is a PROTECTED argument the
     # surface refuses from clients, so an authenticated Delivery bind can only
     # ever target the server-derived project repository.
@@ -128,7 +128,7 @@ REVIEWER_OPERATIONS = COMMON_AGENT_OPERATIONS | MACHINE_OPERATIONS | {
     "send-to-full-lane",
     "execute-challenge", "findings", "claim-qa", "reserve-qa", "test-env-run",
     "review-brief", "review-intents", "analysis-list", "analysis-crosscheck", "relinquish-qa", "attach-challenge-ledger", "qa-result", "split-repair-package", "review-support", "retained-plan",
-    "screen-check", "screen-script",
+    "screen-check", "screen-script", "run-walk",
 }
 CTO_OPERATIONS = COMMON_AGENT_OPERATIONS | {
     # 2026-10-28: the CTO (and the owner at the terminal) declares the project's test environment; the Reviewer may run a capture in it.
@@ -206,7 +206,7 @@ AGENT_ARGUMENT_OPERATIONS = {
     "qa-result", "resolve-repair-package", "split-repair-package", "complete", "claim-release-repair", "repin-final-review",
     "reopen-candidate-scope", "reintegrate-main",
     "reopen-candidate-scope", "owner-action", "owner-action-done", "cto-disposition", "screen-check",
-    "supersede-subtask", "close-released", "deliverable-waived", "deliverable-file", "screen-script", "amend-exclusions",
+    "supersede-subtask", "close-released", "deliverable-waived", "deliverable-file", "screen-script", "run-walk", "amend-exclusions",
     "need-test-machine", "machine-status", "machine-baseline", "reference",
 }
 PROTECTED_ARGUMENTS = {
@@ -225,7 +225,7 @@ _PROJECT_COMMAND_LOCKS_GUARD = threading.Lock()
 # Their board functions use the durable state lock, and staged review authoring
 # depends on them remaining responsive while Delivery evidence executes.
 CONCURRENT_BOARD_OPERATIONS = {
-    "poll", "reserve-qa", "review-brief", "review-intents", "screen-check", "screen-script",
+    "poll", "reserve-qa", "review-brief", "review-intents", "screen-check", "screen-script", "run-walk",
 }
 # `screen-check` is here because Delivery's own rendered test calls it while
 # `request-review` is running that very test. Serialised behind it, the nested
@@ -604,6 +604,8 @@ def _concurrent_arguments(
     value_options = {"--agent"}
     if operation in {"reserve-qa", "review-brief", "review-intents"}:
         value_options.add("--request")
+    if operation == "run-walk":
+        value_options.add("--criterion")
     if operation == "review-intents":
         value_options.add("--intent")
     flag_options = {"--amend"} if operation == "review-intents" else set()
@@ -1423,6 +1425,11 @@ class CommandGateway:
         agent_id, request_id, intents, amendment = _concurrent_arguments(
             operation, arguments,
         )
+        if operation == "run-walk":
+            try:
+                return _sanitized_value(board.run_walk(self.context, agent_id, _argument_value(arguments, "--criterion") or ""), self.context)
+            except ValueError as error:
+                raise SurfaceProtocolError(_sanitized_text(str(error).strip(), self.context)) from error
         if operation == "poll":
             return board.poll(self.context, agent_id)
         if operation == "reserve-qa":

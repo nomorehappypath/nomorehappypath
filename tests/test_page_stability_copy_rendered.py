@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, browser_acceptance, control
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.requirements_support import agreed_requirements
 from tests.test_contract_first_checks import TEST_FILE, ledger, plain_ready
@@ -147,7 +148,7 @@ class RenderedPageStabilityTests(unittest.TestCase):
         (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
         b = delivery_with_direction(root, "TASK-QUESTIONS")
         board.record_requirement_proposal(root, b["id"], "Final agreed requirements: another thing.")
-        board.record_contract_check_submission(root, reviewer["id"], "TASK-QUESTIONS", 1, str(base / "s.json"))
+        examples_first.record(root, reviewer["id"], "TASK-QUESTIONS", 1, str(base / "s.json"))
         board.record_agent_question(root, a["id"], "How many days should the forecast cover?")
         return root, reviewer, a
 

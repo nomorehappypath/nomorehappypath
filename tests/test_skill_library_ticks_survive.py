@@ -10,6 +10,7 @@ import json
 import unittest
 
 from harness import board, board_viewer, control
+from tests import examples_first
 from tests.mission_control_support import RenderedCase
 from tests.test_requirements_contract import context, delivery_with_direction
 
@@ -34,7 +35,7 @@ class SkillTicksSurviveTheEarlyReview(RenderedCase):
         class Handler(parent):
             def do_POST(self):
                 if self.path == "/__complete_early_review":
-                    self.send_json(200, board.record_contract_check_submission(root, reviewer["id"], task, 1, str(submission)))
+                    self.send_json(200, examples_first.record(root, reviewer["id"], task, 1, str(submission)))
                     return
                 super().do_POST()
 

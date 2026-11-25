@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from harness import board, board_viewer, browser_acceptance, control
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
 from tests.test_contract_first_checks import ledger, TEST_FILE, plain_ready
@@ -90,7 +91,7 @@ class RenderedContractCheckTests(unittest.TestCase):
             board.record_requirement_proposal(root, agent_b["id"], "Final agreed requirements: a program prints a greeting.")
             path = base / "submission.json"
             path.write_text(json.dumps(plain_ready({"criteria": criteria, "questions": questions})), encoding="utf-8")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
+            examples_first.record(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
             agent_a = delivery_with_direction(root, "TASK-READING")
             board.record_requirement_proposal(root, agent_a["id"], "Final agreed requirements: a page shows a clock.")
             # the third Delivery is the same vendor as the reviewer, so it is not eligible (the machine allows only two Codex terminals)

@@ -14,6 +14,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from harness import board, board_viewer, browser_acceptance, control
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.test_branding_rendered import probe_proxy
 from tests.test_contract_first_checks import ledger, TEST_FILE, plain_ready
@@ -195,7 +196,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             board.record_requirement_proposal(root, agent_q["id"], "Final agreed requirements: a program prints a greeting.")
             path = base / "s.json"
             path.write_text(json.dumps(plain_ready({"criteria": criteria, "questions": questions})), encoding="utf-8")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
+            examples_first.record(root, reviewer["id"], "TASK-QUESTIONS", 1, str(path))
             agent_r = delivery_with_direction(root, "TASK-READING")
             board.record_requirement_proposal(root, agent_r["id"], "Final agreed requirements: a page shows a clock.")
             cto = board.register(root, "cto", "GLOBAL_MONITOR", vendor="Anthropic")
@@ -233,7 +234,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             for task in ("TASK-WAITED", "TASK-OTHER"):
                 agent = delivery_with_direction(root, task)
                 board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
-                board.record_contract_check_submission(root, reviewer["id"], task, 1, str(base / "s.json"))
+                examples_first.record(root, reviewer["id"], task, 1, str(base / "s.json"))
             result = run_page(self, root, START_AFTER_WAIT_PROBE, wait=60)
             self.assertTrue(result, "Chrome reported nothing")
             proposals = board.snapshot(root)["requirement_proposals"]
@@ -251,7 +252,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
             agent = delivery_with_direction(root, "TASK-WAITED")
             board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-WAITED", 1, str(base / "s.json"))
+            examples_first.record(root, reviewer["id"], "TASK-WAITED", 1, str(base / "s.json"))
             result = run_page(self, root, PAUSED_WAIT_PROBE, wait=60)
             self.assertTrue(result, "Chrome reported nothing")
             self.assertFalse(result["countedWhilePaused"], "a disabled Go ahead is not pressed and not counted as started")
@@ -270,14 +271,14 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
             one = delivery_with_direction(root, "TASK-CONFIRMED")
             board.record_requirement_proposal(root, one["id"], "Final agreed requirements: a program prints a greeting.")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-CONFIRMED", 1, str(base / "s.json"))
+            examples_first.record(root, reviewer["id"], "TASK-CONFIRMED", 1, str(base / "s.json"))
             proposal = board.snapshot(root)["requirement_proposals"]["TASK-CONFIRMED"]
             board.record_requirements_decision(root, "TASK-CONFIRMED", "go_ahead", version=1, token=proposal["contract_check"]["token"])
             board.record_requirement_confirmation(root, one["id"], proposal["text"])
             board._record_contract_check_results(root, "TASK-CONFIRMED", {1: "passed"})
             two = delivery_with_direction(root, "TASK-READY")
             board.record_requirement_proposal(root, two["id"], "Final agreed requirements: a page shows a clock.")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-READY", 1, str(base / "s.json"))
+            examples_first.record(root, reviewer["id"], "TASK-READY", 1, str(base / "s.json"))
             result = run_page(self, root, TESTED_PROBE, wait=60)
             self.assertTrue(result, "Chrome reported nothing")
             self.assertTrue(result["inCard"], "the list is on the proposal card before the owner decides")
@@ -302,7 +303,7 @@ class RenderedQuestionBannerTests(unittest.TestCase):
             (base / "s.json").write_text(json.dumps(plain_ready(value)), encoding="utf-8")
             agent = delivery_with_direction(root, "TASK-RECHECK")
             board.record_requirement_proposal(root, agent["id"], "Final agreed requirements: a program prints a greeting.")
-            board.record_contract_check_submission(root, reviewer["id"], "TASK-RECHECK", 1, str(base / "s.json"))
+            examples_first.record(root, reviewer["id"], "TASK-RECHECK", 1, str(base / "s.json"))
             token = board.snapshot(root)["requirement_proposals"]["TASK-RECHECK"]["contract_check"]["token"]
             board.record_requirements_decision(root, "TASK-RECHECK", "answer", version=1, token=token, answers=[{"question": 1, "choice": 1, "other": ""}])
             result = run_page(self, root, RECHECK_PROBE, wait=60)

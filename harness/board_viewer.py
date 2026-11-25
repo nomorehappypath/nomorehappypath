@@ -776,7 +776,7 @@ function releaseResponseCore(state,name){
   const task=esc(JSON.stringify(name));
   const savedDataInfo=release?.saved_data;
   const needsBackupConfirm=savedDataInfo?.status==='changed';
-  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${(state.task_kinds||{})[name]==='analysis'?analysisReportHtml(name):releasePreviewHtml(release)}${checkedInAdvanceHtml((state.requirement_confirmations||{})[name])}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}${savedDataBoxHtml(savedDataInfo)}<p>Tell us whether you accept this release.</p>${savedDataConfirmHtml(savedDataInfo)}<div class="actions"><button type="button" class="secondary" id="accept-button" ${needsBackupConfirm?'disabled':''} onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
+  return `<div class="release-response">${deliveredDocumentsHtml(name,'release')}${(state.task_kinds||{})[name]==='analysis'?analysisReportHtml(name):releasePreviewHtml(release)}${checkedInAdvanceHtml((state.requirement_confirmations||{})[name],name)}<h4>When you finish your test</h4>${ownerTestPlanHtml(release)}${savedDataBoxHtml(savedDataInfo)}<p>Tell us whether you accept this release.</p>${savedDataConfirmHtml(savedDataInfo)}<div class="actions"><button type="button" class="secondary" id="accept-button" ${needsBackupConfirm?'disabled':''} onclick="submitAccepted(${task})">Accepted</button><button type="button" onclick="openDecisionDialog(${task})">Not accepted</button></div></div>`;
 }
 
 function taskLatestTimestamp(state,name){
@@ -809,13 +809,59 @@ function taskNames(state,contracts,directions,liveTasks){
 
 // The Reviewer's early look at a filed proposal (spec 2026-10-23_contract-first-checks): the Go ahead is never held; the card says what the
 // reviewer is doing, shows its questions ONCE, and every decision names the version and card state the owner was shown.
+// Examples first (task 2026-11-24_tdd-examples-first): a requirement recorded with examples has a real test only when one of its checks is
+// marked checked AND says what it runs and which example it asserts (a document or source-wide requirement: its reading check). The same rule
+// as contract_check.criterion_label; an older record without examples keeps the older rule.
+function readingKind(item){return item&&(item.kind==='document'||item.kind==='source');}
+function requirementCounted(item){const checks=item.stale?[]:(item.checks||[]);return readingKind(item)?checks.length>0:checks.some(check=>check.coverage==='checked'&&check.runs&&check.example);}
+function requirementLabel(item){
+  const checks=item.checks||[];
+  if(item.stale||!checks.length)return'not checked in advance';
+  if((item.examples||[]).length)return requirementCounted(item)?'checked':'partly checked';
+  return checks.every(check=>check.coverage==='checked')?'checked':'partly checked';
+}
 function proposalLabels(cc){
-  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,plain:item.plain||'',kind:item.kind||'',reason:item.why_not_checked||'',coverage:item.stale?'gap: no test covers this yet':(item.coverage_line||'not mapped'),label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};});
+  return(Array.isArray(cc?.criteria)?cc.criteria:[]).map(item=>{const checks=item.checks||[];return{n:item.n,criterion:item.text,plain:item.plain||'',kind:item.kind||'',examples:item.examples||[],walks:checks.map(check=>check.walk).filter(Boolean),reason:item.why_not_checked||'',coverage:item.stale?'gap: no test covers this yet':(item.coverage_line||'not mapped'),label:requirementLabel(item)};});
 }
 // A non-functional requirement (speed, phone layout, accessibility...) is labelled plainly wherever the list is drawn.
-function qualityTag(item){return item&&item.kind==='non-functional'?'<strong data-quality-requirement>Quality requirement:</strong> ':'';}
+function qualityTag(item){return item&&item.kind==='non-functional'?'<strong data-quality-requirement>Quality requirement:</strong> ':item&&item.kind==='document'?'<strong data-document-requirement>Document:</strong> ':item&&item.kind==='source'?'<strong data-source-requirement>Across the code:</strong> ':'';}
+// The requirement's examples, under its plain line: what goes in or what the user does, and the exact result (agreed before the build).
+function examplesHtml(item){
+  const list=Array.isArray(item&&item.examples)?item.examples:[];
+  // not a nested list: the rows of "What will be tested" stay one per requirement
+  return list.length?`<div class="requirement-examples" data-examples>${list.map(text=>`<small data-example style="display:block">Example: ${esc(text)}</small>`).join('')}</div>`:'';
+}
+// The walks of a requirement (task 2026-11-24_tdd-walks): the steps NMHP itself takes on the app's screens, agreed before the build.
+function walksHtml(item){
+  const list=Array.isArray(item&&item.walks)?item.walks:[];
+  return list.map(text=>`<small data-walk style="display:block">NMHP will try it: ${esc(text)}</small>`).join('');
+}
+// What each walk did on the finished version, with the screenshot of its last step.
+function walkResultsHtml(name,cc){
+  const rows=Object.entries((cc&&cc.walks)||{});
+  if(!rows.length)return'';
+  return `<div class="delivery-brief" data-walk-results><strong>Tried on the finished app, in the browser:</strong><ul>${rows.map(([n,item])=>`<li>${esc(item.walk||('Walk '+n))} — <strong>${item.status==='passed'?'passed':item.status==='failed'?'failed':'could not be tried'}</strong>${item.status!=='passed'&&item.reason?` <small>(${esc(item.reason)})</small>`:''}${item.picture?` <a target="_blank" rel="noopener" data-walk-picture href="${esc(apiPath(`/api/tasks/${encodeURIComponent(name)}/walks/${encodeURIComponent(n)}`))}">See the last screen</a>`:''}</li>`).join('')}</ul></div>`;
+}
+// What the reviewer found in the owner's own direction and files, the honest count of real tests, and what his result will be checked for.
+// `cc` is a proposal's early look (lists and criteria) or a confirmed contract's block (the board's own lines).
+function examplesFirstHtml(cc){
+  if(!cc)return'';
+  const asks=Array.isArray(cc.owner_asks)?cc.owner_asks:[],unread=Array.isArray(cc.not_read)?cc.not_read:[],result=Array.isArray(cc.result_must_contain)?cc.result_must_contain:[];
+  const missing=asks.filter(item=>!(item.requirements||[]).length).map(item=>item.ask);
+  const asksHtml=!asks.length?'':missing.length?`<div class="next owner-asks" data-owner-asks="missing"><strong>In your direction, not in the requirements:</strong><ul>${missing.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p>The builder has been told. You can go ahead as it is, or press Modify… to have them added.</p></div>`
+    :unread.length?`<p class="owner-asks" data-owner-asks="unread">The reviewer could not read: ${unread.map(esc).join('; ')}. What it could read is in the requirements.</p>`
+    :`<p class="owner-asks" data-owner-asks="found">The reviewer found everything you asked for in the requirements (${asks.length} points).</p>`;
+  let count=cc.real_tests||'';
+  if(!count&&Array.isArray(cc.criteria)){
+    const rows=cc.criteria.filter(item=>(item.examples||[]).length&&!readingKind(item));
+    if(rows.length)count=`${rows.filter(item=>requirementCounted(item)||(item.also_by||0)>0).length} of ${rows.length} requirements have a real test before the build; the others are tested for real at the final review.`;
+  }
+  const countHtml=count?`<p class="real-tests" data-real-tests>${esc(count)}</p>`:'';
+  const resultHtml=result.length?`<div class="delivery-brief" data-result-list><strong>Your scenario’s result will be checked for:</strong><ul>${result.map(text=>`<li>${esc(text)}</li>`).join('')}</ul></div>`:'';
+  return asksHtml+countHtml+resultHtml;
+}
 function contractCheckLabels(cc){
-  const list=Array.isArray(cc?.labels)?cc.labels:(Array.isArray(cc?.criteria)?cc.criteria.map(item=>{const checks=item.checks||[];return{criterion:item.text,label:(item.stale||!checks.length)?'not checked in advance':checks.every(check=>check.coverage==='checked')?'checked':'partly checked'};}):[]);
+  const list=Array.isArray(cc?.labels)?cc.labels:(Array.isArray(cc?.criteria)?cc.criteria.map(item=>({criterion:item.text,kind:item.kind||'',label:requirementLabel(item)})):[]);
   if(!list.length)return'';
   return `<ul class="checked-in-advance-list">${list.map(item=>`<li>${qualityTag(item)}${esc(item.criterion)} — <strong>${esc(item.label)}</strong></li>`).join('')}</ul>`;
 }
@@ -850,12 +896,12 @@ function plainRequirementsHtml(text,answers,kind,copyHtml){
   const fitHtml=fit?`<div class="plain-summary" data-fit-summary="fit"><strong>Already in the project</strong>${fit.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`:'';
   return `${summary}${fitHtml}${choices}<div class="full-requirements-head" style="display:flex;gap:10px;align-items:flex-start"><details class="full-requirements" data-keep="full-requirements-${esc(kind)}" style="flex:1"><summary>${block?'Full requirements':'Full requirements (developer language)'}</summary><div class="requirements-body">${requirementsHtml(text||'')}</div></details>${copyHtml||''}</div>`;
 }
-function testedListHtml(labels,results,title,compare){
+function testedListHtml(labels,results,title,compare,finalProof){
   const list=Array.isArray(labels)?labels:[];
   if(!list.length)return'';
   const proof={fails_before:'fails before the work (good)',passes_on_nothing:'passes on nothing: did not distinguish, so it proves nothing yet',could_not_compare:'could not compare with the project before the work (no failure of the work)'};
   const said=(value,mark)=>{const before=proof[mark]?` · ${proof[mark]}`:'';if(mark==='passes_on_nothing')return before;return(value==='passed'?' · passed when the board ran it':value==='failed'?' · failed when the board ran it':value==='did_not_run'?' · the board could not run this check (no failure of the work)':'')+before;};
-  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${qualityTag(item)}${esc(item.plain||'A check the developer wrote; open Details to read it.')} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)],(compare||{})[String(item.n)]))}${item.note?` <small>(skipped: ${esc(item.note)})</small>`:''}${item.reason&&item.label==='not checked in advance'?` <small data-no-test-reason>(no test: ${esc(item.reason)})</small>`:''} · <span data-coverage>${esc(item.coverage||'not mapped')}</span></li>`).join('')}</ul><details class="tested-details" data-keep="tested-details"><summary>Details</summary><ul>${list.map(item=>`<li>${qualityTag(item)}${esc(item.criterion)}</li>`).join('')}</ul></details><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started, or a test the board could not run was set aside with a recorded reason.</small></div>`;
+  return `<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">${esc(title||'What will be tested')}</div><p>Written by the reviewer before coding; the board runs them on the finished work.</p><ul class="checked-in-advance-list">${list.map(item=>`<li>${qualityTag(item)}${esc(item.plain||'A check the developer wrote; open Details to read it.')} — <strong>${esc(item.label)}</strong>${esc(item.label==='not checked in advance'?'':said((results||{})[String(item.n)],(compare||{})[String(item.n)]))}${item.note?` <small>(skipped: ${esc(item.note)})</small>`:''}${item.reason&&item.label==='not checked in advance'?` <small data-no-test-reason>(no test: ${esc(item.reason)})</small>`:''} · <span data-coverage>${esc(item.coverage||'not mapped')}</span>${(finalProof||{})[String(item.n)]?` · <strong data-final-proof>${esc((finalProof||{})[String(item.n)])}</strong>`:''}${examplesHtml(item)}${walksHtml(item)}</li>`).join('')}</ul><details class="tested-details" data-keep="tested-details"><summary>Details</summary><ul>${list.map(item=>`<li>${qualityTag(item)}${esc(item.criterion)}</li>`).join('')}</ul></details><small>For your information only; there is nothing for you to do. “Not checked in advance” means the reviewer could not turn that requirement into a test before the work started, or a test the board could not run was set aside with a recorded reason.</small></div>`;
 }
 function deviationLinesHtml(cc){
   const items=Array.isArray(cc?.deviations)?cc.deviations:[];
@@ -863,13 +909,13 @@ function deviationLinesHtml(cc){
   const answer=item=>item.status==='replaced'?'changed the check':item.status==='kept'?`kept it: ${item.answer_reason||''}`:'has not answered yet';
   return `<ul class="check-deviations" data-check-deviations>${items.map(item=>`<li>${esc(`The builder said check ${item.check} did not match reality: ${item.why}. The reviewer ${answer(item)}.`)}</li>`).join('')}</ul>`;
 }
-function checkedInAdvanceHtml(confirmation){
+function checkedInAdvanceHtml(confirmation,name){
   const cc=confirmation?.contract_check;
   if(!cc)return'';
-  const list=testedListHtml(cc.labels,cc.results,'',cc.compare);
+  const list=testedListHtml(cc.labels,cc.results,'',cc.compare,cc.final_proof)+(cc.late_inventory?`<p class="notice" data-late-inventory>The examples were written by the reviewer at the final review; you did not approve them before the build.</p>`:'');
   const reason=cc.reason?` (${esc(cc.reason)})`:'';
   const lane=cc.lane==='small'?`<p class="lane-line" data-lane="small">Small change: tests are not written in advance. The independent reviewer still reviews the finished work.</p>`:cc.lane_sent_back?`<p class="lane-line" data-lane="full">The reviewer sent this back to the full process: ${esc(cc.lane_sent_back.reason||'')}</p>`:'';
-  return lane+(list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`)+deviationLinesHtml(cc);
+  return lane+(list||`<div class="checked-in-advance" data-checked-in-advance><div class="requirements-title">What will be tested</div><p>Not checked in advance${reason}. The finished work is judged only after it is built, as before.</p></div>`)+(name?walkResultsHtml(name,cc):'')+examplesFirstHtml(cc)+deviationLinesHtml(cc);
 }
 // Gaps above the Go ahead (owner 2026-10-26): when a requirement has a coverage gap or a test that proved nothing, say so plainly right above the
 // buttons. The Go ahead is never held and nothing is asked; nothing is shown when everything is covered.
@@ -988,7 +1034,7 @@ function proposalCardHtml(name,proposal){
   const goLabel=(reading||rechecking)?'Go ahead without waiting':'Go ahead — this is the contract';
   const buttons=questions?`<div class="actions" style="margin-top:10px"><button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>`
     :`<div class="actions" style="margin-top:10px"><button type="button" data-req-go="${esc(name)}">${goLabel}</button>${(reading||rechecking)?(waitingForReview.has(name+':'+(proposal.version||1))?`<button type="button" class="secondary" disabled>Waiting for the review…</button>`:`<button type="button" class="secondary" data-req-wait="${esc(name)}">Wait for the review, then start</button>`):''}<button type="button" class="secondary" data-req-modify="${esc(name)}">Modify…</button></div>${(reading||rechecking)&&waitingForReview.has(name+':'+(proposal.version||1))?`<p class="notice" role="status" data-waiting-note>You chose to wait. The reviewer is checking how each requirement can be tested. When it is done the work starts by itself, so keep this page open. If the reviewer has questions for you, it asks them first and nothing starts. You can still go ahead without waiting.</p>`:''}`;
-  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${questions?'':gaps}${realScenarioHtml(proposal)}${screensButtonHtml(name,proposal.screens,'proposal')}${skillsBlockHtml(proposal,name)}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
+  return `<div class="requirements-confirmation requirements-proposal" id="req-decision-${esc(name)}" data-version="${esc(proposal.version||1)}" data-token="${esc(cc.token||'')}"><div class="requirements-title">Final agreed requirements — your decision</div>${plainRequirementsHtml(proposal.text,proposal.contract_check?.answers,'proposal',copyButtonHtml('proposal',name,proposal.text))}<small>Proposed ${esc(proposal.proposed_at||'')} · version ${esc(proposal.version||1)}. Nothing is built until you decide.</small>${runningAsHtml(proposal)}${note}${noTestCountHtml(proposal)}${['ready','questions','rechecking','answered'].includes(status)?examplesFirstHtml(cc):''}${questions?'':gaps}${realScenarioHtml(proposal)}${screensButtonHtml(name,proposal.screens,'proposal')}${skillsBlockHtml(proposal,name)}${smallBox}${buttons}<p class="notice" id="req-decision-note-${esc(name)}" role="status" aria-live="polite"></p></div>`;
 }
 
 // A task card is split into two independently-refreshed regions so the window
@@ -1030,7 +1076,7 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
     :skillsAgreed?`<p class="skills-agreed-line" data-skills-agreed>Skills agreed: ${skillsAgreed.length?skillsAgreed.map(item=>esc(item.plain_name)).join(', '):'none'}</p>`:'';
   const skillsUsedLines=(state.task_skill_usage||{})[name]||[];
   const skillsUsedLine=skillsUsedLines.length?`<p class="skills-used-line" data-skills-used>Skills used: ${skillsUsedLines.map(esc).join(' ')}</p>`:'';
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation)}${screensButtonHtml(name,confirmation.screens,'contract')}${skillsAgreedLine}${skillsUsedLine}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation,name)}${screensButtonHtml(name,confirmation.screens,'contract')}${skillsAgreedLine}${skillsUsedLine}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
@@ -5359,6 +5405,24 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                 if worker_health is not None:
                     ready["watchdog"] = worker_health()
                 self.send_json(200, ready); return
+            walk_match = re.fullmatch(r"/api/tasks/([^/]+)/walks/(\d{1,3}\.\d{1,3})", path)
+            if walk_match:
+                # the screenshot of a walk's last step, looked up only through the board's own record
+                cc = ((board.snapshot(root).get("requirement_confirmations") or {}).get(unquote(walk_match.group(1))) or {}).get("contract_check") or {}
+                picture = str(((cc.get("walks") or {}).get(walk_match.group(2)) or {}).get("picture") or "")
+                try:
+                    body = Path(picture).read_bytes() if picture else b""
+                except OSError:
+                    body = b""
+                if not body:
+                    self.send_json(404, {"error": "no screenshot of that walk"}); return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body); return
             screens_match = re.fullmatch(r"/api/tasks/([^/]+)/screens/(proposal|contract|approval)(?:/(\d{1,3}))?", path)
             if screens_match:
                 # owner 2026-11-21: the contract's screen designs, looked up only through the board's own record (never a path

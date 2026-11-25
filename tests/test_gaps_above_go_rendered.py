@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, browser_acceptance, control
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.test_coverage_check import criteria
 from tests.test_no_terminal_questions_rendered import run_page
@@ -68,7 +69,7 @@ class RenderedGapsAboveGoTests(unittest.TestCase):
                 board.record_requirement_proposal(root, agent["id"], f"Final agreed requirements for {task}.")
                 path = base / f"{task}.json"
                 path.write_text(json.dumps(plain_ready(criteria(*specs))), encoding="utf-8")
-                board.record_contract_check_submission(root, reviewer["id"], task, 1, str(path))
+                examples_first.record(root, reviewer["id"], task, 1, str(path))
             result = run_page(self, root, PROBE, width=1200, height=1600, wait=120)
         self.assertTrue(result, "Chrome reported nothing")
         gaps = result["TASK-GAPS"]

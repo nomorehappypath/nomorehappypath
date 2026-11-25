@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from harness import board, contract_check, control
+from tests import examples_first
 from tests.test_contract_first_checks import TASK, TEXT, TEST_FILE, _Fixture, ledger, submission, write_json
 
 WHY = "Check 1 assumes the answer has a greeting field, but the real answer only has a text field (curl shows {\"text\": \"hello\"})."
@@ -58,7 +59,7 @@ class CheckDeviationTests(_Fixture):
         self.report(agent)
         before = self.block()
         with mock.patch.object(board, "run_red_proof") as red:
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "the answer has a text field, not greeting", self.fix(extra="# real field\n"))
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "the answer has a text field, not greeting", self.fix(extra="# real field\n"))
         red.assert_called_once_with(self.root, TASK, [1], "correction")
         after = self.block()
         self.assertNotEqual(before["checks"][0]["sha256"], after["checks"][0]["sha256"])
@@ -68,21 +69,21 @@ class CheckDeviationTests(_Fixture):
         self.assertIn("text field", after["deviations"][0]["answer_reason"])
         self.assertTrue(after["labels"], "the coverage labels were recomputed")
         with self.assertRaisesRegex(ValueError, "no open builder deviation"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "keeping it after all", self.keep())
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "keeping it after all", self.keep())
 
     def test_reviewer_rejects_the_check_stays_exactly_as_locked_and_a_second_answer_is_refused(self):
         agent, _session, reviewer = self.confirmed()
         with self.assertRaisesRegex(ValueError, "no open builder deviation"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "nothing to answer yet", self.keep("early.json"))
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "nothing to answer yet", self.keep("early.json"))
         self.report(agent)
         before = self.block()
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "the check is right because the spec names the greeting field", self.keep())
+        examples_first.correct(self.root, reviewer["id"], TASK, 1, "the check is right because the spec names the greeting field", self.keep())
         after = self.block()
         self.assertEqual((after["checks"], after["checks_sha256"], after.get("corrections") or []), (before["checks"], before["checks_sha256"], []))
         self.assertEqual(after["deviations"][0]["status"], "kept")
         self.assertIn("the spec names", after["deviations"][0]["answer_reason"])
         with self.assertRaisesRegex(ValueError, "no open builder deviation"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "I changed my mind again", self.keep("again.json"))
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "I changed my mind again", self.keep("again.json"))
         with self.assertRaisesRegex(ValueError, "already has a deviation"):
             self.report(agent)       # the same locked bytes are not argued twice
 
@@ -92,9 +93,9 @@ class CheckDeviationTests(_Fixture):
         self.report(agent)
         self.assertEqual(self.block()["checks"], stored)
         with self.assertRaisesRegex(ValueError, "only the Reviewer"):
-            board.record_contract_check_correction(self.root, agent["id"], TASK, 1, "I want it my way", self.keep())
+            examples_first.correct(self.root, agent["id"], TASK, 1, "I want it my way", self.keep())
         with self.assertRaisesRegex(ValueError, "only the Reviewer"):
-            board.record_contract_check_correction(self.root, agent["id"], TASK, 1, "I want it my way", self.fix("mine.json"))
+            examples_first.correct(self.root, agent["id"], TASK, 1, "I want it my way", self.fix("mine.json"))
         with self.assertRaisesRegex(ValueError, "belongs to requirement 9, not 1"):   # 2026-11-08: a requirement that contradicts the check number is named as such
             board.record_check_deviation(self.root, agent["id"], TASK, 1, "9.9", WHY)
         with self.assertRaisesRegex(ValueError, "not a stored check"):

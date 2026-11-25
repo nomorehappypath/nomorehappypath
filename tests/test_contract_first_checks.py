@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from harness import attention, board, contract_check, control
+from tests import examples_first
 from harness.board_surface import CommandGateway, SessionTokenAuthority
 from harness.project_context import ProjectContext
 from tests.environment_support import require_loopback
@@ -54,7 +55,7 @@ def submission(questions=None, checks=True, **extra) -> dict:
          **({} if checks else {"why_not_checked": "it is a feeling, not a result"}), **extra},
         {"text": "The greeting looks friendly", "why_not_checked": "a matter of taste"},
     ]
-    return {"criteria": criteria, "questions": questions or []}
+    return examples_first.complete({"criteria": criteria, "questions": questions or []})
 
 
 QUESTION = {"text": "Which greeting should it print?", "options": ["hello", "hi there", "good day"], "recommended": 0, "affects": [1]}
@@ -99,7 +100,7 @@ class _Fixture(unittest.TestCase):
 
     def submit(self, reviewer, value, version=None):
         path = write_json(self.base, "submission.json", value)
-        return board.record_contract_check_submission(self.root, reviewer["id"], TASK, version or self.proposal()["version"], path)
+        return examples_first.record(self.root, reviewer["id"], TASK, version or self.proposal()["version"], path)
 
     def age_deadline(self, seconds=3600):
         with board.locked_state(self.root) as state:
@@ -441,7 +442,7 @@ class SubmissionAndAnswersTests(_Fixture):
         self.assertTrue(wake and "CONTRACT RECHECK ROUTED" in wake[0]["text"] and "hi there" in wake[0]["text"])
         self.assertEqual({c["n"]: bool(c.get("stale")) for c in check["criteria"]}, {1: True, 2: False})
         # the Reviewer updates requirement 1 through the existing correction operation: the state becomes ready, the other check stays
-        result = board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction(extra="# hi there\n"))
+        result = examples_first.correct(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction(extra="# hi there\n"))
         self.assertEqual(result["status"], "ready")
         check = self.proposal()["contract_check"]
         self.assertEqual(check["status"], "ready")
@@ -470,7 +471,7 @@ class SubmissionAndAnswersTests(_Fixture):
         self.assertEqual({i["n"]: i["label"] for i in recorded["labels"]}, {1: "not checked in advance", 2: "checked"})
         # 2026-11-05: the update the Reviewer could not finish before Go ahead is no longer lost. It may still add the first
         # check for that requirement afterwards (before this, 5 of 11 requirements of a real run were built with no test).
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "the update I could not finish before Go ahead", self.correction())
+        examples_first.correct(self.root, reviewer["id"], TASK, 1, "the update I could not finish before Go ahead", self.correction())
         late = board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
         self.assertEqual(sorted({c["criterion_index"] for c in late["checks"]}), [1, 2])
 
@@ -482,7 +483,7 @@ class SubmissionAndAnswersTests(_Fixture):
         self.age_deadline()
         before = json.dumps(self.proposal(), sort_keys=True)
         with self.assertRaisesRegex(ValueError, "ran out"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction())
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction())
         self.assertEqual(json.dumps(self.proposal(), sort_keys=True), before)
         board.mark_stalled(self.root)
         check = self.proposal()["contract_check"]
@@ -517,7 +518,7 @@ class SubmissionAndAnswersTests(_Fixture):
         self.assertEqual(self.proposal()["contract_check"]["status"], "superseded")
         self.assertEqual([i for i in control.take_instructions(self.root, session["id"]) if i.get("source") == "contract-check"], [])
         with self.assertRaisesRegex(ValueError, "no stored check|nothing|not|another"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction())
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "updated for the owner's answers", self.correction())
         board.record_requirement_proposal(self.root, agent["id"], TEXT + " Revised.")
         self.assertEqual(self.proposal()["contract_check"]["status"], "reading", "the answered batch is used up; no questions are carried")
         self.assertNotIn(TASK, board.snapshot(self.root).get("contract_open_questions", {}))
@@ -528,8 +529,8 @@ class SubmissionAndAnswersTests(_Fixture):
         self.answer(choice=1)
         _s2, other = self.reviewer()
         with self.assertRaisesRegex(ValueError, "another Reviewer"):
-            board.record_contract_check_correction(self.root, other["id"], TASK, 0, "nothing more to change", write_json(self.base, "none.json", {"checks": []}))
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 0, "nothing more to change", write_json(self.base, "none2.json", {"checks": []}))
+            examples_first.correct(self.root, other["id"], TASK, 0, "nothing more to change", write_json(self.base, "none.json", {"checks": []}))
+        examples_first.correct(self.root, reviewer["id"], TASK, 0, "nothing more to change", write_json(self.base, "none2.json", {"checks": []}))
         check = self.proposal()["contract_check"]
         self.assertEqual(check["status"], "ready")
         self.assertIn("marked not checked in advance", check["reason"])
@@ -651,8 +652,8 @@ class StoredChecksRunTests(_Fixture):
         before = board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
         path = write_json(self.base, "fix.json", {"checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE + "\n# corrected\n"}}]})
         with self.assertRaisesRegex(ValueError, "at least 8"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "wrong", path)
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "the check expected the wrong word", path)
+            examples_first.correct(self.root, reviewer["id"], TASK, 1, "wrong", path)
+        examples_first.correct(self.root, reviewer["id"], TASK, 1, "the check expected the wrong word", path)
         after = board.snapshot(self.root)["requirement_confirmations"][TASK]["contract_check"]
         self.assertNotEqual(before["checks_sha256"], after["checks_sha256"])
         self.assertEqual(after["corrections"][0]["replaced"][0]["sha256"], before["checks"][0]["sha256"])
@@ -662,7 +663,7 @@ class StoredChecksRunTests(_Fixture):
         self.assertIn("changed after they were run", stale, "a certification or PASS made with the old checks no longer counts")
         delivery = self.delivery_agent()
         with self.assertRaises(ValueError):
-            board.record_contract_check_correction(self.root, delivery["id"], TASK, 1, "I want it my way", path)
+            examples_first.correct(self.root, delivery["id"], TASK, 1, "I want it my way", path)
 
     def delivery_agent(self):
         return next(a for a in board.snapshot(self.root)["agents"].values() if a["role"] == "development")
@@ -710,7 +711,7 @@ class FinalReviewFlowTests(unittest.TestCase):
         files = {"test_hello.py": TEST_FILE.replace("'hello'", repr(expected))}
         value = {"criteria": [{"text": "Running the program prints the greeting", "checks": [{"coverage": "checked", "ledger": ledger(), "files": files}]}]}
         path = write_json(self.base, "sub.json", value)
-        board.record_contract_check_submission(self.root, self.qa["id"], TASK, 1, path)
+        examples_first.record(self.root, self.qa["id"], TASK, 1, path)
         token = board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]["token"]
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=token)
         board.record_requirement_confirmation(self.root, self.dev["id"], TEXT)
@@ -733,7 +734,7 @@ class FinalReviewFlowTests(unittest.TestCase):
         self.assertEqual(after["challenge_execution"]["contract_check_sha256"], digest)
         # a wrong check is corrected: the certification no longer counts, a verdict is refused until the checks run again
         fix = write_json(self.base, "fix.json", {"checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE + "# fixed\n"}}]})
-        board.record_contract_check_correction(self.root, self.qa["id"], TASK, 1, "the check was wrong in one detail", fix)
+        examples_first.correct(self.root, self.qa["id"], TASK, 1, "the check was wrong in one detail", fix)
         evidence = self.base / "evidence.txt"
         evidence.write_text("command: python3 -m unittest\nresult: PASS\n")
         with self.assertRaisesRegex(ValueError, "stored checks changed after they were run"):
@@ -748,7 +749,7 @@ class FinalReviewFlowTests(unittest.TestCase):
         with board.locked_state(self.root) as state:
             state["integrity_migration_complete"] = True
         again = write_json(self.base, "fix2.json", {"checks": [{"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE + "# fixed again\n"}}]})
-        board.record_contract_check_correction(self.root, self.qa["id"], TASK, 1, "another correction after the pass", again)
+        examples_first.correct(self.root, self.qa["id"], TASK, 1, "another correction after the pass", again)
         voided = board.snapshot(self.root)["qa_requests"][request["id"]]
         self.assertEqual(voided["status"], "failed")
         self.assertIn("stored checks changed", voided["result_summary"])

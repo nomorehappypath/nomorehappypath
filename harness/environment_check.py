@@ -133,24 +133,37 @@ def needs_hash(needs: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(needs, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def real_run_required(state: dict[str, Any], task: str, needs: dict[str, Any] | None) -> bool:
-    """The app's own real run applies to a task that builds or changes a runnable program whose app calls an AI tool."""
-    if not needs or not needs.get("ai_tools"):
-        return False
+def _program_task(state: dict[str, Any], task: str) -> bool:
+    """The task builds or changes a runnable program: not a document-only task, a Write specs or a Code analysis."""
     if (state.get("task_document_only") or {}).get(task):
         return False
     return str((state.get("task_kinds") or {}).get(task) or "development") not in {"spec", "analysis"}
 
 
-def needs_problem(state: dict[str, Any], task: str, needs: dict[str, Any]) -> str:
-    """A needs list this task cannot use: a real run is required and none is named."""
-    if not real_run_required(state, task, needs):
+def real_run_required(state: dict[str, Any], task: str, needs: dict[str, Any] | None) -> bool:
+    """The app's own real run applies to a task that builds or changes a runnable program whose app calls an AI tool, and to any
+    such task whose setup list names a real run (task 2026-11-24_tdd-examples-first, Change 5: every app, with or without AI;
+    a list filed before that change names none for an app without AI, so a task past its contract keeps its rules)."""
+    if not needs or not (needs.get("ai_tools") or needs.get("real_run")):
+        return False
+    return _program_task(state, task)
+
+
+def needs_problem(state: dict[str, Any], task: str, needs: dict[str, Any], *, every_app: bool = False) -> str:
+    """A needs list this task cannot use: a real run is required and none is named. `every_app` (a full Write-code task filing
+    its list under the examples-first rules) asks it of an app that calls no AI tool too: the owner's scenario from start to
+    finished result, the one command that runs it through the real entry point, and the file the result is written to."""
+    ai = bool(needs.get("ai_tools"))
+    if not _program_task(state, task) or not (ai or every_app):
         return ""
-    missing = [name for name in ("real_run", "real_scenario", "real_data", "real_output") if not needs.get(name)]
+    wanted = ("real_run", "real_scenario", "real_data", "real_output") if ai else ("real_run", "real_scenario", "real_output")
+    missing = [name for name in wanted if not needs.get(name)]
     if missing:
-        return ("this app calls " + ", ".join(needs["ai_tools"]) + ": the setup list must name " + ", ".join(missing) + " (the owner's "
-                "whole scenario, its files, the one command that runs it through the app's real entry point with the real AI tools, and "
-                "the file it writes the finished result to); build it first. " + NEEDS_FORMAT)
+        who = "this app calls " + ", ".join(needs["ai_tools"]) if ai else "this task builds or changes a program"
+        tools = " with the real AI tools" if ai else ""
+        return (who + ": the setup list must name " + ", ".join(missing) + " (the owner's whole scenario, its files, the one command "
+                f"that runs it through the app's real entry point{tools}, and the file it writes the finished result to); build it "
+                "first. " + NEEDS_FORMAT)
     return ""
 
 
@@ -680,6 +693,23 @@ def _save_evidence(folder: Path, output: Path | None, log: str) -> str:
     return str(saved)
 
 
+def write_recorders(shims: Path, calls_dir: Path, tools: list[str], values: dict[str, str], models: dict[str, str] | None) -> list[str]:
+    """Write the recorder of each AI tool (it calls the real one on the Settings test model) into `shims`; the tools not found."""
+    shims.mkdir()
+    calls_dir.mkdir()
+    missing = []
+    for tool in tools:
+        executable = tool_executable(tool, values)
+        if not executable:
+            missing.append(tool)
+            continue
+        shim = shims / tool
+        shim.write_text(RECORDER.format(real=executable.replace('"', '\\"'), tool=tool, calls=str(calls_dir),
+                                        model=model_flag(tool, (models or {}).get(tool, ""))))
+        shim.chmod(0o755)
+    return missing
+
+
 def real_run(command: str, tools: list[str], workspace: str, values: dict[str, str], scrub: Callable[[str], str],
              python_dir: str = "", real_output: str = "", evidence: Path | None = None,
              models: dict[str, str] | None = None) -> dict[str, Any]:
@@ -694,18 +724,7 @@ def real_run(command: str, tools: list[str], workspace: str, values: dict[str, s
         return _item("real_run", label, False, "the task's work folder is missing", BUILDER)
     with tempfile.TemporaryDirectory(prefix="nmhp-realrun-") as folder:
         shims, calls_dir = Path(folder) / "bin", Path(folder) / "calls"
-        shims.mkdir()
-        calls_dir.mkdir()
-        missing = []
-        for tool in tools:
-            executable = tool_executable(tool, values)
-            if not executable:
-                missing.append(tool)
-                continue
-            shim = shims / tool
-            shim.write_text(RECORDER.format(real=executable.replace('"', '\\"'), tool=tool, calls=str(calls_dir),
-                                            model=model_flag(tool, (models or {}).get(tool, ""))))
-            shim.chmod(0o755)
+        missing = write_recorders(shims, calls_dir, tools, values, models)
         if missing:
             return _item("real_run", label, False, "not found on this computer: " + ", ".join(missing), OWNER)
         env = dict(values)
@@ -750,7 +769,7 @@ def real_run(command: str, tools: list[str], workspace: str, values: dict[str, s
     if real_output and not fresh:
         return _item("real_run", label, False, f"`{command}` finished without the scenario's result: {real_output} was not written "
                      "by this run (or is empty). The real run must take the owner's scenario through the app to its finished result", BUILDER)
-    item = _item("real_run", label, True, f"`{command}` ran and called {', '.join(tools)} for real"
+    item = _item("real_run", label, True, f"`{command}` ran" + (f" and called {', '.join(tools)} for real" if tools else " through to its result")
                  + (f"; the scenario's result is kept at {saved}" if saved else ""), BUILDER)
     if saved:
         item["evidence"] = saved

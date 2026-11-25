@@ -9,6 +9,7 @@ import copy
 import unittest
 
 from harness import board, contract_check, control
+from tests import examples_first
 from tests.test_contract_first_checks import QUESTION, TASK, TEST_FILE, TEXT, _Fixture, ledger, write_json
 
 CHECK = {"coverage": "checked", "ledger": ledger(), "files": {"test_hello.py": TEST_FILE}}
@@ -67,10 +68,10 @@ class CoverageTests(_Fixture):
         self.assertEqual(self.proposal()["contract_check"]["status"], "ready")
         # the one answer closes the gap through the correction path
         fix = write_json(self.base, "fix.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered", "covered"])
         with self.assertRaisesRegex(ValueError, "at least one check|no stored check"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap again", fix)
+            examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap again", fix)
         self.assertEqual(self.asked(session), [], "never a second request")
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=self.proposal()["contract_check"]["token"])
         self.assertEqual(self.proposal()["status"], "accepted")
@@ -101,7 +102,7 @@ class CoverageTests(_Fixture):
         """Second stranger run 2026-11-05: Go ahead came a minute before the Reviewer's answer; every answer was then refused
         ("no stored check to correct") and 5 of 11 requirements were built with no test written in advance."""
         agent, reviewer, fix = self.gap_then_go_ahead()
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered", "covered"])
         board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
         self.assertEqual(sorted({c["criterion_index"] for c in self.confirmed_block()["checks"]}), [1, 2], "the late check is in the locked contract")
@@ -111,7 +112,7 @@ class CoverageTests(_Fixture):
         board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
         before = self.confirmed_block()
         self.assertEqual([c["criterion_index"] for c in before["checks"]], [1])
-        result = board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        result = examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         self.assertEqual(result["checks"], 1)
         after = self.confirmed_block()
         self.assertEqual(sorted({c["criterion_index"] for c in after["checks"]}), [1, 2])
@@ -121,7 +122,7 @@ class CoverageTests(_Fixture):
         added = [e for e in board.snapshot(self.root)["events"] if e["kind"] == "contract_check_corrected"]
         self.assertIn("added the first checks for a requirement that had none", added[-1]["message"])
         with self.assertRaisesRegex(ValueError, "no stored check to correct"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 9, "not a requirement of this contract", fix)
+            examples_first.correct(self.root, reviewer["id"], TASK, 9, "not a requirement of this contract", fix)
 
     def test_a_gap_answered_after_a_go_ahead_that_also_answered_a_question_is_taken(self):
         """Codex R1-1: answering the Reviewer's question puts the check in the state "answered"; the late coverage answer
@@ -138,7 +139,7 @@ class CoverageTests(_Fixture):
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=self.proposal()["version"], token=self.proposal()["contract_check"]["token"])
         self.assertEqual((self.proposal()["status"], self.proposal()["contract_check"]["status"]), ("accepted", "answered"))
         fix = write_json(self.base, "late.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
         # requirement 1's own check went stale with the answered question (existing rule); requirement 2's late check must be there
         self.assertIn(2, {c["criterion_index"] for c in self.confirmed_block()["checks"]}, "the late check survives confirmation")
@@ -154,13 +155,13 @@ class CoverageTests(_Fixture):
         board.record_requirement_confirmation(self.root, agent["id"], self.proposal()["text"])
         self.assertEqual((self.confirmed_block().get("checks") or [], self.confirmed_block().get("checks_sha256") or ""), ([], ""))
         fix = write_json(self.base, "first.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
-        result = board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
+        result = examples_first.correct(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
         self.assertEqual(result["checks"], 1)
         after = self.confirmed_block()
         self.assertEqual([c["criterion_index"] for c in after["checks"]], [1])
         self.assertTrue(after["checks_sha256"], "the first check is locked")
         with self.assertRaisesRegex(ValueError, "no stored check to correct"):
-            board.record_contract_check_correction(self.root, reviewer["id"], TASK, 7, "not a requirement", fix)
+            examples_first.correct(self.root, reviewer["id"], TASK, 7, "not a requirement", fix)
 
     def test_happy_path_only_is_a_gap(self):
         session, reviewer = self.start()
@@ -176,7 +177,7 @@ class CoverageTests(_Fixture):
         # what an older board stored: no mapping keys at all (loaded, never re-recorded)
         with board.locked_state(self.root) as state:
             for item in state["requirement_proposals"][TASK]["contract_check"]["criteria"]:
-                for key in ("failure_paths", "no_failure_paths_because", "mapped", "new", "also_by", "coverage_line"):
+                for key in ("failure_paths", "no_failure_paths_because", "mapped", "new", "also_by", "coverage_line", "examples"):   # nor examples (2026-11-24)
                     item.pop(key, None)
         labels = contract_check.labels(self.proposal()["contract_check"]["criteria"])
         self.assertEqual({item["coverage"] for item in labels}, {"not mapped"})
@@ -197,7 +198,7 @@ class CoverageTests(_Fixture):
         self.assertEqual(self.proposal()["contract_check"]["status"], "questions")
         self.assertEqual(len(self.asked(session)), 1)
         fix = write_json(self.base, "fix.json", {"checks": [], "failure_paths": ["a bad input is refused"]})
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered"])
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=self.proposal()["contract_check"]["token"])
         self.assertEqual(self.proposal()["status"], "accepted")
@@ -211,14 +212,14 @@ class CoverageTests(_Fixture):
         extra = copy.deepcopy(CHECK)
         extra["covers"] = [3]
         fix = write_json(self.base, "fix.json", {"checks": [extra]})
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered", "covered", "covered"], "requirement 3 is covered by the check requirement 2 now carries")
         self.assertEqual(self.proposal()["contract_check"]["criteria"][1]["checks"][0]["covers"], [3], "the mapping is kept in storage")
 
     def test_removing_the_only_check_that_covers_a_requirement_makes_it_a_gap_again(self):
         stored = self.submit_and_load(criteria((True, True), (False, True)), covers=True)
         self.assertEqual([item["coverage_line"] for item in stored], ["covered", "covered"])
-        stored[0]["checks"] = [{"coverage": "checked", "file": "x", "sha256": "y"}]          # the check is replaced by one that no longer covers 2
+        stored[0]["checks"] = [{"coverage": "checked", "file": "x", "sha256": "y", "runs": "the program", "example": 1}]          # the check is replaced by one that no longer covers 2
         contract_check.apply_coverage(stored)
         self.assertEqual([item["coverage_line"] for item in stored], ["covered", contract_check.GAP_NO_TEST])
         stored[0]["stale"] = True
@@ -239,7 +240,7 @@ class CoverageTests(_Fixture):
         self.assertEqual(self.lines(), [contract_check.NOT_MAPPED_NEW])
         token = self.proposal()["contract_check"]["token"]
         fix = write_json(self.base, "fix.json", {"checks": [], "failure_paths": ["a bad input is refused"]})
-        board.record_contract_check_correction(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 1, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered"])
         self.assertEqual(contract_check.labels(self.proposal()["contract_check"]["criteria"])[0]["coverage"], "covered")
         self.assertEqual(self.proposal()["contract_check"]["token"], token, "the owner's Go ahead is not held")

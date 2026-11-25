@@ -39,7 +39,7 @@ from typing import Any, Iterator
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness import screen_script as screen_script_runner
-from harness import difficulty_note
+from harness import difficulty_note, walks, workspace_settings
 from harness import saved_data as saved_data_rules
 from harness import code_quality, standing_checks
 from harness import test_machine
@@ -5400,10 +5400,11 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
             earlier = existing.get("contract_check") or {}
             if (
                 earlier.get("status") in {"ready", "questions"}
-                and any(item.get("sharper") for item in earlier.get("criteria") or [])
+                and (any(item.get("sharper") for item in earlier.get("criteria") or [])
+                     or contract_check.asks_not_covered(earlier.get("owner_asks") or []))
                 and not (state.get("contract_check_revisions") or {}).get(task)
             ):
-                # the Reviewer asked for sharper wording: Delivery may replace the waiting proposal, once
+                # the Reviewer asked for sharper wording, or found an owner's ask no requirement covers: Delivery may replace the waiting proposal, once
                 state.setdefault("contract_check_revisions", {})[task] = True
             else:
                 raise ValueError("a requirements proposal is already awaiting the owner's decision")
@@ -5416,7 +5417,9 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
             raise ValueError(DOCUMENT_ONLY_REFUSAL)
         no_program = document_only       # the owner's checkbox decides, never the builder
         if parsed_needs is not None:
-            problem = environment_check.needs_problem(state, task, parsed_needs)
+            # the real run is named for every app a real Builder proposes in the full lane (2026-11-24_tdd-examples-first, Change 5);
+            # needs_required is what the Builder's own command passes, as for the plain block and the screens
+            problem = environment_check.needs_problem(state, task, parsed_needs, every_app=needs_required and not small_change)
             if problem:
                 raise ValueError(problem)
             environment_check.record_needs(state, task, parsed_needs, agent_id, now())
@@ -5504,7 +5507,8 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
             brief = project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))
             wake = {
                 "task": task, "version": version, "session_id": str(reviewer.get("session_id") or ""), "reviewer_id": reviewer["id"],
-                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or ""), brief),
+                "text": contract_check.reviewer_instruction(task, version, text, direction, contract_check.wait_seconds() // 60, str((state.get("task_repositories") or {}).get(task) or ""), brief,
+                                                            _owner_source_files(state, task)),
             }
         if setup_held and wake:
             proposal["held_wake"] = wake     # sent when the setup check passes (record_environment_result)
@@ -5749,7 +5753,8 @@ def set_needs(root: Path, agent_id: str, needs: Any) -> dict[str, Any]:
         if agent["role"] not in DEVELOPER_ROLES or not agent.get("active"):
             raise ValueError("only the task's builder files its setup list")
         task = str(agent.get("task") or "")
-        problem = environment_check.needs_problem(state, task, parsed)
+        # a task past its contract keeps its rules: the every-app real run is asked only where the contract was confirmed under it
+        problem = environment_check.needs_problem(state, task, parsed, every_app=examples_first_applies(state, task, root))
         if problem:
             raise ValueError(problem)
         at = now()
@@ -6299,8 +6304,17 @@ def _confirmation_contract_check(proposal: dict[str, Any]) -> dict[str, Any]:
             included.append({
                 "n": f"{criterion['n']}.{position}", "criterion_index": criterion["n"], "criterion": criterion["text"],
                 "coverage": stored["coverage"], "file": stored["file"], "sha256": stored["sha256"],
+                **{key: stored[key] for key in ("runs", "example") if stored.get(key)},
             })
+    criteria = (check.get("criteria") or []) if attached else []
     return {
+        # rules 2 = this contract was confirmed under the examples-first rules (task 2026-11-24_tdd-examples-first); a contract
+        # confirmed before them has no such mark and keeps its older rules to the end
+        "rules": 2,
+        "owner_asks": list(check.get("owner_asks") or []) if attached else [], "not_read": list(check.get("not_read") or []) if attached else [],
+        "result_must_contain": list(check.get("result_must_contain") or []) if attached else [],
+        "asks_line": contract_check.asks_line(check.get("owner_asks") or [], check.get("not_read") or []) if attached else "",
+        "real_tests": contract_check.real_test_line(criteria),
         "status": check.get("status", ""), "reason": check.get("reason", ""),
         "accepted_version": int(proposal.get("version", 1)), "checked_version": check.get("version"),
         "used_recommended": bool(check.get("used_recommended")), "answers": check.get("answers") or [],
@@ -6368,6 +6382,18 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
     return event
 
 
+def _owner_source_files(state: dict[str, Any], task: str) -> list[str]:
+    """The files the owner attached to this task, as the copies begin-task put in the task's own work folder (never raw board
+    storage paths): what the Reviewer reads to list the owner's asks. Empty when he attached none or the folder cannot be read."""
+    workspace = str((state.get("task_workspaces") or {}).get(task) or "")
+    if not workspace:
+        return []
+    try:
+        return sorted(str(path) for path in (Path(workspace) / SUPPORTING_DOCUMENTS_DIRNAME).iterdir() if path.is_file() and not path.name.startswith("."))
+    except OSError:
+        return []
+
+
 def _contract_check_folder(root: Path, task: str, tag: str) -> Path:
     """Return the evidence storage directory path, under root, for contract
     checks of task under the given tag (a sanitized, hash-suffixed subpath)."""
@@ -6385,6 +6411,8 @@ def _validate_contract_check_files(criteria: list[dict[str, Any]]) -> None:
                 for body in (check["ledger"], *check["files"].values()):
                     if CLAUDE_TOKEN_SHAPE.search(body):
                         raise ValueError(f"{where} contains what looks like a Claude login token; remove it")
+                if walks.is_walk(check):
+                    continue        # a walk has no ledger to run: NMHP takes its steps itself
                 if _ESCAPED_PATTERN.search(check["ledger"]):
                     raise ValueError(f"{where}: the test pattern has escaped quotes (a backslash before a quote), which hand the quote marks to the test finder and find nothing; "
                                      "quote the pattern, for example: python3 -m unittest discover -s .contract-checks/c1-1 -p \"test_*.py\" (quoted, so the shell cannot expand it)")
@@ -6398,17 +6426,45 @@ def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], ch
     """Write check's ledger and files for criterion as a JSON file named name
     inside folder, atomically. Return value: metadata (coverage, file path,
     sha256) describing the stored record."""
+    said = {key: check[key] for key in ("runs", "example", "walk") if check.get(key)}      # what it runs and which example it asserts (2026-11-24_tdd-examples-first)
     data = json.dumps({
         "criterion": criterion["n"], "criterion_text": criterion["text"], "coverage": check["coverage"],
-        "ledger": check["ledger"], "files": check["files"],
+        "ledger": check["ledger"], "files": check["files"], **said,
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / name
     _atomic_write_bytes(path, data)
-    stored = {"coverage": check["coverage"], "file": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+    stored = {"coverage": check["coverage"], "file": str(path), "sha256": hashlib.sha256(data).hexdigest(), **said}
     if check.get("covers"):
         stored["covers"] = list(check["covers"])      # kept beside the file (not inside it), so the coverage can be recomputed whenever the checks change
     return stored
+
+
+def _require_walk_words(root: Path, criteria: list[dict[str, Any]], manifest: list[dict[str, Any]], task: str) -> None:
+    """A walk uses only controls the agreed screens show (task 2026-11-24_tdd-walks); with no screens there is nothing to compare."""
+    from harness import contract_screens
+    found = [(item["n"], check) for item in criteria for check in item.get("checks") or [] if walks.is_walk(check)]
+    if not found or not manifest:
+        return
+    words = walks.screen_words([contract_screens.read(screens_folder(root, task), item) for item in manifest])
+    for number, check in found:
+        problem = walks.label_problem(check, words)
+        if problem:
+            raise ValueError(f"requirement {number}: the walk cannot be stored: {problem}")
+
+
+def _final_inventory_open(state: dict[str, Any], task: str, qa: dict[str, Any], root: Path | None = None) -> bool:
+    """No numbered requirements with examples exist for this accepted contract (the owner went ahead first, the wait ran out, the
+    Reviewer could not answer) and this Reviewer holds the task's final review: it files that list now, before judging
+    (task 2026-11-24_tdd-examples-first, Change 4; Codex plan check R1-2)."""
+    from harness import examples_first
+    if not examples_first_applies(state, task, root):
+        return False
+    criteria = (((state.get("requirement_proposals") or {}).get(task) or {}).get("contract_check") or {}).get("criteria") or []
+    if examples_first.inventory(criteria):
+        return False
+    return any(request.get("task") == task and request.get("phase") == "final_acceptance" and request.get("status") == "claimed"
+               and request.get("claimed_by") == qa.get("id") for request in (state.get("qa_requests") or {}).values())
 
 
 def record_contract_check_submission(root: Path, agent_id: str, task: str, version: Any, submission: str) -> dict[str, Any]:
@@ -6430,16 +6486,29 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             raise ValueError("only the Reviewer can submit the early look at the requirements")
         proposal = (state.get("requirement_proposals") or {}).get(str(task))
         check = (proposal or {}).get("contract_check") or {}
+        _require_walk_words(root, parsed["criteria"], list((((proposal or {}).get("screens") or {}).get("manifest")) or []) or agreed_screens(state, str(task)), str(task))
         late = bool(check.get("late"))       # sent back from the Small change lane: the owner already went ahead and the work exists
-        if not proposal or check.get("status") != "reading" or (proposal.get("status") != "awaiting_owner" and not late):
+        final_inventory = bool(proposal) and _final_inventory_open(state, str(task), qa, root)
+        if final_inventory:
+            # nothing was prepared before the build: the final Reviewer files the numbered requirements with examples now. No wait,
+            # no question, no hold; the cards say the owner did not approve these examples before the build.
+            if parsed["questions"]:
+                raise ValueError("at the final review the list is filed without questions (the owner is not asked)")
+            if str(version) != str(proposal.get("version")):
+                raise ValueError("these requirements changed; your submission is for an older version and was not recorded")
+            check = proposal.setdefault("contract_check", {})
+            check.update({"version": proposal.get("version"), "reviewer_id": agent_id, "late_inventory": True,
+                          "reason": "written by the reviewer at the final review; you did not approve these examples before the build"})
+            late = True                      # stored and attached to the confirmed contract the same way as a late full-lane submission
+        elif not proposal or check.get("status") != "reading" or (proposal.get("status") != "awaiting_owner" and not late):
             raise ValueError("the early look at these requirements is over (the owner decided, it ran out of time, or the requirements changed); nothing was recorded")
         if late and parsed["questions"]:
             raise ValueError("this task was sent back to the full lane after the owner went ahead: submit your checks without questions (the owner is not asked)")
-        if check.get("reviewer_id") != agent_id:
+        if not final_inventory and check.get("reviewer_id") != agent_id:
             raise ValueError("this early look was given to another Reviewer")
-        if str(version) != str(proposal.get("version")) or str(version) != str(check.get("version")):
+        if not final_inventory and (str(version) != str(proposal.get("version")) or str(version) != str(check.get("version"))):
             raise ValueError("these requirements changed; your submission is for an older version and was not recorded")
-        if datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
+        if not final_inventory and datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
             raise ValueError("the time for the early look ran out; nothing was recorded")
         if parsed["questions"]:
             if (state.get("contract_question_batches") or {}).get(str(task)):
@@ -6458,10 +6527,12 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
                 "why_not_checked": criterion["why_not_checked"], "plain": criterion["plain"], "stale": False, "checks": stored,
                 "failure_paths": criterion["failure_paths"], "no_failure_paths_because": criterion["no_failure_paths_because"],
                 "kind": criterion.get("kind", ""), "mapped": criterion["mapped"], "new": criterion["new"], "also_by": criterion["also_by"], "coverage_line": criterion["coverage_line"],
+                **({"examples": list(criterion["examples"])} if criterion.get("examples") else {}),
             })
         check.update({
             "criteria": criteria, "questions": parsed["questions"], "submitted_at": now(), "token": secrets.token_hex(4),
             "status": "questions" if parsed["questions"] else "ready",
+            "owner_asks": parsed["owner_asks"], "not_read": parsed["not_read"], "result_must_contain": parsed["result_must_contain"],
         })
         if parsed["questions"]:
             state.setdefault("contract_question_batches", {})[str(task)] = True
@@ -6473,18 +6544,25 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             gaps = []      # no coverage question round on a task sent back late: the labels are shown as computed
             confirmation = (state.get("requirement_confirmations") or {}).get(str(task)) or {}
             kept = {key: confirmation.get("contract_check", {}).get(key) for key in ("lane", "lane_sent_back") if key in confirmation.get("contract_check", {})}
-            confirmation["contract_check"] = {**_confirmation_contract_check(proposal), **kept, "lane": "full"}
+            confirmation["contract_check"] = {**_confirmation_contract_check(proposal), **kept, "lane": "full",
+                                              **({"late_inventory": True, "reason": check.get("reason", "")} if final_inventory else {})}
             if confirmation["contract_check"].get("checks"):
                 confirmation["contract_check"]["red_proof"] = {"status": "pending"}
         if gaps:       # asked ONCE through the correction path; the owner's Go ahead is never held by it
             check["coverage_requested"] = gaps
             coverage_wake = {"session_id": str(qa.get("session_id") or ""), "text": contract_check.coverage_request(str(task), gaps, criteria)}
         sharper = [f"{item['text']} -> {item['sharper']}" for item in criteria if item["sharper"]]
+        missing_asks = contract_check.asks_not_covered(parsed["owner_asks"])
         developer = (state.get("agents") or {}).get(str(proposal.get("agent_id")), {})
-        if sharper and developer.get("session_id") and not late:
-            follow_up = {"session_id": developer["session_id"], "text": (
-                "CONTRACT CHECK: the Reviewer suggests sharper wording for: " + "; ".join(sharper) + ". If you agree, file a revised "
-                "proposal with propose-requirements now (it replaces the waiting one, once); otherwise do nothing. USER ACTION: None.")}
+        if (sharper or missing_asks) and developer.get("session_id") and not late:
+            # one message, once: sharper wording and the owner's asks no requirement covers; the owner sees the same list above Go ahead
+            parts = []
+            if sharper:
+                parts.append("CONTRACT CHECK: the Reviewer suggests sharper wording for: " + "; ".join(sharper) + ". If you agree, file a revised "
+                             "proposal with propose-requirements now (it replaces the waiting one, once); otherwise do nothing. USER ACTION: None.")
+            if missing_asks:
+                parts.append(contract_check.asks_request(str(task), missing_asks))
+            follow_up = {"session_id": developer["session_id"], "text": " ".join(parts)}
         _event(state, "contract_check_submitted", qa, {
             "task": str(task), "version": proposal["version"], "questions": len(parsed["questions"]),
             "message": "the Reviewer's early look at the requirements was recorded; the owner's Go ahead is not held by it",
@@ -6553,7 +6631,15 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         data = json.loads(Path(submission).read_text(encoding="utf-8"))
     except (OSError, ValueError, UnicodeDecodeError) as error:
         raise ValueError("the correction must be a requirement number and a JSON file with a checks list") from error
-    new_checks, _size = contract_check.parse_checks((data or {}).get("checks") if isinstance(data, dict) else None, f"requirement {number}")
+    # examples-first (2026-11-24): the requirement's own examples decide the rules for its corrected checks; an older record has none
+    known = next((item for item in (((_read_state(root).get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check") or {}).get("criteria") or []
+                  if item.get("n") == number), {})
+    # a requirement of the accepted text that the early list left out is added by the final Reviewer as the next number (Change 4)
+    added = contract_check.parse_added_requirement(data, number) if (not known and isinstance(data, dict) and data.get("text")) else None
+    rules_of = known if known.get("examples") else (added or {})
+    new_checks, _size = contract_check.parse_checks((data or {}).get("checks") if isinstance(data, dict) else None, f"requirement {number}",
+                                                    examples=len(rules_of["examples"]) if rules_of.get("examples") else None,
+                                                    reading=rules_of.get("kind") in contract_check.READING_KINDS)
     paths, none_because, said_paths = contract_check.parse_failure_paths(data if isinstance(data, dict) else {}, f"requirement {number}")
     keep = isinstance(data, dict) and data.get("keep") is True        # the Reviewer's answer to a builder's deviation: the check is right
     if keep and (new_checks or said_paths):
@@ -6566,6 +6652,7 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         if keep:
             return _keep_checked_deviation(state, qa, str(task), number, reason)
         waiting = (state.get("requirement_proposals") or {}).get(str(task)) or {}
+        _require_walk_words(root, [{"n": number, "checks": new_checks}], agreed_screens(state, str(task)) or list(((waiting.get("screens") or {}).get("manifest")) or []), str(task))
         if (waiting.get("contract_check") or {}).get("status") == "rechecking" and waiting.get("status") == "awaiting_owner":
             return _recheck_update(root, state, qa, waiting, number, new_checks, reason)
         confirmation = (state.get("requirement_confirmations") or {}).get(str(task))      # exists once Delivery confirmed the contract
@@ -6579,6 +6666,27 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         # has an empty fingerprint, so "confirmed" is read from the confirmation record, never from the fingerprint).
         block = confirmation.setdefault("contract_check", {}) if isinstance(confirmation, dict) else {}
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
+        if added is not None:
+            listed = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria")
+            if not (isinstance(listed, list) and listed and confirmation and examples_first_applies(state, str(task), root) and number == len(listed) + 1):
+                raise ValueError("a requirement can be added only to a confirmed contract's list, as its next number "
+                                 f"({len(listed) + 1 if isinstance(listed, list) and listed else 'there is no list yet: file it with contract-check-submit'})")
+            if _task_closed_for_checks(state, str(task)):
+                raise ValueError("the task is finished; its requirements can no longer be completed")
+            listed.append({
+                "n": number, "text": added["text"], "sharper": "", "why_not_checked": "" if new_checks else "added at the final review",
+                "plain": added["plain"], "stale": False, "checks": [], "failure_paths": paths, "no_failure_paths_because": none_because,
+                "kind": added["kind"], "mapped": True, "new": True, "also_by": 0, "coverage_line": "", "examples": added["examples"],
+                "added_at_final_review": True,
+            })
+            contract_check.apply_coverage(listed)
+            block["labels"] = contract_check.labels(listed)
+            block["real_tests"] = contract_check.real_test_line(listed)
+            _event(state, "contract_requirement_added", qa, {
+                "task": str(task), "criterion": number, "reason": reason,
+                "message": "the final Reviewer added a requirement of the accepted text that the early list had left out; nothing is held"})
+            if not new_checks:
+                return {"criterion": number, "added": True, "checks": 0}
         if not new_checks and number != 0 and not old:
             # Nothing is stored for this requirement (a report has no program to check, or the requirement was declared untestable) and the
             # answer adds nothing: that is a finished answer, not a refusal. Refusing it let the Reviewer retry until the board put the task
@@ -6615,13 +6723,14 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         })
         for item in criteria:
             if item["n"] == number:
-                item["checks"] = [{k: entry[k] for k in ("coverage", "file", "sha256", "covers") if k in entry} for entry in new]
+                item["checks"] = [{k: entry[k] for k in ("coverage", "file", "sha256", "covers", "runs", "example", "walk") if k in entry} for entry in new]
                 if not old:
                     item["mapped"] = True      # the Reviewer has now said which tests cover this requirement
                     if paths or none_because:
                         item["failure_paths"], item["no_failure_paths_because"] = paths, none_because
         contract_check.apply_coverage(criteria)
         block["labels"] = contract_check.labels(criteria)
+        block["real_tests"] = contract_check.real_test_line(criteria)      # the honest count follows every change of the checks
         (block.get("results") or {}).pop(str(number), None)   # the corrected check has not run yet
         _event(state, "contract_check_corrected", qa, {
             "task": str(task), "criterion": number, "reason": reason,
@@ -6730,6 +6839,7 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
                 item["skipped_reason"] = reason
         contract_check.apply_coverage(criteria)
         block["labels"] = contract_check.labels(criteria)
+        block["real_tests"] = contract_check.real_test_line(criteria)      # the honest count follows every change of the checks
         (block.get("results") or {}).pop(str(number), None)
         (block.get("did_not_run") or {}).pop(str(number), None)
         _event(state, "contract_check_skipped", agent, {
@@ -6872,6 +6982,9 @@ def show_contract_checks(root: Path, agent_id: str, task: str = "") -> dict[str,
         "task": task, "status": block.get("status", ""), "reason": block.get("reason", ""), "labels": block.get("labels") or [],
         "answers": block.get("answers") or [], "corrections": [{"requirement": c["criterion_index"], "reason": c["reason"], "at": c["at"]} for c in block.get("corrections") or []],
         "checks": _verified_contract_checks(state, task),
+        # examples-first (2026-11-24): what the owner's result must contain and the honest count ride with the checks; each
+        # requirement's examples are in its label
+        "result_must_contain": block.get("result_must_contain") or [], "real_tests": block.get("real_tests", ""),
         **({"project_brief": project_memory.brief_for(root, state, (state.get("task_workspaces") or {}).get(task) or (state.get("task_repositories") or {}).get(task))} if agent.get("role") == "qa" else {}),
     }
 
@@ -6939,7 +7052,8 @@ def show_project_history(root: Path, agent_id: str, list_all: bool = False, page
     }
 
 
-def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, str], reasons: dict[int, str] | None = None) -> None:
+def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, str], reasons: dict[int, str] | None = None,
+                                   walked: dict[str, dict[str, Any]] | None = None) -> None:
     """What the board's run said per requirement ("passed" / "failed" / "did_not_run"), for the owner's "What will be tested" list.
 
     Display only: best effort. A check that could not run keeps the plain reason (what ran, what it saw)."""
@@ -6949,6 +7063,8 @@ def _record_contract_check_results(root: Path, task: str, outcomes: dict[int, st
             if block is not None:
                 block["results"] = {str(number): outcome for number, outcome in sorted(outcomes.items())}
                 block["did_not_run"] = {str(number): text for number, text in sorted((reasons or {}).items())}
+                if walked:
+                    block["walks"] = walked
     except (OSError, ValueError):
         pass
 
@@ -6977,6 +7093,84 @@ def _board_already_passed_these_checks(request: dict[str, Any], certification: d
     return False
 
 
+def _walk_folder(root: Path, task: str, name: str) -> Path:
+    """Where one walk's steps and screenshots are kept."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", task)[:60] + "-" + hashlib.sha256(task.encode("utf-8")).hexdigest()[:8]
+    return board_dir(root) / "evidence" / "walks" / safe / name
+
+
+def _task_needs(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """The task's setup list ({} when none is filed)."""
+    return ((state.get("environment_checks") or {}).get(task) or {}).get("needs") or {}
+
+
+def _run_stored_walks(root: Path, task: str, state: dict[str, Any], request: dict[str, Any], stored: list[dict[str, Any]], outcomes: dict[int, str],
+                      reasons: dict[int, str], passed_checks: dict[str, str], walked: dict[str, dict[str, Any]]) -> None:
+    """The task's walks on the committed version, each in its own fresh copy of it (a walk's app may write into its folder).
+
+    All walks run, so one answer names everything that failed; a walk the app does not satisfy refuses the request."""
+    from harness import release_preview
+    commit = str(request.get("reviewed_commit") or "")
+    failures = []
+    for item in stored:
+        with tempfile.TemporaryDirectory(prefix="harness-walk-probe-") as directory:
+            probe = Path(directory) / "walk-probe.md"
+            probe.write_text("probe\n", encoding="utf-8")
+            with _review_candidate_checkout(root, state, request, probe) as (checkout, _unused):
+                release_preview.copy_owner_files(project_context(root).code_root, checkout, list(
+                    (workspace_settings.load(root).get("preview") or {}).get("owner_files") or workspace_settings.DEFAULT_PREVIEW["owner_files"]))
+                result = walks.run(root, checkout, item, _task_needs(state, task), _walk_folder(root, task, f"{item['n']}-{commit[:12]}-{secrets.token_hex(3)}"))
+        walked[item["n"]] = {"status": result["status"], "reason": result["reason"], "picture": result["picture"], "commit": commit,
+                             "walk": item.get("walk", ""), "criterion": item["criterion_index"]}
+        number = item["criterion_index"]
+        if result["status"] == "passed":
+            passed_checks[item["n"]] = item["sha256"]
+            if outcomes.get(number) not in {"failed", "did_not_run"}:
+                outcomes[number] = "passed"
+        elif result["status"] == "could_not_run":
+            if outcomes.get(number) != "failed":
+                outcomes[number] = "did_not_run"
+            reasons[number] = f"{result['reason']}. This says nothing about the work."
+        else:
+            outcomes[number] = "failed"
+            failures.append(f"walk {item['n']} for \"{item['criterion']}\": {result['reason']}")
+    if failures:
+        _record_contract_check_results(root, task, outcomes, reasons, walked)
+        raise ValueError("the walks agreed before the build failed on this version: " + " | ".join(failures) + ". Fix the app and try it with run-walk before "
+                         "asking again. If a walk contradicts the requirements or the agreed screens, say so with check-deviation; never edit the walk.")
+
+
+def run_walk(root: Path, agent_id: str, criterion: str = "") -> dict[str, Any]:
+    """Delivery or the Reviewer runs the task's stored walks on the task's work folder as it is now: help while building, never the
+    committed result (task 2026-11-24_tdd-walks)."""
+    with locked_state(root) as state:
+        agent = _require_writable_agent(state, agent_id)
+        if agent.get("role") not in DEVELOPER_ROLES | {"qa"} or not agent.get("active"):
+            raise ValueError("only an active Delivery or Reviewer agent can run a walk")
+        task = str(agent.get("task") or "")
+        workspace = Path(str((state.get("task_workspaces") or {}).get(task) or ""))
+    state = _read_state(root)
+    stored = [item for item in _verified_contract_checks(state, task) if walks.is_walk(item) and (not criterion or item["n"] == str(criterion) or str(item["criterion_index"]) == str(criterion))]
+    if not stored:
+        raise ValueError("this task has no stored walk" + (f" for requirement {criterion}" if criterion else ""))
+    if not str((state.get("task_workspaces") or {}).get(task) or "") or not workspace.is_dir():
+        raise ValueError("this task has no work folder yet")
+
+    def still_allowed() -> bool:
+        """The agent still works on this task."""
+        who = (_read_state(root).get("agents") or {}).get(agent_id) or {}
+        return bool(who.get("active")) and who.get("write_authority") is not False and str(who.get("task") or "") == task
+
+    answers = []
+    for item in stored:
+        if not still_allowed():
+            raise ValueError("stopped: this agent no longer works on the task")
+        result = walks.run(root, workspace, item, _task_needs(state, task), _walk_folder(root, task, f"try-{item['n']}-{secrets.token_hex(3)}"), still_allowed)
+        answers.append({"walk": item["n"], "requirement": item["criterion"], "steps": item.get("walk", ""), "result": result["status"],
+                        "reason": result["reason"], "screenshot": result["picture"]})
+    return {"task": task, "passed": all(item["result"] == "passed" for item in answers), "walks": answers}
+
+
 def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certification: dict[str, Any], role: str) -> dict[str, Any] | None:
     """The board runs the task's stored checks against the committed candidate itself (final review only); None when there are none.
 
@@ -7001,6 +7195,9 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
     outcomes: dict[int, str] = {}
     reasons: dict[int, str] = {}
     passed_checks: dict[str, str] = {}
+    walked: dict[str, dict[str, Any]] = {}
+    walk_checks = [item for item in checks if walks.is_walk(item)]
+    checks = [item for item in checks if not walks.is_walk(item)]
     with tempfile.TemporaryDirectory(prefix="harness-contract-probe-") as probe_directory:
         probe = Path(probe_directory) / "contract-check-probe.md"
         probe.write_text("probe\n", encoding="utf-8")
@@ -7079,7 +7276,8 @@ def _run_contract_checks(root: Path, task: str, request: dict[str, Any], certifi
                         "requirements rather than your work, post a blocked status naming that requirement; the CTO asks the Reviewer to correct it. If it failed only "
                         "because of the machine (a refused folder, a missing tool), the CTO sets it aside itself with contract-check-skip. Never edit the check."
                     ) from None
-    _record_contract_check_results(root, task, outcomes, reasons)
+    _run_stored_walks(root, task, state, request, walk_checks, outcomes, reasons, passed_checks, walked)
+    _record_contract_check_results(root, task, outcomes, reasons, walked)
     if role == "delivery":
         _compare_passed_checks_with_base(root, task, [number for number, outcome in outcomes.items() if outcome == "passed"])
     partly = bool(reasons)
@@ -7143,7 +7341,7 @@ def _measure_revert_proof(root: Path, task: str, request: dict[str, Any], certif
         checks = _verified_contract_checks(state, task)
         said = run.get("passed_checks")
         if isinstance(said, dict):
-            checks = [item for item in checks if said.get(item["n"]) == item["sha256"]]       # only checks that pass on the finished work can notice anything
+            checks = [item for item in checks if said.get(item["n"]) == item["sha256"] and not walks.is_walk(item)]       # only checks that pass on the finished work can notice anything
         commit = str(request.get("reviewed_commit") or "")
         base = str(((state.get("task_baselines") or {}).get(task) or {}).get("head") or "")
         if not checks or not commit or not base:
@@ -7275,7 +7473,7 @@ def _probe_stored_checks_on_base(root: Path, task: str, numbers: list[int] | Non
     """
     try:
         state = _read_state(root)
-        checks = [item for item in _verified_contract_checks(state, task) if numbers is None or item["criterion_index"] in numbers]
+        checks = [item for item in _verified_contract_checks(state, task) if not walks.is_walk(item) and (numbers is None or item["criterion_index"] in numbers)]
     except (OSError, ValueError, KeyError, TypeError):
         return None
     if not checks:
@@ -9541,6 +9739,7 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
             raise ValueError("only an active Delivery or Reviewer agent can ask for a screen script")
         task = str(agent.get("task") or "")
         roots = _task_execution_roots(root, state, task)
+        uploads = walks.upload_files(Path(str((state.get("task_workspaces") or {}).get(task) or root)), _task_needs(state, task))
     machine_stamp = test_machine.require_usable(root, who=str(agent.get("role") or ""), task=task) if machine else None
     try:
         payload = Path(steps_path).read_bytes()[: screen_script_runner.MAX_STEPS_BYTES + 1]
@@ -9571,7 +9770,7 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
     runtime = Path(tempfile.mkdtemp(prefix="harness-screen-script-"))
     try:
         try:
-            run = screen_script_runner.run_script(url, steps, runtime, timeout=SCREEN_SCRIPT_TIMEOUT_SECONDS, authorized=still_allowed)
+            run = screen_script_runner.run_script(url, steps, runtime, timeout=SCREEN_SCRIPT_TIMEOUT_SECONDS, authorized=still_allowed, uploads=uploads)
         except (OSError, RuntimeError, ValueError) as error:
             raise _browser_failure_advice(error, url) from error
     finally:
@@ -9605,7 +9804,7 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
         kind: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         for kind, path in evidence_files.items()
     }
-    expects = [item["step"]["expect"] for item in run["steps"] if "expect" in item["step"]]
+    expects = [item["step"].get("expect") or item["step"]["wait_for"]["text"] for item in run["steps"] if "expect" in item["step"] or "wait_for" in item["step"]]
     failed = next((item for item in run["steps"] if not item["ok"]), None)
     passed = bool(run["all_passed"])
     record = {
@@ -18727,6 +18926,45 @@ def _judge_review(state: dict[str, Any], request: dict[str, Any], result: str, s
         early_fail=early_fail, certified=bool(request.get("challenge_execution")))
 
 
+def examples_first_applies(state: dict[str, Any], task: str, root: Path | None = None) -> bool:
+    """The examples-first rules apply to this task: a full Write-code task (not a Small change, a Code analysis, a Write specs or
+    a document-only task) whose contract was confirmed under them. A contract confirmed before them carries no mark and keeps
+    its older rules to the end (task 2026-11-24_tdd-examples-first)."""
+    confirmation = (state.get("requirement_confirmations") or {}).get(task) or {}
+    block = confirmation.get("contract_check") or {}
+    return (block.get("rules") == 2 and not confirmation.get("small_change") and block.get("lane") != "small"
+            and not task_document_only(state, task) and task_kind(state, task, root) == "development")
+
+
+def _examples_first_verdict_problem(root: Path, state: dict[str, Any], request: dict[str, Any], task: str, summary: str, agent_id: str) -> str:
+    """Task 2026-11-24_tdd-examples-first, Changes 4 and 5: a final PASS is recorded only when every requirement of the accepted
+    contract has a real test in this review (a counted stored check that passed on this commit, or a Challenge Ledger row that
+    names it) or the Reviewer's own `Not run for real: requirement N` line, and the result of the owner's scenario has its
+    `Result item k: MET` lines. "" when the PASS may be recorded. A refusal here is a call to correct: never a FAIL, a round or
+    an owner card. The proof per requirement is kept for the owner's card."""
+    from harness import examples_first
+    if not examples_first_applies(state, task, root):
+        return ""
+    confirmation = (state.get("requirement_confirmations") or {}).get(task) or {}
+    block = confirmation.get("contract_check") or {}
+    proposal = (state.get("requirement_proposals") or {}).get(task) or {}
+    criteria = (proposal.get("contract_check") or {}).get("criteria") or []
+    rows = examples_first.inventory(criteria)
+    if not rows:
+        return examples_first.no_inventory_problem(task, proposal.get("version", block.get("accepted_version", 1)), agent_id)
+    ledger = request.get("challenge_ledger")
+    numbers = examples_first.ledger_requirements(_task_path_from_state(root, state, task, ledger)) if ledger else set()
+    proof = examples_first.proof_by_requirement(criteria, block.get("results") or {}, numbers, summary)
+    missing = [int(number) for number, how in proof.items() if not how]
+    if missing:
+        return examples_first.missing_problem(missing, rows)
+    problem = examples_first.result_problem(list(block.get("result_must_contain") or []), summary)
+    if problem:
+        return problem
+    block["final_proof"] = proof          # what the owner's card says for each requirement
+    return ""
+
+
 def _scenario_verdict_problem(state: dict[str, Any], request: dict[str, Any], summary: str, root: Path | None = None) -> str:
     """Task 2026-11-23_real-scenario-run: a final PASS of an app that calls an AI tool needs NMHP's passed real run of the owner's
     scenario on the reviewed commit, and the Reviewer's line naming the saved result it judged; a `Not run for real: real
@@ -18800,6 +19038,7 @@ def qa_result(
     evidence: str, finalization_classification: str = "",
     failure_members: list[dict[str, Any]] | None = None,
     code_quality_notes: Any = None,
+    requirement_proof_required: bool = False,
 ) -> dict[str, Any]:
     """Record the Reviewer agent_id's formal verdict (result, summary,
     evidence, finalization_classification, failure_members,
@@ -18810,6 +19049,10 @@ def qa_result(
     requires `summary` to carry the one required "Saved data: ..." line,
     consistent with the certified ledger results; see
     `_saved_data_verdict_problem`.
+
+    `requirement_proof_required` is what the Reviewer's own qa-result command passes (as the Builder's proposal command passes
+    plain_required): a final PASS of a full Write-code task then needs a real test or a not-run line for every requirement
+    and the result-item lines; see `_examples_first_verdict_problem` (task 2026-11-24_tdd-examples-first).
     """
     if result not in {"passed", "failed"}:
         raise ValueError("QA result must be passed or failed")
@@ -18857,6 +19100,9 @@ def qa_result(
             if problem:
                 raise ValueError(problem)
             problem = _scenario_verdict_problem(state, request, summary, root)
+            if problem:
+                raise ValueError(problem)
+            problem = _examples_first_verdict_problem(root, state, request, task_name_here, summary, agent_id) if requirement_proof_required else ""
             if problem:
                 raise ValueError(problem)
             problem = _screens_coverage_problem(root, state, request, task_name_here)
@@ -21497,6 +21743,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("contract-check-correct"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True); p.add_argument("--submission", required=True, help="a JSON file with the corrected checks of that requirement")
     p = sub.add_parser("contract-checks"); p.add_argument("--agent", required=True); p.add_argument("--task", default="")
     p = sub.add_parser("project-history"); p.description = "Read the project's accepted work: --list [--page N] for one-line titles, or --task <id> for one past task in detail."; p.add_argument("--agent", required=True); p.add_argument("--list", action="store_true", help="list the accepted tasks, newest first, 20 per page"); p.add_argument("--page", type=int, default=1, help="the page of the list (1 is the newest)"); p.add_argument("--task", default="", help="the id of one past task")
+    p = sub.add_parser("run-walk"); p.add_argument("--agent", required=True); p.add_argument("--criterion", default="")
     p = sub.add_parser("contract-check-skip"); p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--reason", required=True, help="why this stored check could not run and is set aside (at least 8 characters)")
     p = sub.add_parser("send-to-full-lane"); p.description = "Reviewer only: a Small change task is not small; send it back to the full lane once, with a plain reason"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--reason", required=True, help="one plain sentence, for example: this changes behaviour, not just text")
     p = sub.add_parser("check-deviation"); p.description = "Say that ONE stored check does not match reality (what it assumes vs what is real, with evidence); the Reviewer answers once"; p.add_argument("--agent", required=True); p.add_argument("--task", required=True); p.add_argument("--criterion", required=True); p.add_argument("--check", required=True, help="the check number contract-checks shows, for example 3.1"); p.add_argument("--why", required=True, help="one paragraph: what the check assumes, what is real, and the evidence")
@@ -21672,6 +21919,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "contract-check-correct": out = record_contract_check_correction(root, args.agent, args.task, args.criterion, args.reason, args.submission)
         elif args.command == "contract-checks": out = show_contract_checks(root, args.agent, args.task)
         elif args.command == "project-history": out = show_project_history(root, args.agent, args.list, args.page, args.task)
+        elif args.command == "run-walk": out = run_walk(root, args.agent, args.criterion)
         elif args.command == "contract-check-skip": out = record_contract_check_skip(root, args.agent, args.task, args.criterion, args.reason)
         elif args.command == "send-to-full-lane": out = record_send_to_full_lane(root, args.agent, args.task, args.reason)
         elif args.command == "check-deviation": out = record_check_deviation(root, args.agent, args.task, args.criterion, args.check, args.why)
@@ -21756,7 +22004,8 @@ def main(argv: list[str] | None = None) -> int:
                     "affected_paths": [path for path in parts[3].split(",") if path],
                     "surface": parts[4], "regression_check": parts[5],
                 })
-            out = qa_result(root, args.agent, args.request, args.result, args.summary, args.evidence, args.finalization_classification, failure_members or None, code_quality_notes=getattr(args, "code_quality", None))
+            out = qa_result(root, args.agent, args.request, args.result, args.summary, args.evidence, args.finalization_classification, failure_members or None, code_quality_notes=getattr(args, "code_quality", None),
+                            requirement_proof_required=True)
         elif args.command == "resolve-repair-package":
             resolutions = []
             for raw in args.resolution:

@@ -188,9 +188,11 @@ path. A proposed name that is not in the library is dropped. Terminal words are 
 "libraries": [...], "real_run": "..."}` — `ai_tools` the AI tools the APP ITSELF calls (`claude`, `codex`, `gemini`; `[]` when none);
 `folders` every folder outside the project the work reads or writes (`{"path": "/abs", "access": "read"|"write"}`); `programs` the languages,
 compilers, build and test tools (`{"name": "python3", "min_version": "3.11"}`); `libraries` per language (`{"language": "python"|"node",
-"name": "..."}`); for an app that calls an AI tool, also `real_scenario` (one plain sentence: the owner's main job from start to finished
-result), `real_data` (the files it uses: the owner's own files when he gave them, read in place; else realistic fake files you write
-into the project), `real_output` (the file the run writes the finished result to) and `real_run`, ONE command that runs that whole
+"name": "..."}`); for EVERY task that builds or changes a program, with or without AI (owner 2026-11-24; a Small change is exempt), also
+`real_scenario` (one plain sentence: the owner's main job from start to finished result; for a fix or a change in a large app, the owner
+workflow this task touches and its corrected result, not a tour of the app), `real_data` (the files it uses: the owner's own files when
+he gave them, read in place; else realistic fake files you write into the project; an app that calls no AI tool and reads no file may
+leave it out), `real_output` (the file the run writes the finished result to) and `real_run`, ONE command that runs that whole
 scenario through the app's real entry point (its CLI or its server's HTTP call, never a test helper or a mock), calling every listed AI
 tool by name from PATH, and writes the finished result to `real_output`. A one-call "hello" never passes: NMHP fails a run that writes
 no fresh result. Never put a test model in the app's code or defaults: NMHP gives each of the app's AI calls the Settings "Model for
@@ -229,6 +231,13 @@ The owner may go ahead without waiting; a submission after that, after the wait 
 Put every question in this file: never ask one in your terminal or with the CLI's question widget (it is denied), because the owner only sees
 Mission Control.
 
+Delivery: the walks of your task (`contract-checks`) are the exam, written before your code. Run them while you build with `run-walk --agent
+<your-id> [--criterion <n>]`: it starts your app from the task folder and answers passed, or the step that failed and what the page
+showed. Build until they pass; compare your own real result with `result_must_contain` before you ask for review, and have an app that
+uses AI check what it got back on every run (nothing missing, the asked length) before it shows it. The board runs the walks again on
+the saved version and refuses a final review while one fails. Never edit a walk; one that contradicts the requirements or the agreed
+screens is answered with `check-deviation`.
+
 Reviewer: before you write checks, read `NOTES_FOR_NEXT_TASK.md` at the root of the project's repository if it exists, as
 background only (chapter `review-rounds` says how); your checks still come from the direction and the requirements, never from the note.
 
@@ -236,12 +245,47 @@ The file is JSON:
 
     {"criteria": [{"text": "<one acceptance criterion in the contract's words>",
                    "plain": "<one sentence the OWNER can read: what this protects for them>",
-                   "checks": [{"coverage": "checked", "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
+                   "examples": ["<what goes in or what the user does, and the exact result; one to four plain sentences>"],
+                   "checks": [{"coverage": "checked", "runs": "<the command, address or function of the program this check exercises>",
+                               "example": 1, "ledger": "<scenario ledger table>", "files": {"test_one.py": "<file text>"}}],
                    "failure_paths": ["<a failure or edge case the checks cover>"],
                    "no_failure_paths_because": "<or, instead of failure_paths, why none apply>",
                    "why_not_checked": "<required when there is no check>",
                    "sharper": "<optional: a sharper sentence for a vague criterion>"}],
+     "owner_asks": [{"ask": "<one thing the owner asked for, in plain words>", "requirements": [1]}],
+     "not_read": ["<a file of the owner's you could not read>"],
+     "result_must_contain": ["<what the finished result of the owner's main scenario must contain at least>"],
      "questions": [{"text": "<product question>", "options": ["A", "B"], "recommended": 0, "affects": [1]}]}
+
+- **Examples first (owner 2026-11-24).** Every criterion carries `examples` (20 to 300 characters each, the owner's words, no file or
+  function names): what goes in or what the user does, and the exact result. The owner reads them under each requirement and they are
+  what the requirement means for Delivery and for the final review. A submission with a criterion that has no example is refused.
+  Give the examples even when no check can be written yet: on a new app most requirements have examples and no check, and that is
+  honest. `owner_asks` lists every distinct result, behaviour or limit the owner asked for in the direction, the clarifications and
+  every file he attached (read them in full at the paths the routing message gives; name one you could not read under `not_read`),
+  each with the requirement numbers that cover it and `[]` when none does: the owner sees those above Go ahead and Delivery may revise
+  once. `result_must_contain` (1 to 6 short lines, one thing each) says only what the owner asked the finished result of his
+  main scenario to contain, in his words; never your own expert answer, section numbers or details he did not ask for. The final review
+  checks the real result against it line by line, on its substance.
+- **An app with screens: write walks, before any code exists (owner 2026-11-24).** A walk is a check written as the steps a user takes
+  and what he must then see; NMHP starts the app and takes the steps itself in its browser, so you need no address, selector or test
+  code. Write one for every example the screens can show, in `checks`:
+  `{"example": 1, "walk": {"steps": [{"open": "/"}, {"click": {"text": "New project"}}, {"fill": {"field": "Project name", "text": "Suite 210"}},
+  {"choose": {"field": "Matter type", "option": "Lease dispute"}}, {"upload": {"field": "Add documents", "files": ["lease.pdf", "note.txt"]}},
+  {"wait_for": {"text": "2 documents", "seconds": 60}}, {"expect": "note.txt will not be read"}], "files": {"note.txt": "<text>"}}}`.
+  Steps: `open`, `click`, `fill` (a field by its visible label or placeholder), `choose` (a list's option), `upload` (the setup list's
+  `real_data` files by name, or the walk's own small text `files`; leave `field` out for the page's only file field), `expect` (words
+  visible now), `wait_for` (words visible within N seconds). At most 40 steps, the last one `expect` or `wait_for`. Open the agreed
+  screens first: every button, field and option must use their exact words (a submission naming another is refused with the label).
+  Expect the substance the requirement promises, never a guessed sentence of an AI's answer. Walks that reach an AI call cost a real
+  call each: keep those to the main path, and give the answer up to 300 seconds. An app with no screens, or a check of an inner rule, uses the test files below.
+- **Only a real test is counted.** A check is `"coverage": "checked"` only when it runs the program and asserts one example's result,
+  and says so: `runs` (the entry point it exercises) and `example` (which example). A check that only checks syntax, only installs or
+  imports something, starts the app without asserting an example's result, or that you are unsure about is `"partly"`: stored and
+  run, never counted, and its requirement is tested for real at the final review. A check for what the program does whose files only
+  read files is refused. A requirement that really is about a delivered document (a licence, a README) is declared `"kind":
+  "document"`, one that changes the source everywhere (a rename, a removal) `"kind": "source"`: their reading checks are accepted and
+  labelled, and are not app tests. Another requirement's check covers this one (`covers`) only when that check is itself counted.
 
 - `plain` is required for every criterion (five words to 140 characters): what it protects for the owner, in everyday words, because the
   owner reads this list under "What will be tested" and the developer wording sits behind a Details toggle. The board refuses a submission
@@ -253,8 +297,8 @@ The file is JSON:
 - Quote the test pattern with plain double quotes: `-p "test_*.py"`, so the shell cannot expand it against other files. Never write the quotes with
   backslashes (`-p \"test_*.py\"`): the test finder then looks for file names that contain quote marks, finds nothing, and the board reports the check as
   did not run. The board refuses a pattern written with backslash-escaped quotes.
-- List EVERY acceptance criterion exactly once. `coverage` is `checked` when the checks fully cover it and `partly` otherwise; a
-  criterion you cannot test needs `why_not_checked` (and a `sharper` sentence if wording would fix it).
+- List EVERY acceptance criterion exactly once. `coverage` is `checked` only for a check that runs the program against a named example
+  (above) and `partly` otherwise; a criterion you cannot test yet needs `why_not_checked` (and a `sharper` sentence if wording would fix it).
 - Each check is a test file that really asserts the expected result (printed output and exit code, an HTTP answer, or visible text on a page
   through the screen-check) using only what the contract names. The program is started by the test itself on a free port and stopped by it.
   The ledger is a normal scenario ledger (same columns as the Delivery Scenario Ledger); its command runs the files with a recognized test
@@ -656,6 +700,8 @@ the cap; running out of time means you are writing procedural rows.
   page with Streamlit, and otherwise `python3 app.py`, `server.py` or `main.py`,
   or `npm start`. If your app is started any other way, ship a `start.sh` at
   the project root that starts it on `$PORT`: the owner's View app runs it.
+- **An app that keeps data keeps it in `DATA_DIR` when that variable is set** (its own default folder otherwise), so a test never
+  touches the owner's real data. NMHP's walks start the app with a new empty `DATA_DIR`.
 
 ## own-tool-limits
 
@@ -1591,6 +1637,20 @@ with it when it is the only one open. Either way the board keeps the list, wakes
 sign-in, or routing the builder to make it runnable), and the owner's test card shows each as "Not tested for real"; the app is
 never held for it and the owner is never asked. A bug next to it still fails as usual. A process limit not tied to an agreed
 requirement (an extra check of your own, a second browser window) is one `Process note: <the step and why>` line.
+**Every requirement is tested for real by the end (owner 2026-11-24).** At the final review of a full Write-code task the brief's
+`final_stage.examples_first` lists the accepted contract's numbered requirements with their examples and, under
+`need_a_real_test_in_this_review`, those with no counted stored check that passed on this version. If the list is empty, nothing was
+prepared before the build: file it FIRST with `contract-check-submit --task <task> --version <n> --submission <file.json>` (the usual
+format; every requirement of the whole accepted text once, with its plain line and examples; checks optional; no questions). If it
+left out a requirement of the accepted text, add it with `contract-check-correct --criterion <next number> --reason "<why>"
+--submission <JSON with text, plain, examples and checks>`. Then give each listed number a real test in this review: a Challenge
+Ledger row that runs one of its examples through the real program and names the number in an extra column `Requirement` (`3`, or `3, 5`
+when one command really checks both; these rows are outside the row cap), or, when you could not run it, the line `Not run for real:
+requirement <n> - <why>` in your summary. A PASS with neither for a number is refused with the list; that is a call to correct, never a
+FAIL or a round. When the brief carries `result_must_contain`, your summary has one line per item, `Result item <k>: MET - <where in the
+result>`; `Result item <k>: NOT MET - <what is missing>` means the owner's result lacks what he was shown it would contain: record FAIL. An item
+is MET when its substance is there; a missing detail he did not ask for, or wording you would improve, is a note, never NOT MET.
+
 **The app's real run (owner 2026-11-21).** An app that calls an AI tool is reviewed and released only after NMHP ran its `real_run`
 on that commit with the real tools; cite it for the app's AI calls. **The one exception to this chapter (owner 2026-11-23):** the
 owner's real scenario. Open NMHP's saved result (the brief's `final_stage.real_scenario.saved_result`) and judge it as the owner would

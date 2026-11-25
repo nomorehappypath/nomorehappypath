@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, browser_acceptance, contract_check
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.requirements_support import agreed_requirements
 from tests.test_no_terminal_questions_rendered import run_page
@@ -87,7 +88,7 @@ class RenderedCoverageTests(unittest.TestCase):
         plain = {"criteria": [{"text": "Running the program prints hello", "plain": "The program says hello when you run it.", "checks": [CHECK]}], "questions": []}
         fixture.submit(reviewer, plain)
         fix = write_json(fixture.base, "fix.json", {"checks": [], "failure_paths": ["a bad input is refused"]})
-        board.record_contract_check_correction(fixture.root, reviewer["id"], FIRST_TASK, 1, "closing a coverage gap", fix)
+        examples_first.correct(fixture.root, reviewer["id"], FIRST_TASK, 1, "closing a coverage gap", fix)
         labels = contract_check.labels(fixture.proposal()["contract_check"]["criteria"])
         with tempfile.TemporaryDirectory() as temporary:
             root = context(Path(temporary))
@@ -100,7 +101,8 @@ class RenderedCoverageTests(unittest.TestCase):
             result = run_page(self, root, PROBE, width=1200, height=1000, wait=120)
         self.assertTrue(result and "error" not in result, result)
         self.assertEqual(len(result["active"]), 1, result["active"])
-        self.assertTrue(result["active"][0].endswith("covered"), result["active"])
+        # the row now also shows the requirement's example under its coverage word (task 2026-11-24_tdd-examples-first)
+        self.assertIn("· covered", result["active"][0], result["active"])
         self.assertNotIn("not mapped", result["active"][0])
 
 

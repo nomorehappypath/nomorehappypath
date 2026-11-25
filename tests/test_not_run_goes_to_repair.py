@@ -90,7 +90,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
     def test_every_project_checks_each_roles_own_sign_in_even_when_the_app_calls_no_ai(self):
         # owner 2026-11-22: "The sign in should be tested before contract acceptance for any type of project"
         env_tests._script(self.bin / "codex", 'echo "OK"\n')
-        self.propose(self.needs(ai_tools=[], real_run="", programs=[{"name": "sh"}]))
+        self.propose(self.needs(ai_tools=[], programs=[{"name": "sh"}]))
         run = self.run_stage("contract")
         signed = {item["label"]: item["ok"] for item in run["items"] if item["kind"] == "role_access" and "signed in" in item["label"]}
         self.assertEqual(signed, {"Builder is signed in to Claude": True, "Reviewer is signed in to Codex": True,
@@ -101,7 +101,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
         # Linux full suite 2026-11-22: dash (Linux's sh) answers `sh --version` with "Illegal option --"
         env_tests._script(self.bin / "codex", 'echo "OK"\n')
         env_tests._script(self.bin / "dashlike", 'echo "/usr/bin/sh: 0: Illegal option --" >&2; exit 2\n')
-        self.propose(self.needs(ai_tools=[], real_run="", programs=[{"name": "dashlike"}]))
+        self.propose(self.needs(ai_tools=[], programs=[{"name": "dashlike"}]))
         run = self.run_stage("contract")
         roles = {item["label"]: item["ok"] for item in run["items"] if item["kind"] == "role_access"}
         self.assertEqual([roles[f"{role} can use dashlike"] for role in ("Builder", "Reviewer", "CTO")], [True, True, True], run["items"])
@@ -115,7 +115,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
         env_tests._script(self.bin / "codex", 'if [ -f "$CODEX_HOME/auth" ]; then echo OK; else echo "401 Unauthorized" >&2; exit 1; fi\n')
         self.write_profile({"OWNER_ONLY_SETTING": "from-his-shell", "CODEX_HOME": str(other)})
         owner = environment_check.owner_env.read(fresh=True)
-        self.propose(self.needs(ai_tools=[], real_run="", programs=[{"name": "sh"}]))
+        self.propose(self.needs(ai_tools=[], programs=[{"name": "sh"}]))
         with mock.patch.object(environment_check, "LAUNCH_ENV", lambda: {**owner, "CODEX_HOME": str(signed)}):
             run = self.run_stage("contract")
         reviewer = next(i for i in run["items"] if i["label"] == "Reviewer is signed in to Codex")
@@ -129,7 +129,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
         env_tests._script(self.bin / "codex", 'if [ -f "$CODEX_HOME/auth" ]; then echo OK; else echo "401 Unauthorized" >&2; exit 1; fi\n')
         self.write_profile({"OWNER_ONLY_SETTING": "from-his-shell", "CODEX_HOME": str(signed)})
         owner = environment_check.owner_env.read(fresh=True)
-        self.propose(self.needs(ai_tools=[], real_run="", programs=[{"name": "sh"}]))
+        self.propose(self.needs(ai_tools=[], programs=[{"name": "sh"}]))
         with mock.patch.object(environment_check, "LAUNCH_ENV", lambda: {**owner, "CODEX_HOME": str(other)}):
             run = self.run_stage("contract")
         self.assertEqual(run["status"], "failed")
@@ -137,7 +137,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
 
     def test_a_role_whose_sign_in_does_not_work_holds_any_contract_with_its_card(self):
         env_tests._script(self.bin / "codex", 'echo "Not signed in" >&2; exit 1\n')
-        self.propose(self.needs(ai_tools=[], real_run="", programs=[{"name": "sh"}]))
+        self.propose(self.needs(ai_tools=[], programs=[{"name": "sh"}]))
         run = self.run_stage("contract")
         self.assertEqual(run["status"], "failed")
         self.assertEqual([card["title"] for card in self.open_setup_cards()], ["Blocked, needs you: Reviewer is signed in to Codex"])
@@ -168,7 +168,7 @@ class EachRoleIsCheckedBeforeTheContract(env_tests.Case):
         # outside every grant: not the temp space (agents may write there), not the project; a folder of this checkout
         outside = Path(tempfile.mkdtemp(prefix=".nmhp-outside-", dir=str(ROOT)))
         self.addCleanup(shutil.rmtree, outside, True)
-        self.propose(self.needs(ai_tools=[], real_run="", folders=[{"path": str(outside), "access": "write"}]))
+        self.propose(self.needs(ai_tools=[], folders=[{"path": str(outside), "access": "write"}]))
         reads = os.pathsep.join([str(self.base), str(outside)])     # where reads are confined (Linux), the owner granted it
         with mock.patch.dict(os.environ, {"HARNESS_AGENT_READ_PATHS": reads}):
             run = self.run_stage("contract")

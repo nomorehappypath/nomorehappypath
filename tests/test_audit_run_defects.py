@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from harness import board, contract_check, control, cost_center, self_heal, standing_checks
+from tests import examples_first
 from tests.test_cost_center import CLAUDE_ID, CLAUDE_ID_2, Fixture, T0
 from tests.test_no_silent_stall import _Stall
 from tests.test_self_restart import _ago
@@ -305,7 +306,7 @@ class ReportOnlyContractStepTests(unittest.TestCase):
     def answer_empty(self, reviewer, number, name):
         from tests.test_contract_first_checks import write_json
         path = write_json(self.fx.base, name, {"checks": []})
-        return board.record_contract_check_correction(self.fx.root, reviewer["id"], "TASK-CONTRACT", number, "nothing to add here", path)
+        return examples_first.correct(self.fx.root, reviewer["id"], "TASK-CONTRACT", number, "nothing to add here", path)
 
     def test_a_report_with_no_program_to_check_gets_no_coverage_request_and_no_refusal_after_go_ahead(self) -> None:
         from tests.test_coverage_check import criteria

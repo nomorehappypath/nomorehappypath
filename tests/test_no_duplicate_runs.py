@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from harness import board, red_proof
+from tests import examples_first
 from tests import test_contract_first_checks as first
 from tests import test_repair_test_integrity as repair
 
@@ -127,7 +128,7 @@ class ReviewerDoesNotRepeatTheBoardTests(unittest.TestCase):
         self.confirm_with_checks()
         request = self.request()
         fix = first.write_json(self.base, "fix.json", {"checks": [{"coverage": "checked", "ledger": first.ledger(), "files": {"test_hello.py": first.TEST_FILE + "# fixed\n"}}]})
-        board.record_contract_check_correction(self.root, self.qa["id"], TASK, 1, "the check was wrong in one detail", fix)
+        examples_first.correct(self.root, self.qa["id"], TASK, 1, "the check was wrong in one detail", fix)
         board.claim_qa(self.root, self.qa["id"], request["id"], str(self.root / "challenge.md"))
         gates, patch = counting()
         with patch:

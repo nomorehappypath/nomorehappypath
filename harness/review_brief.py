@@ -380,6 +380,32 @@ def build(
                          "with what you found. This is the one exception to not-tested: if you could not judge it, write "
                          "'Not run for real: real scenario - <why>', which is a FAIL, never a PASS."),
             }
+        # task 2026-11-24_tdd-examples-first: every requirement of the accepted contract is tested for real by the end. The list is the
+        # accepted contract's own numbered requirements with their examples; with no such list the Reviewer files it first.
+        if block.get("rules") == 2 and not confirmation.get("small_change") and brief["process"]["task_kind"] == "development":
+            from harness import examples_first
+            criteria = (((state.get("requirement_proposals") or {}).get(task) or {}).get("contract_check") or {}).get("criteria") or []
+            rows = examples_first.inventory(criteria)
+            need = [item["n"] for item in rows if not examples_first.stored_test_passed(item, criteria, results)]
+            brief["final_stage"]["examples_first"] = {
+                "requirements": [{"n": item["n"], "requirement": _text(item.get("plain") or item.get("text")), "examples": _bounded(list(item.get("examples") or [])),
+                                  "stored_test": "passed on this version" if item["n"] not in need else "none that counts"} for item in rows][:MAX_ITEMS],
+                "need_a_real_test_in_this_review": need[:MAX_ITEMS],
+                "result_must_contain": _bounded(list(block.get("result_must_contain") or [])),
+                "examples_approved_before_the_build": bool(rows) and not block.get("late_inventory"),
+                "rule": (
+                    ("Nothing was prepared before the build. FIRST file the numbered requirements of the whole accepted text, each with its plain "
+                     "line and examples, with contract-check-submit (same format as the early look; checks optional; no questions). " if not rows else
+                     "First reconcile this list with the whole accepted requirements text; a requirement it left out is added with "
+                     "contract-check-correct --criterion <next number> and a JSON file carrying text, plain and examples. ")
+                    + "Then, for every number under need_a_real_test_in_this_review, your Challenge Ledger has a row that runs one of its examples "
+                    "through the real program and names the number in a `Requirement` column (`3` or `3, 5`; one row may name several; these rows "
+                    "are outside the twelve-row guidance), or your summary has a line `Not run for real: requirement <n> - <why>`. A PASS without "
+                    "one of the two for each number is refused, to correct; it is not a failed review. "
+                    + ("For each line of result_must_contain, your summary has `Result item <k>: MET - <where in the result>`; `NOT MET` means the "
+                       "result lacks what the owner was shown it would contain: record FAIL. " if block.get("result_must_contain") else "")
+                ),
+            }
         # always at the final review (Codex R1-1): the early criteria are not an inventory, a line they left out has no label at all
         brief["final_stage"]["verify_yourself"] = (
                 ("No requirement was checked in advance (no early checks were recorded). " if not labels else

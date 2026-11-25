@@ -46,6 +46,9 @@ SCENARIO_HEADERS = {
     "result": "QA result",
 }
 OWNER_DESCRIPTION_HEADER = "What was tested"
+# Task 2026-11-24_tdd-examples-first: a ledger row may say which accepted requirements it tests, by number, in a column named
+# "Requirement" ("3" or "3, 5"). The board matches numbers only, never prose; an older ledger without the column is unchanged.
+REQUIREMENT_HEADER = "Requirement"
 OWNER_DESCRIPTION_MIN_LENGTH = 24
 OWNER_DESCRIPTION_MAX_LENGTH = 500
 OWNER_DESCRIPTION_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -717,6 +720,7 @@ def _scenario_rows(path: Path, *, require_owner_description: bool = False):
         return [], ["ledger is missing a scenario table header beginning with ID"]
     normalized = {cell.casefold(): index for index, cell in enumerate(header)}
     owner_description_index = normalized.get(OWNER_DESCRIPTION_HEADER.casefold())
+    requirement_index = normalized.get(REQUIREMENT_HEADER.casefold(), normalized.get(REQUIREMENT_HEADER.casefold() + "s"))
     if require_owner_description and owner_description_index is None:
         problems.append(f"ledger header is missing required column: {OWNER_DESCRIPTION_HEADER}")
     indexes = {}
@@ -773,6 +777,9 @@ def _scenario_rows(path: Path, *, require_owner_description: bool = False):
             "observed_response": observed,
             "result": result,
             "what_was_tested": owner_description,
+            # the accepted requirement numbers this row says it tests (empty without the column)
+            "requirements": sorted({int(number) for number in re.findall(r"\d+", cells[requirement_index])})
+            if requirement_index is not None and requirement_index < len(cells) else [],
         })
     if not rows:
         hint = ""

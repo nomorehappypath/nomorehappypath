@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, browser_acceptance, control
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.requirements_support import agreed_requirements
 from tests.test_contract_first_checks import TEST_FILE, ledger
@@ -80,7 +81,7 @@ class RenderedPlainContractTests(unittest.TestCase):
                  "questions": [{"text": "Which temperature unit should it show?", "options": ["Celsius", "Fahrenheit"], "recommended": 0, "affects": []}]}
         path = Path(tempfile.mkdtemp(dir=str(root.parent))) / "s.json"
         path.write_text(json.dumps(value), encoding="utf-8")
-        board.record_contract_check_submission(root, reviewer["id"], task, 1, str(path))
+        examples_first.record(root, reviewer["id"], task, 1, str(path))
         token = board.snapshot(root)["requirement_proposals"][task]["contract_check"]["token"]
         board.record_requirements_decision(root, task, "go_ahead", version=1, token=token,
                                            answers=[{"question": 1, "choice": 1, "other": ""}])

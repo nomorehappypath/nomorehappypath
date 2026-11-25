@@ -429,7 +429,7 @@ def invoke(argv: list[str]) -> int:
         arguments, artifacts = _prepare_artifacts(arguments[0], arguments)
         # A screen script has its own 90 second run budget plus bounded browser start and clean-up waits; the
         # agent must not give up (and rerun clicks) while it is still running.
-        timeout = 360 if arguments[0] in {"request-review", "execute-challenge", "record-release", "collect-build"} else 240 if arguments[0] == "screen-script" else 30
+        timeout = 3600 if arguments[0] in {"request-review", "run-walk"} else 360 if arguments[0] in {"execute-challenge", "record-release", "collect-build"} else 240 if arguments[0] == "screen-script" else 30
         attempts = POLL_TRANSPORT_ATTEMPTS if arguments[0] == "poll" else 1
         value = None
         for attempt in range(attempts):

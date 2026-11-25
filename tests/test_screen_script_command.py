@@ -58,7 +58,7 @@ class ScreenScriptStepListTests(unittest.TestCase):
         self.assertEqual(len(steps), 5)
 
     def test_bad_lists_are_refused_with_a_plain_reason(self):
-        self.refused(steps_bytes(*[{"expect": "x1"}] * 13), "at most 12 steps; this one has 13")
+        self.refused(steps_bytes(*[{"expect": "x1"}] * 41), "at most 40 steps; this one has 41")
         self.refused(steps_bytes({"click": {"text": "Go"}}), "last step must be an expect step")
         self.refused(steps_bytes({"eval": "alert(1)"}), "exactly one of: open, click, type, expect")
         self.refused(steps_bytes({"click": {"text": "a", "selector": "b"}, "expect": "x"}), "exactly one of")
@@ -99,8 +99,8 @@ class ScreenScriptRefusalTests(ScreenScriptFixture):
                         "http://127.0.0.1:8740/", "http://127.0.0.1:8741/", "http://127.0.0.1:8742/"):
                 with self.subTest(url=url), self.assertRaises(SurfaceProtocolError):
                     self.run_script_command(token, good, "--url", url)
-            with self.assertRaisesRegex(SurfaceProtocolError, "at most 12 steps"):
-                self.run_script_command(token, [{"expect": "ab"}] * 13, "--url", self.url)
+            with self.assertRaisesRegex(SurfaceProtocolError, "at most 40 steps"):
+                self.run_script_command(token, [{"expect": "ab"}] * 41, "--url", self.url)
             with self.assertRaisesRegex(SurfaceProtocolError, "last step must be an expect"):
                 self.run_script_command(token, [{"click": {"text": "Go"}}], "--url", self.url)
             self.gateway.served_ports.add(self.app.server_address[1])

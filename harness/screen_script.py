@@ -2,14 +2,16 @@
 """A harness-run click/type script against a project's own loopback page (the `screen-script` board command).
 
 Agents' own sandboxes refuse localhost, and a plain screen-check only renders one page. This module runs a tiny,
-validated step list (open, click, type, expect) in the harness browser, outside the agent's sandbox. The agent never
+validated step list (open, click, type, expect; fill, choose, upload, wait_for) in the harness browser, outside the agent's sandbox. The agent never
 supplies code: steps are data, every string reaches the page only as a JSON value inside harness-owned JavaScript
 templates, and the browser itself is held to the page's own server:
 
 * all non-loopback traffic is refused by the browser (proxy and resolver flags), and every request the page makes is
   paused and refused unless it goes to the page's own origin (DevTools Fetch interception);
-* new windows are closed, downloads are denied, file choosers are intercepted, JavaScript dialogs are dismissed;
-* the whole run - browser start, protocol calls and steps - shares one 90 second deadline.
+* new windows are closed, downloads are denied, file choosers are intercepted (an `upload` step sets a named, allowed
+  file straight into the file field), JavaScript dialogs are dismissed;
+* the whole run - browser start, protocol calls and steps - shares one deadline (90
+  seconds for an agent's script; a walk adds its own waits).
 """
 from __future__ import annotations
 
@@ -25,13 +27,15 @@ from urllib.parse import urljoin, urlsplit
 
 from harness import browser_acceptance as ba
 
-MAX_STEPS = 12
+MAX_STEPS = 40
 MAX_TEXT = 500
 MAX_STEPS_BYTES = 50_000
 WALL_SECONDS = 90
 STEP_WAIT_SECONDS = 5.0
 STEP_TEXT_LIMIT = 4_000
-STEP_KINDS = ("open", "click", "type", "expect")
+STEP_KINDS = ("open", "click", "type", "expect", "fill", "choose", "upload", "wait_for")
+MAX_WAIT_SECONDS = 600
+MAX_UPLOADS = 20
 TEXT_INPUT_TYPES = {"", "text", "search", "email", "url", "tel", "password", "number"}
 BROWSER_ARGS = [
     # Browser-wide: everything that is not loopback fails, for every window, frame and worker.
@@ -107,6 +111,57 @@ LOCATE = r"""((spec) => {
 })"""
 
 
+# Marks the one form field a step names as a person does: by its visible label, then its placeholder or aria label.
+FIND_FIELD = r"""((spec) => {
+  document.querySelectorAll('[data-harness-field]').forEach((e) => e.removeAttribute('data-harness-field'));
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const wanted = norm(spec.field);
+  const usable = (el) => spec.file || !!el.getClientRects().length;
+  const fields = Array.from(document.querySelectorAll(spec.kinds)).filter(usable);
+  const labelsOf = (el) => {
+    const out = Array.from(el.labels || []).map((l) => norm(l.textContent));
+    (el.getAttribute('aria-labelledby') || '').split(/\s+/).forEach((id) => {
+      const other = id && document.getElementById(id); if (other) out.push(norm(other.textContent)); });
+    const prev = el.previousElementSibling;
+    if (prev && prev.tagName === 'LABEL' && !prev.control) out.push(norm(prev.textContent));
+    return out;
+  };
+  let found = [];
+  if (wanted) {
+    found = fields.filter((el) => labelsOf(el).includes(wanted));
+    if (!found.length) found = fields.filter((el) => [el.getAttribute('placeholder'), el.getAttribute('aria-label')].map(norm).includes(wanted));
+    if (!found.length) found = fields.filter((el) => labelsOf(el).some((t) => t.startsWith(wanted)));
+  } else if (spec.file && fields.length === 1) found = fields;
+  const what = wanted ? 'named "' + spec.field + '"' : 'to choose without a name';
+  if (!found.length) return {ok: false, reason: 'no field is ' + what + ' (looked at the labels and placeholders of ' + fields.length + ' fields)'};
+  if (found.length > 1) return {ok: false, reason: found.length + ' fields are named "' + spec.field + '"'};
+  if (found[0].disabled) return {ok: false, reason: 'the field is disabled'};
+  found[0].setAttribute('data-harness-field', '1');
+  return {ok: true, type: (found[0].getAttribute('type') || '').toLowerCase()};
+})"""
+CHOOSE = r"""((option) => {
+  const el = document.querySelector('[data-harness-field]');
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const all = Array.from(el.options), hit = all.filter((o) => norm(o.textContent) === norm(option));
+  if (hit.length !== 1) return {ok: false, reason: 'the list has ' + hit.length + ' options named "' + option + '": ' + all.map((o) => o.textContent.trim()).join(' / ')};
+  if (hit[0].disabled) return {ok: false, reason: 'that option is disabled'};
+  el.value = hit[0].value;
+  el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true}));
+  return {ok: true};
+})"""
+# A date, time, month or range field takes its value whole (a person picks it); typed text would be refused by the browser.
+SET_VALUE = r"""((text) => {
+  const el = document.querySelector('[data-harness-field]');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, text);
+  el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true}));
+  return el.value === text;
+})"""
+PICKED_TYPES = {"date", "time", "month", "week", "datetime-local", "range", "color"}
+FIELD = "[data-harness-field]"
+TEXT_FIELDS = ("input:not([type=file]):not([type=radio]):not([type=checkbox]):not([type=submit]):not([type=button]):not([type=hidden])"
+               ":not([type=reset]):not([type=image]), textarea")
+
+
 class ScriptError(ValueError):
     """A step list that is not allowed (shape, size, kinds)."""
 
@@ -146,6 +201,25 @@ def parse_steps(payload: bytes | str) -> list[dict[str, Any]]:
                 raise ScriptError(f'{label} click must be {{"text": ...}} or {{"selector": ...}}')
             key = next(iter(value))
             clean.append({"click": {key: _text(value[key], f"{label} click {key}")}})
+        elif kind == "fill":
+            if not isinstance(value, dict) or set(value) != {"field", "text"}:
+                raise ScriptError(f'{label} fill must be {{"field": "<the visible label>", "text": ...}}')
+            clean.append({"fill": {"field": _text(value["field"], f"{label} fill field"), "text": _text(value["text"], f"{label} fill text", allow_empty=True)}})
+        elif kind == "choose":
+            if not isinstance(value, dict) or set(value) != {"field", "option"}:
+                raise ScriptError(f'{label} choose must be {{"field": "<the visible label>", "option": "<its words>"}}')
+            clean.append({"choose": {key: _text(value[key], f"{label} choose {key}") for key in ("field", "option")}})
+        elif kind == "upload":
+            names = value.get("files") if isinstance(value, dict) else None
+            if not isinstance(value, dict) or set(value) - {"field", "files"} or not isinstance(names, list) or not 1 <= len(names) <= MAX_UPLOADS:
+                raise ScriptError(f'{label} upload must be {{"field": "<the visible label>", "files": ["<file name>"]}} (no field: the page\'s only file field)')
+            clean.append({"upload": {"field": _text(value.get("field", ""), f"{label} upload field", allow_empty=True),
+                                     "files": [_text(name, f"{label} upload file name") for name in names]}})
+        elif kind == "wait_for":
+            seconds = value.get("seconds") if isinstance(value, dict) else None
+            if not isinstance(value, dict) or set(value) != {"text", "seconds"} or isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= MAX_WAIT_SECONDS:
+                raise ScriptError(f'{label} wait_for must be {{"text": ..., "seconds": 1 to {MAX_WAIT_SECONDS}}}')
+            clean.append({"wait_for": {"text": _text(value["text"], f"{label} wait_for text"), "seconds": seconds}})
         else:
             if not isinstance(value, dict) or set(value) != {"selector", "text"}:
                 raise ScriptError(f'{label} type must be {{"selector": ..., "text": ...}}')
@@ -153,8 +227,8 @@ def parse_steps(payload: bytes | str) -> list[dict[str, Any]]:
                 "selector": _text(value["selector"], f"{label} type selector"),
                 "text": _text(value["text"], f"{label} type text", allow_empty=True),
             }})
-    if "expect" not in clean[-1]:
-        raise ScriptError("the last step must be an expect step: a script that never checks what the page shows proves nothing")
+    if "expect" not in clean[-1] and "wait_for" not in clean[-1]:
+        raise ScriptError("the last step must be an expect step (or wait_for): a script that never checks what the page shows proves nothing")
     return clean
 
 
@@ -266,7 +340,7 @@ def _json(value: Any) -> str:
 
 def run_script(
     url: str, steps: list[dict[str, Any]], runtime: Path, *, timeout: float = WALL_SECONDS,
-    authorized: Callable[[], bool] = lambda: True,
+    authorized: Callable[[], bool] = lambda: True, uploads: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run validated steps; returns the step results and evidence bytes. Raises only when no step could run."""
     ba.validate_url(url)
@@ -312,7 +386,7 @@ def run_script(
                 break
             try:
                 driver.socket.settimeout(max(1.0, deadline - time.monotonic()))
-                ok, reason = _run_step(driver, kind, value, url, deadline)
+                ok, reason = _run_step(driver, kind, value, url, deadline, uploads or {})
             except (RuntimeError, OSError, ValueError) as step_error:
                 ok, reason = False, str(step_error)[:300]
             driver.pump(0.2)
@@ -362,7 +436,12 @@ def _wait_ready(driver: _Driver, deadline: float, limit: float = STEP_WAIT_SECON
             pass   # the page is mid-navigation; the next poll sees the new one
 
 
-def _run_step(driver: _Driver, kind: str, value: Any, url: str, deadline: float) -> tuple[bool, str]:
+def _field(driver: _Driver, field: str, kinds: str, file: bool = False) -> dict[str, Any]:
+    """Mark the one field a step names; the page's answer (ok, reason, type)."""
+    return driver.evaluate(f"({FIND_FIELD})({_json({'field': field, 'kinds': kinds, 'file': file})})") or {"ok": False, "reason": "the field could not be used"}
+
+
+def _run_step(driver: _Driver, kind: str, value: Any, url: str, deadline: float, uploads: dict[str, str] | None = None) -> tuple[bool, str]:
     """Carry out one validated step of kind ("open", "expect", "click" or "type") with its value against the page driver controls, resolving relative navigation against url and bounding waits by deadline. Return a (ok, reason) pair: ok is True on success, and reason explains a failure."""
     if kind == "open":
         target = urljoin(url, value)
@@ -372,18 +451,50 @@ def _run_step(driver: _Driver, kind: str, value: Any, url: str, deadline: float)
         driver.call("Page.navigate", {"url": target})
         _wait_ready(driver, deadline)
         return True, ""
-    if kind == "expect":
+    if kind in {"expect", "wait_for"}:
+        wait = STEP_WAIT_SECONDS if kind == "expect" else float(value["seconds"])
+        value = value if kind == "expect" else value["text"]
         wanted = _normal(value).casefold()
-        end = min(deadline, time.monotonic() + STEP_WAIT_SECONDS)
+        end = min(deadline, time.monotonic() + wait)
         while True:
             driver.pump(0.2)
             text = _normal(driver.evaluate(READ_TEXT) or "")
             if wanted in text.casefold():
                 return True, ""
             if time.monotonic() >= end or driver.violations:
-                return False, f"the text was not visible within {int(STEP_WAIT_SECONDS)} seconds: {value[:80]}"
+                return False, f"the text was not visible within {int(wait)} seconds: {value[:80]}"
+    if kind in {"fill", "choose", "upload"}:
+        # a page still drawing itself gets the same few seconds an expect step gets
+        kinds = {"fill": TEXT_FIELDS, "choose": "select", "upload": "input[type=file]"}[kind]
+        end = min(deadline, time.monotonic() + STEP_WAIT_SECONDS)
+        found = _field(driver, value["field"], kinds, kind == "upload")
+        while not found.get("ok") and time.monotonic() < end and not driver.violations:
+            driver.pump(0.3)
+            found = _field(driver, value["field"], kinds, kind == "upload")
+        if not found.get("ok"):
+            return False, str(found.get("reason") or "the field could not be used")
+        if kind == "choose":
+            done = driver.evaluate(f"({CHOOSE})({_json(value['option'])})") or {}
+            driver.pump(0.3)
+            return bool(done.get("ok")), str(done.get("reason") or "")
+        if kind == "upload":
+            missing = [name for name in value["files"] if name not in (uploads or {})]
+            if missing:
+                return False, "no file named " + ", ".join(missing) + " may be uploaded (the setup list's real_data, or the walk's own files)"
+            document = driver.call("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+            node = driver.call("DOM.querySelector", {"nodeId": document, "selector": FIELD})["nodeId"]
+            driver.call("DOM.setFileInputFiles", {"files": [uploads[name] for name in value["files"]], "nodeId": node})
+            driver.pump(0.3)
+            return True, ""
+        if found.get("type") in PICKED_TYPES:
+            return (True, "") if driver.evaluate(f"({SET_VALUE})({_json(value['text'])})") else (False, "the field does not accept " + value["text"][:80])
+        kind, value = "type", {"selector": FIELD, "text": value["text"]}
     spec = value if kind == "click" else {"selector": value["selector"]}
     located = driver.evaluate(f"({LOCATE})({_json(spec)})") or {}
+    end = min(deadline, time.monotonic() + STEP_WAIT_SECONDS)
+    while kind == "click" and "text" in spec and not located.get("ok") and not located.get("refused") and time.monotonic() < end and not driver.violations:
+        driver.pump(0.3)        # a button that appears or is enabled a moment later, as a person would wait for it
+        located = driver.evaluate(f"({LOCATE})({_json(spec)})") or {}
     if not located.get("ok"):
         return False, str(located.get("reason") or "the element could not be used")
     x, y = float(located["x"]), float(located["y"])

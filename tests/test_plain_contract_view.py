@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 from harness import board, contract_check, control
+from tests import examples_first
 from tests.test_contract_first_checks import TEST_FILE, TASK, ledger, plain_ready, write_json
 from tests.requirements_support import NO_SETUP, setup_checked
 from tests.test_requirements_contract import context, delivery_with_direction
@@ -78,7 +79,7 @@ class SubmissionTests(unittest.TestCase):
     def submit(self, value):
         path = self.base / "s.json"
         path.write_text(json.dumps(value), encoding="utf-8")
-        return board.record_contract_check_submission(self.root, self.reviewer["id"], TASK, 1, str(path))
+        return examples_first.record(self.root, self.reviewer["id"], TASK, 1, str(path))
 
     def proposal(self):
         return board.snapshot(self.root)["requirement_proposals"][TASK]
@@ -105,6 +106,10 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(board.snapshot(self.root)["requirement_confirmations"][TASK]["text"], GOOD_BLOCK + "\n\n" + FULL)
 
 
+# A real Builder's proposal names its app's real run, with or without AI (task 2026-11-24_tdd-examples-first, Change 5).
+WITH_REAL_RUN = json.dumps({"ai_tools": [], "real_run": "python3 run_it.py", "real_scenario": "A city goes in and its forecast comes out",
+                            "real_output": "out/result.txt"})
+
 class ProposalCommandTests(unittest.TestCase):
     """The agent's command (the board's own entry point) requires the plain block; the board's own callers and older fixtures do not."""
 
@@ -113,12 +118,12 @@ class ProposalCommandTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = context(Path(self._tmp.name))
         self.agent = delivery_with_direction(self.root, TASK)
-        setup_checked(self.root, TASK)
+        setup_checked(self.root, TASK, WITH_REAL_RUN)
 
     def propose(self, text):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", NO_SETUP,
+            code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", WITH_REAL_RUN,
                                "--no-screens", "a fixture task: nothing visible changes"])
         return code, out.getvalue() + err.getvalue()
 

@@ -14,6 +14,7 @@ from unittest import mock
 from pathlib import Path
 
 from harness import board, control
+from tests import examples_first
 from tests import test_contract_first_checks as base
 from tests.test_contract_first_checks import TASK, TEST_FILE, TEXT, ledger, submission, write_json
 
@@ -226,7 +227,7 @@ class RequestReviewIsNotBlockedTests(unittest.TestCase):
         board.record_requirement_proposal(self.root, self.dev["id"], TEXT)
         files = {"test_hello.py": test_file or TEST_FILE.replace("'hello'", repr(expected))}
         value = {"criteria": [{"text": "Running the program prints the greeting", "checks": [{"coverage": "checked", "ledger": ledger_text, "files": files}]}]}
-        board.record_contract_check_submission(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
+        examples_first.record(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
         token = board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]["token"]
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=token)
         board.record_requirement_confirmation(self.root, self.dev["id"], TEXT)
@@ -315,7 +316,7 @@ class ActiveRepairSkipTests(unittest.TestCase):
                               {"text": "The program exits cleanly", "checks": [check]}], "questions": []}
         path = Path(self._tmp.name) / "s.json"
         path.write_text(json.dumps(base.plain_ready(value)), encoding="utf-8")
-        board.record_contract_check_submission(self.context, reviewer["id"], TASK, 1, str(path))
+        examples_first.record(self.context, reviewer["id"], TASK, 1, str(path))
         token = board.snapshot(self.context)["requirement_proposals"][TASK]["contract_check"]["token"]
         board.record_requirements_decision(self.context, TASK, "go_ahead", version=1, token=token)
         board.record_requirement_confirmation(self.context, delivery["id"], board.snapshot(self.context)["requirement_proposals"][TASK]["text"])

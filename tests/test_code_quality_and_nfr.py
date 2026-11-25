@@ -15,6 +15,7 @@ import json
 import unittest
 
 from harness import board, board_mcp, code_quality, contract_check, red_proof
+from tests import examples_first
 from tests import test_frozen_review_scope as frozen
 from tests import test_repair_test_integrity as integrity
 from tests.test_contract_first_checks import TEXT, write_json
@@ -61,6 +62,11 @@ class CodeQualityNotes(frozen.Rounds):
     def test_notes_on_a_pass_keep_it_a_pass_and_a_missing_flag_stores_nothing(self):
         first = self.request()
         qa = self.claim(first, certified=True)
+        # this test is about code-quality notes on a pass: its contract is one confirmed before the examples-first rules, which
+        # the Reviewer's qa-result command now applies to a newer contract (task 2026-11-24_tdd-examples-first)
+        with board.locked_state(self.root) as state:
+            for confirmation in (state.get("requirement_confirmations") or {}).values():
+                (confirmation.get("contract_check") or {}).pop("rules", None)
         self.assertEqual(self.cli(first, qa, "passed", "TASK DONE: YES — all good", "--code-quality", "a.py: a hard-coded port"), 0)
         self.assertEqual(self.state()["qa_requests"][first["id"]]["status"], "passed")
         self.assertEqual(code_quality.notes(self.state(), self.task_of(first)), ["a.py: a hard-coded port"])
@@ -107,7 +113,7 @@ class QualityRequirement(integrity._Project):
     def file_requirements(self, criteria):
         board.record_requirement_proposal(self.root, self.dev["id"], TEXT)
         self.inbox()
-        board.record_contract_check_submission(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", {"criteria": criteria}))
+        examples_first.record(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", {"criteria": criteria}))
         return board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]
 
     def test_the_kind_is_read_from_the_field_or_the_leading_words_and_never_refused(self):
@@ -142,7 +148,7 @@ class QualityRequirement(integrity._Project):
         board.record_requirement_proposal(self.root, self.dev["id"], TEXT)
         self.inbox()
         value = {"criteria": [{"text": "Non-functional: the greeting file is there when asked", "kind": "non-functional", "checks": [check]}]}
-        board.record_contract_check_submission(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
+        examples_first.record(self.root, self.qa["id"], TASK, 1, write_json(self.base, "sub.json", value))
         token = board.snapshot(self.root)["requirement_proposals"][TASK]["contract_check"]["token"]
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=token)
         board.record_requirement_confirmation(self.root, self.dev["id"], TEXT)

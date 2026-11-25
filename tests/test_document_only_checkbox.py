@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from harness import board, board_viewer, browser_acceptance, contract_check, control, standing_checks
+from tests import examples_first
 from tests.environment_support import require_loopback
 from tests.environment_support import pass_agents_check
 from tests.test_branding_rendered import probe_proxy
@@ -109,12 +110,12 @@ class EveryCriterionNeedsACheckOrAReasonTests(_Fixture):
 
     def test_a_criterion_with_neither_a_check_nor_a_reason_is_refused(self):
         with self.assertRaisesRegex(ValueError, "criterion 2 needs a check or the reason it has none"):
-            contract_check.parse_submission(json.dumps({"criteria": self.CRITERIA}))
+            contract_check.parse_submission(json.dumps(examples_first.complete({"criteria": self.CRITERIA})))
 
     def test_with_a_reason_for_each_the_labels_carry_the_reasons(self):
         criteria = [dict(item) for item in self.CRITERIA]
         criteria[1]["why_not_checked"] = "it is read in the report"
-        parsed = contract_check.parse_submission(json.dumps({"criteria": criteria}))
+        parsed = contract_check.parse_submission(json.dumps(examples_first.complete({"criteria": criteria})))
         labels = contract_check.labels(parsed["criteria"])
         self.assertEqual([item["label"] for item in labels], ["not checked in advance"] * 3)
         self.assertEqual(labels[1]["reason"], "it is read in the report")
