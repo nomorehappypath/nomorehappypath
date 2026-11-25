@@ -8,20 +8,12 @@ Run:  PYTHONPATH=. python3 -m unittest tests.test_cto_wake_counters -v
 """
 import json
 import tempfile
-import importlib.util
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from harness import board, control, review_cost
 from tests import test_cto_realtime_wake as realtime
-
-_GOLDEN_RUNNER = Path(__file__).resolve().parents[1] / "evals" / "golden" / "run_eval.py"
-if not _GOLDEN_RUNNER.is_file():
-    raise unittest.SkipTest("golden eval set: only where evals/golden ships")
-_spec = importlib.util.spec_from_file_location("run_eval", _GOLDEN_RUNNER)
-run_eval = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(run_eval)
 
 
 class CtoWakeCounters(unittest.TestCase):
@@ -55,21 +47,6 @@ class CtoWakeCounters(unittest.TestCase):
         found = self.counters()
         self.assertEqual(found["by_reason"], {"owner": 1})
         self.assertEqual((found["polls"], found["posts"]), (2, 1))
-
-    def test_the_usage_line_and_the_eval_score_show_the_cto_wakes(self):
-        self._run_review("final_acceptance", "passed")
-        state = board.snapshot(self.root)
-        usage = review_cost.usage(state, "APP")
-        self.assertEqual(usage["cto_wakes"], 1)
-        self.assertIn("CTO wakes: 1 (release 1).", usage["line"])
-        self.assertNotIn("CTO wakes", review_cost.usage(state, "OTHER")["line"])
-        path = Path(tempfile.mkdtemp()) / "state.json"
-        self.addCleanup(lambda: path.unlink(missing_ok=True))
-        path.write_text(json.dumps(state), encoding="utf-8")
-        scored = run_eval.read_board(path, [])
-        self.assertEqual((scored["cto_wakes_total"], scored["cto_wakes_by_reason"]), (1, {"release": 1}))
-        path.write_text(json.dumps({"task_turns": {}}), encoding="utf-8")   # a board from before the counters
-        self.assertIsNone(run_eval.read_board(path, [])["cto_wakes_total"])
 
 
 if __name__ == "__main__":

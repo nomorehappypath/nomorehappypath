@@ -34,11 +34,11 @@ class ProposeSpecQuestionsTests(unittest.TestCase):
         bundle = board.poll(self.root, agent["id"])["context_bundle"]["tasks"][0]
         self.assertEqual(bundle["spec_answers"]["answers"]["how_used"], ["Web page, hosted"])
 
-    def test_a_second_proposal_for_the_same_task_is_refused(self):
+    def test_a_second_proposal_for_the_same_task_keeps_the_first_card(self):
         agent = delivery_with_direction(self.root, "TASK-SPEC2")
         board.propose_spec_questions(self.root, agent["id"], "TASK-SPEC2", [], include_existing_data=False, include_data_loss=False)
-        with self.assertRaises(ValueError):
-            board.propose_spec_questions(self.root, agent["id"], "TASK-SPEC2", [], include_existing_data=False, include_data_loss=False)
+        again = board.propose_spec_questions(self.root, agent["id"], "TASK-SPEC2", [{"text": "Another?", "options": ["a", "b"]}], include_existing_data=False, include_data_loss=False)
+        self.assertEqual(again["app_questions"], [])
 
     def test_answers_without_a_proposed_card_are_refused(self):
         with self.assertRaises(ValueError):

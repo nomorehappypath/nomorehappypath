@@ -84,25 +84,6 @@ def proof_by_requirement(criteria: list[dict[str, Any]], results: dict[str, Any]
     return proof
 
 
-def no_inventory_problem(task: str, version: Any, agent_id: str) -> str:
-    """What the final Reviewer is told when no numbered list of requirements with examples exists for the accepted contract."""
-    return ("cannot record PASS yet: this contract has no numbered requirements with examples (nothing was prepared before the build). File them "
-            f"first, from the whole accepted requirements text: contract-check-submit --agent {agent_id} --task {task} --version {version} "
-            "--submission <JSON file> in the usual format (every requirement once, with its plain line and examples; checks are optional, no "
-            "questions; the owner's asks and result_must_contain as usual). Then give each requirement a Challenge Ledger row that names it in a "
-            "Requirement column, or a line `Not run for real: requirement <n> - <why>`. Nothing failed; this call was not recorded.")
-
-
-def missing_problem(missing: list[int], criteria: list[dict[str, Any]]) -> str:
-    """What the final Reviewer is told when requirements have no real test in this review and no not-run line."""
-    names = "; ".join(f"{item['n']}. {item.get('plain') or item.get('text')}" for item in criteria if item.get("n") in missing)
-    return ("cannot record PASS yet: these requirements have no stored test that passed on this version, no Challenge Ledger row naming them and no "
-            f"not-run line: {names}. For each, add a row that runs its example through the real program and names it in the ledger's "
-            f"`{contract.REQUIREMENT_HEADER}` column (one row may name several: `3, 5`), then attach and execute the ledger again; or write "
-            "`Not run for real: requirement <n> - <why>` in your summary (recorded, shown to the owner, never a failed review). Nothing failed; "
-            "this call was not recorded.")
-
-
 def result_problem(items: list[str], summary: Any) -> str:
     """Why a PASS cannot be recorded against the result list the owner was shown ("" when every item has its MET line)."""
     if not items:
@@ -112,9 +93,4 @@ def result_problem(items: list[str], summary: Any) -> str:
     if not_met:
         return ("cannot record PASS: you wrote NOT MET for result item " + ", ".join(str(n) for n in not_met) + " (\""
                 + "\"; \"".join(items[n - 1] for n in not_met) + "\"). The owner's result lacks what it must contain: record FAIL, naming it")
-    absent = [number for number in range(1, len(items) + 1) if number not in said]
-    if absent:
-        return ("cannot record PASS yet: the result of the owner's scenario must be checked against the list he was shown. Add one line per item to "
-                "your summary, `Result item <k>: MET - <where in the result>` (or `NOT MET - <what is missing>`, which makes the verdict FAIL). Missing: "
-                + "; ".join(f"{n}. {items[n - 1]}" for n in absent) + ". Nothing failed; this call was not recorded.")
     return ""

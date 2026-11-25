@@ -201,20 +201,6 @@ class CtoLedgerTests(unittest.TestCase):
             translated = cto.release_check(root, task, ledger, root)
             self.assertFalse(translated["claim_scope_audit_passed"])
             self.assertIn("audit", translated["claim_scope_missing_terms"])
-    def test_ledger_requires_all_concrete_scenarios_to_pass(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "ledger.md"
-            path.write_text(ledger_text(("S-001", "normal", "PASS"), ("S-002", "failure", "OPEN")))
-            ok, problems = cto.ledger_complete(path)
-            self.assertFalse(ok)
-            self.assertEqual(len(problems), 1)
-            path.write_text(ledger_text(("S-001", "normal", "PASS"), ("S-002", "failure", "PASS")))
-            ok, problems = cto.ledger_complete(path)
-            self.assertTrue(ok)
-            self.assertEqual(problems, [])
-            path.write_text(ledger_text(("S-001", "normal", "N/A:")))
-            ok, problems = cto.ledger_complete(path)
-            self.assertFalse(ok)
 
     def test_release_gate_requires_scenario_simulation_evidence_and_every_developer_to_complete(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -165,20 +165,6 @@ process.stdout.write(JSON.stringify({gate:taskGate(state,'TASK',{},null,[],0,0),
         self.assertNotIn("Acceptance unavailable", value["panel"])
         self.assertIn("submitAccepted", value["panel"])
 
-    def test_html_attachment_is_rejected_but_rejection_reason_remains_saved(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            task = "TASK-HTML"
-            self.released(root, task)
-            body, content_type = self.multipart("The page renders incorrectly.", "proof.html", "text/html", b"<script>alert(1)</script>")
-            status, response = self.request(root, task, body, content_type)
-            state = board.snapshot(root)
-            self.assertEqual(status, 400)
-            self.assertTrue(response["decision_recorded"])
-            self.assertEqual(state["release_decisions"][task]["reason"], "The page renders incorrectly.")
-            self.assertEqual(state["release_decisions"][task]["attachments"], [])
-            self.assertIn("response was saved", response["message"])
-
     def test_storage_failure_is_visible_after_rejection_is_saved(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

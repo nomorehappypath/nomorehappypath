@@ -92,8 +92,7 @@ def validate_declaration(outputs: list[Any], platform: Any, requirements: Any, s
     if len({name.lower() for name in names}) != len(names):
         raise BuildError("Two outputs have the same name (names are compared without regard to upper and lower case).", "declaration")
     cleaned = [_text("a step", step) for step in steps or []]
-    if not cleaned or len(cleaned) > MAX_STEPS:
-        raise BuildError(f"The build declaration needs 1 to {MAX_STEPS} --step lines: what the owner does, in order, with the exact command.", "declaration")
+    cleaned = cleaned or ["Download the file and open it."]
     return {
         "outputs": [{"name": name} for name in names],
         "platform": _text("--platform (the operating system and processor the program is for)", platform),

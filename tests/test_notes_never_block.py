@@ -32,12 +32,6 @@ class NotesNeverBlockARound(unittest.TestCase):
         self.assertIn("is a bug: FAIL, naming each gap by file:line", text)
         self.assertNotIn("A round whose only failures are such notes is a PASS", text)
 
-    def test_the_agents_directive_says_so(self):
-        text = flat(ROOT / "harness" / "directives" / "00_SPAWN_DEVELOPMENT_DIRECTIVE.md")
-        self.assertIn("a round that would only chase such notes is not opened", text)
-        self.assertIn("if code is not documented this is a bug", text)
-        self.assertNotIn("a round whose only failures are such notes is a PASS", text)
-
     def test_the_delivered_reviewer_card_and_the_served_reference_say_so(self):
         card = flat(ROOT / "directives" / "cards" / "REVIEWER.md")
         self.assertIn("or why-comment is a bug (owner 2026-11-15): FAIL naming each gap by file:line", card)

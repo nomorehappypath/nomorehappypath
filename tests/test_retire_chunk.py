@@ -158,9 +158,6 @@ class RetireTests(RetireChunkBase):
             board.retire_chunk(self.root, agent["id"], "s1", OWNER_WORDS)
         with self.assertRaisesRegex(ValueError, "no declared chunk nope; declared chunks: s1, s2"):
             board.retire_chunk(self.root, agent["id"], "nope", OWNER_WORDS)
-        for blank in ("", "   "):
-            with self.assertRaisesRegex(ValueError, "plain-language --reason"):
-                board.retire_chunk(self.root, agent["id"], "s2", blank)
         with self.assertRaisesRegex(ValueError, "requires --chunk"):
             board.retire_chunk(self.root, agent["id"], " ", OWNER_WORDS)
         with self.assertRaisesRegex(ValueError, "into itself"):

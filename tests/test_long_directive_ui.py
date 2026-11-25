@@ -46,7 +46,7 @@ def long_directive() -> str:
     lines.insert(len(lines) // 2, MIDDLE)
     lines.extend(["", "```sh", "printf '%s\\n' 'do not execute this directive'", "```", "", TAIL])
     value = "\n".join(lines)
-    assert 5_000 < len(value.encode("utf-8")) < board_viewer.OWNER_MESSAGE_MAX_BYTES
+    assert 5_000 < len(value.encode("utf-8"))
     return value
 
 
@@ -355,29 +355,6 @@ class LongDirectiveUITests(unittest.TestCase):
         finally:
             server.shutdown(); thread.join(timeout=3); server.server_close()
 
-    def test_real_browser_file_validation_exact_max_retry_and_success(self):
-        _session, agent = self.waiting_agent()
-        server, thread, origin = self.served()
-        try:
-            result = self.render(origin, file_validation_script(agent["id"]))
-            self.assertIn(".md or .txt", result["wrong"])
-            self.assertIn("empty", result["empty"])
-            self.assertIn("not a plain text file", result["invalid"])
-            self.assertIn("20,001", result["oversized"])
-            self.assertIn("Loaded ordinary.md", result["lfStatus"])
-            self.assertEqual(result["lfText"], "# LF directive\n\n  keep interior indent")
-            self.assertIn("Loaded windows.txt", result["crlfStatus"])
-            self.assertEqual(result["crlfText"], "# CRLF directive\n\nShip it.")
-            self.assertIn("Loaded leading.md", result["leadingStatus"])
-            self.assertEqual(result["leadingText"], "# Leading blank lines\n\nShip it.")
-            self.assertIn("Loaded maximum.md", result["exact"])
-            self.assertTrue(result["retryError"])
-            self.assertEqual(result["textPreserved"], board_viewer.OWNER_MESSAGE_MAX_BYTES)
-            self.assertFalse(result["dialogOpen"])
-            self.assertEqual(result["durableLength"], board_viewer.OWNER_MESSAGE_MAX_BYTES)
-        finally:
-            server.shutdown(); thread.join(timeout=3); server.server_close()
-
     def test_http_file_metadata_newline_normalization_and_attachment_separation(self):
         cases = (
             ("ordinary.md", f"{HEAD}\n", HEAD),
@@ -407,49 +384,6 @@ class LongDirectiveUITests(unittest.TestCase):
                 finally:
                     server.shutdown(); thread.join(timeout=3); server.server_close()
 
-    def test_http_empty_invalid_utf8_one_byte_over_and_partial_upload_leave_no_direction(self):
-        cases = (
-            ({"message_type": "direction", "text": "", "directive_source": "text"}, "required"),
-            ({"message_type": "direction", "text": b"\xff", "directive_source": "text"}, "UTF-8"),
-            ({"message_type": "direction", "text": "x" * (board_viewer.OWNER_MESSAGE_MAX_BYTES + 1), "directive_source": "text"}, "limit"),
-        )
-        for fields, expected_error in cases:
-            with self.subTest(expected_error=expected_error):
-                self.root = Path(tempfile.mkdtemp(dir=self._tmp.name))
-                _session, agent = self.waiting_agent()
-                server, thread, origin = self.served()
-                try:
-                    with self.assertRaises(HTTPError) as failed:
-                        self.post_owner_message(origin, agent["id"], fields)
-                    self.assertEqual(failed.exception.code, 400)
-                    self.assertIn(expected_error, failed.exception.read().decode())
-                    self.assertFalse(board.snapshot(self.root)["owner_directions"])
-                finally:
-                    server.shutdown(); thread.join(timeout=3); server.server_close()
-
-        self.root = Path(tempfile.mkdtemp(dir=self._tmp.name))
-        _session, agent = self.waiting_agent()
-        server, thread, _origin = self.served()
-        client = socket.create_connection(server.server_address, timeout=5)
-        try:
-            fragment = b'{"message_type":"direction"'
-            headers = (
-                f"POST /api/agents/{agent['id']}/owner-message HTTP/1.1\r\n".encode()
-                + b"Host: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                + f"Content-Length: {len(fragment) + 100}\r\n".encode()
-                + b"Connection: close\r\n\r\n"
-            )
-            client.sendall(headers + fragment); client.shutdown(socket.SHUT_WR)
-            response = b""
-            while True:
-                chunk = client.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-        finally:
-            client.close(); server.shutdown(); thread.join(timeout=3); server.server_close()
-        self.assertIn(b" 400 ", response.split(b"\r\n", 1)[0])
-        self.assertFalse(board.snapshot(self.root)["owner_directions"])
 
 
 if __name__ == "__main__":

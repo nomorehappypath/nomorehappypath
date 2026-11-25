@@ -6,7 +6,6 @@ __pycache__/
 *.pyc
 
 # A *filled* profile holds real secrets/keys — NEVER commit it.
-# The blank template (profile.template/) IS tracked; a user's copy (profile/) is not.
 profile/
 .env
 *.key
@@ -21,7 +20,6 @@ build/
 
 # Per-project runtime board state. It is durable locally but never source code.
 .harness/
-evals/results/
 
 # Files a direction or clarification attached, copied into the task's own
 # workspace so a builder can read them. Not part of the delivered application.

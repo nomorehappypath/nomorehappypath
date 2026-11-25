@@ -47,7 +47,7 @@ from harness.project_context import add_context_arguments, context_cli_arguments
 
 BOOTSTRAP_LIMIT = 8 * 1024
 COMMAND_LIMIT = MAX_ARTIFACT_WIRE_BYTES + 256 * 1024
-CHAT_BODY_LIMIT = 4 * 1024
+CHAT_BODY_LIMIT = 40 * 1024
 CHAT_RESPONSE_LIMIT = 16 * 1024
 CHAT_RATE_LIMIT = 12
 CHAT_RATE_WINDOW_SECONDS = 60.0

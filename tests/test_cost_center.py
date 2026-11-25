@@ -415,9 +415,9 @@ class ReleaseScrubTests(unittest.TestCase):
             fake = Path(scratch) / "src"
             (fake / "scripts").mkdir(parents=True)
             shutil.copy(repo / "scripts" / "make_public_release.sh", fake / "scripts" / "make_public_release.sh")
-            for directory in ("harness", "web", "engine", "tests", "directives"):
+            for directory in ("harness", "tests", "directives"):
                 (fake / directory).mkdir()
-            for name in ("profile.template", "profile.example.json", "LICENSE", "NOTICE", "DISCLAIMER.md", "CONTRIBUTING.md", "README.md", "install.sh", ".gitignore"):
+            for name in ("LICENSE", "NOTICE", "DISCLAIMER.md", "CONTRIBUTING.md", "README.md", "install.sh", ".gitignore"):
                 (fake / name).write_text("x\n", encoding="utf-8")
             (fake / "harness" / "cost_ledger.json").write_text("{}", encoding="utf-8")
             result = subprocess.run(["bash", str(fake / "scripts" / "make_public_release.sh"), str(Path(scratch) / "out")],
@@ -427,95 +427,3 @@ class ReleaseScrubTests(unittest.TestCase):
         self.assertNotIn("Gate 4", result.stdout)
 
 
-@unittest.skipUnless((Path(__file__).resolve().parents[1] / "evals" / "golden" / "run_eval.py").is_file(), "golden eval set: only where evals/golden ships")
-class EvalRunCostTests(unittest.TestCase):
-    """The golden eval scorer reads a run's costs from the run's own isolated homes, whatever NMHP version ran it."""
-
-    def _run_eval(self):
-        import importlib.util
-        import sys
-        golden = Path(__file__).resolve().parents[1] / "evals" / "golden" / "run_eval.py"
-        spec = importlib.util.spec_from_file_location("golden_run_eval_cost", str(golden))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["golden_run_eval_cost"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    def test_costs_come_from_the_runs_sessions_only_and_land_in_the_score_sheet(self) -> None:
-        import re
-        cost_center.configure(None)
-        with tempfile.TemporaryDirectory() as scratch:
-            base = Path(scratch)
-            run = base / "nmhp-golden-synthetic-abc"
-            codex_home, claude_home = base / "signin-codex", base / "signin-home"
-            data = run / "home" / "projects" / "p1" / "data"
-            (data / "control").mkdir(parents=True)
-            (data / "board").mkdir(parents=True)
-            slug = lambda path: re.sub(r"[^A-Za-z0-9]", "-", str(path))
-            reviewer_file = claude_home / ".claude" / "projects" / slug(run / "project") / f"{CLAUDE_ID}.jsonl"
-            reviewer_file.parent.mkdir(parents=True)
-            reviewer_file.write_text(claude_row("msg_1", 1, (1000, 500, 2000, 300)), encoding="utf-8")
-            other_file = claude_home / ".claude" / "projects" / "-somebody-elses-project" / f"{CLAUDE_ID_2}.jsonl"
-            other_file.parent.mkdir(parents=True)
-            other_file.write_text(claude_row("msg_x", 1, (999999, 0, 0, 0)), encoding="utf-8")
-            rollout = codex_home / "sessions" / "2026" / "10" / "27" / f"rollout-2026-10-27T09-00-00-{CODEX_ID}.jsonl"
-            rollout.parent.mkdir(parents=True)
-            meta = json.dumps({"type": "session_meta", "payload": {"cwd": str(run / "project"), "instructions": SECRET_TEXT}}) + "\n"
-            rollout.write_text(meta + codex_rows(1, (10000, 4000, 0, 500), model="gpt-6.1-sol", limit=(10.0, 1_800_000_000))
-                               + codex_rows(2, (12000, 4000, 0, 800), limit=(13.0, 1_800_000_000)), encoding="utf-8")
-            sessions = {
-                "claude_reviewer-1": {"kind": "claude_reviewer", "provider": "claude", "cli_session_provider": "claude", "cli_session_id": CLAUDE_ID},
-                "codex_delivery-1": {"kind": "codex_delivery", "provider": "codex", "cli_session_provider": "codex", "cli_session_id": CODEX_ID},
-                "claude_cto-1": {"kind": "claude_cto", "provider": "claude", "cli_session_provider": "claude", "cli_session_id": CLAUDE_ID_2},
-                "gemini-1": {"kind": "codex_delivery", "provider": "gemini", "cli_session_provider": "gemini", "cli_session_id": "gem-conversation-1"},
-            }
-            (data / "control" / "sessions.json").write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
-            agents = {
-                "a1": {"id": "a1", "role": "qa", "task": "T1", "session_id": "claude_reviewer-1", "spawned_at": stamp(-1)},
-                "a2": {"id": "a2", "role": "development", "task": "T1", "session_id": "codex_delivery-1", "spawned_at": stamp(-1)},
-                "a3": {"id": "a3", "role": "cto", "task": "T1", "session_id": "claude_cto-1", "spawned_at": stamp(-1)},
-                "a4": {"id": "a4", "role": "development", "task": "T1", "session_id": "gemini-1", "spawned_at": stamp(-1)},
-            }
-            (data / "board" / "state.json").write_text(json.dumps({"agents": agents}), encoding="utf-8")
-            record = {"project": "03_json_api", "project_id": "p1", "home": str(run / "home"),
-                      "isolation": {"codex_home": str(codex_home), "claude_home": str(claude_home)}}
-            cost = cost_center.collect_run(run, record)
-            self.assertTrue(cost["available"], cost)
-            self.assertEqual(cost["roles"]["reviewer"]["tokens"], 3800)
-            self.assertAlmostEqual(cost["roles"]["reviewer"]["usd"], 0.00795, places=9)
-            self.assertEqual(cost["roles"]["delivery"]["tokens"], 6000 + 4000 + 500 + 2000 + 300)   # the other project's session is not counted
-            self.assertNotIn("cto", cost["roles"])   # its session lives outside the run folder, so it is not the run's
-            self.assertEqual(cost["sessions_outside_the_run"], 1)
-            self.assertIn("+3% of your 5-hour window", list(cost["codex_windows"].values())[0])
-            self.assertTrue(cost["gemini"])
-            cells = self._run_eval().cost_cells(cost)
-            self.assertEqual(len(cells), 5)
-            self.assertIn("not measured", cells[4])
-            self.assertTrue(cells[2].startswith("$"))
-            self.assertNotIn(SECRET_TEXT, " ".join(cells) + json.dumps(cost))
-            self.assertEqual(self._run_eval().cost_cells(cost_center.collect_run(run, {"project": "x"}))[0][:11], "unavailable")
-            # The sheet carries the columns (an old run without figures says "unavailable", never zero).
-            runner = self._run_eval()
-            folder = runner.write_sheet(base / "results", "t", [{"project": "03_json_api", "title": "t", "planted": 1, "fixed": 1, "bugs": [], "flagged_by_review": [],
-                                                                  "false_blocker_texts": [], "false_blockers": 0, "review_rounds": 1, "review_passed": 1, "review_failed": 0,
-                                                                  "outcome": "o", "agent_steps": 1, "review_minutes": 1, "cto_polls": 1, "cto_commands": 1,
-                                                                  "cto_wakes_total": 1, "cost": cost},
-                                                                 {"project": "04", "title": "old", "planted": 1, "fixed": 0, "bugs": [], "flagged_by_review": [],
-                                                                  "false_blocker_texts": [], "false_blockers": None, "review_rounds": None, "outcome": "o", "agent_steps": None,
-                                                                  "review_minutes": None}])
-            sheet = (folder / "score.md").read_text(encoding="utf-8")
-            self.assertIn("API-equivalent $ total", sheet)
-            self.assertIn("unavailable", sheet)
-            table = [line for line in sheet.splitlines() if line.startswith("| Project") or line.startswith("|---|---|---|---|---|---|---|---|---|---|---|---|") or line.startswith("| 0") or line.startswith("| **Total")]
-            self.assertEqual(len(table), 5, table)
-            self.assertEqual({line.count("|") for line in table}, {table[0].count("|")}, "every row, the total row included, has the same number of columns")
-            self.assertIn("for 1 of 2 projects measured", sheet)   # the total says how much of it was measured
-            self.assertIn("excludes Gemini", sheet)
-            self.assertIn("not measured", " ".join(runner.cost_cells({"available": True, "roles": {"delivery": {"tokens": 5, "usd": 0.5}}, "usd": 0.5, "tasks_total": 1, "tasks_measured": 1})[:2]))
-            # Nothing measured anywhere: the total is "not measured", not $0.00.
-            empty = runner.write_sheet(base / "results", "t2", [{"project": "04", "title": "old", "planted": 1, "fixed": 0, "bugs": [], "flagged_by_review": [],
-                                                                  "false_blocker_texts": [], "false_blockers": None, "review_rounds": None, "outcome": "o", "agent_steps": None,
-                                                                  "review_minutes": None}])
-            total_line = [line for line in (empty / "score.md").read_text(encoding="utf-8").splitlines() if line.startswith("| **Total")][0]
-            self.assertIn("not measured", total_line)
-            self.assertNotIn("$0", total_line)

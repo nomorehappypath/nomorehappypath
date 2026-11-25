@@ -92,10 +92,6 @@ def _infer_what_holds(description: str) -> str | None:
     return None
 
 
-class InvalidSpecQuestions(ValueError):
-    """One app-specific question, or the submission as a whole, is malformed."""
-
-
 def validate_app_questions(raw: Any) -> list[dict[str, Any]]:
     """Check Delivery's own up-to-five app-specific questions.
 
@@ -105,28 +101,16 @@ def validate_app_questions(raw: Any) -> list[dict[str, Any]]:
 
     Return: the same questions, normalized (text and options stripped).
 
-    Raises: InvalidSpecQuestions on anything malformed or over the limits —
-    too many questions, too few/many options, a missing or out-of-range
-    recommended index, or a blank question/option text.
     """
-    if not isinstance(raw, list):
-        raise InvalidSpecQuestions("app_questions must be a list")
-    if len(raw) > MAX_APP_QUESTIONS:
-        raise InvalidSpecQuestions(f"at most {MAX_APP_QUESTIONS} app-specific questions are allowed")
     normalized: list[dict[str, Any]] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            raise InvalidSpecQuestions("each app question must be an object")
-        text = str(entry.get("text") or "").strip()
-        if len(text) < 5:
-            raise InvalidSpecQuestions("each app question needs real question text")
-        options = [str(option).strip() for option in (entry.get("options") or [])]
-        options = [option for option in options if option]
-        if not (MIN_OPTIONS <= len(options) <= MAX_OPTIONS):
-            raise InvalidSpecQuestions(f"each app question needs {MIN_OPTIONS} to {MAX_OPTIONS} options")
+    for entry in raw if isinstance(raw, list) else []:
+        text = str(entry.get("text") or "").strip() if isinstance(entry, dict) else ""
+        options = [option for option in (str(option).strip() for option in (entry.get("options") or [])) if option][:MAX_OPTIONS] if text else []
+        if len(options) < MIN_OPTIONS or len(normalized) == MAX_APP_QUESTIONS:
+            continue        # a question the card cannot show is left out; the assumption chapter covers it (owner 2026-11-24)
         recommended = entry.get("recommended")
-        if not isinstance(recommended, int) or not (0 <= recommended < len(options)):
-            raise InvalidSpecQuestions("recommended must be a valid index into options")
+        if isinstance(recommended, bool) or not isinstance(recommended, int) or not 0 <= recommended < len(options):
+            recommended = 0
         normalized.append({"text": text, "options": options, "recommended": recommended})
     return normalized
 

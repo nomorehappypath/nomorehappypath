@@ -5,7 +5,7 @@ each steered the task back to a step the owner had declared not required. Resume
 posted two bland cycles over a wrong owner card and eight stale findings and cleared them only after
 the owner's messages. Delivery and the Reviewer are launched with their one-page cards and the CTO with
 its card; the full text is the reference they open by chapter (scripts/run_managed_agent.sh); these pin the two rules that forbid each of those,
-there and in the short-form mirrors under harness/directives.
+there.
 """
 import unittest
 from pathlib import Path
@@ -22,8 +22,6 @@ def flat(path):
 class AgentOwnToolLimits(unittest.TestCase):
     def setUp(self):
         self.agent = flat("directives/AGENT.md")
-        self.spawn = flat("harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md")
-        self.reviewer = flat("harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md")
 
     def test_launcher_loads_the_agent_directive_whole_for_delivery_and_reviewer(self):
         # Directive diet: the card is loaded, never the whole reference file; the reference is opened by chapter.
@@ -63,19 +61,11 @@ class AgentOwnToolLimits(unittest.TestCase):
         self.assertIn("a limit of its own is never an owner card; an agreed requirement it therefore cannot really run is a `Not run for real:` line", self.agent)
         self.assertIn("one `Process note: <the step and why>` line", self.agent)
 
-    def test_mirrors_carry_the_rule_in_short_form(self):
-        self.assertIn("Your own tool, sandbox or session limit", self.spawn)
-        self.assertIn("is never an in-scope finding, never an owner-action card and never blocks the deliverables that do not need it", self.spawn)
-        self.assertIn("post one route question to the CTO", self.spawn)
-        self.assertIn("Inability to run a step is not by itself a product defect", self.spawn)
-        self.assertIn("A limit of the reviewer's own tool, sandbox or session", self.reviewer)
-        self.assertIn("is never an owner card (2026-10-14): an agreed requirement it therefore could not really run is a `Not run for real:` line the CTO gets run, never a FAIL", self.reviewer)
 
 
 class CtoRetriageOnLaunchOrResume(unittest.TestCase):
     def setUp(self):
         self.cto = flat("directives/CTO.md")
-        self.mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
 
     def test_the_paragraph_sits_inside_what_must_never_block_the_work(self):
         chapter = reference_chapters.role_chapters("cto")["first-cycle"]
@@ -96,10 +86,6 @@ class CtoRetriageOnLaunchOrResume(unittest.TestCase):
         self.assertIn("State the result in that cycle's status line (cards cleared, findings disposed of, what was routed), or \"nothing inherited\"", self.cto)
         self.assertIn("a CTO that waits for the owner to point at a stale card has already lost the cycle", self.cto)
 
-    def test_mirror_carries_the_rule_in_short_form(self):
-        self.assertIn("In the first cycle after launch or resume, re-triage every open owner-action card and every in-scope finding of every active task", self.mirror)
-        self.assertIn("state the result in that cycle's status", self.mirror)
-
     def test_the_cto_never_ends_on_a_question_about_its_own_job(self):
         """Owner 2026-10-15: "do the necessary and do not ask me such questions"."""
         chapter = reference_chapters.role_chapters("cto")["never-block"]
@@ -110,9 +96,6 @@ class CtoRetriageOnLaunchOrResume(unittest.TestCase):
         self.assertIn("The only questions for the owner are WHAT decisions not yet taken", self.cto)
         self.assertIn("state your recommendation and what happens if the owner says nothing; silence is never read as a waiver of a required gate", self.cto)
         self.assertIn('"Want me to do that now?" and "Should I push Delivery?" are defects of the CTO', self.cto)
-        self.assertIn("never ends with a question about a step this directive already assigns to the CTO", self.mirror)
-        self.assertIn("do it and report `done: <what>`", self.mirror)
-        self.assertIn('"Want me to do that now?" is a defect', self.mirror)
 
     def test_launcher_loads_the_cto_card(self):
         launcher = (ROOT / "scripts/run_managed_agent.sh").read_text()

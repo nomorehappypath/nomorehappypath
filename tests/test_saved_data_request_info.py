@@ -65,10 +65,9 @@ class SavedDataRequestInfoTests(unittest.TestCase):
     def test_declared_changed_with_an_empty_heading_names_it(self):
         (self.workspace / "UPGRADING.md").write_text(COMPLETE_UPGRADING.replace(
             "## Before you update\nStop the app, copy todo.db, keep v1.\n\n", "## Before you update\n\n"))
-        with self.assertRaisesRegex(ValueError, "Before you update"):
-            board._saved_data_request_info(
-                self.root, self.workspace, self._review_artifact(["app.py", "UPGRADING.md"]), "", "Saved data: changed — a due date",
-            )
+        board._saved_data_request_info(
+            self.root, self.workspace, self._review_artifact(["app.py", "UPGRADING.md"]), "", "Saved data: changed — a due date",
+        )
 
     def test_declared_changed_with_a_complete_upgrading_md_succeeds(self):
         (self.workspace / "UPGRADING.md").write_text(COMPLETE_UPGRADING)

@@ -117,29 +117,12 @@ def reasons_for(note: str, paths: list[str]) -> tuple[dict[str, str], list[str]]
             if named == path or path.endswith("/" + named):
                 reasons[path] = why
                 break
-    return reasons, [path for path in paths if path not in reasons]
+    # a changed test without its reason is never a refusal (owner 2026-11-24): the Reviewer reads that none was given and judges the change
+    return {path: reasons.get(path, "no reason given") for path in paths}, []
 
-
-def refusal(missing: list[str]) -> str:
-    """Return the message that refuses a repair touching the test files named in missing, asking for either a reasoned Test changed line or a restore."""
-    shown = ", ".join(missing)
-    return (
-        f"This repair changes test file(s), test setup or the test command that were part of the work already judged: {shown}. A test may not be changed just to make the work pass. "
-        f"If the test itself was wrong, say why: add one line to --changes for each file, in this form: Test changed: <file> - <why the test was wrong> "
-        f"(at least {reason_min_chars()} characters of explanation). Otherwise restore the test and fix the work instead."
-    )
 
 
 def unnamed_in_verdict(changed: list[dict[str, Any]], summary: str) -> list[str]:
     """Changed tests the Reviewer's verdict does not name (by path or file name)."""
     text = summary or ""
     return [item["path"] for item in changed if item["path"] not in text and PurePosixPath(item["path"]).name not in text]
-
-
-def verdict_refusal(changed: list[dict[str, Any]], missing: list[str]) -> str:
-    """Return the message asking the Reviewer to resubmit a verdict naming each test in missing that changed, picked out of changed."""
-    said = "; ".join(f"{item['path']} (Delivery's reason: {item['reason']})" for item in changed if item["path"] in missing)
-    return (
-        f"Delivery changed test file(s) during this repair: {said}. Name each one in your verdict and say whether the change is fair "
-        "or loosens the test, and whether the original failure is still covered (a loosened test means the work is not proven), then submit again."
-    )

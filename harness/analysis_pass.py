@@ -54,19 +54,14 @@ def owing(record: dict[str, Any] | None) -> list[str]:
 
 
 def parse_item(raw: Any) -> dict[str, str]:
-    """Parse one raw issue string of the form `<file:line>|<what is wrong>|<why it matters>` and return a dict
-    with "location", "wrong" and "matters" keys; raise ValueError when raw does not have exactly three
-    non-empty pipe-separated parts, the first part lacks a file:line location, or either remaining part is
-    outside the 12 to 600 character range."""
-    parts = [part.strip() for part in str(raw).split("|", 2)]
-    if len(parts) != 3 or not all(parts):
-        raise ValueError("each issue is `<file:line>|<what is wrong>|<why it matters>`, for example "
-                         "`app/services/ocr.py:120|a retried job repeats the paid call|the customer is billed twice`")
-    if not re.search(r"\S+:\d+", parts[0]):
-        raise ValueError("each issue needs a file:line location")
-    if not (12 <= len(parts[1]) <= 600 and 12 <= len(parts[2]) <= 600):
-        raise ValueError("what is wrong and why it matters need 12 to 600 characters each")
-    return {"location": parts[0], "wrong": parts[1], "matters": parts[2]}
+    """One raw issue, `<file:line>|<what is wrong>|<why it matters>`, as its parts. Form never loses an issue (owner 2026-11-24): a part that
+    is not there is said to be missing, and the reader sees the rest."""
+    parts = [" ".join(part.split()) for part in str(raw).split("|", 2)]
+    if len(parts) == 1 or not re.search(r"\S+:\d+", parts[0]) and len(parts) < 3:
+        found = re.search(r"\S+:\d+", parts[0])
+        parts = [found.group(0) if found else "", *parts]
+    parts += [""] * (3 - len(parts))
+    return {"location": parts[0] or "place not given", "wrong": parts[1] or parts[0] or "not described", "matters": parts[2] or "not said"}
 
 
 def add_items(record: dict[str, Any], side: str, raws: list[str], at: str, found: bool = False) -> list[dict[str, Any]]:
@@ -93,10 +88,8 @@ def close_list(record: dict[str, Any], side: str, examined: str, none_reason: st
         raise ValueError("your list is already closed")
     examined = " ".join(str(examined or "").split())
     none_reason = " ".join(str(none_reason or "").split())
-    if len(examined) < EXAMINED_MIN:
-        raise ValueError(f"`--done` needs `--examined` saying every part of the code you read, at least {EXAMINED_MIN} characters")
-    if not mine["items"] and len(none_reason) < NONE_MIN:
-        raise ValueError(f"your list is empty: add at least one issue, or give `--none` with a reason of at least {NONE_MIN} characters saying what you followed and found sound")
+    examined = examined or "what was read was not said"
+    none_reason = none_reason or "no reason given"
     mine.update({"closed_at": at, "examined": examined, "none_reason": none_reason if not mine["items"] else "", "last_at": at})
 
 
@@ -125,18 +118,9 @@ def parse_marks(raws: list[str], expected: list[dict[str, Any]]) -> dict[str, di
         head, _, evidence = str(raw).partition("|")
         ident, _, verdict = head.partition("=")
         ident, verdict, evidence = ident.strip().upper(), " ".join(verdict.split()).lower(), " ".join(evidence.split())
-        if ident not in ids:
-            raise ValueError(f"{ident or raw!r} is not an item of the list you are checking; its items are: " + ", ".join(sorted(ids)))
-        if ident in marks:
-            raise ValueError(f"{ident} is marked twice")
-        if verdict not in MARKS:
-            raise ValueError(f"mark {ident} as `{ident}=confirmed`, `{ident}=false alarm|<file:line evidence>` or `{ident}=wrong|<file:line evidence>`")
-        if verdict != "confirmed" and (len(evidence) < 12 or not re.search(r"\S+:\d+", evidence)):
-            raise ValueError(f"{ident}: a `{verdict}` mark needs your evidence with a file:line location (at least 12 characters)")
-        marks[ident] = {"mark": MARKS[verdict], "evidence": evidence}
-    missing = [item["id"] for item in expected if item["id"] not in marks]
-    if missing:
-        raise ValueError("every item must be marked, once; not yet marked: " + ", ".join(missing))
+        if ident not in ids or verdict not in MARKS:
+            continue        # a mark that cannot be read leaves its item unchecked, shown as such; it stops nothing (owner 2026-11-24)
+        marks[ident] = {"mark": MARKS[verdict], "evidence": evidence or ("" if verdict == "confirmed" else "no evidence given")}
     return marks
 
 
@@ -150,14 +134,10 @@ def parse_groups(raws: list[str], record: dict[str, Any]) -> list[list[str]]:
     groups: list[list[str]] = []
     for raw in raws:
         ids = [part.strip().upper() for part in str(raw).split(",") if part.strip()]
-        if len(ids) < 2 or len(set(ids)) != len(ids):
-            raise ValueError(f"a group names two or more different items, for example `D2,R4`; got {raw!r}")
-        for ident in ids:
-            if ident not in known:
-                raise ValueError(f"{ident} is not an item on either list; the items are: " + ", ".join(sorted(known, key=lambda i: (i[0], int(i[1:])))))
-            if ident in seen:
-                raise ValueError(f"{ident} is in two groups; an item belongs to at most one group")
-            seen.add(ident)
+        ids = list(dict.fromkeys(ident for ident in ids if ident in known and ident not in seen))
+        if len(ids) < 2:
+            continue        # nothing to merge: the items stay separate in the clean list, so none is lost
+        seen.update(ids)
         groups.append(sorted(ids, key=lambda i: (i[0], int(i[1:]))))
     return groups
 

@@ -800,9 +800,7 @@ class GitBroker:
         """
         state = self.state()
         _, task = self._delivery_task(state, agent_id)
-        message = str(message).strip()
-        if not message or "\x00" in message or len(message) > 4000:
-            raise BrokerError("commit message is missing or invalid")
+        message = str(message).replace("\x00", "").strip()[:4000] or "Work saved"
         with self.project_lock():
             self.consume_nonce(state, agent_id, nonce, "stage+commit")
             workspace = self._workspace_for(state, task, subtask)

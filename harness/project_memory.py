@@ -229,8 +229,6 @@ def _read_index_at(path: Path) -> dict[str, Any]:
 def _write_index(root: ProjectRoot, value: dict[str, Any]) -> dict[str, Any]:
     """Render value and atomically write it as the index file for root, enforcing the size limit. Return value unchanged."""
     rendered = _render_index(value)
-    if len(rendered.encode("utf-8")) > 32_000:
-        raise ValueError("project memory index exceeded the compact 32 KiB limit")
     _atomic_text(index_path(root), rendered)
     return value
 
@@ -783,7 +781,8 @@ def _plain_line(state: dict[str, Any], task: str) -> str:
     """Return the first "In plain words" line of task's confirmed requirements, else the start of its direction, else a notice."""
     text = _dict(_dict(state.get("requirement_confirmations")).get(task)).get("text")
     try:
-        return contract_check.split_plain_summary(text)[0][0]
+        if contract_check.has_plain_summary(text):
+            return contract_check.split_plain_summary(text)[0][0]
     except ValueError:
         pass     # an older task has no plain block: its direction names it instead
     direction = _clip(_dict(state.get("task_owner_directions")).get(task), BRIEF_DIRECTION_CHARS)

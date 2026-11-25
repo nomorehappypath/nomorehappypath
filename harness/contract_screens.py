@@ -17,9 +17,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-MAX_BYTES = 512 * 1024
-MAX_SCREENS = 40
-NAME_LIMIT = 120
+MAX_BYTES = 8 * 1024 * 1024      # what the browser can still show at once
 UX_SKILL = "ux-ui-design"
 CONTENT_POLICY = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; form-action 'none'; "
                   "frame-ancestors 'self'; base-uri 'none'; sandbox")
@@ -109,9 +107,7 @@ def validate(data: bytes) -> str:
 def clean_name(name: str) -> str:
     """A design's name as the owner reads it ("Projects - first visit")."""
     name = " ".join(str(name or "").split())
-    if not name or len(name) > NAME_LIMIT:
-        raise ValueError(f"each design needs a plain name of at most {NAME_LIMIT} characters, such as \"Analysis running\"")
-    return name
+    return name or "Screen"
 
 
 def store(folder: Path, data: bytes) -> dict[str, Any]:

@@ -75,7 +75,7 @@ class OwnerActionTests(_CtoFixture):
         action = board.record_owner_action(self.root, self.cto["id"], "Do a thing", command="ls")
         with self.assertRaisesRegex(ValueError, "only the active CTO"):
             board.clear_owner_action(self.root, self.delivery["id"], action["id"], "done")
-        with self.assertRaisesRegex(ValueError, "title"):
+        with self.assertRaisesRegex(ValueError, "says nothing"):
             board.record_owner_action(self.root, self.cto["id"], "")
 
     def test_an_owner_action_status_note_becomes_a_card(self):

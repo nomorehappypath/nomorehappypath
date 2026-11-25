@@ -476,13 +476,9 @@ class NoSilentStallInvariantTests(_Stall):
 class CtoRuleTests(unittest.TestCase):
     def test_the_cto_never_does_a_stalled_roles_deliverable_and_the_harness_owns_the_card(self):
         cto = flat("directives/CTO.md")
-        mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
         self.assertIn("the harness ladder (wake, restart, replace) recovers a silent role", cto)
         self.assertIn("never do the stalled Delivery or Reviewer deliverable yourself", cto)
         self.assertIn("Only the harness raises the one owner card when the ladder is exhausted", cto)
-        self.assertIn("the harness ladder (wake, restart, replace) recovers a silent role", mirror)
-        self.assertIn("never does the stalled Delivery or Reviewer deliverable itself", mirror)
-        self.assertIn("only the harness raises the one owner card when the ladder is exhausted", mirror)
 
 
 if __name__ == "__main__":

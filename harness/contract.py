@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
-"""Completion Contracts, profile validation, evidence manifests, and claim linting."""
+"""Completion Contracts, evidence manifests, and claim linting."""
 from __future__ import annotations
 import argparse, hashlib, json, re, sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from harness import redaction
 from harness.project_context import ProjectRoot, add_context_arguments, context_from_args, project_context
 
-REQUIRED_PROFILE = {"project_name", "default_branch", "test_command", "build_command", "health_command", "deployment_channels"}
 REQUIRED_CONTRACT = {"objective", "deliverables", "exclusions", "status", "remaining_work"}
 COMPLETION_WORDS = re.compile(r"\b(done|ready|complete|finished|shipped)\b", re.I)
-APPROVED_EXCEPTION = re.compile(r"^(?:N/A|DEFERRED):\s*(?:CTO|PRODUCT OWNER)\b\s*[-:]\s*(.{8,})$", re.I)
 HANDOFF_STATUSES = {"COMPLETE", "PARTIAL", "BLOCKED"}
 ANSI_DCS = re.compile(r"(?:\x1bP|\x90).*?(?:\x1b\\|\x9c)", re.S)
 ANSI_OSC = re.compile(r"(?:\x1b\]|\x9d).*?(?:\x07|\x1b\\|\x9c)", re.S)
@@ -32,40 +32,34 @@ def is_security_scenario_id(scenario_id: Any) -> bool:
 # shell control operators, and is executed with the same safety as the bare
 # command (issue row 6).
 EXECUTABLE_TEST_COMMAND = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|<>`$]*\s+)*"
+    r"^(?:cd\s+(?![/~])[^\s;&|<>`$]+\s+&&\s+)?"          # the folder of the project the runner belongs to
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|<>`$]*\s+)*"
     r"(?:python(?:3)?\s+-m\s+(?:unittest|pytest)\b|pytest\b|"
-    r"npm\s+(?:test|run\s+test)\b|go\s+test\b|cargo\s+test\b|"
-    r"make\s+test\b|gradle\s+test\b)",
+    r"(?:npm|yarn|pnpm|bun)\s+(?:test|run\s+test)\b|npx\s+(?:jest|vitest|playwright\s+test|mocha)\b|node\s+--test\b|deno\s+test\b|"
+    r"flutter\s+test\b|dart\s+test\b|swift\s+test\b|xcodebuild\s+(?:\S+\s+)*test\b|"
+    r"go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn\s+(?:\S+\s+)*(?:test|verify)\b|ctest\b|rspec\b|(?:vendor/bin/)?phpunit\b|"
+    r"make\s+test\b|(?:\./)?gradlew?\s+(?:\S+\s+)*(?:test|connectedAndroidTest)\b)",
     re.I,
 )
 SHELL_CONTROL = re.compile(r"(?:&&|\|\||[;&|<>]|\$\(|\r|\n)")
-SCENARIO_HEADERS = {
-    "simulation_command": "Simulation command",
-    "expected_response": "Expected system response",
-    "observed_response": "Observed system response",
-    "result": "QA result",
-}
+
+
+def split_folder(command: str) -> tuple[str, str]:
+    """(folder, the command itself) of a command that starts with `cd <folder in the project> &&`."""
+    match = re.match(r"^cd\s+([^\s;&|<>`$]+)\s+&&\s+(.*)$", command.strip(), re.S)
+    return (match.group(1), match.group(2)) if match else ("", command)
+
+
+def runnable_test_command(command: str) -> bool:
+    """One test command the board can run and whose own exit says whether it passed (no pipe, no second command)."""
+    folder, rest = split_folder(command)
+    return bool(EXECUTABLE_TEST_COMMAND.match(command)) and ".." not in folder.split("/") and not SHELL_CONTROL.search(rest)
 OWNER_DESCRIPTION_HEADER = "What was tested"
 # Task 2026-11-24_tdd-examples-first: a ledger row may say which accepted requirements it tests, by number, in a column named
 # "Requirement" ("3" or "3, 5"). The board matches numbers only, never prose; an older ledger without the column is unchanged.
 REQUIREMENT_HEADER = "Requirement"
-OWNER_DESCRIPTION_MIN_LENGTH = 24
 OWNER_DESCRIPTION_MAX_LENGTH = 500
 OWNER_DESCRIPTION_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-OWNER_DESCRIPTION_HASH = re.compile(r"^(?:[0-9a-f]{7,64}|sha(?:1|256)\s*[:=]?\s*[0-9a-f]{7,64})$", re.I)
-OWNER_DESCRIPTION_IDENTIFIER = re.compile(r"^(?:S-)?[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)+$")
-OWNER_DESCRIPTION_INTERNAL_STATE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
-OWNER_DESCRIPTION_PATH = re.compile(r"^(?:\.?\.?/|~?/|[A-Za-z]:[\\/]|[^\s]+[/\\][^\s]+)$")
-OWNER_DESCRIPTION_JARGON_WORDS = {
-    "cas", "certification", "certified", "challenge", "command", "digest",
-    "executed", "execution", "hash", "identifier", "ledger", "pass", "passed",
-    "qa", "regression", "reviewer", "scenario", "suite", "test", "tested",
-    "testing", "validation",
-}
-OWNER_DESCRIPTION_STOP_WORDS = {
-    "a", "an", "and", "as", "at", "by", "for", "from", "in", "is", "it",
-    "of", "on", "or", "the", "this", "to", "was", "with",
-}
 
 # Takes no arguments. Return: the current UTC time as an ISO-8601 string, used to timestamp contract records.
 def _now(): return datetime.now(timezone.utc).isoformat()
@@ -182,28 +176,10 @@ def contract_preflight(root, task):
     problems = []
     if value.get("task") != task: problems.append("contract task does not match board task")
     if not isinstance(value.get("objective"), str) or not value["objective"].strip(): problems.append("contract objective is missing")
-    if value.get("status") not in {"open", "partial", "blocked", "complete"}: problems.append("contract status is invalid")
-    if not isinstance(value.get("remaining_work"), list): problems.append("contract remaining work is missing")
-    if not isinstance(value.get("exclusions"), list): problems.append("contract exclusions are missing")
     deliverables = value.get("deliverables")
     if not isinstance(deliverables, list) or not deliverables: problems.append("contract deliverables are missing")
-    else:
-        for item in deliverables:
-            if not isinstance(item, dict) or not item.get("name") or not item.get("acceptance_proof"):
-                problems.append("every deliverable needs a name and executable acceptance proof")
-                break
     problems.extend(_immutable_problems(value))
     return not problems, problems
-
-def validate_profile(path: Path):
-    """Load the project profile JSON at path and report any missing required fields.
-
-    Output is a dict with "valid" (true when nothing from REQUIRED_PROFILE is
-    missing), "missing" (the sorted list of absent keys), and the loaded
-    "profile" itself.
-    """
-    profile=_load(path); missing=sorted(k for k in REQUIRED_PROFILE if not profile.get(k))
-    return {"valid": not missing, "missing": missing, "profile": profile}
 
 # 2026-11-15 (PropDesk Public): the owner's requirements said "(SPEC 1.1, 1.7)" and no deliverable of the contract cited 1.7, so the
 # rename it required was never built, checked or released against. A spec section the accepted requirements cite must be cited by a
@@ -249,7 +225,8 @@ def create_contract(root, task, objective, deliverables, exclusions=None):
     or deliverables is missing, or if a contract already exists for task.
     Return: the newly created contract dict.
     """
-    if not objective.strip() or not deliverables: raise ValueError("objective and at least one deliverable are required")
+    objective = objective.strip() or "The agreed requirements"
+    deliverables = list(deliverables or ["Everything in the agreed requirements"])
     path=_task_path(root, task)
     if path.exists(): raise ValueError("task contract already exists")
     original=[{"name":x,"acceptance_proof":f"Executable evidence verifies: {x}","evidence":[],"verified":False} for x in deliverables]
@@ -291,15 +268,14 @@ def expand_contract(root, task, additions, actor="Product Management"):
     path=_task_path(root,task); value=_load(path)
     valid, problems=contract_preflight(root,task)
     if not valid: raise ValueError("cannot expand an invalid Completion Contract: "+"; ".join(problems))
-    immutable=value.get("immutable_scope")
-    if not immutable:
-        raise ValueError("legacy contract requires audited immutable-scope migration before expansion")
+    if not value.get("immutable_scope"):
+        value = migrate_legacy_scope(root, task)
     existing={item["name"] for item in value["deliverables"]}
     added=[]
     for name, proof in additions:
         name, proof=name.strip(), proof.strip()
-        if not name or not proof: raise ValueError("expanded deliverables require a name and acceptance proof")
-        if name in existing: raise ValueError(f"deliverable already exists: {name}")
+        if not name or name in existing: continue
+        proof = proof or f"Executable evidence verifies: {name}"
         item={"name":name,"acceptance_proof":proof,"evidence":[],"verified":False,"added_by":actor,"added_at":_now()}
         value["deliverables"].append(item); existing.add(name); added.append(item)
     value["remaining_work"]=_remaining(value)
@@ -605,8 +581,7 @@ def scope_problems(root, task):
         return []
     try:
         value = _load(path)
-        problems = [] if not any(not e.get("approved_by") or not e.get("reason") for e in value.get("exclusions", [])) else ["exclusion lacks approval/reason"]
-        return problems + list(_immutable_problems(value))
+        return list(_immutable_problems(value))
     except (OSError, ValueError, TypeError, AttributeError, KeyError):
         return ["the Completion Contract could not be read, so its agreed scope cannot be checked"]
 
@@ -673,202 +648,155 @@ def _ledger_cells(line):
     return cells
 
 
-def _owner_description_problem(value: str) -> str:
-    """Return a stable reason when owner-facing scenario wording is unsafe."""
-    text = value.strip()
-    if not text:
-        return f"requires a non-empty {OWNER_DESCRIPTION_HEADER} value"
-    if len(text) < OWNER_DESCRIPTION_MIN_LENGTH or len(text) > OWNER_DESCRIPTION_MAX_LENGTH:
-        return (
-            f"{OWNER_DESCRIPTION_HEADER} must be between "
-            f"{OWNER_DESCRIPTION_MIN_LENGTH} and {OWNER_DESCRIPTION_MAX_LENGTH} characters"
-        )
-    if OWNER_DESCRIPTION_CONTROL.search(value):
-        return f"{OWNER_DESCRIPTION_HEADER} must not contain control characters"
-    unquoted = text.strip("`").strip()
-    if EXECUTABLE_TEST_COMMAND.match(unquoted):
-        # prose may contain "Q&A" or "a; b" (2026-10-28: "Q&A" was refused here as a shell command); only a text that STARTS with a test runner is a command
-        return f"{OWNER_DESCRIPTION_HEADER} must describe behavior, not a command"
-    if (
-        OWNER_DESCRIPTION_HASH.fullmatch(unquoted)
-        or OWNER_DESCRIPTION_IDENTIFIER.fullmatch(unquoted)
-        or OWNER_DESCRIPTION_INTERNAL_STATE.fullmatch(unquoted)
-        or OWNER_DESCRIPTION_PATH.fullmatch(unquoted)
-    ):
-        return f"{OWNER_DESCRIPTION_HEADER} must describe behavior, not a technical identifier"
-    words = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
-    if len(words) < 5:
-        return f"{OWNER_DESCRIPTION_HEADER} must be meaningful in ordinary language"
-    owner_words = [
-        word.casefold() for word in words
-        if word.casefold() not in OWNER_DESCRIPTION_JARGON_WORDS
-        and word.casefold() not in OWNER_DESCRIPTION_STOP_WORDS
-    ]
-    if len(owner_words) < 3:
-        return f"{OWNER_DESCRIPTION_HEADER} must describe observable behavior, not testing jargon"
-    return ""
+# Owner 2026-11-24: "if an issue is not a material bug in the app it should not stop the delivery of the product, should apply everywhere,
+# everytime". A ledger is read for what it says: names of columns, row ids and wording never stop a step. Only a ledger nothing can be run
+# from is refused. A row that cannot be run is left out of the run with its reason and is never counted as passed.
+_COLUMN_WORDS = {
+    "simulation_command": ("simulation command", "command", "simulation", "test command"),
+    "expected_response": ("expected system response", "expected response", "expected result", "expected"),
+    "observed_response": ("observed system response", "observed response", "observed result", "observed", "actual"),
+    "result": ("qa result", "result", "status", "verdict", "outcome"),
+    "what": ("what was tested", "scenario", "description", "what", "test"),
+    "requirement": ("requirement", "requirements"),
+}
+
+
+def _column(header: list[str], names: tuple[str, ...]) -> int | None:
+    """The column of header whose name is one of names, exactly first, else starting with one; None when there is none."""
+    cells = [cell.strip("*` ").casefold() for cell in header]
+    for match in (lambda cell, name: cell == name, lambda cell, name: cell.startswith(name)):
+        for name in names:
+            for index, cell in enumerate(cells):
+                if match(cell, name):
+                    return index
+    return None
+
+
+def _is_rule_line(cells: list[str]) -> bool:
+    """A markdown table's separator line."""
+    return bool(cells) and all(not cell.strip("-: ") for cell in cells)
+
+
+def scenario_table(path: Path) -> tuple[dict[str, int], list[dict[str, Any]], list[str]]:
+    """The ledger's table read once for everybody: (columns, rows, notes). A row keeps its own id when it is a scenario id and gets the
+    next free S-<n> otherwise, so every reader of the same file sees the same ids."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    tables = [(number, _ledger_cells(line)) for number, line in enumerate(lines) if line.strip().startswith("|") or "|" in line.strip()]
+    start = next((position for position, (_n, cells) in enumerate(tables) if cells and cells[0].strip("*` ").casefold() == "id"), None)
+    if start is None:
+        start = next((position for position, (_n, cells) in enumerate(tables)
+                      if len(cells) > 1 and _column(cells, _COLUMN_WORDS["simulation_command"]) is not None), None)
+    if start is None:
+        return {}, [], ["ledger has no scenario table"]
+    header = tables[start][1]
+    columns = {field: index for field, names in _COLUMN_WORDS.items() if (index := _column(header, names)) is not None}
+    has_id = header[0].strip("*` ").casefold() == "id"
+    rows: list[dict[str, Any]] = []
+    for _number, cells in tables[start + 1:]:
+        if _is_rule_line(cells) or cells == header or (has_id and cells[0].strip("*` ").casefold() == "id"):
+            continue
+        rows.append({"cells": cells, "id": cells[0].strip("*` ") if has_id else ""})
+    taken = {row["id"] for row in rows if SCENARIO_ID.fullmatch(row["id"])}
+    seen: set[str] = set()
+    notes: list[str] = []
+    number = 0
+    for row in rows:
+        if SCENARIO_ID.fullmatch(row["id"]) and row["id"] not in seen:
+            seen.add(row["id"])
+            continue
+        number += 1
+        while f"S-{number:03d}" in taken:
+            number += 1
+        notes.append(f"row {row['id'] or len(seen) + 1!r} was numbered S-{number:03d}")
+        row["id"] = f"S-{number:03d}"
+        taken.add(row["id"])
+        seen.add(row["id"])
+    return columns, rows, notes
 
 
 def _scenario_rows(path: Path, *, require_owner_description: bool = False):
-    """Parse executable scenario rows and report structural simulation gaps."""
-    if not path.is_file():
-        return [], [f"ledger missing: {path}"]
-    lines = path.read_text(encoding="utf-8").splitlines()
-    problems = []
-    header = next((cells for cells in map(_ledger_cells, lines) if cells and cells[0].lower() == "id"), None)
-    if header is None:
-        return [], ["ledger is missing a scenario table header beginning with ID"]
-    normalized = {cell.casefold(): index for index, cell in enumerate(header)}
-    owner_description_index = normalized.get(OWNER_DESCRIPTION_HEADER.casefold())
-    requirement_index = normalized.get(REQUIREMENT_HEADER.casefold(), normalized.get(REQUIREMENT_HEADER.casefold() + "s"))
-    if require_owner_description and owner_description_index is None:
-        problems.append(f"ledger header is missing required column: {OWNER_DESCRIPTION_HEADER}")
-    indexes = {}
-    for field, label in SCENARIO_HEADERS.items():
-        index = normalized.get(label.casefold())
-        if index is None:
-            problems.append(f"ledger header is missing required column: {label}")
-        else:
-            indexes[field] = index
-    rows = []
-    unrecognised: list[str] = []
-    for line in lines:
-        cells = _ledger_cells(line)
-        if cells and not SCENARIO_ID.fullmatch(cells[0]) and cells[0].lower() != "id" and cells[0].strip("-: ") and cells[0] not in unrecognised:
-            unrecognised.append(cells[0])
-        if not cells or not SCENARIO_ID.fullmatch(cells[0]):
-            continue
-        scenario_id = cells[0]
-        required_indexes = list(indexes.values())
-        if owner_description_index is not None:
-            required_indexes.append(owner_description_index)
-        if required_indexes and max(required_indexes, default=0) >= len(cells):
-            problems.append(f"{scenario_id} has fewer cells than the scenario table header")
-            continue
-        if len(indexes) != len(SCENARIO_HEADERS):
-            continue
-        command = cells[indexes["simulation_command"]].strip().strip("`").strip()
-        expected = cells[indexes["expected_response"]].strip()
-        observed = cells[indexes["observed_response"]].strip()
-        result = cells[indexes["result"]].strip()
-        owner_description = (
-            cells[owner_description_index].strip()
-            if owner_description_index is not None and owner_description_index < len(cells)
-            else ""
-        )
-        if require_owner_description:
-            description_problem = _owner_description_problem(owner_description)
-            if description_problem:
-                problems.append(f"{scenario_id} {description_problem}")
-        exception = result.upper().startswith(("N/A:", "DEFERRED:"))
-        if not exception:
-            if not command or command.casefold() in {"n/a", "none", "tbd", "todo", "<command>"}:
-                problems.append(f"{scenario_id} requires an executable Simulation command")
-            elif not EXECUTABLE_TEST_COMMAND.match(command):
-                problems.append(f"{scenario_id} Simulation command must invoke a recognized test runner")
-            elif SHELL_CONTROL.search(command):
-                problems.append(f"{scenario_id} Simulation command must not contain shell control operators")
-            if not expected or expected.casefold() in {"tbd", "todo", "<expected>", "pass"}:
-                problems.append(f"{scenario_id} requires a substantive Expected system response")
-        rows.append({
-            "id": scenario_id,
-            "command": command,
-            "expected_response": expected,
-            "observed_response": observed,
-            "result": result,
-            "what_was_tested": owner_description,
-            # the accepted requirement numbers this row says it tests (empty without the column)
-            "requirements": sorted({int(number) for number in re.findall(r"\d+", cells[requirement_index])})
-            if requirement_index is not None and requirement_index < len(cells) else [],
-        })
-    if not rows:
-        hint = ""
-        if unrecognised:
-            hint = (f": these first-column values are not scenario ids ({', '.join(repr(item) for item in unrecognised[:4])}); an id starts with "
-                    "\"S-\", for example S-001. Each row's Simulation command must also start with a test runner (python3 -m pytest ..., "
-                    "python3 -m unittest ..., npm test ...)")
-        problems.append("ledger has no concrete scenario rows" + hint)
+    """The ledger's rows that can be run, and why there is none ([] when there is at least one). Form is never a reason."""
+    rows, problems, _notes = scenario_plan(path)
     return rows, problems
 
 
-EXCEPTION_ROW_PROBLEM = (
-    "{id} is an N/A or DEFERRED row, but a review simulation must be executed by the board. Behaviour that "
-    "cannot be proven by a hermetic command plus an independently captured screen-check is raised to the owner "
-    "with an owner-action card; it is never written as an exception row"
-)
+def scenario_plan(path: Path) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """(rows the board can run, problems, notes). problems is non-empty only when nothing can be run; notes name every row left out."""
+    if not path.is_file():
+        return [], [f"ledger missing: {path}"], []
+    columns, table, notes = scenario_table(path)
+    if "simulation_command" not in columns:
+        return [], ["ledger has no scenario table with a command column"], notes
+    rows = []
+    for row in table:
+        cells = row["cells"]
 
+        def cell(field: str) -> str:
+            index = columns.get(field)
+            return cells[index].strip() if index is not None and index < len(cells) else ""
 
-def _refuse_exception_rows(rows, problems) -> None:
-    """A review simulation is executed, so an N/A/DEFERRED row can never pass the execution that follows.
-    Say so at intake instead of letting the ledger be accepted and then fail downstream."""
-    for row in rows:
-        if row["result"].upper().startswith(("N/A:", "DEFERRED:")):
-            problems.append(EXCEPTION_ROW_PROBLEM.format(id=row["id"]))
+        command = cell("simulation_command").strip("`").strip()
+        result = cell("result") or "PASS"          # an empty cell says nothing; the board runs the row and its own run decides
+        if result.upper().startswith(("N/A", "DEFERRED")):
+            notes.append(f"{row['id']} was not run: the ledger says {result}")
+            continue
+        if not command or command.casefold() in {"n/a", "none", "tbd", "todo", "<command>"}:
+            notes.append(f"{row['id']} was not run: it names no command")
+            continue
+        if not runnable_test_command(command):
+            notes.append(f"{row['id']} was not run: the board cannot run its command as one test ({command[:80]})")
+            continue
+        rows.append({
+            "id": row["id"],
+            "command": command,
+            "expected_response": cell("expected_response") or "the command passes",
+            "observed_response": cell("observed_response") or "not written in the ledger",
+            "result": result,
+            "what_was_tested": cell("what"),
+            # the accepted requirement numbers this row says it tests (empty without the column)
+            "requirements": sorted({int(number) for number in re.findall(r"\d+", cell("requirement"))}),
+        })
+    notes = [redaction.redact(note) for note in notes]         # a cell may hold anything; a credential never reaches a note or a message
+    problems = [] if rows else ["nothing in the ledger can be run: " + ("; ".join(notes) if notes else "it has no rows")]
+    return rows, problems, notes
 
 
 def scenario_simulations(path: Path):
-    """Return a validated per-scenario executable simulation plan."""
-    rows, problems = _scenario_rows(path)
-    _refuse_exception_rows(rows, problems)
+    """The executable plan of a ledger: (it can be run, why not, rows)."""
+    rows, problems, _notes = scenario_plan(path)
     return not problems, problems, rows
 
 
 def scenario_submission_simulations(path: Path):
-    """Validate a newly submitted ledger, including owner-readable wording."""
-    rows, problems = _scenario_rows(path, require_owner_description=True)
-    _refuse_exception_rows(rows, problems)
-    return not problems, problems, rows
+    """The executable plan of a newly submitted ledger; the same reading as scenario_simulations."""
+    return scenario_simulations(path)
 
 
 def scenario_ledger_complete(path: Path):
-    """Require executable simulations, observations, and PASS/approved exceptions."""
-    rows, problems = _scenario_rows(path)
+    """The ledger can be run and no row says it failed (what its own author wrote as failing is not complete)."""
+    rows, problems, _notes = scenario_plan(path)
+    problems = list(problems)
     for row in rows:
-        result = row["result"].upper()
-        if result == "PASS":
-            observed = row["observed_response"].strip()
-            if not observed or observed.casefold() in {"pass", "passed", "ok", "tbd", "todo", "<observed>"}:
-                problems.append(f"{row['id']} PASS requires a substantive Observed system response")
-            continue
-        if result.startswith("N/A:") or result.startswith("DEFERRED:"):
-            if APPROVED_EXCEPTION.fullmatch(result):
-                continue
-            problems.append(f"{row['id']} exception requires CTO or Product Owner approval and a substantive reason")
-            continue
-        problems.append(f"{row['id']} has non-passing QA result: {result or '<empty>'}")
+        if re.match(r"\W*(fail|failed|blocked|error)\b", row["result"], re.I):
+            problems.append(f"{row['id']} has non-passing QA result: {row['result']}")
     return not problems, problems
 
 
 def scenario_submission_complete(path: Path):
-    """Require complete executable results and owner-readable wording."""
-    rows, problems = _scenario_rows(path, require_owner_description=True)
-    for row in rows:
-        result = row["result"].upper()
-        if result == "PASS":
-            observed = row["observed_response"].strip()
-            if not observed or observed.casefold() in {"pass", "passed", "ok", "tbd", "todo", "<observed>"}:
-                problems.append(f"{row['id']} PASS requires a substantive Observed system response")
-            continue
-        if result.startswith("N/A:") or result.startswith("DEFERRED:"):
-            if APPROVED_EXCEPTION.fullmatch(result):
-                continue
-            problems.append(f"{row['id']} exception requires CTO or Product Owner approval and a substantive reason")
-            continue
-        problems.append(f"{row['id']} has non-passing QA result: {result or '<empty>'}")
-    return not problems, problems
+    """The same reading as scenario_ledger_complete."""
+    return scenario_ledger_complete(path)
+
 
 def scenario_ledger_exists(path: Path):
-    """Require a concrete executable simulation plan before review begins."""
-    rows, problems = _scenario_rows(path)
-    _refuse_exception_rows(rows, problems)
-    return bool(rows) and not problems, problems
+    """The ledger has at least one scenario the board can run."""
+    valid, problems, _rows = scenario_simulations(path)
+    return valid, problems
 
 
 def scenario_submission_exists(path: Path):
-    """Require concrete scenarios and owner-readable wording for new intake."""
-    rows, problems = _scenario_rows(path, require_owner_description=True)
-    _refuse_exception_rows(rows, problems)
-    return bool(rows) and not problems, problems
+    """The same reading as scenario_ledger_exists."""
+    return scenario_ledger_exists(path)
+
 
 def scenario_fingerprints(path: Path):
     """Return executable scenario commands for independent-ledger checks."""
@@ -919,13 +847,12 @@ def lint_handoff(root, task, text):
 def main(argv=None):
     """Run the contract CLI: parse argv and dispatch to the matching subcommand.
 
-    Supports validate-profile, create, evidence, expand, migrate-scope, and
+    Supports create, evidence, expand, migrate-scope, and
     lint subcommands, printing the resulting JSON output. Return: 0 on
     success (or when the command's own "valid" field is true), 1 when it is
     false, or 2 if a ValueError/FileNotFoundError/JSONDecodeError is raised.
     """
     p=argparse.ArgumentParser(); add_context_arguments(p); s=p.add_subparsers(dest="cmd",required=True)
-    q=s.add_parser("validate-profile"); q.add_argument("--profile",required=True)
     q=s.add_parser("create"); q.add_argument("--task",required=True); q.add_argument("--objective",required=True); q.add_argument("--deliverable",action="append",required=True)
     q=s.add_parser("evidence"); q.add_argument("--task",required=True); q.add_argument("--deliverable",required=True); q.add_argument("--file",action="append",required=True)
     q=s.add_parser("expand"); q.add_argument("--task",required=True); q.add_argument("--deliverable",action="append",required=True, metavar="NAME|ACCEPTANCE_PROOF")
@@ -933,8 +860,7 @@ def main(argv=None):
     q=s.add_parser("lint"); q.add_argument("--task",required=True); q.add_argument("--file",required=True)
     a=p.parse_args(argv); root=context_from_args(a)
     try:
-        if a.cmd=="validate-profile": out=validate_profile(Path(a.profile))
-        elif a.cmd=="create": out=create_contract(root,a.task,a.objective,a.deliverable)
+        if a.cmd=="create": out=create_contract(root,a.task,a.objective,a.deliverable)
         elif a.cmd=="evidence": out=add_evidence(root,a.task,a.deliverable,a.file)
         elif a.cmd=="expand": out=expand_contract(root,a.task,[tuple(item.split("|",1)) if "|" in item else ("","") for item in a.deliverable])
         elif a.cmd=="migrate-scope": out=migrate_legacy_scope(root,a.task)

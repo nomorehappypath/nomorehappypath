@@ -250,20 +250,13 @@ class LocationDirectiveTests(unittest.TestCase):
         self.assertIn("read that port from the project's start script or docs (Studio: 8900)", agent)
         self.assertIn("picks a free private port, is stopped when the test ends, and your status says which port and folder it used", agent)
         self.assertIn("The same holds for a Reviewer's test servers", agent)
-        spawn = flat("harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md")
-        self.assertIn("The owner signs in only to the owner's own instance", spawn)
-        self.assertIn("never takes a port the project's own launcher uses", spawn)
         cto = flat("directives/CTO.md")
         self.assertIn("for a sign-in or act-inside card open the URL yourself, never a copy an agent started for its own test", cto)
-        mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
-        self.assertIn("the same for a sign-in or act-inside card: open the URL yourself, never a copy an agent started for its own test", mirror)
         # Owner 2026-10-15 (Studio 16:37Z): "restarted Studio. Confirmed live" relayed while the process predated the merge.
         # Owner 2026-10-15 (Studio 17:36Z): "in progress ... against fixed commit" relayed for a run that had died with the old process.
         self.assertIn("A status claiming restarted, deployed, live, running or in progress names the evidence you checked in that cycle", cto)
         self.assertIn("a process start later than the change, the served version, the task id with a live process or heartbeat", cto)
         self.assertIn("relay nothing the cycle did not check", cto)
-        self.assertIn("A status claiming restarted, deployed, live, running or in progress names the evidence the CTO checked in that cycle", mirror)
-        self.assertIn("relay nothing the cycle did not check", mirror)
 
 
 if __name__ == "__main__":

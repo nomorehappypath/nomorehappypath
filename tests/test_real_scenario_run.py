@@ -106,7 +106,8 @@ class GateTwoTheWholeScenario(setup_case.Case):
         self.assertTrue((Path(saved).parent / "run-output.txt").is_file())
         request = {"task": setup_case.TASK, "reviewed_commit": commit}
         state = self.state()
-        self.assertIn("was not judged", board._scenario_verdict_problem(state, request, "TASK DONE: YES — report ok"))
+        self.assertEqual(board._scenario_verdict_problem(state, request, "TASK DONE: YES — report ok"), "")
+        self.assertIn("Not tested for real", request["form_notes"][0])
         self.assertIn("never 'not tested for real'", board._scenario_verdict_problem(
             state, request, f"TASK DONE: YES\nScenario result judged: {saved}\nNot run for real: real scenario - no sign-in"))
         self.assertEqual(board._scenario_verdict_problem(state, request, f"TASK DONE: YES\nScenario result judged: {saved} - complete"), "")
@@ -129,7 +130,8 @@ class GateTwoTheWholeScenario(setup_case.Case):
         request = {"task": setup_case.TASK, "reviewed_commit": commit}
         self.assertEqual(board._scenario_verdict_problem(state, request, f"Scenario result judged: {handed} - complete", self.root), "")
         forged = "trusted://000000000000" + handed[len("trusted://000000000000"):]
-        self.assertIn("was not judged", board._scenario_verdict_problem(state, request, f"Scenario result judged: {forged}", self.root))
+        self.assertEqual(board._scenario_verdict_problem(state, request, f"Scenario result judged: {forged}", self.root), "")
+        self.assertIn("Not tested for real", request["form_notes"][0])
 
     def test_the_settings_test_model_reaches_the_apps_call_and_the_app_is_unchanged(self):
         args = self.base / "claude-args"

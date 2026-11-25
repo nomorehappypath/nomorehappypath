@@ -21,10 +21,8 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
 
     def test_cto_blocks_only_material_release_issues(self):
         primary = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
-        completion = " ".join((ROOT / "harness" / "directives" / "CTO_COMPLETION_DIRECTIVE.md").read_text().split())
         self.assertIn("\n## materiality\n", (ROOT / "directives" / "CTO.md").read_text())   # directive diet: a named chapter
-        self.assertIn("Materiality", completion)
-        for text in (primary, completion):
+        for text in (primary,):
             self.assertIn("executable evidence", text)
             self.assertIn("material impact", text)
             self.assertIn("non-blocking", text)
@@ -35,14 +33,12 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
 
     def test_directives_require_proving_a_fix_under_the_condition_that_breaks_it(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
-        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
-        for text in (agent.lower(), spawn.lower()):
+        for text in (agent.lower(),):
             self.assertIn("a path outside the approved workspace", text)
             self.assertIn("a different operating system", text)
             self.assertIn("infer another agent's or another platform's behavior from its transcript", text)
             self.assertIn("stays unproven", text)
         self.assertIn("A green result from a place the failure cannot occur is not evidence", agent)
-        self.assertIn("belongs in the repository as a script or a test", spawn)
 
     def test_reviewer_fails_only_on_material_issues(self):
         """Owner 2026-09-29: "over engineering reviews kills the app"."""
@@ -57,7 +53,6 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
     def test_final_review_walks_the_whole_app_and_says_task_done(self):
         """Owner 2026-09-30: test the whole app end to end, then say task done or not."""
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
-        completion = " ".join((ROOT / "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md").read_text().split())
         for phrase in (
             "Final stage: the whole app, end to end",
             "walk the path the owner asked for from start to finish",
@@ -68,13 +63,10 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
             "walk the owner's path end to end yourself",
         ):
             self.assertIn(phrase, agent)
-        self.assertIn("PASS always means TASK DONE: YES", completion)
-        self.assertIn("walk the owner's path from start to finish", completion)
 
     def test_directives_protect_behavior_a_reviewer_already_accepted(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
-        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
-        for text in (agent.lower(), spawn.lower()):
+        for text in (agent.lower(),):
             self.assertIn("already accepted", text)
             self.assertIn("non-blocking", text)
             self.assertIn("out of scope", text)
@@ -90,14 +82,7 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
         """
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         cto = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
-        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
-        reviewer = " ".join((ROOT / "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md").read_text().split())
-        completion = " ".join((ROOT / "harness/directives/CTO_COMPLETION_DIRECTIVE.md").read_text().split())
-        template_path = ROOT / "validated_v0.2/REVIEWER_CHALLENGE_LEDGER_TEMPLATE.md"
-        # validated_v0.2/ is private material the public cut does not ship; the
-        # five directives above are shipped and stay pinned unconditionally.
-        template = " ".join(template_path.read_text().split()) if template_path.is_file() else None
-        for text in (agent, spawn, reviewer, cto, completion):
+        for text in (agent, cto):
             self.assertIn("would change what the owner receives", text)
             self.assertIn("acceptance criterion", text)
             self.assertIn("commit-identity bookkeeping", text)
@@ -105,28 +90,20 @@ class ZeroConfigDirectiveTests(unittest.TestCase):
             self.assertIn("source-structure assertions", text)
             self.assertIn("dead code", text)
             self.assertIn("real pipeline path", text)
-        for text in (agent, reviewer, spawn):
+        for text in (agent,):
             self.assertIn("never more than twelve", text)
-        self.assertIn("at most two rows per acceptance criterion", reviewer)
         self.assertIn("hands back no result", agent)
-        self.assertIn("hands back no result", reviewer)
         self.assertIn("not a licence to test how it looks", agent)
-        for text in (cto, completion):
+        for text in (cto,):
             self.assertIn("Never open a hold on a procedural row", text)
             self.assertIn("never let a procedural FAIL block a release", text)
         self.assertIn("drift, not diligence", cto)
-        if template is None:
-            self.skipTest("validated_v0.2/ is not part of this tree (public cut excludes it); directives pinned above")
-        self.assertIn("never more than twelve", template)
-        self.assertIn("| ID | Criterion tested |", template)
 
     def test_runtime_directives_cannot_recreate_the_removed_findings_queue(self):
         agent = " ".join((ROOT / "directives" / "AGENT.md").read_text().split())
         cto = " ".join((ROOT / "directives" / "CTO.md").read_text().split())
-        spawn = " ".join((ROOT / "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md").read_text().split())
-        completion = " ".join((ROOT / "harness/directives/CTO_COMPLETION_DIRECTIVE.md").read_text().split())
         launcher = (ROOT / "scripts/run_managed_agent.sh").read_text()
-        for text in (agent, cto, spawn, completion):
+        for text in (agent, cto):
             self.assertNotIn("record a durable deferred finding", text)
             self.assertNotIn("Fix` or `Do not fix", text)
             self.assertNotIn("routed as follow-up work", text)

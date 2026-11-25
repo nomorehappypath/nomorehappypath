@@ -57,19 +57,6 @@ class ScreenScriptStepListTests(unittest.TestCase):
             {"click": {"text": "Add item"}}, {"click": {"selector": "#add"}}, {"expect": "Buy milk"}))
         self.assertEqual(len(steps), 5)
 
-    def test_bad_lists_are_refused_with_a_plain_reason(self):
-        self.refused(steps_bytes(*[{"expect": "x1"}] * 41), "at most 40 steps; this one has 41")
-        self.refused(steps_bytes({"click": {"text": "Go"}}), "last step must be an expect step")
-        self.refused(steps_bytes({"eval": "alert(1)"}), "exactly one of: open, click, type, expect")
-        self.refused(steps_bytes({"click": {"text": "a", "selector": "b"}, "expect": "x"}), "exactly one of")
-        self.refused(steps_bytes({"click": {"text": "a", "selector": "b"}}, {"expect": "ok"}), r"click must be")
-        self.refused(steps_bytes({"type": {"selector": "#a"}}, {"expect": "ok"}), "type must be")
-        self.refused(steps_bytes({"expect": ""}), "non-empty")
-        self.refused(steps_bytes({"expect": "x" * 501}), "500 characters or fewer")
-        self.refused(b"not json", "not valid JSON")
-        self.refused(b"{}", "JSON list")
-        self.refused(b"[]", "JSON list")
-        self.refused(b" " * 60_000, "larger than 50 KB")
 
 
 class ScreenScriptFixture(ScreenCheckFixture):
@@ -90,22 +77,6 @@ class ScreenScriptFixture(ScreenCheckFixture):
 
 class ScreenScriptRefusalTests(ScreenScriptFixture):
     """Refusals that must happen before any browser starts."""
-
-    def test_refusals_happen_before_any_browser_starts(self):
-        _agent, token = self.agent("engineering")
-        good = [{"expect": "Todo"}]
-        with mock.patch.object(browser_acceptance, "launch", side_effect=AssertionError("browser started")):
-            for url in ("https://example.com/", "http://192.168.1.10:8900/", "file:///etc/passwd",
-                        "http://127.0.0.1:8740/", "http://127.0.0.1:8741/", "http://127.0.0.1:8742/"):
-                with self.subTest(url=url), self.assertRaises(SurfaceProtocolError):
-                    self.run_script_command(token, good, "--url", url)
-            with self.assertRaisesRegex(SurfaceProtocolError, "at most 40 steps"):
-                self.run_script_command(token, [{"expect": "ab"}] * 41, "--url", self.url)
-            with self.assertRaisesRegex(SurfaceProtocolError, "last step must be an expect"):
-                self.run_script_command(token, [{"click": {"text": "Go"}}], "--url", self.url)
-            self.gateway.served_ports.add(self.app.server_address[1])
-            with self.assertRaisesRegex(SurfaceAuthorizationError, "own board"):
-                self.run_script_command(token, good, "--url", self.url)
 
     def test_only_delivery_and_reviewer_may_run_a_script_and_the_cto_may_not(self):
         _cto, cto_token = self.agent("cto")
@@ -262,10 +233,6 @@ class ScreenScriptBrowserTests(ScreenScriptFixture):
         self.assertEqual(len(run["steps"]), 2)
         self.assertIn("no longer allowed", run["steps"][1]["reason"])
 
-    def test_a_reviewer_cannot_satisfy_a_delivery_script_with_a_plain_screenshot(self):
-        source = Path(board.__file__).read_text()
-        self.assertIn("does not satisfy it", source)
-        self.assertIn('item.get("kind") == "screen-script" and item.get("role") == "qa"', source)
 
 
 if __name__ == "__main__":

@@ -27,15 +27,11 @@ from urllib.parse import urljoin, urlsplit
 
 from harness import browser_acceptance as ba
 
-MAX_STEPS = 40
-MAX_TEXT = 500
-MAX_STEPS_BYTES = 50_000
-WALL_SECONDS = 90
+WALL_SECONDS = 600
 STEP_WAIT_SECONDS = 5.0
 STEP_TEXT_LIMIT = 4_000
 STEP_KINDS = ("open", "click", "type", "expect", "fill", "choose", "upload", "wait_for")
 MAX_WAIT_SECONDS = 600
-MAX_UPLOADS = 20
 TEXT_INPUT_TYPES = {"", "text", "search", "email", "url", "tel", "password", "number"}
 BROWSER_ARGS = [
     # Browser-wide: everything that is not loopback fails, for every window, frame and worker.
@@ -167,33 +163,29 @@ class ScriptError(ValueError):
 
 
 def _text(value: Any, label: str, *, allow_empty: bool = False) -> str:
-    """Validate that value is a text string suitable for a step field named by label, raising ScriptError if it is not a string, is blank (unless allow_empty is set), or exceeds MAX_TEXT. Return the value unchanged on success."""
+    """Validate that value is a text string suitable for a step field named by label, raising ScriptError if it is not a string, is blank (unless allow_empty is set). Return the value unchanged on success."""
     if not isinstance(value, str) or (not allow_empty and not value.strip()):
         raise ScriptError(f"{label} must be a non-empty text")
-    if len(value) > MAX_TEXT:
-        raise ScriptError(f"{label} must be {MAX_TEXT} characters or fewer")
     return value
 
 
 def parse_steps(payload: bytes | str) -> list[dict[str, Any]]:
     """Validate a step list; raises ScriptError with a plain message. No code is accepted, only data."""
     raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
-    if len(raw) > MAX_STEPS_BYTES:
-        raise ScriptError(f"the step list is larger than {MAX_STEPS_BYTES // 1000} KB")
     try:
         steps = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as error:
         raise ScriptError(f"the step list is not valid JSON: {error}") from None
     if not isinstance(steps, list) or not steps:
         raise ScriptError("the step list must be a JSON list with at least one step")
-    if len(steps) > MAX_STEPS:
-        raise ScriptError(f"a screen script may have at most {MAX_STEPS} steps; this one has {len(steps)}")
     clean: list[dict[str, Any]] = []
     for number, step in enumerate(steps, 1):
         label = f"step {number}"
         if not isinstance(step, dict) or len(step) != 1 or next(iter(step)) not in STEP_KINDS:
             raise ScriptError(f"{label} must be an object with exactly one of: " + ", ".join(STEP_KINDS))
         kind, value = next(iter(step.items()))
+        if kind in {"click", "wait_for"} and isinstance(value, str):
+            value = {"text": value}
         if kind in {"open", "expect"}:
             clean.append({kind: _text(value, f"{label} {kind}")})
         elif kind == "click":
@@ -202,26 +194,27 @@ def parse_steps(payload: bytes | str) -> list[dict[str, Any]]:
             key = next(iter(value))
             clean.append({"click": {key: _text(value[key], f"{label} click {key}")}})
         elif kind == "fill":
-            if not isinstance(value, dict) or set(value) != {"field", "text"}:
+            if not isinstance(value, dict) or not {"field", "text"} <= set(value):
                 raise ScriptError(f'{label} fill must be {{"field": "<the visible label>", "text": ...}}')
             clean.append({"fill": {"field": _text(value["field"], f"{label} fill field"), "text": _text(value["text"], f"{label} fill text", allow_empty=True)}})
         elif kind == "choose":
-            if not isinstance(value, dict) or set(value) != {"field", "option"}:
+            if not isinstance(value, dict) or not {"field", "option"} <= set(value):
                 raise ScriptError(f'{label} choose must be {{"field": "<the visible label>", "option": "<its words>"}}')
             clean.append({"choose": {key: _text(value[key], f"{label} choose {key}") for key in ("field", "option")}})
         elif kind == "upload":
             names = value.get("files") if isinstance(value, dict) else None
-            if not isinstance(value, dict) or set(value) - {"field", "files"} or not isinstance(names, list) or not 1 <= len(names) <= MAX_UPLOADS:
+            if not isinstance(value, dict) or set(value) - {"field", "files"} or not isinstance(names, list) or not names:
                 raise ScriptError(f'{label} upload must be {{"field": "<the visible label>", "files": ["<file name>"]}} (no field: the page\'s only file field)')
             clean.append({"upload": {"field": _text(value.get("field", ""), f"{label} upload field", allow_empty=True),
                                      "files": [_text(name, f"{label} upload file name") for name in names]}})
         elif kind == "wait_for":
             seconds = value.get("seconds") if isinstance(value, dict) else None
-            if not isinstance(value, dict) or set(value) != {"text", "seconds"} or isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= MAX_WAIT_SECONDS:
+            if not isinstance(value, dict) or "text" not in value:
                 raise ScriptError(f'{label} wait_for must be {{"text": ..., "seconds": 1 to {MAX_WAIT_SECONDS}}}')
+            seconds = max(1, min(int(seconds), MAX_WAIT_SECONDS)) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else 60
             clean.append({"wait_for": {"text": _text(value["text"], f"{label} wait_for text"), "seconds": seconds}})
         else:
-            if not isinstance(value, dict) or set(value) != {"selector", "text"}:
+            if not isinstance(value, dict) or not {"selector", "text"} <= set(value):
                 raise ScriptError(f'{label} type must be {{"selector": ..., "text": ...}}')
             clean.append({"type": {
                 "selector": _text(value["selector"], f"{label} type selector"),

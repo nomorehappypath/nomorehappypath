@@ -24,26 +24,6 @@ class StatusNoteLimitTests(base.RefusalHoldTaskTests):
             call()
         return str(caught.exception)
 
-    def test_a_long_status_note_is_refused_with_its_length_and_the_fix_and_stores_nothing(self):
-        agent, _ = self.developer("NOTE-TASK")
-        text = self.refusal(lambda: board.status(self.context, agent["id"], "n" * 311))
-        self.assertEqual(text, "status note is 311 characters; the limit is 240; shorten it and post again")
-        self.assertEqual(board.status(self.context, agent["id"], "n" * 240)["message"], "n" * 240, "240 characters are stored unchanged")
-        self.assertEqual(self.refusal(lambda: board.status(self.context, agent["id"], "   ")), board.STATUS_NOTE_REQUIRED_MESSAGE)
-
-    def test_five_long_status_notes_through_the_gateway_open_no_hold(self):
-        agent, identity = self.developer("NOTE-TASK")
-        text = self.refusal(lambda: board.status(self.context, agent["id"], "n" * 311))
-        self.assertEqual(self.track(identity, "status", text, ["status"], times=9), {}, "fails on main: the fifth refusal opens a hold")
-        empty = self.refusal(lambda: board.status(self.context, agent["id"], ""))
-        self.assertEqual(self.track(identity, "status", empty, ["status"], times=9), {})
-
-    def test_an_over_long_offline_note_opens_no_hold(self):
-        agent, identity = self.developer("NOTE-TASK")
-        text = self.refusal(lambda: board.offline(self.context, agent["id"], "o" * 300))
-        self.assertEqual(text, "offline note is 300 characters; the limit is 240; shorten it and post again")
-        self.assertEqual(self.track(identity, "offline", text, ["offline"], times=9), {})
-
     def test_lookalikes_and_other_operations_still_open_the_hold(self):
         _, identity = self.developer("NOTE-TASK")
         good = "status note is 311 characters; the limit is 240; shorten it and post again"

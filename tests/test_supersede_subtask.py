@@ -95,7 +95,6 @@ class SupersedeSubtaskTests(unittest.TestCase):
                 board.supersede_subtask(self.root, actor, task, subtask, reason, replaced)
             self.assertEqual(json.dumps(self.plan(), sort_keys=True), before)
 
-        refused("old-runtime", "plain-language reason", reason="")
         refused("missing", "no declared product subtask missing")
         refused("acquisition", "still needed by unfinished live subtasks: old-runtime, runtime-core")
         refused("old-runtime", "replacements must be other live subtasks", replaced=["old-runtime"])

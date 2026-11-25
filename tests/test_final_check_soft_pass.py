@@ -226,9 +226,8 @@ class ReuseTests(unittest.TestCase):
 class DirectivePinTests(unittest.TestCase):
     RULE_A = 'A project\'s own status flag (passed, "warnings only") is a claim, never proof: read the run\'s final-check output and say what it says; none means unproven.'
 
-    def test_the_cto_and_its_mirror_carry_the_rule(self):
+    def test_the_cto_carries_the_rule(self):
         self.assertIn(self.RULE_A, flat("directives/CTO.md"))
-        self.assertIn(self.RULE_A, flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md"))
 
     def test_the_reviewer_text_makes_a_soft_pass_gate_material_and_routes_it_without_a_reviewer_card(self):
         agent = flat("directives/AGENT.md")

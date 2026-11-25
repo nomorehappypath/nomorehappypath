@@ -134,10 +134,5 @@ class VerdictGateByKindTests(unittest.TestCase):
     def test_a_spec_pass_needs_no_findings_count(self):
         self.assertEqual(self.problem("spec", self.BASE), "")
 
-    def test_an_analysis_pass_needs_the_count_and_zero_of_zero_is_fine(self):
-        self.assertIn("Findings verified independently", self.problem("analysis", self.ANALYSIS_BASE))
-        self.assertEqual(self.problem("analysis", self.ANALYSIS_BASE + "Findings verified independently: 0 of 0"), "")
-        self.assertEqual(self.problem("analysis", self.ANALYSIS_BASE + "Findings verified independently: 18 of 18"), "")
-
     def test_a_development_pass_is_asked_for_neither(self):
         self.assertEqual(self.problem("development", "Security check: checked the diff."), "")

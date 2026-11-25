@@ -70,14 +70,6 @@ class WalkData(unittest.TestCase):
         self.assertIn("Type “Maya” in “Your name”.", check["walk"])
         self.assertIn("Within 20 seconds, see", check["walk"])
 
-    def test_bad_walks_are_refused(self):
-        for steps, why in (([{"open": "/"}], "last step"), ([{"click": {"selector": "#b"}}, {"expect": "x"}], "never a selector"),
-                           ([{"wait_for": {"text": "x", "seconds": 9999}}], "seconds"), ([{"open": "/"}] * 40 + [{"expect": "x"}], "40")):
-            with self.assertRaisesRegex(ValueError, why):
-                stored(steps)
-        with self.assertRaisesRegex(ValueError, "example"):
-            contract_check.parse_checks([walk(example=3)], "requirement 1", examples=1)
-
     def test_the_labels_come_from_the_agreed_screens(self):
         words = walks.screen_words([SCREEN])
         self.assertEqual(walks.label_problem(stored(), words), "")
@@ -88,9 +80,9 @@ class WalkData(unittest.TestCase):
         self.assertEqual(walks.label_problem(stored(named), words), "")
 
     def test_the_time_is_todays_allowance_plus_the_waits(self):
-        self.assertEqual(walks.budget([{"open": "/"}, {"expect": "x"}]), 90)
-        self.assertEqual(walks.budget(STEPS), 110)
-        self.assertEqual(walks.budget([{"wait_for": {"text": "x", "seconds": 600}}]), 600)
+        self.assertEqual(walks.budget([{"open": "/"}, {"expect": "x"}]), 600)
+        self.assertEqual(walks.budget(STEPS), 620)
+        self.assertEqual(walks.budget([{"wait_for": {"text": "x", "seconds": 600}}]), 1200)
 
 
 class WalkRuns(unittest.TestCase):
@@ -173,11 +165,6 @@ class BoardWalks(cf._Fixture):
 
     def block(self):
         return board.snapshot(self.root)["requirement_confirmations"][cf.TASK]["contract_check"]
-
-    def test_a_walk_naming_a_button_no_screen_shows_is_refused_and_nothing_is_stored(self):
-        with self.assertRaisesRegex(ValueError, "Store it.*no agreed screen shows"):
-            self.agreed([{"click": {"text": "Store it"}}, {"expect": "x"}])
-        self.assertEqual(self.proposal()["contract_check"]["status"], "reading")
 
     def test_the_walk_is_the_exam_red_before_the_code_green_after_and_run_on_the_saved_version(self):
         agent, _reviewer = self.agreed(STEPS)

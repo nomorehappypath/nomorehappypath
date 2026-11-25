@@ -13,8 +13,8 @@ version="${2:-}"
 
 echo "== Gate 0: assemble the standing cut"
 mkdir -p "$out"
-for item in harness web engine tests scripts directives profile.template \
-            profile.example.json LICENSE NOTICE DISCLAIMER.md CONTRIBUTING.md \
+for item in harness tests scripts directives \
+            LICENSE NOTICE DISCLAIMER.md CONTRIBUTING.md \
             README.md install.sh .gitignore; do
   cp -R "$source_root/$item" "$out/"
 done
@@ -36,7 +36,6 @@ if [[ -f "$source_root/CODE_OF_CONDUCT.md" ]]; then
   cp "$source_root/CODE_OF_CONDUCT.md" "$out/"
 fi
 find "$out" \( -name __pycache__ -o -name .DS_Store -o -name "*.pyc" \) -prune -exec rm -rf {} + 2>/dev/null || true
-rm -rf "$out/web/node_modules" 2>/dev/null || true
 
 if [[ -n "$version" ]]; then
   printf '%s\n' "$version" > "$out/VERSION"
@@ -99,6 +98,30 @@ if ! ( cd "$out" && PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -c \
   echo "         table for the output directory." >&2
   exit 1
 fi
-( cd "$out" && PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests )
+# Owner 2026-11-24: only a material bug stops a release. A failing test stops it until the dev has named it as not material, with the
+# review's agreement, in the file NOT_MATERIAL points at: one line per test, its complete id first (module.Class.test), then the reason.
+# The complete id is compared, so naming one test never covers another; a run that ends any other way always stops.
+log="$(mktemp)"
+( cd "$out" && PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests ) 2>&1 | tee "$log" && suite=0 || suite=$?
+if [[ $suite -ne 0 ]]; then
+  python3 - "$log" "${NOT_MATERIAL:-}" <<'PY' || exit 1
+import re, sys
+text = open(sys.argv[1], errors="replace").read()
+failed = set()
+for name, place in re.findall(r"(?m)^(?:FAIL|ERROR): (\S+) \(([^)\s]+)\)", text):
+    failed.add(place if place.split(".")[-1] == name else f"{place}.{name}")
+summary = re.findall(r"(?m)^FAILED \((.*)\)\s*$", text)
+named = set()
+if sys.argv[2]:
+    named = {line.split()[0] for line in open(sys.argv[2], encoding="utf-8") if line.strip() and not line.startswith("#")}
+open_ones = sorted(failed - named)
+headers = len(re.findall(r"(?m)^(?:FAIL|ERROR): ", text))
+read = len(re.findall(r"(?m)^(?:FAIL|ERROR): \S+ \([^)\s]+\)", text))
+if open_ones or not failed or not summary or headers != read or "unexpected" in summary[-1]:
+    print("REFUSED: tests failed: " + (", ".join(open_ones) or "the run did not say which"), file=sys.stderr)
+    sys.exit(1)
+print("   failing tests named as not material: " + ", ".join(sorted(failed)))
+PY
+fi
 
 echo "== All gates passed: $out is ready for release commit"

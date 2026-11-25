@@ -24,6 +24,8 @@ from harness import browser_acceptance, child_process, execution_identity, agent
 _POSITIVE_COUNT_PATTERNS = (
     re.compile(r"\bRan\s+(\d+)\s+tests?\b|\b(\d+)\s+passed\b", re.I),   # unittest, pytest, jest, vitest, cargo summary
     re.compile(r"^\s*(?:#|\u2139)\s*tests\s+(\d+)", re.I | re.M),            # node --test / TAP
+    re.compile(r"(?m)^\s*(?:\d+:)+\d+ \+(\d+)(?: ~\d+)?: All tests passed!"),       # flutter test, dart test
+    re.compile(r"\bExecuted (\d+) tests?\b|\bTests run: (\d+)\b|\bPassed:\s*(\d+)\b", re.I),      # swift test, xcodebuild, Maven, dotnet
     re.compile(r"\brunning\s+(\d+)\s+tests?\b", re.I),                       # cargo test
     re.compile(r"\bTests\s+run:\s*(\d+)", re.I),                             # JUnit / Maven
 )
@@ -140,6 +142,7 @@ class OwnerMachineActivity(RetryableInterruption):
 
 # How long a duplicate request waits behind another run of the same identity
 # (the command's own timeout starts only after the lock is held).
+TEST_COMMAND_SECONDS = 3600      # one test command; a slow suite is not a failing one (owner 2026-11-24)
 _LOCK_WAIT_SECONDS = 120.0
 _LOCK_POLL_SECONDS = 0.1
 
@@ -434,7 +437,7 @@ def run(
     gate: str,
     retry_reason: str = "",
     browser: dict[str, str] | None = None,
-    timeout_seconds: int = 300,
+    timeout_seconds: int = TEST_COMMAND_SECONDS,
     reuse: bool = True,
     unable_not_failure: bool = False,
     workdir: str = ".",

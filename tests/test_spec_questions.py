@@ -12,18 +12,8 @@ class ValidateAppQuestions(unittest.TestCase):
         result = sq.validate_app_questions([{"text": "How many warehouses?", "options": ["One", "A few"], "recommended": 0}])
         self.assertEqual(result, [{"text": "How many warehouses?", "options": ["One", "A few"], "recommended": 0}])
 
-    def test_more_than_five_questions_is_refused(self):
-        six = [{"text": f"Question number {i}?", "options": ["A", "B"], "recommended": 0} for i in range(6)]
-        with self.assertRaises(sq.InvalidSpecQuestions):
-            sq.validate_app_questions(six)
 
-    def test_too_few_options_is_refused(self):
-        with self.assertRaises(sq.InvalidSpecQuestions):
-            sq.validate_app_questions([{"text": "Only one choice?", "options": ["A"], "recommended": 0}])
 
-    def test_recommended_out_of_range_is_refused(self):
-        with self.assertRaises(sq.InvalidSpecQuestions):
-            sq.validate_app_questions([{"text": "Pick one?", "options": ["A", "B"], "recommended": 5}])
 
 
 class CardQuestions(unittest.TestCase):

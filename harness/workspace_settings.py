@@ -79,8 +79,6 @@ def _validated_preview(value: Any) -> dict[str, Any]:
     """Validate the preview section carried in value and return a sanitized copy; raise ValueError on bad input."""
     section = value if isinstance(value, dict) else {}
     command = str(section.get("command") or "").strip()
-    if len(command) > 2000:
-        raise ValueError("the preview command must be 2000 characters or fewer")
     url_template = str(section.get("url_template") or DEFAULT_PREVIEW["url_template"]).strip()
     if "{port}" not in url_template:
         raise ValueError("the preview URL template must contain {port}")

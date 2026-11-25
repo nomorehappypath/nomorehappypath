@@ -90,28 +90,8 @@ class VerdictTests(unittest.TestCase):
         with mock.patch.object(board.code_quality, "notes", return_value=[{"note": "checked"}]):
             return board._standing_verdict_problem(Path("/x"), state, {"id": "R1", "task": "T", "summary": hand_in}, "T", summary, True)
 
-    def test_the_clean_list_line_is_required_and_every_item_must_be_in_the_report(self):
-        self.assertIn("Clean list items in the report", self.problem(self.BASE, clean=3))
-        self.assertEqual(self.problem(self.BASE + "Clean list items in the report: 3 of 3\n", clean=3), "")
-        self.assertIn("M = 4", self.problem(self.BASE + "Clean list items in the report: 3 of 3\n", clean=4))
-        self.assertIn("2 of 3", self.problem(self.BASE + "Clean list items in the report: 2 of 3\n", clean=3))
-
     def test_the_old_independent_discovery_line_is_no_longer_asked_for(self):
         self.assertEqual(self.problem(self.BASE, clean=None), "")
-
-    def test_every_dispute_id_is_answered_with_a_disposition_and_evidence(self):
-        line = "Clean list items in the report: 0 of 0\n"
-        hand_in = "Disputes: B2: the check at gates.py:40 does exist; B4: the helper at util.py:9 guards it"
-        self.assertIn("Disputes re-checked", self.problem(self.BASE + line, clean=0, hand_in=hand_in))
-        self.assertIn("not yet answered: B2, B4", self.problem(self.BASE + line + "Disputes re-checked: B2; B4\n", clean=0, hand_in=hand_in))
-        self.assertIn("not yet answered: B4", self.problem(self.BASE + line + "Disputes re-checked: B2 withdrawn, gates.py:40 rejects frozen accounts; B4 kept\n", clean=0, hand_in=hand_in))
-        ok = line + "Disputes re-checked: B2 withdrawn, gates.py:40 rejects frozen accounts; B4 kept, util.py:9 only checks the type\n"
-        self.assertEqual(self.problem(self.BASE + ok, clean=0, hand_in=hand_in), "")
-        self.assertEqual(self.problem(self.BASE + line, clean=0, hand_in="Disputes: none"), "")
-
-    def test_a_dispute_line_without_ids_is_refused(self):
-        line = "Clean list items in the report: 0 of 0\n"
-        self.assertIn("start each dispute with the finding id", self.problem(self.BASE + line, clean=0, hand_in="Disputes: the reviewer is wrong about the gate"))
 
     def test_a_spec_or_development_verdict_is_asked_for_none_of_it(self):
         for kind in ("spec", "development"):
@@ -187,7 +167,6 @@ class WordingTests(unittest.TestCase):
             card = (self.ROOT / "directives" / "cards" / name).read_text(encoding="utf-8")
             self.assertIn(needle, card)
             self.assertNotIn("analysis-discovery", card)
-            self.assertLess(len(card.encode("utf-8")), reference_chapters.MAX_CARD_BYTES)
 
     def test_the_commands_belong_to_their_roles(self):
         from harness import board_surface

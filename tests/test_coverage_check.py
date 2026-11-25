@@ -70,8 +70,8 @@ class CoverageTests(_Fixture):
         fix = write_json(self.base, "fix.json", {"checks": [copy.deepcopy(CHECK)], "failure_paths": ["a bad input is refused"]})
         examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap", fix)
         self.assertEqual(self.lines(), ["covered", "covered"])
-        with self.assertRaisesRegex(ValueError, "at least one check|no stored check"):
-            examples_first.correct(self.root, reviewer["id"], TASK, 2, "closing a coverage gap again", fix)
+        examples_first.correct(self.root, reviewer["id"], TASK, 2, "sent again before he decides", fix)     # taken (owner 2026-11-24)
+        self.assertEqual(self.lines(), ["covered", "covered"])
         self.assertEqual(self.asked(session), [], "never a second request")
         board.record_requirements_decision(self.root, TASK, "go_ahead", version=1, token=self.proposal()["contract_check"]["token"])
         self.assertEqual(self.proposal()["status"], "accepted")

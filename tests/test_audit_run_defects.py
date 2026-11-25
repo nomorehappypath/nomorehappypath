@@ -157,41 +157,6 @@ class StandingChecksGateTests(unittest.TestCase):
         for needle in ("standing-checks", "`Security check:`", "--code-quality", "`Not examined:`", "In a Code analysis", "analysis-crosscheck", "Clean list items in the report:"):
             self.assertIn(needle, reviewer)
 
-    def test_requirements_without_a_security_line_are_sent_back(self) -> None:
-        plain = "In plain words:\nA report of the problems.\nNothing for you to do.\n\nAlready in the project:\nNothing related exists yet.\n\nFind problems.\nNon-functional: none"
-        with self.assertRaisesRegex(ValueError, "Security:"):
-            board.record_requirement_proposal(Path("/nonexistent"), "agent", plain, plain_required=True)
-        self.assertEqual(standing_checks.requirements_problem(plain + "\nSecurity: the report is read-only and touches no live data."), "")
-
-    def test_a_hand_in_needs_both_sections_at_final_acceptance_only(self) -> None:
-        self.assertEqual(standing_checks.hand_in_problem(self.GOOD_HAND_IN), "")
-        self.assertIn("\"Security:\"", standing_checks.hand_in_problem("Code quality: tidy and small functions."))
-        self.assertIn("\"Code quality:\"", standing_checks.hand_in_problem("Security: checked sessions and isolation."))
-        with self.assertRaisesRegex(ValueError, "hand-in is incomplete"):
-            board.request_review(Path("/nonexistent"), "agent", "ledger.md", "Done, all tests pass.", phase="final_acceptance")
-        with self.assertRaises(Exception) as chunk:   # a chunk review is not gated: it fails later, for another reason
-            board.request_review(Path("/nonexistent"), "agent", "ledger.md", "Done.", phase="chunk")
-        self.assertNotIn("hand-in is incomplete", str(chunk.exception))
-
-    def test_a_pass_needs_a_security_check_and_a_code_quality_line(self) -> None:
-        said = "TASK DONE: YES\nSecurity check: read the auth and isolation code and ran two probes; nothing found."
-        self.assertIn("Security check", standing_checks.verdict_problem("TASK DONE: YES", True, False, False))
-        self.assertIn("--code-quality", standing_checks.verdict_problem(said, False, False, False))
-        self.assertEqual(standing_checks.verdict_problem(said, True, False, False), "")
-        self.assertEqual(standing_checks.verdict_problem(said, False, True, False), "", "notes stored by an earlier round count")
-
-    def test_a_report_only_pass_must_name_what_was_not_examined(self) -> None:
-        said = "Security check: read the changed code and ran two probes; found nothing new."
-        self.assertIn("Not examined", standing_checks.verdict_problem(said, True, False, True))
-        self.assertEqual(standing_checks.verdict_problem(said + "\nFindings verified independently: 3 of 3\nNot examined: the mobile client and the deploy scripts.", True, False, True), "")
-        self.assertEqual(standing_checks.verdict_problem(said, True, False, False), "", "a build task is not asked for it")
-        # security and code quality are asked of an analysis exactly as of a build: only "Not examined" differs
-        self.assertIn("Security check", standing_checks.verdict_problem("Not examined: nothing", True, False, True))
-        self.assertIn("--code-quality", standing_checks.verdict_problem(said + "\nFindings verified independently: 2 of 2\nNot examined: nothing", False, False, True))
-        self.assertEqual(standing_checks.verdict_problem(said + "\nFindings verified independently: 2 of 2\nNot examined: nothing", True, False, True), "", "it may say nothing")
-        for name in ("AREAS", "REPORT_SPOT_CHECK"):
-            self.assertFalse(hasattr(standing_checks, name), "no prescribed areas")
-
     def test_a_report_only_task_adds_only_the_report_to_the_project(self) -> None:
         extra = standing_checks.report_only_extra_files(
             ["FINDINGS.md", "audit_evidence/test_findings_grounding.py", ".harness/x"], ["/work/proj/FINDINGS.md", "FINDINGS.md"])

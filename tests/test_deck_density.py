@@ -6,8 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FULL = ("directives/AGENT.md", "harness/directives/CTO_COMPLETION_DIRECTIVE.md",
-        "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md")
+FULL = ("directives/AGENT.md",)
 
 
 def flat(path):

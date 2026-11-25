@@ -129,16 +129,6 @@ class ContractCarriesTheScreens(Fixture):
                 self.assertFalse(contract_screens.ui_task(state, TASK))
         self.assertFalse(contract_screens.ui_task({}, TASK, small_change=True))
 
-    def test_designs_need_the_screens_block_and_a_refused_filing_keeps_them_pending(self):
-        self.design("Leases - list")
-        with self.assertRaisesRegex(ValueError, "Screens:"):
-            self.propose(TEXT.split("Screens:")[0])
-        self.assertEqual(board.contract_screen(self.root, self.agent["id"], list_only=True)["pending"], ["Leases - list"])
-        self.propose()
-        screens = self.proposal()["screens"]
-        self.assertEqual([item["name"] for item in screens["manifest"]], ["Leases - list"])
-        self.assertEqual(board.contract_screen(self.root, self.agent["id"], list_only=True)["pending"], [])
-
     def test_keep_screens_carries_the_earlier_set_and_otherwise_new_designs_are_needed(self):
         self.design("Leases - list")
         self.propose()

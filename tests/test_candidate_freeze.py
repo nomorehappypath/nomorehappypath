@@ -142,8 +142,6 @@ class ReopenScopeTests(FreezeFixture):
                 self.root, self.developer["id"], "TASK-F",
                 "delivery must not lift its own freeze ever",
             )
-        with self.assertRaisesRegex(ValueError, "at least 20 characters"):
-            board.reopen_candidate_scope(self.root, self.cto["id"], "TASK-F", "because")
         with board.locked_state(self.root) as state:
             state["qa_requests"]["review-final-01"]["status"] = "open"
         with self.assertRaisesRegex(ValueError, "not frozen"):

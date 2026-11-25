@@ -162,7 +162,7 @@ class RefusalsKeepTheReasonTests(unittest.TestCase):
     def test_every_refusal_keeps_the_blocked_browser_reason(self):
         output = f"{browser_acceptance.SANDBOX_BLOCKED}: the browser exited with code 1\nRan 0 tests in 0.001s"
         for message in ("internal-QA test command reported zero executed tests",
-                        "internal-QA test command timed out after 300 seconds",
+                        "internal-QA test command did not finish in an hour",
                         "internal-QA output must report a positive executed-test count"):
             with self.subTest(message=message):
                 self.assertIn(browser_acceptance.SANDBOX_BLOCKED, browser_acceptance.with_blocked_note(message, output))
@@ -176,7 +176,7 @@ class TimeoutOutputTests(unittest.TestCase):
                                           stderr=f"{browser_acceptance.SANDBOX_BLOCKED}: x\n".encode())
         with mock.patch.object(board.subprocess, "run", side_effect=error), \
                 mock.patch.object(board.execution_preflight, "validate_commands", return_value=None):
-            with self.assertRaisesRegex(ValueError, "timed out after 300 seconds") as caught:
+            with self.assertRaisesRegex(ValueError, "did not finish in an hour") as caught:
                 board._run_internal_qa("python3 -m unittest", Path(tempfile.gettempdir()))
         self.assertIn(browser_acceptance.SANDBOX_BLOCKED, str(caught.exception))
 

@@ -527,11 +527,7 @@ class DirectiveTests(unittest.TestCase):
         self.assertIn("for any other card verify the control or command it names exists", cto)
         self.assertIn('the first "awaiting owner" status names exactly where the thing is', cto)
 
-    def test_the_mirror_and_delivery_directives_carry_the_rule(self):
-        mirror = flat("harness/directives/CTO_COMPLETION_DIRECTIVE.md")
-        self.assertIn("Before pinning or repeating an owner card, open the path yourself", mirror)
-        self.assertIn("a card the owner cannot act on is a defect", mirror)
-        self.assertIn('the first "awaiting owner" status names exactly where the thing is', mirror)
+    def test_the_delivery_directive_carries_the_rule(self):
         agent = flat("directives/AGENT.md")
         self.assertIn("attach that document with `--for-owner`", agent)
         self.assertIn('attaches each under its own `--document "<name>"`', agent)

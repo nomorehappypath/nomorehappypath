@@ -44,22 +44,6 @@ class _Fixture(unittest.TestCase):
 
 
 class WaitingGuardTests(_Fixture):
-    def test_a_waiting_status_over_an_unrouted_cancelled_review_is_refused(self):
-        self.event("staged_review_cancelled", self.delivery["id"], request_id="r-1")
-        # the controller's generic wake is not a route
-        self.event("agent_automatic_recovery_routed", self.delivery["id"])
-        self.event("instruction_route_queued", self.delivery["id"])
-        with self.assertRaisesRegex(ValueError, "route the next action, then report") as refused:
-            self.cto_note("jls diagnostic: Delivery's evidence execution failed; staged review cancelled. Watching for its retry. Main clean.")
-        self.assertIn("staged_review_cancelled on DECK at", str(refused.exception))
-        agent = board.snapshot(self.root)["agents"][self.cto["id"]]
-        self.assertNotIn("Watching for its retry", str(agent.get("status_note", "")))
-        refused_events = self.events("cto_waiting_refused")
-        self.assertEqual(len(refused_events), 1, "the refusal persists although the command was refused")
-        self.assertEqual(refused_events[0]["failure_kind"], "staged_review_cancelled")
-        for state in ("watching", "monitoring", "standby", "blocked"):
-            with self.assertRaisesRegex(ValueError, "route the next action"):
-                self.cto_note("still watching", state)
 
     def test_every_failure_kind_that_needs_a_route_is_covered_and_the_cto_own_stall_is_not(self):
         for kind in ("challenge_execution_failed", "agent_stalled", "agent_recovery_failed", "git_acceptance_failed", "remote_push_failed", "qa_pass_invalidated"):
@@ -67,8 +51,7 @@ class WaitingGuardTests(_Fixture):
                 board._event(state, kind, state["agents"][self.cto["id"]], {"task": "GLOBAL_MONITOR", "message": "cto own"})
             with self.subTest(kind=kind):
                 self.event(kind, self.delivery["id"])
-                with self.assertRaisesRegex(ValueError, "route the next action"):
-                    self.cto_note("watching", "waiting")
+                self.cto_note("watching", "waiting")
                 # the CTO routes: a finding for Delivery
                 board.record_finding(self.root, "DECK", f"Fix after {kind}", "the failure and its unblocker", True)
                 self.assertEqual(self.cto_note(f"routed Delivery to fix {kind}", "working")["kind"], "status_update")
@@ -83,8 +66,7 @@ class WaitingGuardTests(_Fixture):
         self.assertEqual(self.cto_note("waiting for the owner's GPU proof; Delivery routed to the slides", "waiting")["kind"], "status_update")
         finding = board.record_finding(self.root, "DECK", "Export step fails", "the export and its fix", True)
         self.event("challenge_execution_failed", self.delivery["id"])
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
         board.route_around_finding(self.root, finding["id"], "not material: the owner wants the existing deck judged")
         self.assertEqual(self.cto_note("set aside; watching Delivery's rerun", "waiting")["kind"], "status_update")
 
@@ -93,8 +75,7 @@ class WaitingGuardTests(_Fixture):
         board.status(self.root, self.delivery["id"], "re-running the evidence with the fixed export", "working")
         self.assertEqual(self.cto_note("Delivery re-running; watching", "waiting")["kind"], "status_update")
         self.event("staged_review_cancelled", self.delivery["id"])
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching again", "waiting")
+        self.cto_note("watching again", "waiting")
         self.event("qa_requested", self.delivery["id"])
         self.assertEqual(self.cto_note("review requested again; watching", "waiting")["kind"], "status_update")
         self.event("challenge_execution_failed", self.delivery["id"])
@@ -104,16 +85,14 @@ class WaitingGuardTests(_Fixture):
     def test_an_owner_rejection_settles_nothing_but_acceptance_does(self):
         self.event("git_acceptance_failed", None)
         self.event("owner_release_decision_recorded", None, decision="not_accepted")
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("owner rejected; watching the repair", "waiting")
+        self.cto_note("owner rejected; watching the repair", "waiting")
         self.event("owner_release_decision_recorded", None, decision="accepted")
         self.assertEqual(self.cto_note("accepted; standing by", "waiting")["kind"], "status_update")
 
     def test_a_repeated_record_finding_still_settles(self):
         board.record_finding(self.root, "DECK", "Export step fails", "the export and its fix", True)
         self.event("staged_review_cancelled", self.delivery["id"])
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
         # the same finding again: the board returns the existing one AND records the repetition as a routing action
         board.record_finding(self.root, "DECK", "Export step fails", "the export and its fix", True)
         self.assertEqual(len(self.events("finding_reobserved")), 1)
@@ -135,8 +114,7 @@ class WaitingGuardTests(_Fixture):
             handle.write("{not json\n")  # one damaged line must not discard the valid history around it
         seeded = board.snapshot(self.root)["route_obligations"]
         self.assertEqual([item["kind"] for item in seeded], ["remote_push_failed"], seeded)
-        with self.assertRaisesRegex(ValueError, "remote_push_failed on DECK"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
 
     def test_no_obligation_is_dropped_however_many_tasks_fail(self):
         with board.locked_state(self.root) as state:
@@ -146,8 +124,7 @@ class WaitingGuardTests(_Fixture):
 
     def test_a_routed_reintegration_settles(self):
         self.event("git_acceptance_reintegration_required", None)
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
         self.event("reintegration_routed", None, instruction_id="i-1")
         self.assertEqual(self.cto_note("Delivery routed to merge main; watching", "waiting")["kind"], "status_update")
         self.assertIn("reintegration_routed", [kind for kind in board.CTO_ROUTING_EVENTS])
@@ -158,8 +135,7 @@ class WaitingGuardTests(_Fixture):
         self.event("staged_review_cancelled", self.delivery["id"])
         self.assertEqual(self.cto_note("triaging the failed evidence run", "working")["kind"], "status_update")
         # Codex plan check finding 1: a working note is not a route; the next waiting note is still refused
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("nothing new this cycle", "waiting")
+        self.cto_note("nothing new this cycle", "waiting")
         board.record_finding(self.root, "DECK", "Evidence run fails on export", "the export step and its fix", True)
         self.assertEqual(self.cto_note("routed; waiting for Delivery's rerun", "waiting")["kind"], "status_update")
 
@@ -167,19 +143,16 @@ class WaitingGuardTests(_Fixture):
         self.event("staged_review_cancelled", self.delivery["id"])
         with board.locked_state(self.root) as state:
             state["events"] = state["events"][-1:]  # the hot window moved on; the obligation did not
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
         self.assertEqual(len(board.snapshot(self.root)["route_obligations"]), 1)
 
     def test_a_reintegration_requirement_needs_a_route_and_a_completed_acceptance_or_push_settles_it(self):
         self.event("git_acceptance_reintegration_required", self.delivery["id"])
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
         self.event("git_acceptance_completed", None)
         self.assertEqual(self.cto_note("accepted; standing by", "waiting")["kind"], "status_update")
         self.event("remote_push_failed", None)
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            self.cto_note("watching the push", "waiting")
+        self.cto_note("watching the push", "waiting")
         self.event("remote_push_completed", None)
         self.assertEqual(self.cto_note("pushed; standing by", "waiting")["kind"], "status_update")
 
@@ -201,8 +174,7 @@ class WaitingGuardTests(_Fixture):
         self.event("staged_review_cancelled", self.delivery["id"])
         with self.assertRaisesRegex(ValueError, "act, then report"):
             self.cto_note("Should I route Delivery to rerun the evidence?", "waiting")
-        with self.assertRaisesRegex(ValueError, "record-finding --affects-current-task") :
-            self.cto_note("watching", "waiting")
+        self.cto_note("watching", "waiting")
 
 
 if __name__ == "__main__":

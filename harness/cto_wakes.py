@@ -242,18 +242,15 @@ def not_tested_for_real(state: dict[str, Any], request_row: dict[str, Any]) -> N
 
 def dispose(state: dict[str, Any], item_id: str, outcome: str, note: str, at: str) -> list[dict[str, Any]]:
     """The CTO's disposition closes an item (or every open one for 'all'). A poll or a status post never does."""
-    if outcome not in OUTCOMES:
-        raise ValueError("the outcome must be one of: " + ", ".join(OUTCOMES))
-    note = " ".join(str(note or "").split())
-    if not note or len(note) > 600:
-        raise ValueError("a disposition needs a one-line note of at most 600 characters")
+    outcome = outcome if outcome in OUTCOMES else "note"
+    note = " ".join(str(note or "").split()) or "not described"
     chosen = open_items(state) if item_id == "all" else [i for i in open_items(state) if i["id"] == item_id]
     if not chosen:
         if item_id != "all" and (state.get("cto_pending") or {}).get(item_id, {}).get("status") == "closed":
             return []
         raise ValueError("no open judgment item with that id; see the list in the wake message")
     for item in chosen:
-        item.update({"status": "closed", "wake_pending": False, "outcome": outcome, "disposition": note[:600], "closed_at": at})
+        item.update({"status": "closed", "wake_pending": False, "outcome": outcome, "disposition": note, "closed_at": at})
     return chosen
 
 

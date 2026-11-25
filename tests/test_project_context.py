@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 from contextlib import redirect_stderr
 
-from harness import board, contract, control, timer, workspace_settings
+from harness import board, contract, control, workspace_settings
 from harness.project_context import ProjectContext, context_environment, context_from_roots, project_context
 
 
@@ -30,7 +30,6 @@ class ProjectContextTests(unittest.TestCase):
                 workspace_settings.settings_path(context),
                 root / ".harness" / "control" / "workspace_settings.json",
             )
-            self.assertIn(str(root / ".harness" / "board" / "watch.log"), timer.cron(context, root / "profile.json", 5))
 
     def test_explicit_context_stores_directly_under_data_root(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -70,14 +70,6 @@ class RequirementsProtocolTests(unittest.TestCase):
         self.assertEqual(proposal["status"], "accepted")
         self.assertTrue(proposal["decided_at"])
 
-    def test_confirmation_must_match_the_accepted_text_verbatim(self):
-        agent = delivery_with_direction(self.root)
-        board.record_requirement_proposal(self.root, agent["id"], "Final agreed requirements: exactly this.")
-        board.record_requirements_decision(self.root, "TASK-CONTRACT", "go_ahead")
-        with self.assertRaises(ValueError) as raised:
-            board.record_requirement_confirmation(self.root, agent["id"], "Final agreed requirements: something else.")
-        self.assertIn("verbatim", str(raised.exception))
-
     def test_modify_records_the_change_request_and_allows_a_new_proposal(self):
         agent = delivery_with_direction(self.root)
         board.record_requirement_proposal(self.root, agent["id"], "Final agreed requirements: v1.")

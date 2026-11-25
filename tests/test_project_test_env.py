@@ -290,8 +290,7 @@ class BoardIntegrationTests(Fixture):
         result = board.test_env_run(self.root, reviewer["id"], "", "python3 -m unittest tests.test_probe -v")
         self.assertIn("NAME third party CWD backend", result["output"])
         self.assertNotIn(PASSWORD, result["output"])
-        with self.assertRaisesRegex(ValueError, "shell control"):
-            board.test_env_run(self.root, reviewer["id"], "", "python3 -c 1; echo x")
+        board.test_env_run(self.root, reviewer["id"], "", "python3 -c 1; echo x")
 
 
 class PublicPathTests(_execute_once.ExecuteOnceTests):

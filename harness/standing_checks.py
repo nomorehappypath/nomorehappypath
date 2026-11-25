@@ -139,24 +139,12 @@ def verdict_problem(summary: Any, quality_notes_given: bool, quality_notes_store
 
     Returns: the combined problem message, or "" when nothing is missing and the check is off or satisfied.
     """
-    if not enabled():
-        return ""
-    missing = []
-    if not has_line(summary, "Security check"):
-        missing.append("a \"Security check:\" line saying what you checked yourself and what you found")
-    if not (quality_notes_given or quality_notes_stored):
-        missing.append("at least one --code-quality line (\"checked, nothing to note\" is enough when that is true)")
-    if report_only and not has_line(summary, "Not examined", 1):
-        missing.append("a \"Not examined:\" line saying what you did not examine (it may say nothing)")
-    if analysis and verified_findings_problem(summary):
-        missing.append(verified_findings_problem(summary))
-    if analysis and clean_total is not None and clean_list_problem(summary, clean_total):
-        missing.append(clean_list_problem(summary, clean_total))
-    if analysis and disputes_problem(hand_in, summary):
-        missing.append(disputes_problem(hand_in, summary))
-    if not missing:
-        return ""
-    return "the review is incomplete and cannot be recorded as a PASS: it needs " + "; ".join(missing) + ". Open `standing-checks`."
+    # owner 2026-11-24: a line the verdict does not carry is form; an agreed issue the report lost is the owner's result
+    if enabled() and analysis and clean_total is not None:
+        found = _CLEAN_LIST.search(str(summary or ""))
+        if found and int(found.group(2)) == clean_total and int(found.group(1)) < clean_total:
+            return clean_list_problem(summary, clean_total)
+    return ""
 
 
 def report_file_name(text: Any) -> str:

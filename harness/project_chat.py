@@ -26,7 +26,7 @@ from harness.project_context import ProjectRoot, project_context
 
 UNKNOWN_ANSWER = "I do not know."
 REFUSAL_ANSWER = "I can answer questions about this project, but I cannot make changes from chat."
-MAX_QUESTION_BYTES = 2_048
+MAX_QUESTION_BYTES = 32 * 1024
 MAX_FACT_VALUE_BYTES = 4_096
 MAX_PACKAGE_BYTES = 48_000
 MAX_SELECTED_FACTS = 24
@@ -1239,8 +1239,7 @@ def validate_provider_output(raw: str | dict[str, Any], package: dict[str, Any])
             raise AnswerValidationError("The provider selected a fact id that is not in the package")
         if fact_id not in selected:
             selected.append(fact_id)
-    if len(selected) > MAX_SELECTED_FACTS:
-        raise AnswerValidationError("The provider selected more facts than the configured limit")
+    selected = selected[:MAX_SELECTED_FACTS]
     return {
         "in_scope": value["in_scope"],
         "action_oriented": value["action_oriented"],

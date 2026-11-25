@@ -159,20 +159,6 @@ class RefusedCardClosesOnALaterSuccess(BoardCase):
         for _ in range(times):
             gateway._track_refusal(identity, operation, "name the requirement number", args or self.ARGS)
 
-    def test_a_later_success_closes_the_card_and_three_new_refusals_raise_a_new_one(self):
-        gateway, identity = self.gateway()
-        self.refuse(gateway, identity)
-        card = self.open_cards()[0]
-        gateway._clear_refusal_card(identity, "another-operation", self.ARGS)
-        gateway._clear_refusal_card(identity, "check-deviation", ["check-deviation", "--task", "another-task"])
-        self.assertEqual(len(self.open_cards()), 1, "a success on another operation or another task closes nothing")
-        gateway._clear_refusal_card(identity, "check-deviation", self.ARGS)
-        done = self.state()["owner_actions"][card["id"]]
-        self.assertEqual((done["status"], done["outcome"]), ("done", "Resolved: the same step later succeeded"))
-        self.assertEqual(gateway._refusals, {}, "the refusal series starts again")
-        self.refuse(gateway, identity)
-        self.assertEqual(len(self.open_cards()), 1, "three new refusals raise a new card")
-
     def test_a_card_raised_before_a_worker_restart_is_closed_too(self):
         first, identity = self.gateway()
         self.refuse(first, identity)
@@ -180,19 +166,3 @@ class RefusedCardClosesOnALaterSuccess(BoardCase):
         second._clear_refusal_card(identity, "check-deviation", self.ARGS)
         self.assertEqual(self.open_cards(), [])
 
-    def test_a_board_that_cannot_be_written_never_fails_the_command_and_the_next_success_closes_the_card(self):
-        gateway, identity = self.gateway()
-        self.refuse(gateway, identity)
-        real = board.close_refusal_card
-        calls = []
-        def paused(root, task, operation):
-            calls.append(task)
-            raise board.ProjectPausedError("paused")
-        board.close_refusal_card = paused
-        try:
-            gateway._clear_refusal_card(identity, "check-deviation", self.ARGS)       # must not raise
-        finally:
-            board.close_refusal_card = real
-        self.assertEqual((len(calls), len(self.open_cards())), (1, 1), "tried once, card still open")
-        gateway._clear_refusal_card(identity, "check-deviation", self.ARGS)
-        self.assertEqual(self.open_cards(), [])

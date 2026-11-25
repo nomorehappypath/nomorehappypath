@@ -11,8 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "directives/CTO.md",
     "directives/AGENT.md",
-    "harness/directives/CTO_COMPLETION_DIRECTIVE.md",
-    "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md",
 )
 
 

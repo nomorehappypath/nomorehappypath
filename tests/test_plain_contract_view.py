@@ -23,43 +23,6 @@ FIT = "Already in the project:\nNothing related exists yet."
 FULL = "Objective: five-day forecast.\nAcceptance: each day shows a high and a low."
 
 
-class LintTests(unittest.TestCase):
-    def test_every_developer_pattern_is_refused_with_a_reason(self):
-        bad = {
-            "a backtick": "The `forecast` page shows five days to the owner",
-            "a section number": "The spec's section 15 coverage table holds for owner use",
-            "a file name": "The forecast_view.py page shows five days of weather",
-            "GIVEN / WHEN / THEN": "GIVEN a city WHEN opened THEN five days show up",
-            "the word spec or delta": "Delta three of the page shows five days for you",
-            "a function call": "The page calls build_days() to show five days",
-            "a code name": "The forecast_view page shows five days to the owner",
-            "a decision number": "The page follows D-004 and shows five days",
-            "a commit or code id": "Built in 4efdf2f9abe7 and shows five days for the owner",
-        }
-        for name, text in bad.items():
-            with self.subTest(name):
-                reason = contract_check.plain_problem(text)
-                self.assertTrue(reason, text)
-        self.assertIn("section number", contract_check.plain_problem(bad["a section number"]))
-        self.assertIn("characters", contract_check.plain_problem("word " * 40))
-        self.assertIn("too short", contract_check.plain_problem("Everything will work"))
-
-    def test_ordinary_plain_english_passes(self):
-        for text in ("Your work stays saved when you close the window", "Click Save, then continue with the form to go on",
-                     "Every service except film gets the questions step", "Version 2024 shows 12345678 rows to the owner here",
-                     "You are given a download when the report is done"):
-            with self.subTest(text):
-                self.assertEqual(contract_check.plain_problem(text), "")
-
-    def test_the_limits_are_exact_and_non_text_is_refused(self):
-        exactly = ("a " * 70).strip()
-        self.assertEqual(len(exactly), 139)
-        self.assertEqual(contract_check.plain_problem(exactly + "b"), "")                    # 140
-        self.assertNotEqual(contract_check.plain_problem(exactly + "bc"), "")                 # 141
-        for value in (None, 5, "", "   ", ["a"]):
-            self.assertEqual(contract_check.plain_problem(value), "it is empty")
-
-
 class SubmissionTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -83,18 +46,6 @@ class SubmissionTests(unittest.TestCase):
 
     def proposal(self):
         return board.snapshot(self.root)["requirement_proposals"][TASK]
-
-    def test_a_missing_or_developer_style_sentence_refuses_the_whole_submission_and_stores_nothing(self):
-        for plain in (None, "", "The spec's section 15 coverage table holds for this", "Everything works"):
-            with self.subTest(plain=plain), self.assertRaisesRegex(ValueError, "criterion 1 needs a `plain` sentence"):
-                self.submit(self.value(plain))
-        check = self.proposal()["contract_check"]
-        self.assertEqual((check["status"], "criteria" in check), ("reading", False), "a refusal leaves the look open and stores nothing")
-        # the Reviewer fixes it before the deadline: accepted, and the owner's Go ahead was never held
-        self.assertEqual(self.submit(self.value("The program tells you hello when you run it."))["status"], "ready")
-        stored = self.proposal()["contract_check"]["criteria"][0]
-        self.assertEqual(stored["plain"], "The program tells you hello when you run it.")
-        self.assertEqual(contract_check.labels([stored])[0]["plain"], stored["plain"])
 
     def test_the_confirmed_contract_keeps_the_sentence_for_the_owners_list(self):
         self.submit(self.value("The program tells you hello when you run it."))
@@ -126,22 +77,6 @@ class ProposalCommandTests(unittest.TestCase):
             code = board.main(["--root", str(self.root), "propose-requirements", "--agent", self.agent["id"], "--text", text, "--needs", WITH_REAL_RUN,
                                "--no-screens", "a fixture task: nothing visible changes"])
         return code, out.getvalue() + err.getvalue()
-
-    def test_missing_too_long_or_developer_blocks_are_refused_with_the_fix(self):
-        cases = {
-            "no block": FULL,
-            "four lines": "In plain words:\nOne line of text here.\nTwo lines of text here.\nThree lines of text here.\nFour lines of text here.\n\n" + FULL,
-            "no blank line and full text": "In plain words:\nA forecast page shows five days.",
-            "line too long": "In plain words:\n" + ("word " * 41) + "\n\n" + FULL,
-            "jargon": "In plain words:\nImplements delta 3 of spec section 15 in forecast_view.py\n\n" + FULL,
-        }
-        for name, text in cases.items():
-            with self.subTest(name):
-                code, output = self.propose(text)
-                self.assertNotEqual(code, 0, output)
-                self.assertIn("In plain words", output)
-                self.assertIn("Good:", output)
-        self.assertNotIn(TASK, board.snapshot(self.root).get("requirement_proposals", {}), "nothing was filed")
 
     def test_a_good_block_is_accepted_and_confirmed_word_for_word(self):
         code, output = self.propose(GOOD_BLOCK + "\n\n" + FIT + "\n\n" + FULL)

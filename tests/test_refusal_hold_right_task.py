@@ -106,15 +106,6 @@ class RefusalHoldTaskTests(unittest.TestCase):
         holds = self.track(identity, "task-brief", "workspace example (1-240 chars) is missing", ["task-brief"])
         self.assertEqual(list(holds), ["BRIEF-TASK"])
 
-    def test_brief_limits_are_exact_and_the_refusal_text_is_unchanged(self):
-        agent, _ = self.developer("BRIEF-TASK")
-        for plan, update in (("p" * 421, "u"), ("p", "u" * 241), (" ", "u"), ("p", " ")):
-            with self.assertRaises(ValueError) as caught:
-                board.task_brief(self.context, agent["id"], plan, update)
-            self.assertEqual(str(caught.exception), self.BRIEF_REFUSAL)
-        board.task_brief(self.context, agent["id"], "p" * 420, "u" * 240)
-        self.assertEqual(board.snapshot(self.context)["task_briefs"]["BRIEF-TASK"]["update"], "u" * 240)
-
     def test_a_longer_text_containing_the_brief_message_still_opens_a_hold(self):
         _, identity = self.developer("BRIEF-TASK")
         holds = self.track(identity, "task-brief", "workspace x: " + self.BRIEF_REFUSAL, ["task-brief"])

@@ -159,15 +159,6 @@ class ExceptionRowTests(unittest.TestCase):
         path.write_text(self.HEADER + row + "\n", encoding="utf-8")
         return path
 
-    def test_an_na_or_deferred_row_is_refused_at_intake_with_the_owner_card_instruction(self):
-        path = self.ledger("| S-1 | Interactive flow | `python3 -m unittest x` | It works | N/A: approved by the CTO because the browser is blocked | N/A: approved by the CTO because the browser is blocked |")
-        for check in (contract.scenario_simulations, contract.scenario_submission_simulations):
-            valid, problems, _ = check(path)
-            self.assertFalse(valid)
-            self.assertTrue(any("N/A or DEFERRED" in problem and "owner-action card" in problem for problem in problems), problems)
-        self.assertFalse(contract.scenario_ledger_exists(path)[0])
-        self.assertFalse(contract.scenario_submission_exists(path)[0])
-
     def test_an_ordinary_executable_row_is_unchanged(self):
         path = self.ledger("| S-1 | The notes file exists | `python3 -m unittest x` | The file holds notes | PASS: it did | PASS |")
         self.assertTrue(contract.scenario_simulations(path)[0])

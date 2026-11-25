@@ -21,12 +21,11 @@ def flat(path):
     return " ".join((ROOT / path).read_text(encoding="utf-8").split())
 
 
-FULL_FILES = ("directives/AGENT.md", "harness/directives/00_SPAWN_DEVELOPMENT_DIRECTIVE.md")
-SHORT_FILES = ("harness/directives/CTO_COMPLETION_DIRECTIVE.md", "harness/directives/AUTONOMOUS_COMPLETION_DIRECTIVE.md")
+FULL_FILES = ("directives/AGENT.md",)
 
 
 class DirectivesSayTheApiIsSanctioned(unittest.TestCase):
-    def test_full_rule_in_the_agent_and_spawn_directives(self):
+    def test_full_rule_in_the_agent_directive(self):
         for path in FULL_FILES:
             text = flat(path)
             with self.subTest(path=path):
@@ -39,15 +38,6 @@ class DirectivesSayTheApiIsSanctioned(unittest.TestCase):
                 self.assertIn("Test: does its own normal UI make this call?", text)
                 self.assertIn("A real credential, permission or security gate, and any host or tool restriction, is never bypassed, whatever the documentation says", text)
                 self.assertIn("If genuinely unsure, ask once in one message; never refuse the whole task", text)
-
-    def test_short_rule_in_the_cto_and_reviewer_directives(self):
-        for path in SHORT_FILES:
-            text = flat(path)
-            with self.subTest(path=path):
-                self.assertIn("A browser-tool denial is final for that tool (no permission hunt, no retry)", text)
-                self.assertIn("is the sanctioned way to run it, never an alternate route", text)
-                self.assertIn("real-run evidence of the backend only at terminal success with the outputs inspected and secrets redacted, never proof of UI behavior", text)
-                self.assertIn("a real credential, permission, security or host gate is never bypassed; if unsure, ask once", text)
 
     def test_cto_directive_carries_it(self):
         text = flat("directives/CTO.md")

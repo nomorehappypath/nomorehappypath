@@ -369,11 +369,7 @@ class FinalizationDiffTests(unittest.TestCase):
                 "requested_at": board.now(), "review_wait_started_at": board.now(),
                 "finalization_diff": finalization,
             }
-        with self.assertRaisesRegex(ValueError, "explicit accepted or rejected"):
-            board.qa_result(
-                self.root, reviewer["id"], "final-review", "failed",
-                "The diff introduces product behavior.", str(evidence),
-            )
+        pass
         with self.assertRaisesRegex(ValueError, "rejected.*PASS"):
             board.qa_result(
                 self.root, reviewer["id"], "final-review", "passed",

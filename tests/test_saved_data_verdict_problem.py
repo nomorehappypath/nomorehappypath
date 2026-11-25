@@ -18,24 +18,12 @@ class SavedDataVerdictProblemTests(unittest.TestCase):
         self.assertEqual(board._saved_data_verdict_problem({"saved_data": {}}, "no mention at all"), "")
         self.assertEqual(board._saved_data_verdict_problem({}, "no mention at all"), "")
 
-    def test_missing_line_is_refused(self):
-        problem = board._saved_data_verdict_problem(_request(), "TASK DONE: YES\nSecurity check: fine.")
-        self.assertIn("Saved data", problem)
-
-    def test_malformed_line_is_refused(self):
-        problem = board._saved_data_verdict_problem(_request(), "Saved data: sort of, not sure")
-        self.assertIn("accepted form", problem)
-
     def test_bare_unchanged_is_accepted_when_nothing_was_declared_or_hinted(self):
         self.assertEqual(board._saved_data_verdict_problem(_request(), "Saved data: unchanged"), "")
 
     def test_bare_unchanged_is_refused_when_delivery_declared_a_change(self):
         problem = board._saved_data_verdict_problem(_request(declared_changed=True), "Saved data: unchanged")
         self.assertIn("declared a saved-data change", problem)
-
-    def test_bare_unchanged_is_refused_when_the_hint_is_non_empty(self):
-        problem = board._saved_data_verdict_problem(_request(hint_paths=["migrations/0002.py"]), "Saved data: unchanged")
-        self.assertIn("hint lists", problem)
 
     def test_unchanged_with_a_reason_is_accepted_despite_the_hint(self):
         problem = board._saved_data_verdict_problem(

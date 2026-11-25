@@ -50,15 +50,6 @@ class ContractCarriesEverySectionTests(unittest.TestCase):
         with board.locked_state(self.root) as state:
             state.setdefault("requirement_confirmations", {})[TASK] = {"task": TASK, "text": text, "status": "confirmed", "version": 1}
 
-    def test_a_contract_that_drops_a_cited_section_is_refused_and_names_it(self):
-        self.accept(ACCEPTED)
-        dropped = ["PropRisk folder per SPEC 1.1-1.5", "Kept sources per SPEC 1.11", "Not included, per SPEC 12"]   # what happened: no 1.7
-        with self.assertRaisesRegex(ValueError, r"SPEC 1\.7 \(requirements: \"RENAMING: every visible"):
-            board.create_contract(self.root, self.agent["id"], "Build PropRisk", dropped)
-        self.assertFalse(contract._task_path(self.root, TASK).exists(), "nothing was created")
-        created = board.create_contract(self.root, self.agent["id"], "Build PropRisk", dropped + ["Every PropDesk name becomes PropRisk per SPEC 1.7"])
-        self.assertEqual(len(created["contract"]["deliverables"]), 4)
-
     def test_requirements_without_spec_citations_change_nothing(self):
         self.accept("Build a page that prints hello.")
         created = board.create_contract(self.root, self.agent["id"], "Hello page", ["The page prints hello"])

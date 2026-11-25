@@ -1,7 +1,7 @@
 # Copyright (c) 2026 KpiMinds LLC. Licensed under the Apache License, Version 2.0; see LICENSE. SPDX-License-Identifier: Apache-2.0
 """The Reviewer's early look at the requirements: submission format, answers and labels.
 
-Pure helpers (no board, no files): board.py holds the state changes, this module
+Helpers without board state: board.py holds the state changes, this module
 holds what a submission must look like, how the owner's answers become a
 "Decided before coding" section, and the plain-word label of each requirement.
 Spec: board/tasks/2026-10-23_contract-first-checks_SPEC.md (v2).
@@ -11,11 +11,15 @@ from __future__ import annotations
 import json
 import ast
 import re
-from pathlib import PurePosixPath
+import tempfile
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+from harness import contract
 
 # The one wait for the Reviewer's early look (seconds). The owner can go ahead without waiting at any time.
 WAIT_DEFAULT_SECONDS = 1800      # task 2026-11-24_tdd-examples-first: examples, the asks list and the result list take longer to write; still only a default
+WAIT_OLD_DEFAULT_SECONDS = 900
 WAIT_MIN_SECONDS = 60
 WAIT_MAX_SECONDS = 3600
 _configured: dict[str, int] = {}
@@ -23,9 +27,6 @@ _configured: dict[str, int] = {}
 MAX_QUESTIONS = 4
 MIN_OPTIONS = 2
 MAX_OPTIONS = 4
-MAX_CRITERIA = 30
-MAX_CHECKS = 60        # task 2026-11-24_tdd-examples-first: one real check per example must fit (was 12; the 512 KB limit below stays)
-MAX_FILES_PER_CHECK = 20
 # Functions that run a command: a call to one of these whose first argument starts with "git" is a git invocation. Words in
 # strings, assertion data or comments ("the README documents git diff --stat") are not (round 1 of 2026-11-04_checks-no-git).
 COMMAND_RUNNERS = {"run", "call", "check_call", "check_output", "Popen", "system", "popen", "getoutput", "getstatusoutput",
@@ -61,15 +62,8 @@ def runs_git(relative: str, body: str) -> bool:
                 return True
         return False
     return any(SHELL_GIT_LINE.match(line) for line in body.splitlines())
-MAX_TOTAL_BYTES = 512 * 1024
-QUESTION_CHARS = 200
-OPTION_CHARS = 150
-OTHER_CHARS = 300
-CRITERION_CHARS = 400
-REQUIREMENTS_LIMIT = 12000          # the same limit propose-requirements and confirm-requirements apply
 DECIDED_HEADING = "Decided before coding:"
 
-MAX_FAILURE_PATHS = 10
 COVERED = "covered"
 NOT_MAPPED = "not mapped"
 NOT_MAPPED_NEW = "not mapped: the reviewer did not say which test covers this"
@@ -81,15 +75,6 @@ GAP_NORMAL_ONLY = "gap: only the normal case is tested, no failure or unusual ca
 # recorded what it runs and which example it asserts and marked it checked; everything else is stored and run but never
 # counted, and its requirement is tested for real at the final review. A criterion without "examples" is an older record and
 # keeps the older rules untouched (a task past its contract keeps its rules).
-MAX_EXAMPLES = 4
-EXAMPLE_MIN = 20
-EXAMPLE_MAX = 300
-MAX_ASKS = 60
-ASK_CHARS = 200
-MAX_NOT_READ = 20
-MAX_RESULT_ITEMS = 6           # what the owner asked the result to contain, one thing a line; a long expert list made no real result pass (first real run)
-RESULT_ITEM_CHARS = 120
-RUNS_CHARS = 200
 KIND_DOCUMENT = "document"         # a requirement about a delivered document (a licence, a README): checked by reading it
 KIND_SOURCE = "source"             # a requirement that changes the source everywhere (a rename, a removal): checked by reading it
 READING_KINDS = {KIND_DOCUMENT, KIND_SOURCE}
@@ -159,66 +144,61 @@ def real_test_line(criteria: list[dict[str, Any]]) -> str:
     return f"{counted} of {len(rows)} requirements have a real test before the build; the others are tested for real at the final review."
 
 
-def parse_examples(item: dict[str, Any], label: str, required: bool) -> list[str]:
-    """The requirement's examples: one to four plain sentences, each saying what goes in or what the user does and the exact result."""
+def _words(value: Any) -> str:
+    """value as one line of text ("" when it is not text)."""
+    return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def parse_examples(item: dict[str, Any], label: str, required: bool, notes: list[str] | None = None) -> list[str]:
+    """The requirement's examples, each saying what goes in or what the user does and the exact result. Owner 2026-11-24: the form of an
+    example never stops the package; what can be read is kept, the rest is named in notes."""
+    notes = notes if notes is not None else []
     raw = item.get("examples")
-    if raw is None and not required:
-        return []
-    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_EXAMPLES:
-        raise ValueError(f"{label} needs \"examples\": one to {MAX_EXAMPLES} plain sentences, each saying what goes in or what the user does and the exact "
-                         "result (for example: \"Typing Chicago and pressing Check weather shows today's temperature for Chicago.\")")
-    examples = []
-    for position, value in enumerate(raw, 1):
-        problem = plain_problem(value, EXAMPLE_MAX)
-        if not problem and len(" ".join(value.split())) < EXAMPLE_MIN:
-            problem = f"it is too short to be an example ({EXAMPLE_MIN} characters at least)"
-        if problem:
-            raise ValueError(f"{label} example {position} is not a plain example the owner can read: {problem}")
-        examples.append(" ".join(value.split()))
+    if isinstance(raw, str):
+        raw = [raw]
+    examples = [words for words in map(_words, raw if isinstance(raw, list) else []) if words]
+    if required and not examples:
+        notes.append(f"{label} has no example, so its tests are not counted and it is tested for real at the final review")
     return examples
 
 
 def parse_added_requirement(data: dict[str, Any], number: int) -> dict[str, Any]:
     """A requirement of the accepted text that the early list left out, added by the final Reviewer: its text, its plain line
-    for the owner, its examples and its kind. Raises ValueError with the plain reason."""
-    text = _text(data.get("text"), f"requirement {number} text", CRITERION_CHARS, minimum=5)
-    problem = plain_problem(data.get("plain"))
-    if problem:
-        raise ValueError(f"requirement {number} needs a `plain` sentence the owner can read (at most {PLAIN_LIMIT} characters): {problem}")
-    return {"text": text, "plain": " ".join(data["plain"].split()), "examples": parse_examples(data, f"requirement {number}", True),
-            "kind": requirement_kind(data, text)}
+    for the owner, its examples and its kind."""
+    text = _words(data.get("text"))
+    examples = parse_examples(data, f"requirement {number}", True)
+    plain = _words(data.get("plain")) or text
+    return {"text": text, "plain": plain, "examples": examples or [plain], "kind": requirement_kind(data, text)}
 
 
-def parse_owner_lists(data: dict[str, Any], criteria_count: int, required: bool) -> dict[str, Any]:
+def _numbers(value: Any, highest: int) -> list[int]:
+    """The requirement numbers in value that exist (1 to highest); anything else in it is ignored."""
+    values = value if isinstance(value, list) else [value]
+    return sorted({n for n in values if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= highest})
+
+
+def _lines(value: Any) -> list[str]:
+    """The readable lines of a list (or of one text)."""
+    return [words for words in map(_words, value if isinstance(value, list) else [value]) if words]
+
+
+def parse_owner_lists(data: dict[str, Any], criteria_count: int, required: bool, notes: list[str] | None = None) -> dict[str, Any]:
     """The three lists the Reviewer writes from the owner's own direction and files: what he asked for and which requirements
     cover each ask, any source it could not read, and what the finished result of his scenario must contain at least."""
-    asks_raw = data.get("owner_asks")
-    if asks_raw is None and not required:
-        asks_raw = []
-    if not isinstance(asks_raw, list) or len(asks_raw) > MAX_ASKS or (required and not asks_raw):
-        raise ValueError(f"list under \"owner_asks\" every distinct thing the owner asked for in the direction, the clarifications and the attached files "
-                         f"(one to {MAX_ASKS} plain lines, related ones combined, none dropped), each as {{\"ask\": \"...\", \"requirements\": [<numbers that cover it>]}}; "
-                         "use [] for an ask no requirement covers")
+    notes = notes if notes is not None else []
     asks = []
-    for position, item in enumerate(asks_raw, 1):
-        if not isinstance(item, dict):
-            raise ValueError(f"owner ask {position} must be an object with ask and requirements")
-        numbers = item.get("requirements")
-        if not isinstance(numbers, list) or any(isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= criteria_count for n in numbers):
-            raise ValueError(f"owner ask {position}: requirements must list existing requirement numbers (1 to {criteria_count}), or [] when none covers it")
-        asks.append({"ask": _text(item.get("ask"), f"owner ask {position}", ASK_CHARS, minimum=5), "requirements": sorted(set(numbers))})
-    not_read_raw = data.get("not_read") or []
-    if not isinstance(not_read_raw, list) or len(not_read_raw) > MAX_NOT_READ:
-        raise ValueError(f"not_read must list at most {MAX_NOT_READ} sources you could not read (a file name each)")
-    not_read = [_text(value, f"not_read {position}", ASK_CHARS, minimum=2) for position, value in enumerate(not_read_raw, 1)]
-    result_raw = data.get("result_must_contain")
-    if result_raw is None and not required:
-        result_raw = []
-    if not isinstance(result_raw, list) or len(result_raw) > MAX_RESULT_ITEMS or (required and not result_raw):
-        raise ValueError(f"list under \"result_must_contain\" only what the owner asked the finished result of his main scenario to contain: one to "
-                         f"{MAX_RESULT_ITEMS} plain lines, one thing each, in his words; never your own expert answer or its details")
-    result = [_text(value, f"result item {position}", RESULT_ITEM_CHARS, minimum=5) for position, value in enumerate(result_raw, 1)]
-    return {"owner_asks": asks, "not_read": not_read, "result_must_contain": result}
+    raw = data.get("owner_asks")
+    for item in raw if isinstance(raw, list) else [raw] if raw else []:
+        words = _words(item.get("ask") or item.get("text")) if isinstance(item, dict) else _words(item)
+        if words:
+            # an ask whose numbers cannot be read is shown as covered by none: the owner sees it, nothing is rounded up
+            asks.append({"ask": words, "requirements": _numbers(item.get("requirements"), criteria_count) if isinstance(item, dict) else []})
+    result = _lines(data.get("result_must_contain"))
+    if required and not asks:
+        notes.append("the reviewer listed none of your asks, so nothing says whether the requirements cover them all")
+    if required and not result:
+        notes.append("the reviewer did not say what the finished result must contain")
+    return {"owner_asks": asks, "not_read": _lines(data.get("not_read")), "result_must_contain": result}
 
 
 def asks_not_covered(asks: list[dict[str, Any]]) -> list[str]:
@@ -252,24 +232,8 @@ CHECKED = "checked"
 
 
 # --- Plain words for the owner (owner 2026-10-24: "it is gibberish") ------------------------------------------------------------------------
-PLAIN_LIMIT = 140                 # one sentence per requirement in "What will be tested"
-PLAIN_MIN_WORDS = 5
 SUMMARY_HEADING = "In plain words:"
-SUMMARY_MAX_LINES = 3
 SUMMARY_LINE_LIMIT = 200
-_PLAIN_RULES = (
-    (re.compile(r"`"), "a backtick (code)"),
-    (re.compile(r"\bsections?\s*\d|§", re.I), "a section number"),
-    (re.compile(r"\b[\w./-]+\.(?:py|js|ts|md|json|sh|html|css)\b", re.I), "a file name"),
-    (re.compile(r"\b(?:GIVEN|WHEN|THEN)\b"), "GIVEN / WHEN / THEN"),
-    (re.compile(r"\b(?:spec|delta)\b", re.I), "the word spec or delta"),
-    (re.compile(r"\b\w+\("), "a function call"),
-    (re.compile(r"\b[a-z]+(?:_[a-z0-9]+)+\b"), "a code name with underscores"),
-    (re.compile(r"\bD-\d{3}\b"), "a decision number"),
-)
-_COMMIT_ID = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
-
-
 NON_FUNCTIONAL = "non-functional"
 _NFR_KINDS = {"non-functional", "nonfunctional", "non functional", "quality", "nfr"}
 _NFR_PREFIX = re.compile(r"^\s*(non[- ]?functional|quality requirement)\s*:", re.I)
@@ -295,105 +259,71 @@ def no_program_reason(text: Any) -> str:
             " The independent review reads the report against exactly this.")
 
 
-def plain_problem(value: Any, limit: int = PLAIN_LIMIT, *, min_words: int = PLAIN_MIN_WORDS) -> str:
-    """Why this is not plain words for the owner ("" when it is). Deterministic: the board and the tests use the same rules."""
-    if not isinstance(value, str) or not value.strip():
-        return "it is empty"
-    text = " ".join(value.split())
-    if len(text) > limit:
-        return f"it is {len(text)} characters; the limit is {limit}"
-    if len(text.split()) < min_words:
-        return f"it is too short to say anything ({min_words} words at least)"
-    for pattern, name in _PLAIN_RULES:
-        if pattern.search(text):
-            return f"it contains {name}, which the owner cannot read"
-    if _COMMIT_ID.search(text):
-        return "it contains a commit or code id, which the owner cannot read"
-    return ""
-
-
-PLAIN_SUMMARY_EXAMPLE = (
-    "Good: \"In plain words:\nA forecast page will show the next five days.\nYou will see a high and a low for each day.\n"
-    "Nothing for you to do.\n\n<the full requirements>\". "
-    "Bad: a block that names a spec section, a file, a function or a commit, or no block at all."
-)
-
-
-def split_plain_summary(text: Any) -> tuple[list[str], str]:
-    """(plain lines, the whole text) when the text starts with a valid "In plain words:" block, else raises ValueError with the fix.
-
-    The block is one to three short lines, then a blank line, then the full requirements. The whole stored text (block included) is what
-    the owner accepts and Delivery confirms verbatim, so the second value is the text unchanged.
-    """
-    raw = str(text or "").replace("\r\n", "\n").strip()
-    head = raw.split("\n", 1)[0]
-    if head.lower().startswith(SUMMARY_HEADING.lower()) and head[len(SUMMARY_HEADING):].strip():
-        # "In plain words: A page will ..." on one line is the same block (agents write it that way, 2026-10-28)
-        raw = SUMMARY_HEADING + "\n" + head[len(SUMMARY_HEADING):].strip() + raw[len(head):]
-    lines = raw.split("\n")
-    if not lines or lines[0].strip().lower() != SUMMARY_HEADING.lower():
-        raise ValueError(f"start the requirements with an \"{SUMMARY_HEADING}\" block for the owner: one to {SUMMARY_MAX_LINES} short lines (what will be built, what changes for them, whether they must do anything), then a blank line, then the full requirements. {PLAIN_SUMMARY_EXAMPLE}")
-    block: list[str] = []
-    index = 1
+def _block(lines: list[str], index: int, heading: str) -> tuple[list[str], int]:
+    """(the block's lines, the index after it) when lines[index] starts the block named heading ("heading: words" on one line is the same)."""
+    first = lines[index].strip()[len(heading):].strip()
+    block = [first] if first else []
+    index += 1
     while index < len(lines) and lines[index].strip():
         block.append(lines[index].strip())
         index += 1
-    rest = "\n".join(lines[index:]).strip()
-    if not 1 <= len(block) <= SUMMARY_MAX_LINES:
-        raise ValueError(f"the \"{SUMMARY_HEADING}\" block must have one to {SUMMARY_MAX_LINES} lines, then a blank line. {PLAIN_SUMMARY_EXAMPLE}")
-    if not rest:
-        raise ValueError(f"after the \"{SUMMARY_HEADING}\" block, a blank line and the full requirements must follow. {PLAIN_SUMMARY_EXAMPLE}")
-    for number, line in enumerate(block, 1):
-        problem = plain_problem(line, SUMMARY_LINE_LIMIT, min_words=3)
-        if problem:
-            raise ValueError(f"line {number} of the \"{SUMMARY_HEADING}\" block is not plain words: {problem}. {PLAIN_SUMMARY_EXAMPLE}")
-    return block, raw
+    return block, index
+
+
+def _starts(line: str, heading: str) -> bool:
+    return line.strip().lower().startswith(heading.lower())
+
+
+def has_plain_summary(text: Any) -> bool:
+    """The text starts with the builder's own block for the owner."""
+    return _starts(str(text or "").strip().split("\n")[0], SUMMARY_HEADING)
+
+
+def split_plain_summary(text: Any) -> tuple[list[str], str]:
+    """(plain lines, the whole text). Owner 2026-11-24: how the builder wrote the block for the owner never stops the contract; when there is
+    none, the requirements' own first words become it. The whole returned text is what the owner accepts."""
+    raw = str(text or "").replace("\r\n", "\n").strip()
+    lines = raw.split("\n")
+    if _starts(lines[0], SUMMARY_HEADING):
+        block, after = _block(lines, 0, SUMMARY_HEADING)
+        rest = "\n".join(lines[after:]).strip()
+        if block and rest:
+            return block, "\n".join([SUMMARY_HEADING, *block]) + "\n\n" + rest
+        raw = rest or "\n".join(block)
+    words = next((" ".join(line.lstrip("#-*0123456789. ").split()) for line in raw.split("\n") if len(line.split()) > 3), " ".join(raw.split()))
+    block = [words if len(words) <= SUMMARY_LINE_LIMIT else words[:SUMMARY_LINE_LIMIT - 1].rstrip() + "…"]
+    return block, "\n".join([SUMMARY_HEADING, *block]) + "\n\n" + raw
 
 
 FIT_HEADING = "Already in the project:"
-FIT_EXAMPLE = (
-    "Good: \"Already in the project:\nThe sign-in page you accepted last week already exists.\nThis change adds a reset link to it instead of "
-    "building a second page.\n\n<the full requirements>\". Say \"Nothing related exists yet.\" when that is true."
-)
+FIT_NOT_SAID = "The builder did not say what the project already has."
 
 
 def split_fit_block(text: Any) -> tuple[list[str], str]:
-    """(fit lines, the whole text) when the text, which already starts with a valid plain block, continues with a valid "Already in the project:" block, else raises ValueError with the fix.
-
-    Takes the text split_plain_summary returned. The block follows the plain block and its blank line: one to three short lines under the same
-    plain-words rules, then a blank line, then the full requirements. Only the shape is checked; whether the lines are true is the Reviewer's judgment.
-    """
+    """(fit lines, the whole text) for a text that starts with the plain block (split_plain_summary's second value). A missing block says so."""
     lines = str(text or "").split("\n")
     index = 1
     while index < len(lines) and lines[index].strip():
         index += 1                      # past the plain block
     while index < len(lines) and not lines[index].strip():
         index += 1                      # past the blank line
-    if index >= len(lines) or not lines[index].strip().lower().startswith(FIT_HEADING.lower()):
-        raise ValueError(f"after the \"{SUMMARY_HEADING}\" block and a blank line, add an \"{FIT_HEADING}\" block: one to {SUMMARY_MAX_LINES} short lines saying what accepted work or existing code this task touches and how the new work fits or extends it, then a blank line, then the full requirements. {FIT_EXAMPLE}")
-    same_line = lines[index].strip()[len(FIT_HEADING):].strip()
-    if same_line:
-        # "Already in the project: The page exists." on one line is the same block (as for the plain block)
-        lines[index:index + 1] = [FIT_HEADING, same_line]
-    block: list[str] = []
-    after = index + 1
-    while after < len(lines) and lines[after].strip():
-        block.append(lines[after].strip())
-        after += 1
-    if not 1 <= len(block) <= SUMMARY_MAX_LINES:
-        raise ValueError(f"the \"{FIT_HEADING}\" block must have one to {SUMMARY_MAX_LINES} lines, then a blank line. {FIT_EXAMPLE}")
-    if not "\n".join(lines[after:]).strip():
-        raise ValueError(f"after the \"{FIT_HEADING}\" block, a blank line and the full requirements must follow. {FIT_EXAMPLE}")
-    for number, line in enumerate(block, 1):
-        problem = plain_problem(line, SUMMARY_LINE_LIMIT, min_words=3)
-        if problem:
-            raise ValueError(f"line {number} of the \"{FIT_HEADING}\" block is not plain words: {problem}. {FIT_EXAMPLE}")
-    return block, "\n".join(lines)
+    head = "\n".join(lines[:index]).rstrip()
+    if index < len(lines) and _starts(lines[index], FIT_HEADING):
+        block, after = _block(lines, index, FIT_HEADING)
+        rest = "\n".join(lines[after:]).strip()
+        if block and rest:
+            return block, head + "\n\n" + "\n".join([FIT_HEADING, *block]) + "\n\n" + rest
+        rest = rest or "\n".join(block)
+    else:
+        rest = "\n".join(lines[index:]).strip()
+    return [FIT_NOT_SAID], head + "\n\n" + FIT_HEADING + "\n" + FIT_NOT_SAID + "\n\n" + rest
 
 
 def configure(seconds: Any) -> None:
     """Install the owner's wait (the project worker passes the settings value once at start); None restores the default."""
     _configured.clear()
+    if seconds == WAIT_OLD_DEFAULT_SECONDS:
+        return      # the value older versions saved for everybody; nobody chose it (2026-11-24: it took half of the new wait away)
     if isinstance(seconds, int) and not isinstance(seconds, bool) and WAIT_MIN_SECONDS <= seconds <= WAIT_MAX_SECONDS:
         _configured["seconds"] = seconds
 
@@ -401,16 +331,6 @@ def configure(seconds: Any) -> None:
 def wait_seconds() -> int:
     """Give the wait the owner configured, or WAIT_DEFAULT_SECONDS when configure() set none. Returns the wait in seconds."""
     return _configured.get("seconds", WAIT_DEFAULT_SECONDS)
-
-
-def _text(value: Any, label: str, limit: int, *, minimum: int = 1) -> str:
-    """Collapse value's whitespace and check it is a string of at least minimum and at most limit characters, raising ValueError naming label if not. Return the cleaned value."""
-    if not isinstance(value, str) or len(" ".join(value.split())) < minimum:
-        raise ValueError(f"{label} is required")
-    value = " ".join(value.split())
-    if len(value) > limit:
-        raise ValueError(f"{label} must be {limit} characters or fewer")
-    return value
 
 
 def _relative_path(value: Any) -> str:
@@ -423,80 +343,120 @@ def _relative_path(value: Any) -> str:
     return str(path)
 
 
-def parse_checks(checks_raw: Any, label: str, *, examples: int | None = None, reading: bool = False) -> tuple[list[dict[str, Any]], int]:
-    """Validate a list of checks (a ledger plus the test files that assert the result); returns them and their size in bytes.
+def _own_ledger(files: dict[str, str]) -> str:
+    """The ledger NMHP writes itself for a check whose own ledger cannot be run: one row that runs the check's own tests."""
+    if not any(name.endswith(".py") and "unittest" in body for name, body in files.items()):
+        return ""
+    names = sorted(name for name, body in files.items() if name.endswith(".py") and "unittest" in body)
+    pattern = "test_*.py" if any(PurePosixPath(name).name.startswith("test_") for name in names) else "*.py"
+    return ("| ID | Simulation command | Expected system response | Observed system response | QA result |\n| --- | --- | --- | --- | --- |\n"
+            f"| S-001 | python3 -m unittest discover -s {{folder}} -p \"{pattern}\" | the check's own tests pass | not run yet | PASS |\n")
+
+
+def check_folder(number: int, position: int) -> str:
+    """Where the board places a check's files in the copy it runs."""
+    return f".contract-checks/c{number}-{position}"
+
+
+_ESCAPED_QUOTE = re.compile(r'\\(?=["\'])')
+
+
+def usable_ledger(ledger: str, files: dict[str, str], number: int, position: int, notes: list[str], where: str) -> str:
+    """ledger in a form the board can run ("" when it cannot be run at all): rows are numbered, escaped quotes unescaped, and, when no row
+    can be run, the check's own tests are run by a row NMHP writes."""
+    if _ESCAPED_QUOTE.search(ledger):
+        ledger = _ESCAPED_QUOTE.sub("", ledger)
+        notes.append(f"{where}: escaped quotes in its command were corrected")
+    with tempfile.TemporaryDirectory(prefix="harness-contract-check-") as temporary:
+        probe = Path(temporary) / "ledger.md"
+        probe.write_text(ledger, encoding="utf-8")
+        _rows, problems, said = contract.scenario_plan(probe)
+    if not problems:
+        notes.extend(f"{where}: {line}" for line in said)
+        return ledger
+    own = _own_ledger(files)
+    if own:
+        notes.append(f"{where}: its test list could not be run ({'; '.join(problems)[:160]}), so NMHP runs its test files itself")
+        return own.format(folder=check_folder(number, position))
+    notes.append(f"{where} cannot be run, so it is not used: {'; '.join(problems)[:240]}")
+    return ""
+
+
+def parse_checks(checks_raw: Any, label: str, *, examples: int | None = None, reading: bool = False,
+                 notes: list[str] | None = None, number: int = 0) -> tuple[list[dict[str, Any]], int]:
+    """The checks that can be used (a ledger plus the test files that assert the result) and their size in bytes.
 
     `examples` is the number of examples of the requirement the checks belong to (None for an older record, which keeps the
-    older rules); `reading` says the requirement is a document or source-wide one. Under the examples-first rules a check
-    marked checked must record what it runs and which example it asserts, and a check for what the app does that only reads
-    files is refused (task 2026-11-24_tdd-examples-first, Change 3)."""
-    if not isinstance(checks_raw, list):
-        raise ValueError(f"{label} checks must be a list")
+    older rules); `reading` says the requirement is a document or source-wide one. A check counts as a real test only when it says what it
+    runs and which example it asserts (task 2026-11-24_tdd-examples-first, Change 3). Owner 2026-11-24: a check in a bad form never takes
+    the package with it: it is corrected, or kept as "partly" (run, never counted), or left out and named in notes."""
+    notes = notes if notes is not None else []
     total_bytes = 0
     checks = []
-    for position, check in enumerate(checks_raw, 1):
+    for position, check in enumerate(checks_raw if isinstance(checks_raw, list) else [checks_raw] if checks_raw else [], 1):
         where = f"{label} check {position}"
         if not isinstance(check, dict):
-            raise ValueError(f"{where} must be an object")
+            notes.append(f"{where} could not be read, so it is not used")
+            continue
+        example = check.get("example")
+        if isinstance(example, bool) or not isinstance(example, int) or example < 1 or (examples is not None and example > examples):
+            example = None
         if "walk" in check:
             # a walk (task 2026-11-24_tdd-walks): steps on the app's screens, written as data, stored as this requirement's check
             from harness import walks
-            number = check.get("example")
-            if examples is None or isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= examples:
-                raise ValueError(f"{where}: a walk shows one of the requirement's examples: add \"example\" (1 to {examples or 1})")
-            entry = {**walks.parse(check["walk"], where), "example": number}
+            try:
+                entry = walks.parse(check["walk"], where)
+            except ValueError as error:
+                notes.append(f"{error}; this walk is not used")
+                continue
+            if example is None and examples == 1:
+                example = 1
+            if example is None:
+                entry["coverage"] = "partly"
+                notes.append(f"{where}: the walk names no example, so it runs but is not counted")
+            else:
+                entry["example"] = example
             total_bytes += sum(len(body.encode("utf-8")) for body in entry["files"].values())
-            checks.append(entry)
+            checks.append({**entry, "place": position})
+            continue
+        files: dict[str, str] = {}
+        unsafe = ""
+        for name, body in (check.get("files") or {}).items() if isinstance(check.get("files"), dict) else []:
+            try:
+                relative = _relative_path(name)
+            except ValueError as error:
+                unsafe = str(error)
+                break
+            if isinstance(body, str):
+                files[relative] = body
+        # Checks run in a copy of the project that has no git (the disposable checkout), so a check that runs git can never pass,
+        # whatever the work is (2026-11-04).
+        git = next((relative for relative, body in files.items() if runs_git(relative, body)), "")
+        if unsafe or not files or git:
+            notes.append(f"{where} is not used: " + (unsafe or (f"its file {git} runs git, and checks run in a copy with no git" if git else "it has no test file")))
+            continue
+        ledger = usable_ledger(check.get("ledger") if isinstance(check.get("ledger"), str) else "", files, number, position, notes, where)
+        if not ledger:
             continue
         coverage = check.get("coverage", CHECKED)
         if coverage not in {"checked", "partly"}:
-            raise ValueError(f"{where}: coverage must be checked or partly")
-        ledger = check.get("ledger")
-        if not isinstance(ledger, str) or not ledger.strip():
-            raise ValueError(f"{where} needs its scenario ledger text")
-        files_raw = check.get("files")
-        if not isinstance(files_raw, dict) or not files_raw:
-            raise ValueError(f"{where} needs at least one test file that asserts the result (files)")
-        if len(files_raw) > MAX_FILES_PER_CHECK:
-            raise ValueError(f"{where}: at most {MAX_FILES_PER_CHECK} files")
-        files: dict[str, str] = {}
-        for name, body in files_raw.items():
-            relative = _relative_path(name)
-            if relative in files:
-                raise ValueError(f"{where}: file {relative} is listed twice")
-            if not isinstance(body, str):
-                raise ValueError(f"{where}: file {relative} must be text")
-            files[relative] = body
-            total_bytes += len(body.encode("utf-8"))
-        total_bytes += len(ledger.encode("utf-8"))
-        # Checks run in a copy of the project that has no git (the disposable checkout), so a check that runs git can never pass,
-        # whatever the work is. Refused here, when it is written, not weeks later at final acceptance (2026-11-04).
-        for relative, body in files.items():
-            if runs_git(relative, body):
-                raise ValueError(f"{where}: file {relative} runs git; checks run in a copy of the project with no git. Compare against "
-                                 "the stored baseline copy (the files as they were) instead, never through git commands")
-        entry = {"coverage": coverage, "ledger": ledger, "files": files}
-        if check.get("runs"):
-            entry["runs"] = _text(check["runs"], f"{where} runs", RUNS_CHARS, minimum=2)
-        if check.get("example") is not None:
-            number = check["example"]
-            if isinstance(number, bool) or not isinstance(number, int) or number < 1 or (examples is not None and number > examples):
-                raise ValueError(f"{where}: example must be the number of one of the requirement's examples (1 to {examples or 1})")
-            entry["example"] = number
-        if examples is not None and not reading:
-            if only_reads_files(files):
-                raise ValueError(f"{where} only reads files, so it cannot show what the program does: a check for an app requirement runs the program "
-                                 "(a command, an address or its own function) and compares the result with an example. If the requirement really is about a "
-                                 "delivered document, or changes the source everywhere, declare it with \"kind\": \"document\" or \"kind\": \"source\"")
-            if coverage == "checked" and not check_counted(entry):
-                raise ValueError(f"{where} is marked checked but does not say what it runs and which example it asserts: add \"runs\" (the command, "
-                                 "address or function of the program it exercises) and \"example\" (1 to " + str(examples) + "), or mark it "
-                                 "\"coverage\": \"partly\" (a syntax check, an install, a start with no example asserted is partly: stored and run, never counted)")
-        if "covers" in check:
-            covers = check["covers"]
-            if not isinstance(covers, list) or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in covers):
-                raise ValueError(f"{where}: covers must list requirement numbers")
-            entry["covers"] = sorted(set(covers))
+            coverage = "partly"
+            notes.append(f"{where} does not say whether it tests the whole requirement, so it runs but is not counted")
+        # the Reviewer names the check's folder by its place in its own list; the board moves that name when a check before it is left out
+        entry = {"coverage": coverage, "ledger": ledger, "files": files, "place": position}
+        if _words(check.get("runs")):
+            entry["runs"] = _words(check["runs"])
+        if example is not None:
+            entry["example"] = example
+        if examples is not None and not reading and coverage == "checked":
+            if only_reads_files(files) or not check_counted(entry):
+                entry["coverage"] = "partly"
+                notes.append(f"{where} " + ("only reads files" if only_reads_files(files) else "does not say what it runs and which example it asserts")
+                             + ", so it runs but is not counted")
+        covers = _numbers(check.get("covers"), 10 ** 6)
+        if covers:
+            entry["covers"] = covers
+        total_bytes += len(ledger.encode("utf-8")) + sum(len(body.encode("utf-8")) for body in files.values())
         checks.append(entry)
     return checks, total_bytes
 
@@ -504,12 +464,22 @@ def parse_checks(checks_raw: Any, label: str, *, examples: int | None = None, re
 def parse_failure_paths(item: dict[str, Any], label: str) -> tuple[list[str], str, bool]:
     """(failure paths and edge cases the checks cover, the reason none apply, whether the Reviewer said anything about it)."""
     said = "failure_paths" in item or "no_failure_paths_because" in item
-    raw = item.get("failure_paths") or []
-    if not isinstance(raw, list) or len(raw) > MAX_FAILURE_PATHS:
-        raise ValueError(f"{label} failure_paths must be a list of at most {MAX_FAILURE_PATHS} short sentences")
-    paths = [_text(entry, f"{label} failure path", CRITERION_CHARS) for entry in raw]
-    none = _text(item["no_failure_paths_because"], f"{label} no_failure_paths_because", CRITERION_CHARS, minimum=3) if item.get("no_failure_paths_because") else ""
-    return paths, none, said
+    return _lines(item.get("failure_paths")), _words(item.get("no_failure_paths_because")), said
+
+
+def placed(check: dict[str, Any], number: int, position: int) -> tuple[str, dict[str, str]]:
+    """The check's ledger and files with its folder named by the place it is stored at."""
+    place = check.get("place", position)
+    if place == position or is_walk_files(check):
+        return check["ledger"], check["files"]
+    old = re.compile(re.escape(check_folder(number, place)) + r"(?!\d)")
+    new = check_folder(number, position)
+    return old.sub(new, check["ledger"]), {name: old.sub(new, body) for name, body in check["files"].items()}
+
+
+def is_walk_files(check: dict[str, Any]) -> bool:
+    """A walk has no folder of its own."""
+    return bool(check.get("walk"))
 
 
 def covered_by_others(criteria: list[dict[str, Any]]) -> dict[int, int]:
@@ -565,85 +535,65 @@ def coverage_request(task: str, numbers: list[int], criteria: list[dict[str, Any
 
 
 def parse_submission(raw: str, *, examples_required: bool = True) -> dict[str, Any]:
-    """Validate the JSON a Reviewer uploads; raise ValueError with a plain reason, return the normalised form.
+    """The Reviewer's package in the form the board stores, with `notes` naming everything that was corrected or left out.
 
-    With `examples_required` (every submission the board records for a full Write-code task) each criterion needs its examples
-    and the submission needs the owner's asks and the result list (task 2026-11-24_tdd-examples-first, Changes 1, 2 and 5)."""
+    Only a file nothing can be read from is refused (owner 2026-11-24: form never stops the work). With `examples_required` (every
+    submission the board records for a full Write-code task) a criterion without examples, asks or a result list is noted, and a check that
+    names no example is never counted (task 2026-11-24_tdd-examples-first, Changes 1, 2 and 5)."""
     try:
         data = json.loads(raw)
     except (TypeError, ValueError) as error:
-        raise ValueError("the submission must be a JSON file") from error
-    if not isinstance(data, dict):
-        raise ValueError("the submission must be a JSON object with criteria and questions")
-    criteria_raw = data.get("criteria")
+        raise ValueError("the submission must be a JSON file; nothing was recorded, so send it again once it is one") from error
+    criteria_raw = data.get("criteria") if isinstance(data, dict) else None
     if not isinstance(criteria_raw, list) or not criteria_raw:
-        raise ValueError("list every acceptance criterion under criteria, each with its checks or the reason it has none")
-    if len(criteria_raw) > MAX_CRITERIA:
-        raise ValueError(f"at most {MAX_CRITERIA} criteria")
-    total_bytes = 0
-    total_checks = 0
+        raise ValueError("list every acceptance criterion under criteria, each with its checks or the reason it has none; nothing was recorded, so send it again")
+    notes: list[str] = []
     criteria = []
     for number, item in enumerate(criteria_raw, 1):
+        label = f"criterion {number}"
         if not isinstance(item, dict):
-            raise ValueError(f"criterion {number} must be an object")
-        text = _text(item.get("text"), f"criterion {number} text", CRITERION_CHARS, minimum=5)
-        sharper = _text(item["sharper"], f"criterion {number} sharper sentence", CRITERION_CHARS) if item.get("sharper") else ""
-        checks_raw = item.get("checks") or []
-        if not isinstance(checks_raw, list):
-            raise ValueError(f"criterion {number} checks must be a list")
-        why = ""
-        if not checks_raw:
-            why = _text(item.get("why_not_checked"), f"criterion {number} needs a check or the reason it has none (why_not_checked)", CRITERION_CHARS, minimum=3)
-        plain = item.get("plain")
-        problem = plain_problem(plain)
-        if problem:
-            raise ValueError(f"criterion {number} needs a `plain` sentence the owner can read (what this protects for them, at most {PLAIN_LIMIT} characters): {problem}")
-        examples = parse_examples(item, f"criterion {number}", examples_required)
+            item = {"text": item if isinstance(item, str) else ""}
+        text = _words(item.get("text")) or _words(item.get("plain"))
+        if not text:
+            text = f"Requirement {number}"
+            notes.append(f"{label} has no text")
+        plain = _words(item.get("plain")) or text
+        examples = parse_examples(item, label, examples_required, notes)
         kind = requirement_kind(item, text)
-        checks, check_bytes = parse_checks(checks_raw, f"criterion {number}", examples=len(examples) if examples else None, reading=kind in READING_KINDS)
-        paths, none_because, said = parse_failure_paths(item, f"criterion {number}")
-        total_bytes += check_bytes
-        total_checks += len(checks)
-        criteria.append({"n": number, "text": text, "plain": " ".join(plain.split()), "sharper": sharper, "why_not_checked": why, "checks": checks,
-                         "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said,
-                         "kind": kind, **({"examples": examples} if examples else {})})
-    if total_checks > MAX_CHECKS:
-        raise ValueError(f"at most {MAX_CHECKS} checks in one submission")
-    if total_bytes > MAX_TOTAL_BYTES:
-        raise ValueError(f"the checks are larger than {MAX_TOTAL_BYTES // 1024} KB together")
+        left_out: list[str] = []
+        checks, _bytes = parse_checks(item.get("checks"), label, examples=len(examples) if (examples or examples_required) else None,
+                                      reading=kind in READING_KINDS, notes=left_out, number=number)
+        notes.extend(left_out)
+        why = _words(item.get("why_not_checked"))
+        if not checks and not why:
+            why = "; ".join(line for line in left_out if "not used" in line) or "the reviewer gave no test and no reason"
+        paths, none_because, said = parse_failure_paths(item, label)
+        criteria.append({"n": number, "text": text, "plain": plain, "sharper": _words(item.get("sharper")), "why_not_checked": why if not checks else "",
+                         "checks": checks, "failure_paths": paths, "no_failure_paths_because": none_because, "_said": said,
+                         # with no example of its own the requirement itself is what the final review tests for real (never counted before)
+                         "kind": kind, **({"examples": examples or [text]} if (examples or examples_required) else {})})
     mapped = any(item.pop("_said") or any("covers" in check for check in item["checks"]) for item in criteria)
     for item in criteria:
         item["mapped"] = mapped
         item["new"] = True
         for check in item["checks"]:
-            for target in check.get("covers") or []:
-                if target > len(criteria):
-                    raise ValueError(f"criterion {item['n']}: covers names requirement {target}, which is not in the list")
+            if check.get("covers"):
+                check["covers"] = _numbers(check["covers"], len(criteria))
     apply_coverage(criteria)
-    questions_raw = data.get("questions") or []
-    if not isinstance(questions_raw, list):
-        raise ValueError("questions must be a list")
-    if len(questions_raw) > MAX_QUESTIONS:
-        raise ValueError(f"at most {MAX_QUESTIONS} questions, once; keep only the product choices you cannot write a check without")
-    questions = []
-    for number, item in enumerate(questions_raw, 1):
-        if not isinstance(item, dict):
-            raise ValueError(f"question {number} must be an object")
-        options_raw = item.get("options")
-        if not isinstance(options_raw, list) or not MIN_OPTIONS <= len(options_raw) <= MAX_OPTIONS:
-            raise ValueError(f"question {number} needs {MIN_OPTIONS} to {MAX_OPTIONS} options")
-        options = [_text(option, f"question {number} option", OPTION_CHARS) for option in options_raw]
+    questions: list[dict[str, Any]] = []
+    questions_raw = data.get("questions")
+    for item in questions_raw if isinstance(questions_raw, list) else []:
+        options = _lines(item.get("options"))[:MAX_OPTIONS] if isinstance(item, dict) and isinstance(item.get("options"), list) else []
+        words = _words(item.get("text") or item.get("question")) if isinstance(item, dict) else ""
+        if not words or len(options) < MIN_OPTIONS or len(questions) == MAX_QUESTIONS:
+            notes.append("a question was not asked: " + ("only the first four are" if len(questions) == MAX_QUESTIONS else "it has no text or fewer than two options"))
+            continue
         recommended = item.get("recommended")
         if isinstance(recommended, bool) or not isinstance(recommended, int) or not 0 <= recommended < len(options):
-            raise ValueError(f"question {number} must mark one option as recommended (its position, starting at 0)")
-        affects_raw = item.get("affects") or []
-        if not isinstance(affects_raw, list) or any(isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= len(criteria) for n in affects_raw):
-            raise ValueError(f"question {number} affects must list existing criterion numbers (1 to {len(criteria)})")
-        questions.append({
-            "n": number, "text": _text(item.get("text"), f"question {number} text", QUESTION_CHARS, minimum=5),
-            "options": options, "recommended": recommended, "affects": sorted(set(affects_raw)),
-        })
-    return {"criteria": criteria, "questions": questions, **parse_owner_lists(data, len(criteria), examples_required)}
+            recommended = 0
+        questions.append({"n": len(questions) + 1, "text": words, "options": options, "recommended": recommended,
+                          "affects": _numbers(item.get("affects"), len(criteria))})
+    return {"criteria": criteria, "questions": questions, **parse_owner_lists(data, len(criteria), examples_required, notes), "notes": notes}
 
 
 def resolve_answers(questions: list[dict[str, Any]], answers: Any) -> tuple[list[dict[str, Any]], bool]:
@@ -662,8 +612,6 @@ def resolve_answers(questions: list[dict[str, Any]], answers: Any) -> tuple[list
     for question in questions:
         item = given.get(question["n"], {})
         other = " ".join(str(item.get("other") or "").split())
-        if len(other) > OTHER_CHARS:
-            raise ValueError(f"an Other answer must be {OTHER_CHARS} characters or fewer")
         choice = item.get("choice")
         if other:
             answer, recommended, is_other = other, False, True
@@ -681,12 +629,6 @@ def append_decided(text: str, resolved: list[dict[str, Any]]) -> str:
     """Append a "Decided before coding" section to text, listing each resolved answer's question text and chosen answer, marking the recommended ones. Return the combined text with the section appended."""
     lines = [f"- {item['text']} -> {item['answer']}{' (recommended)' if item['recommended'] else ''}" for item in resolved]
     return text.rstrip() + "\n\n" + DECIDED_HEADING + "\n" + "\n".join(lines)
-
-
-def worst_case_decided_length(questions: list[dict[str, Any]]) -> int:
-    """The longest "Decided before coding" section any set of answers could add (Other answers at their cap)."""
-    longest = max(OTHER_CHARS, *(len(option) for q in questions for option in q["options"])) if questions else 0
-    return len(DECIDED_HEADING) + 4 + sum(len(q["text"]) + longest + 18 for q in questions)
 
 
 def criterion_label(criterion: dict[str, Any]) -> str:
@@ -738,11 +680,12 @@ def reviewer_instruction(task: str, version: int, requirements: str, direction: 
         "\"owner_asks\" with the requirement numbers that cover each ([] when none does), and list under \"result_must_contain\" what the finished "
         "result of his main scenario must contain at least. A check is marked \"checked\" only when it runs the program and asserts one example's result "
         "(\"runs\" and \"example\"); where the app does not exist yet and you cannot write that, give the examples and no check: the requirement is then "
-        "tested for real at the final review. Then submit ONCE with "
+        "tested for real at the final review. Then submit with "
         f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter "
         "`contract-first` (the board command reference --agent <your id> --name contract-first). Ask the owner at most 4 product questions, only where you cannot write "
-        "a check without guessing, each with 2 to 4 options and one recommended. The owner may go ahead without waiting and a submission after "
-        f"that, or after about {max(1, minutes)} minutes, is refused. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
+        "a check without guessing, each with 2 to 4 options and one recommended. The answer lists anything that could not be used: correct those with "
+        "contract-check-correct; a submission the board could not read was not recorded, so send it again. The owner may go ahead without waiting; "
+        f"aim to finish within about {max(1, minutes)} minutes. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
         f"ORIGINAL OWNER DIRECTION:\n{direction}\nREQUIREMENTS (version {version}):\n{requirements}"
         + (f"\nPROJECT BRIEF:\n{brief}" if brief else "")
     )
@@ -758,24 +701,22 @@ def recheck_instruction(task: str, version: int, answers: list[dict[str, Any]], 
         f"For each, write the new checks from the answers and submit them with contract-check-correct --task {task} --criterion <n> "
         "--reason \"updated for the owner's answers\" --submission <JSON file with {\"checks\": [...]}>. When nothing more needs changing, finish with "
         f"contract-check-correct --task {task} --criterion 0 --reason \"nothing more to change\" --submission <JSON file with {{\"checks\": []}}>. "
-        + existing_code_note(repository) + f" The owner may go ahead without waiting and a submission after that, or after about {max(1, minutes)} minutes, is refused. "
+        + existing_code_note(repository) + f" The owner may go ahead without waiting; aim to finish within about {max(1, minutes)} minutes. "
         "Do not start any polling or background helper. Never ask the owner anything in your terminal. USER ACTION: None. Open reference: contract-first"
     )
 
 
 # --- The builder says a locked check does not match reality (task 2026-10-26_check-deviation) --------------------------------------------
-DEVIATION_WHY_MIN = 20
-DEVIATION_WHY_MAX = 1200
 
 
 def deviation_request(task: str, check: str, number: int, criterion: str, why: str) -> str:
     """The one message that wakes the Reviewer to answer a builder's deviation, once, through the correction path."""
     return (
         f"CHECK DEVIATION: task {task}, check {check} (requirement {number}: {criterion}). Delivery says this stored check does not match reality: {why} "
-        f"Answer ONCE with contract-check-correct --task {task} --criterion {number}: either replace the check "
+        f"Answer with contract-check-correct --task {task} --criterion {number}: either replace the check "
         "(--reason \"<what was wrong>\" --submission <JSON file with {\"checks\": [...]}>; it is locked again, seen failing first and its coverage recomputed as for any correction), "
         "or keep it (--reason \"the check is right because <why>\" --submission <JSON file with {\"keep\": true, \"checks\": []}>). "
-        "A second answer is refused. Nothing is held and Delivery keeps building; if you never answer, the final reviewer sees the deviation and the check stays as it is. "
+        "Nothing is held and Delivery keeps building; if you never answer, the final reviewer sees the deviation and the check stays as it is. "
         "Do not start any polling or background helper. Never ask the owner anything. USER ACTION: None. Open reference: contract-first"
     )
 
@@ -789,10 +730,10 @@ def full_lane_request(task: str, version: int, why: str, requirements: str, minu
     """The one message that restarts the contract-check step for a Reviewer who sent a Small change task back to the full lane."""
     return (
         f"FULL LANE: you sent task {task} back from the Small change lane ({why}). Advisory preparation again, not a review round: write your checks from the "
-        "confirmed requirements below (black box)." + existing_code_note(repository) + " Then submit ONCE with "
+        "confirmed requirements below (black box)." + existing_code_note(repository) + " Then submit with "
         f"contract-check-submit --task {task} --version {version} --submission <your JSON file>; the format is in your reference chapter `contract-first`. "
-        "Submit no questions (the owner is not asked; a submission with questions is refused). The board runs the checks on Delivery's work as in the full lane; "
+        "Submit no questions (the owner is not asked; questions are left out). The board runs the checks on Delivery's work as in the full lane; "
         "nothing is held and the task is not sent back a second time. "
-        f"A submission after about {max(1, minutes)} minutes is refused. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
+        f"Aim to finish within about {max(1, minutes)} minutes. Do not start any polling or background helper. USER ACTION: None. Open reference: contract-first\n"
         f"REQUIREMENTS:\n{requirements}"
     )

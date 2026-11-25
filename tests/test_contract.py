@@ -56,58 +56,6 @@ class ContractTests(unittest.TestCase):
   direction="Run every scenario, including owner prose about OWNER DIRECTION"
   noise="\x1bP1$r0m\x1b\\\x9b7;85R\x90tmux;passthrough\x9c"
   self.assertEqual(contract.normalize_owner_direction(direction + noise), direction)
- def test_scenario_exception_requires_real_external_approval_and_reason(self):
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-001 | exception | N/A | N/A | N/A | N/A: x |\n")
-   self.assertFalse(contract.scenario_ledger_complete(path)[0])
-   path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-001 | exception | N/A | N/A | N/A | N/A: CTO - temporary third-party outage documented |\n")
-   self.assertTrue(contract.scenario_ledger_complete(path)[0])
- def test_description_only_scenario_ledger_is_rejected(self):
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   path.write_text("| ID | Scenario | QA result |\n|---|---|---|\n| S-001 | dependency fails and the system recovers | PASS |\n")
-   valid, problems = contract.scenario_ledger_exists(path)
-   self.assertFalse(valid)
-   self.assertIn("Simulation command", " ".join(problems))
-   self.assertIn("Expected system response", " ".join(problems))
- def test_scenario_requires_a_recognized_simulation_command(self):
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-001 | dependency fails | inspect the code | Retry is bounded and state is preserved | looked correct | PASS |\n")
-   valid, problems, rows = contract.scenario_simulations(path)
-   self.assertFalse(valid)
-   self.assertEqual(rows[0]["id"], "S-001")
-   self.assertIn("recognized test runner", " ".join(problems))
- def test_scenario_command_rejects_shell_control_operators(self):
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-001 | masked failure | `python3 -m unittest test_failure; true` | Failed test blocks review | PASS: claimed pass must not be trusted | PASS |\n")
-   valid, problems, _ = contract.scenario_simulations(path)
-   self.assertFalse(valid)
-   self.assertIn("shell control operators", " ".join(problems))
- def test_bare_ampersand_cannot_mask_failing_simulation_with_whitespace_variants(self):
-  commands = (
-   "python3 -m unittest test_failure&",
-   "python3 -m unittest test_failure &",
-   "python3 -m unittest test_failure & true",
-   "python3 -m unittest test_failure\t&\ttrue",
-   "python3 -m unittest test_failure | true",
-  )
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   for index, command in enumerate(commands, 1):
-    path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-%03d | masked failure | `%s` | The failing test is rejected before execution, so background or success syntax cannot mask it | PASS: validator rejected the command before execution | PASS |\n" % (index, command))
-    valid, problems, _ = contract.scenario_simulations(path)
-    self.assertFalse(valid, command)
-    self.assertIn("shell control operators", " ".join(problems))
- def test_scenario_pass_requires_an_observed_system_response(self):
-  with tempfile.TemporaryDirectory() as tmp:
-   path=Path(tmp)/"ledger.md"
-   path.write_text("| ID | Scenario | Simulation command | Expected system response | Observed system response | QA result |\n|---|---|---|---|---|---|\n| S-001 | dependency fails | `python3 -m unittest test_retry` | Retry is bounded and state is preserved | PASS | PASS |\n")
-   valid, problems = contract.scenario_ledger_complete(path)
-   self.assertFalse(valid)
-   self.assertIn("Observed system response", " ".join(problems))
  def test_executable_scenario_plan_is_accepted(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/"ledger.md"

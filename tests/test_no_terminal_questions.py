@@ -78,8 +78,7 @@ class AskOwnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already have a question open"):
             board.record_agent_question(self.root, self.agent["id"], "And how many days should it cover?")
         reviewer = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic")
-        with self.assertRaisesRegex(ValueError, "2 to 4 options"):
-            board.record_agent_question(self.root, reviewer["id"], "A question long enough?", ["only one"])
+        board.record_agent_question(self.root, reviewer["id"], "A question long enough?", ["only one"])
 
     def test_the_answer_reaches_the_asking_agent_and_closes_the_card(self):
         entry = board.record_agent_question(self.root, self.agent["id"], "Should the forecast show Celsius or Fahrenheit?", ["Celsius", "Fahrenheit"])

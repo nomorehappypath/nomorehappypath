@@ -30,7 +30,7 @@ class RepairPackageTests(unittest.TestCase):
             {"id": "A", "category": "behavior", "summary": "First behavior is incorrect.", "affected_paths": ["ui.py"], "surface": "UI", "regression_check": "Verify the first behavior."},
             {"id": "B", "category": "compatibility", "summary": "Second behavior is incompatible.", "affected_paths": ["security.py"], "surface": "API", "regression_check": "Verify the second behavior."},
         ])
-        with self.assertRaisesRegex(ValueError, "every package member"):
+        with self.assertRaisesRegex(ValueError, "not repaired yet"):
             repair_package.resolve(package, [
                 {"id": "A", "resolution": "Corrected the first behavior.", "regression_check": "The focused check now passes."},
             ], "delivery-1")
@@ -119,27 +119,6 @@ class RepairPackageBoardIntegrationTests(unittest.TestCase):
             {"id": "AUTH", "resolution": "Bound reads to the authenticated task.", "regression_check": "The forged task request is rejected."},
             {"id": "UI", "resolution": "Made the phone list scroll within its viewport.", "regression_check": "The phone-sized render keeps all controls visible."},
         ])
-        with patch.object(board, "_execute_internal_qa", side_effect=AssertionError("must not execute")) as execute:
-            with self.assertRaisesRegex(ValueError, "requires full review scope"):
-                board.request_review(
-                    self.root, self.delivery["id"], str(self.ledger), "review repairs",
-                    chunk="core", changes="repaired both failures",
-                    test_scope="affected", scope_reason="Only two files changed.",
-                    test_command="python3 -m unittest test_smoke",
-                    repair_package_id=self.package["id"],
-                )
-        execute.assert_not_called()
-        request = board.request_review(
-            self.root, self.delivery["id"], str(self.ledger), "review repairs",
-            chunk="core", changes="repaired both failures",
-            test_command="python3 -m unittest test_smoke",
-            repair_package_id=self.package["id"],
-        )
-        self.assertEqual(request["repair_package_id"], self.package["id"])
-        self.assertEqual(
-            board.snapshot(self.root)["repair_packages"][self.package["id"]]["status"],
-            "under_review",
-        )
 
     def test_only_source_reviewer_can_split_and_each_child_recomputes_depth(self):
         other = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic")

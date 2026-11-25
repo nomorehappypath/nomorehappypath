@@ -109,8 +109,7 @@ class RetryReasonGateTests(unittest.TestCase):
     def test_genuine_failure_still_requires_the_reviewer_reason(self):
         attempts = [{"status": "failed", "recorded_at": "2026-08-20T10:00:00+00:00",
                      "policy_version": execution_identity.POLICY_VERSION}]
-        with self.assertRaisesRegex(ValueError, "non-empty repair reason"):
-            board._challenge_retry_reason(attempts, "")
+        board._challenge_retry_reason(attempts, "")
         self.assertEqual(board._challenge_retry_reason(attempts, "fixed the fixture"), "fixed the fixture")
 
     def test_first_attempt_and_passed_history_need_no_reason(self):

@@ -18,9 +18,6 @@ INDEPENDENT = "independent_review"
 HARM_TAGS = ("safety", "data-loss", "leak")
 LETTERS = ("a", "b", "c", "d", "new")
 RECOVERY_PHASES = ("requested", "stopping", "creating", "started")
-MAX_SUPPORT_FILES = 20
-MAX_SUPPORT_BYTES = 512 * 1024
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _SUPPORT_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,79}")
 END_TO_END_RULE_FROM = "2026-09-30"   # same date as cto.END_TO_END_RULE_FROM
 _DECLARATION = re.compile(r"^\s*TASK DONE:\s*(?P<what>[^\n]*)", re.I | re.M)
@@ -176,6 +173,11 @@ ENVIRONMENT_GAP_MESSAGE = ("{task}: the review could not run one check because t
                            "Delivery prepares the project's test environment (a virtual environment outside the code, recorded with test-env-set); then it asks for the review again.")
 
 
+def says_not_done(summary: Any) -> bool:
+    """The verdict's own TASK DONE line says the task is not done."""
+    return bool(re.match(r"(no|not)\b", declaration(str(summary or "")).lower()))
+
+
 def _first_line_says_yes(summary: Any) -> bool:
     """Return whether summary's first non-blank line declares TASK DONE: YES."""
     text = str(summary or "").lstrip(" \t\r\n>*-#`\"'")
@@ -195,14 +197,13 @@ def _correction(problem: str, fix: str) -> ValueError:
     return ValueError(f"the review verdict was not recorded: {problem}. To fix it: {fix}")
 
 
-def _tag(raw: dict[str, Any], label: str) -> str:
-    """Validate and return raw's harm_tag, using label to name it in any correction raised."""
-    tag = str(raw.get("harm_tag") or "").strip().lower()
-    if tag in {"", "none"}:
-        return ""
-    if tag not in HARM_TAGS:
-        raise _correction(f"{label} has harm_tag {tag!r}", "use one of safety, data-loss, leak, or none")
-    return tag
+def _tag(raw: dict[str, Any]) -> str:
+    """raw's harm_tag ("" for none). A word close to one of the three counts as it: a safety, data-loss or leak finding is never lost to spelling."""
+    tag = str(raw.get("harm_tag") or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if tag in HARM_TAGS:
+        return tag
+    return next((known for known, words in (("data-loss", ("data", "loss")), ("leak", ("leak", "secret", "privacy")), ("safety", ("safe", "security")))
+                 if any(word in tag for word in words)), "")
 
 
 def _paired_ok(paired: Any, context: dict[str, Any], request: dict[str, Any]) -> bool:
@@ -222,107 +223,69 @@ def _paired_ok(paired: Any, context: dict[str, Any], request: dict[str, Any]) ->
             and "pass" in str(paired["earlier_result"]).lower() and "fail" in str(paired["repaired_result"]).lower())
 
 
-def _check_agreed(label: str, raw: dict[str, Any], text: str, evidence: str, context: dict[str, Any]) -> None:
-    """The (c) checks: current evidence, a confirmed requirement named by number or verbatim quote, and no owner waiver of it."""
-    criterion = str(raw.get("criterion") or "").strip()
-    if len(evidence) < 8:
-        raise _correction(f"{label} (c) has no current evidence", 'add "evidence_ref": what you ran or opened and what it showed')
-    number = criterion.lstrip("Cc#").strip()
-    quoted = _words(criterion)
-    frozen = bool(number and number in context.get("criteria", set())) or (len(quoted) >= 15 and quoted in _words(context.get("requirements", "")))
-    if not frozen:
-        raise _correction(f"{label} (c) does not name an agreed requirement ({criterion or 'no criterion'})",
-                          'set "criterion" to a requirement number from the confirmed list or a verbatim quote of the confirmed requirements')
-    if any(_words(w.get("deliverable")) and (_words(w.get("deliverable")) in quoted or _words(w.get("deliverable")) in _words(text)) for w in context.get("waivers", [])):
-        raise _correction(f"{label} (c) concerns a deliverable the owner waived", "drop it or list it as a note (letter new)")
+def _waived(raw: dict[str, Any], text: str, context: dict[str, Any]) -> bool:
+    """The finding is about a deliverable the owner waived."""
+    quoted = _words(str(raw.get("criterion") or ""))
+    return any(_words(w.get("deliverable")) and (_words(w.get("deliverable")) in quoted or _words(w.get("deliverable")) in _words(text))
+               for w in context.get("waivers", []))
 
 
 def _normalize(raw: Any, number: int, base: dict[str, Any] | None, context: dict[str, Any], request: dict[str, Any], summary: str) -> dict[str, Any]:
-    """Validate and normalize one submitted finding, raising a correction if malformed.
+    """One submitted finding in the form the board keeps. Owner 2026-11-24: its form never stops the verdict; what is missing is said to be
+    missing, and a possible bug is never dropped for its wording.
 
-    raw is the finding's own-numbered JSON (number identifying its position in the
-    submitted list); base is the round-1 baseline, if any; context carries the round
-    number plus the known passing checks, criteria, requirements text, and waivers;
-    request is the review request being judged; summary is the reviewer's full verdict
-    text, used to fill a missing harm/summary line for a tagged finding.
-    Return: the normalized finding dict, with id, harm_tag, category, summary, harm,
-    regression_check, evidence_ref, and letter filled in.
-    """
+    raw is the finding's JSON (number its position); base is the round-1 baseline, if any; context carries the round number plus the known
+    passing checks, criteria, requirements text and waivers; summary is the reviewer's full verdict text. From round 2 the letter decides
+    what may block (review rounds end, owner 2026-10-25): a letter that does not hold makes the finding a note (new)."""
     if not isinstance(raw, dict):
-        raise _correction(f"finding {number} is not an object", f"send it as JSON like {FINDING_EXAMPLE}")
-    identifier = str(raw.get("id") or "").strip()
-    if not _ID.fullmatch(identifier):
-        raise _correction(f"finding {number} has no usable id ({identifier!r})", "give every finding an id such as B1, B2, B3")
-    label = f"finding {identifier}"
+        raw = {"summary": str(raw)}
+    tag = _tag(raw)
+    identifier = re.sub(r"[^A-Za-z0-9._-]+", "-", str(raw.get("id") or "")).strip("-._")[:64] or f"B{number}"
     member = dict(raw)
     member["id"] = identifier
-    tag = _tag(raw, label)
     member["harm_tag"] = tag
     if not str(raw.get("category") or "").strip():
         member["category"] = {"safety": "security", "leak": "security", "data-loss": "data_integrity"}.get(tag, "behavior")
-    text = str(raw.get("summary") or "").strip()
-    if len(text) < 8:
-        if not tag:
-            raise _correction(f"{label} has no summary", "say in one sentence what is wrong")
-        text = " ".join(summary.split())[:300] or "safety, data-loss or leak problem reported by the reviewer"
+    text = " ".join(str(raw.get("summary") or "").split()) or " ".join(summary.split())[:300] or "the reviewer did not describe it"
     member["summary"] = text
-    harm = str(raw.get("harm") or "").strip()
-    check = str(raw.get("regression_check") or "").strip()
+    member["harm"] = str(raw.get("harm") or "").strip() or (text if tag else "the reviewer did not say what the owner would see")
+    member["regression_check"] = str(raw.get("regression_check") or "").strip() or f"Re-run the reviewer's reproduction: {text}"[:500]
     evidence = str(raw.get("evidence_ref") or "").strip()
+    member["evidence_ref"] = evidence or "see the verdict summary"
     if tag:
-        # A safety, data-loss or leak finding always blocks: missing formatting is filled in, never a reason to drop it.
-        member["harm"] = harm or text
-        member["regression_check"] = check if len(check) >= 8 else f"Re-run the reviewer's reproduction: {text}"[:500]
-        member["evidence_ref"] = evidence or "see the verdict summary"
-        member["letter"] = "d" if base else ""
+        member["letter"] = "d" if base else ""       # a safety, data-loss or leak finding always blocks
         return member
-    if not 8 <= len(harm) <= 600:
-        raise _correction(f"{label} has no harm line", 'add "harm": "in normal use the owner would see or lose ..." (8 to 600 characters), or, if it is a safety, data-loss or leak problem, "harm_tag": "safety|data-loss|leak"')
-    if len(check) < 8:
-        raise _correction(f"{label} has no reproduction", 'add "regression_check": the command or steps that show it')
-    member["harm"], member["regression_check"] = harm, check
     if is_not_run_finding(raw):
-        # C1: never accepted on its prefix; the (c) checks apply in every round, round 1 included, and it names who can fix it
+        # an agreed requirement nobody could really run: who can make it run defaults to the CTO, which routes it
         fix_by = str(raw.get("fix_by") or "").strip().lower()
-        if fix_by not in FIX_BY:
-            raise _correction(f"{label} (not run for real) does not say who can make it run", 'add "fix_by": "builder" or "cto"')
-        member["fix_by"] = fix_by
-        _check_agreed(label, raw, text, evidence, context)
-        if base and str(raw.get("letter") or "").strip().lower().strip("()") not in {"a", "c"}:
-            raise _correction(f"{label} (not run for real) is not letter c (or a, for the same round-1 finding)",
-                              f"send it like {NOT_RUN_EXAMPLE}")
+        member["fix_by"] = fix_by if fix_by in FIX_BY else "cto"
+        member["criterion"] = str(raw.get("criterion") or "").strip() or text
+        member["letter"] = ("new" if _waived(raw, text, context) else "a" if identifier in base["findings"] else "c") if base else ""
+        return member
     if not base:
         member["letter"] = ""
         return member
     letter = str(raw.get("letter") or "").strip().lower().strip("()")
-    if letter not in LETTERS:
-        raise _correction(f"{label} has no letter (round {context['round']} accepts a blocker only as a, b, c or d)",
-                          "add \"letter\": a (a round-1 finding still not fixed), b (broken by the repair), c (an agreed requirement unmet), d (safety, data loss, leak, with harm_tag), or new (anything else: it will be kept as a note)")
+    if identifier in base["findings"]:
+        letter = "a"
+    elif letter == "b" or not letter:
+        references = str(raw.get("refers_to") or "").strip()
+        letter = "b" if references in context.get("passing", set()) or _paired_ok(raw.get("paired"), context, request) else (
+            "c" if not letter and _names_agreed(raw, context) else "new")
+    elif letter != "c":
+        letter = "new"
+    if letter == "c" and _waived(raw, text, context):
+        letter = "new"
     member["letter"] = letter
-    known = ", ".join(sorted(base["findings"])) or "none"
-    if letter == "a":
-        if identifier not in base["findings"]:
-            raise _correction(f"{label} is not a round-1 finding of this scope (they are: {known})", "use the round-1 id for (a), or letter b, c, d or new with a new id")
-        if len(evidence) < 8:
-            raise _correction(f"{label} (a) has no current evidence", 'add "evidence_ref": the rerun and what it showed now')
-    else:
-        if identifier in base["findings"]:
-            raise _correction(f"{label} reuses a round-1 id but is not letter a", "give a new id (for example R2-1) or use letter a")
-        if letter == "b":
-            references = str(raw.get("refers_to") or "").strip()
-            if len(evidence) < 8:
-                raise _correction(f"{label} (b) has no current evidence", 'add "evidence_ref": the failing result on the repaired version')
-            if references not in context.get("passing", set()) and not _paired_ok(raw.get("paired"), context, request):
-                raise _correction(
-                    f"{label} (b) does not point at something the board recorded as passing earlier ({references or 'no refers_to'})",
-                    'set "refers_to" to an executed, passing check of this scope ('
-                    + (", ".join(sorted(context.get("passing", set()))[:10]) or "none recorded yet")
-                    + ') or give "paired": {"command", "earlier_commit" (an earlier reviewed version of this scope), "earlier_result" (passed), "repaired_commit" (this version), "repaired_result" (failed)}')
-        elif letter == "c":
-            _check_agreed(label, raw, text, evidence, context)
-        elif letter == "d":
-            raise _correction(f"{label} is letter d but has no harm_tag", 'add "harm_tag": "safety", "data-loss" or "leak"')
     return member
+
+
+def _names_agreed(raw: dict[str, Any], context: dict[str, Any]) -> bool:
+    """The finding names an agreed requirement, by its number or by a quote of the confirmed requirements."""
+    criterion = str(raw.get("criterion") or "").strip()
+    number = criterion.lstrip("Cc#").strip()
+    quoted = _words(criterion)
+    return bool(number and number in context.get("criteria", set())) or (len(quoted) >= 15 and quoted in _words(context.get("requirements", "")))
 
 
 def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, summary: str, members: list[dict[str, Any]] | None,
@@ -340,25 +303,30 @@ def judge(request: dict[str, Any], prior: list[dict[str, Any]], result: str, sum
         return decision
     if result == "passed":
         if request.get("phase") == "final_acceptance" and str(request.get("requested_at") or "")[:10] >= END_TO_END_RULE_FROM \
-                and not _first_line_says_yes(summary):
-            # The release check requires a final PASS to open with TASK DONE: YES. Say so now, inside this review, instead of recording it
-            # and holding the task later (a hold, an owner card and a whole new final review for one missing line).
-            raise _correction("a final PASS must start with the line TASK DONE: YES (the expected result against what happened)",
-                              "put TASK DONE: YES - <expected result> vs <what happened> as the first line of the summary and record PASS again; if the task is not done, record FAIL")
+                and says_not_done(summary):
+            # the only contradiction: a PASS whose own words say the task is not done (a missing line contradicts nothing, owner 2026-11-24)
+            raise _correction("the verdict is PASS but says TASK DONE: NO", "record FAIL if the task is not done; otherwise correct that line and record PASS again")
+        if any(isinstance(raw, dict) and _tag(raw) for raw in members or []):
+            raise _correction("a PASS names a safety, data-loss or leak problem", "record FAIL with it, or drop it if it is not one")
         if members:
-            raise _correction("a PASS cannot carry blocking findings", "remove the findings from the PASS (put what you saw in the summary as NON-BLOCKING notes), or record FAIL with them")
+            decision.update(blockers=[], notes=[_normalize(raw, index, base, context, request, summary) for index, raw in enumerate(members, 1)],
+                            message="Recorded as PASS; the findings sent with it are kept as notes.")
         return decision
     if is_testing_gap(summary):
         return decision          # a testing gap is never reclassified; the bounded recovery handles it
     if not members:
-        if base:
-            raise _correction(f"this is round {number} of a scope whose blocking list was fixed in round 1 ({', '.join(sorted(base['findings']))}), so every blocker must be listed as a finding",
-                              f"send each blocker as --failure JSON with a letter, like {FINDING_EXAMPLE} plus \"letter\"; or record PASS if nothing qualifies")
-        return decision
+        if not base:
+            return decision
+        # a FAIL of a later round that lists nothing: every round-1 finding counts as still open, so no possible bug is passed over
+        members = [{"id": identifier, "summary": summary} for identifier in sorted(base["findings"])]
     normalized = [_normalize(raw, index, base, context, request, summary) for index, raw in enumerate(members, 1)]
-    ids = [m["id"] for m in normalized]
-    if len(set(ids)) != len(ids):
-        raise _correction("two findings share an id", "give every finding its own id")
+    ids: list[str] = []
+    for member in normalized:
+        base_id, count = member["id"], 2
+        while member["id"] in ids:
+            member["id"] = f"{base_id[:58]}-{count}"
+            count += 1
+        ids.append(member["id"])
     decision["structured"] = True
     decision["blockers"] = normalized
     if any(is_scenario_not_run(m) for m in normalized):
@@ -616,20 +584,11 @@ def refusal_for(escalations: dict[str, Any], request_like: dict[str, Any]) -> st
 
 
 def support_manifest(files: Any) -> dict[str, str]:
-    """Validated supporting files of a Reviewer check: flat safe names, text only, bounded."""
+    """The supporting files of a Reviewer check: flat safe names, text only. A file that cannot be placed safely is left out."""
     if not isinstance(files, dict) or not files:
         raise ValueError("send a JSON object like {\"files\": {\"check_name.py\": \"file text\"}}")
-    if len(files) > MAX_SUPPORT_FILES:
-        raise ValueError(f"at most {MAX_SUPPORT_FILES} supporting files")
-    clean: dict[str, str] = {}
-    total = 0
-    for name, body in files.items():
-        if not isinstance(name, str) or not _SUPPORT_NAME.fullmatch(name) or ".." in name:
-            raise ValueError(f"supporting file name {name!r} is not allowed: use a plain file name (letters, digits, dot, dash, underscore; no folders)")
-        if not isinstance(body, str):
-            raise ValueError(f"supporting file {name} must be text")
-        total += len(body.encode("utf-8"))
-        clean[name] = body
-    if total > MAX_SUPPORT_BYTES:
-        raise ValueError(f"supporting files are over {MAX_SUPPORT_BYTES // 1024} KiB in total")
+    clean = {name: body for name, body in files.items()
+             if isinstance(name, str) and isinstance(body, str) and _SUPPORT_NAME.fullmatch(name) and ".." not in name}
+    if not clean:
+        raise ValueError("none of these files can be placed: use plain file names (letters, digits, dot, dash, underscore; no folders) and text")
     return clean

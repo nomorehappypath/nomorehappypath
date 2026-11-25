@@ -653,8 +653,7 @@ class PreviewSettingsTests(unittest.TestCase):
                 workspace_settings.update_preview(root, {"command": "x", "url_template": "http://127.0.0.1:9000/"})
             with self.assertRaisesRegex(ValueError, "between 5 and 300"):
                 workspace_settings.update_preview(root, {"command": "x", "startup_timeout_seconds": 2})
-            with self.assertRaisesRegex(ValueError, "2000 characters"):
-                workspace_settings.update_preview(root, {"command": "y" * 2001})
+            workspace_settings.update_preview(root, {"command": "y" * 2001})
 
 
 class EndpointTests(PreviewFixture):

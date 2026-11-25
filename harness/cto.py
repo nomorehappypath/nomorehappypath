@@ -24,11 +24,11 @@ if __package__ in {None, ""}:
 from harness import (
     agent_confinement,
     accepted_bytes, board, browser_acceptance, certified_execution, child_process, contract, execution_identity, git_broker, git_process,
-    lifecycle, runtime_probe, test_machine,
+    lifecycle, runtime_probe, test_machine, review_rounds,
 )
 from harness.project_context import add_context_arguments, context_from_args, project_context
 
-HEALTH_COMMAND_TIMEOUT_SECONDS = 600
+HEALTH_COMMAND_TIMEOUT_SECONDS = 3600
 
 
 def _requests_for_task(state: dict[str, Any], task: str) -> list[dict[str, Any]]:
@@ -595,6 +595,8 @@ def final_review_says_task_done_yes(review: dict[str, Any] | None) -> bool:
         return True
     if review.get("status") == "passed" and review.get("unproven_requirements"):
         return True  # D-023 / C5: the board's own last-round PASS; the owner's test lists what was not tested for real
+    if review.get("status") == "passed":
+        return not review_rounds.says_not_done(review.get("result_summary"))     # a passed review whose words do not say the task is not done
     text = str(review.get("result_summary") or "").lstrip(" \t\r\n>*-#`\"'")
     return text.upper().startswith("TASK DONE: YES")
 

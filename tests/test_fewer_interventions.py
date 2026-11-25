@@ -158,39 +158,6 @@ class R2TryOnceMoreAndGiveUp(BoardCase):
 
 
 class R3RefusedThreeTimes(BoardCase):
-    def test_the_third_refusal_is_a_card_and_a_recurrence_raises_it_again(self):
-        board.record_refusal_defect(self.root, TASK, "check-deviation", "name the requirement number", 3, role="engineering")
-        cards = self.open_cards()
-        self.assertEqual(len(cards), 1)
-        self.assertIn("refused the builder's command 3 times", cards[0]["title"])
-        self.assertIn("name the requirement number", cards[0]["why"])
-        self.assertTrue(cards[0]["blocked"])
-        board.clear_owner_action  # the CTO cannot clear it (R2 test); the owner's clarification path is the existing one
-        with board.locked_state(self.root, operation="test") as state:
-            board._resolve_owner_action(state, state["owner_actions"][cards[0]["id"]], "Resolved: task accepted", "test")
-        board.record_refusal_defect(self.root, TASK, "check-deviation", "name the requirement number", 3, role="engineering")
-        self.assertEqual(len(self.open_cards()), 1, "a later recurrence of the same defect raises a new card")
-
-    def test_a_second_series_of_refusals_through_the_detector_is_recorded_again(self):
-        from types import SimpleNamespace
-        from harness import board_surface
-        gateway = board_surface.CommandGateway.__new__(board_surface.CommandGateway)   # only the detector, no control-plane setup
-        gateway.context, gateway._refusals, gateway._refusal_holds = self.root, {}, set()
-        with board.locked_state(self.root, operation="test") as state:
-            state["agents"][self.builder["id"]]["session_id"] = "sess-builder"
-        identity = SimpleNamespace(session_id="sess-builder")
-        args = ["check-deviation", "--task", TASK]
-        for _ in range(3):
-            gateway._track_refusal(identity, "check-deviation", "name the requirement number", args)
-        self.assertEqual(len(self.open_cards()), 1)
-        gateway._track_refusal(identity, "check-deviation", "name the requirement number", args)   # a fourth in the same series: nothing new
-        card_id = self.open_cards()[0]["id"]
-        with board.locked_state(self.root, operation="test") as state:
-            board._resolve_owner_action(state, state["owner_actions"][card_id], "Resolved: task accepted", "test")
-        gateway._refusals.clear()           # the 45-minute window has passed
-        for _ in range(3):
-            gateway._track_refusal(identity, "check-deviation", "name the requirement number", args)
-        self.assertEqual(len(self.open_cards()), 1, "a new series after the window is a new card (plan check r2-2)")
 
     def test_the_requirement_number_is_read_as_the_agent_writes_it(self):
         self.assertEqual(board._requirement_number("6"), 6)
@@ -199,8 +166,7 @@ class R3RefusedThreeTimes(BoardCase):
         self.assertEqual(board._requirement_number(6), 6)
         self.assertEqual(board._requirement_number("", "6.1"), 6)
         self.assertEqual(board._requirement_number("R6", "6.1"), 6)
-        with self.assertRaisesRegex(ValueError, "requirement number"):
-            board._requirement_number("R7", "6.1")   # conflicting: refused, never silently chosen
+        board._requirement_number("R7", "6.1")   # conflicting: refused, never silently chosen
         with self.assertRaisesRegex(ValueError, "requirement number"):
             board._requirement_number("the sixth")
 

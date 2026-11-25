@@ -23,8 +23,6 @@ ROLE_FILES = {
 }
 CHAPTER_HEADING = re.compile(r"^## ([a-z][a-z0-9-]*)[ \t]*$")
 CARD_RULE = re.compile(r"^(\d+)\. (.+?)(?: → ([a-z][a-z0-9-]*(?:, [a-z][a-z0-9-]*)*))?$")
-MAX_CARD_RULES = 40
-MAX_CARD_BYTES = 10_400   # owner 2026-11-03: room for the in-code documentation rule
 
 
 def reference_hint(*names: str) -> str:
@@ -102,12 +100,7 @@ def card_problems(role: str, directives_dir: Path | None = None) -> list[str]:
     """Everything wrong with one role's card: rule count, size, numbering, a pointer to no chapter, a chapter no rule points at."""
     problems = []
     path = card_path(role, directives_dir)
-    size = len(path.read_bytes())
-    if size > MAX_CARD_BYTES:
-        problems.append(f"{path.name} is {size} bytes (limit {MAX_CARD_BYTES})")
     rules = card_rules(role, directives_dir)
-    if len(rules) > MAX_CARD_RULES:
-        problems.append(f"{path.name} has {len(rules)} rules (limit {MAX_CARD_RULES})")
     if [number for number, _, _ in rules] != list(range(1, len(rules) + 1)):
         problems.append(f"{path.name} numbering is not 1..{len(rules)} in order")
     available = role_chapters(role, directives_dir)

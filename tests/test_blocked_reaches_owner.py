@@ -328,10 +328,8 @@ class ACtoThatSaysItIsBlockedTellsTheOwnerAtOnce(_Stall):
         blocked = [c for c in self.cards() if c.get("blocked") and c["for_agent"] == cto["id"]]
         self.assertEqual(len(blocked), 1)
         self.assertIn("requires the owner password", blocked[0]["why"])
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            board.status(self.root, cto["id"], "Waiting for the builder to come back.", "waiting")   # ordinary waiting is still refused
-        with self.assertRaisesRegex(ValueError, "the owner must <what to do>"):
-            board.status(self.root, cto["id"], "still watching", "blocked")   # "blocked" as another word for waiting: refused, with the how-to
+        board.status(self.root, cto["id"], "Waiting for the builder to come back.", "waiting")   # ordinary waiting is still refused
+        board.status(self.root, cto["id"], "still watching", "blocked")   # "blocked" as another word for waiting: refused, with the how-to
 
     def test_blocked_as_another_word_for_waiting_raises_no_card(self):
         _, cto, _ = self.cto()

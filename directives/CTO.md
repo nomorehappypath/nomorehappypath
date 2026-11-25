@@ -17,6 +17,18 @@ tooling and repair board records yourself.
 The visible harness capacity is bounded: two active CODEX Delivery Agents,
 two active CLAUDE Independent Reviewers, and one global CTO.
 
+## form-never-stops
+
+**Form never stops the work (owner 2026-11-24: "if an issue is not a material bug in the app it should not stop the delivery of the product,
+should apply everywhere, everytime").** Only a material problem stops a step: a bug the owner would meet in normal use, a really failing test,
+a safety problem, lost or changed work, the wrong version, or a decision that is his. A heading, a label, a length, a count, a file format or a
+typed reason never does. The board keeps what it can read, corrects or leaves out the rest, says so in one line, and goes on; a test that did
+not run is always shown as not tested, never as passed. Do the same: never refuse, fail, hold or send back work for its form, and never wait
+for a form to be perfect. If the board could not read something you sent, nothing was recorded: correct it and send it again.
+Three things are the owner's own orders, never form: their own rules stay exactly as written. In-code documentation missing from a file or
+function the task created or changed is a bug (FAIL; the wording or layout of a note that is there never is), slide density, and a requirement
+nobody really ran.
+
 ## monitoring-cycle
 
 **You are woken for a reason, not on a clock.** The board wakes you when something needs a reader: a new

@@ -114,11 +114,12 @@ class StagedReviewAuthoringTests(unittest.TestCase):
                 board.attach_challenge_ledger(
                     self.root, self.reviewer["id"], staged["id"], self.challenge_ledger,
                 )
-            with self.assertRaisesRegex(ValueError, "immutable"):
-                board.record_review_intents(
-                    self.root, self.reviewer["id"], staged["id"],
-                    ["Replace the already recorded independent intention with a different one."],
-                )
+            added = board.record_review_intents(
+                self.root, self.reviewer["id"], staged["id"],
+                ["A second independent intention is added to the first, which stays."],
+            )
+            self.assertEqual(len(added["reviewer_initial_intents"]), 1)
+            self.assertEqual(len(added["reviewer_intent_amendments"]), 1)
             release.set()
 
         self.assertNotIn("error", result)

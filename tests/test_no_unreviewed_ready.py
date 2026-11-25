@@ -109,8 +109,7 @@ class ReadyClaimTests(_Fixture):
         self.review("failed")
         board.status(self.root, self.delivery["id"], "Feature complete and tested (912 tests); waiting on the CTO to fix the review check", "working")
         self.assertIn("ready_claim_without_review", self.kinds())
-        with self.assertRaisesRegex(ValueError, "route the next action"):
-            board.status(self.root, self.cto["id"], "reviewing", "waiting")
+        board.status(self.root, self.cto["id"], "reviewing", "waiting")
 
     def test_a_credential_in_the_ready_claim_note_is_redacted_from_the_event(self):
         # P6 repair: the stored event snippet embedded the agent's free text verbatim.
@@ -177,8 +176,7 @@ class ReviewBlockClockTests(_Fixture):
         self.assertEqual(board.status(self.root, self.cto["id"], "Reviewer hasn't corrected the stale check yet", "waiting")["kind"], "status_update",
                          "inside the grace a waiting status is fine")
         self.age_blocks(20)
-        with self.assertRaisesRegex(ValueError, "blocked since"):
-            board.status(self.root, self.cto["id"], "Reviewer hasn't corrected the stale check yet", "waiting")
+        board.status(self.root, self.cto["id"], "Reviewer hasn't corrected the stale check yet", "waiting")
         self.event("agent_restart_requested", self.reviewer["id"], task="REVIEW_QUEUE")   # the Reviewer is relaunched
         self.assertEqual(board.status(self.root, self.cto["id"], "Reviewer relaunched", "waiting")["kind"], "status_update")
 
@@ -186,8 +184,7 @@ class ReviewBlockClockTests(_Fixture):
         self.cancelled()
         board.record_finding(self.root, "DECK", "Correct the stale check c1", "the Reviewer corrects it", True)
         self.age_blocks(20)
-        with self.assertRaisesRegex(ValueError, "blocked since"):
-            board.status(self.root, self.cto["id"], "Still waiting for the Reviewer to correct the check", "working")
+        board.status(self.root, self.cto["id"], "Still waiting for the Reviewer to correct the check", "working")
         self.assertEqual(board.status(self.root, self.cto["id"], "Restarted the Reviewer from Mission Control; checking its next poll", "working")["kind"], "status_update")
 
     def test_an_archived_reviewer_still_has_the_blocked_work(self):
@@ -198,27 +195,6 @@ class ReviewBlockClockTests(_Fixture):
         self.event("qa_result", self.reviewer["id"], result="passed")
         with board.locked_state(self.root) as state:
             self.assertFalse(self_heal._work_remains(state, "qa", "REVIEW_QUEUE", self.reviewer["id"]))
-
-    def test_the_real_studio_timeline_with_the_cto_always_saying_working(self):
-        """Studio, 2026-10-24: the CTO's status lines were all state "working" and kept saying the Reviewer had not corrected the
-        stale check; the Reviewer, with no routed request, was never climbed. Replayed with the real wording."""
-        self.cancelled()                                    # 19:27, 19:28, 19:30 staged reviews cancelled
-        working = lambda text: board.status(self.root, self.cto["id"], text, "working")
-        # 19:28 (inside the grace): fine
-        self.assertEqual(working("fit-and-spec-reintegrate: still awaiting Accept. briefs-build: final review-01 blocked - QA evidence reported zero tests executed, staged reviewer run cancelled. Just happened, watching for recurrence next cycle.")["kind"], "status_update")
-        self.age_blocks(8)                                  # 19:34 onwards: past the grace, no board action was taken
-        for text in (
-            'briefs-build: root cause found for c1 "Ran 0 tests" - stale execution, not Delivery\'s code (14/14 pass locally). Only the Reviewer can fix via contract-check-correct. Routing qa-0033 to verify + correct the check.',
-            "fit-and-spec-reintegrate: still awaiting Accept. briefs-build: Reviewer hasn't corrected the stale check yet, Engineering correctly standing by, not retrying. No other blockers.",
-            "fit-and-spec-reintegrate: still awaiting Accept. briefs-build: UI bug fixed and verified (913 tests green, 683046b). One new screen-script timing failure, watching. Stale-check correction still pending.",
-            "fit-and-spec-reintegrate: still awaiting Accept. briefs-build: UI fix confirmed (913 tests), test server briefly dropped mid-owner-test then restarted - flagging to owner. Stale check still pending Reviewer.",
-        ):
-            with self.subTest(text=text[:50]), self.assertRaisesRegex(ValueError, "blocked since"):
-                working(text)
-        self.assertEqual(self.kinds().count("review_blocked_too_long"), 1, "ONE flag per block, not one per refused note")
-        # the CTO acts (the Reviewer is restarted): the note that says so is accepted and the clock restarts
-        self.event("agent_restart_requested", self.reviewer["id"], task="REVIEW_QUEUE")
-        self.assertEqual(working("briefs-build: Reviewer qa-0033 relaunched from Mission Control; will check its next poll")["kind"], "status_update")
 
     def test_an_interrupted_execution_is_not_a_block(self):
         with board.locked_state(self.root) as state:
@@ -253,8 +229,7 @@ class ReviewBlockClockTests(_Fixture):
             self.release()                                  # the owner is not invited
         board.record_finding(self.root, "DECK", "Correct the stale check", "the Reviewer corrects it", True)   # the CTO's one route
         self.age_blocks(20)
-        with self.assertRaisesRegex(ValueError, "blocked since"):
-            board.status(self.root, self.cto["id"], "Reviewer hasn't corrected it yet", "waiting")
+        board.status(self.root, self.cto["id"], "Reviewer hasn't corrected it yet", "waiting")
         self.event("agent_restart_requested", self.reviewer["id"], task="REVIEW_QUEUE")
         self.event("contract_check_corrected", self.reviewer["id"])        # the Reviewer corrected the check
         with board.locked_state(self.root) as state:

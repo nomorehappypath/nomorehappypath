@@ -9,6 +9,8 @@ import shlex
 import shutil
 from typing import Iterable
 
+from harness import contract
+
 
 _INSTALL_ACTIONS = {"ci", "install", "i"}
 
@@ -160,6 +162,11 @@ def validate_commands(
         if not command:
             continue
         checked += 1
+        folder, command = contract.split_folder(command)
+        place = (execution_root / folder).resolve()
+        if not place.is_relative_to(execution_root):
+            problems.append(f"test command leaves the project: {folder}")
+            continue
         try:
             values = _tokens(command)
         except ValueError as error:
@@ -168,12 +175,12 @@ def validate_commands(
         if not values:
             problems.append("test command has no executable")
             continue
-        if calls_the_board(values, cwd=execution_root, search_path=executable_path):
+        if calls_the_board(values, cwd=place, search_path=executable_path):
             problems.append(BOARD_CALL_REFUSAL)
             continue
         executable = values[0]
         available = (
-            (execution_root / executable).resolve().is_file()
+            (place / executable).resolve().is_file()
             if "/" in executable
             else shutil.which(executable, path=executable_path) is not None
         )
@@ -183,7 +190,7 @@ def validate_commands(
         if executable not in {"npm", "npm.cmd"}:
             continue
         try:
-            package_root = _npm_root(execution_root, values)
+            package_root = _npm_root(place, values)
             action = _npm_action(values)
         except ValueError as error:
             problems.append(str(error))

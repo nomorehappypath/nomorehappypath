@@ -65,7 +65,7 @@ RELEASE_SIGNOFF_GRACE_SECONDS = 600
 # Batch 2 item C: a review waiting on a signed-out reviewer this long alerts the owner once.
 REVIEWER_SIGN_IN_ALERT_SECONDS = 600
 REVIEWER_SIGN_IN_HEADLINE = "Reviewer needs sign-in: nothing will progress"
-REVIEW_RESERVATION_SECONDS = 600
+REVIEW_RESERVATION_SECONDS = 1800       # writing a test list slowly is not abandoning the review (owner 2026-11-24)
 # Normal LLM turns and focused test runs on the observed board regularly take
 # 93-99 seconds. Four minutes keeps those healthy turns green. Only durable board
 # polls, progress records, and exact execution leases count as activity.
@@ -116,12 +116,10 @@ PROGRESS_EVENTS = {
     "task_repository_bound", "qa_reserved", "reviewer_intents_recorded",
     "qa_challenge_ledger_attached", "qa_challenge_ledger_corrected",
 }
-MAX_REASON_LENGTH = 20_000
-MAX_ATTACHMENTS = 5
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024
+# Owner 2026-11-24: the owner's own words and files are taken as they are. These two sizes only keep one upload from filling the computer.
+MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+MAX_TOTAL_ATTACHMENT_BYTES = 300 * 1024 * 1024
 MAX_DEFERRED_FINDINGS_VISIBLE = 5
-MAX_FINDING_TEXT_LENGTH = 20_000
 ALLOWED_ATTACHMENT_TYPES = {
     "application/pdf": ".pdf",
     "text/markdown": ".md",
@@ -1245,8 +1243,6 @@ def _finding_text(value: Any, label: str) -> str:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"finding {label} is required")
-    if len(text) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"finding {label} must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     return text
 
 
@@ -1327,8 +1323,6 @@ def record_finding(
     title = _finding_text(title, "title")
     description = _finding_text(description, "description")
     evidence = str(evidence or "").strip()
-    if len(evidence) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"finding evidence must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     fingerprint = _finding_fingerprint(title, description)
     created_at = now()
     in_scope = bool(affects_current_task)
@@ -1438,14 +1432,9 @@ def triage_finding(
     if verdict not in {"repeat", "distinct", "cleared"}:
         raise ValueError("triage verdict must be repeat, distinct, or cleared")
     note = str(note or "").strip()
-    if len(note) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"triage note must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     recommend = str(recommend or "").strip().lower().replace(" ", "_")
-    if recommend and recommend not in {"fix", "do_not_fix"}:
-        raise ValueError("triage recommendation must be fix or do_not_fix")
+    recommend = recommend if recommend in {"fix", "do_not_fix"} else ""
     recommend_reason = str(recommend_reason or "").strip()
-    if len(recommend_reason) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"recommendation reason must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     with locked_state(root) as state:
         findings = state.setdefault("deferred_findings", {})
         finding = findings.get(finding_id)
@@ -1455,10 +1444,7 @@ def triage_finding(
             raise _finding_refusal(finding_id, finding, "only a needs_triage finding can be triaged")
         triaged_at = now()
         if verdict == "cleared":
-            if not note:
-                raise ValueError("cleared triage requires evidence explaining why the observation no longer exists")
-            if target_id or recommend or recommend_reason:
-                raise ValueError("cleared triage accepts only an evidence note")
+            note = note or NOT_DESCRIBED
             finding.update({
                 "status": "cleared",
                 "decision": "system_cleared",
@@ -1547,10 +1533,7 @@ def route_around_finding(root: Path, finding_id: str, reason: str) -> dict[str, 
     """
     finding_id = _finding_text(finding_id, "id")
     reason = " ".join(str(reason or "").split())
-    if not reason:
-        raise ValueError("route-around requires --reason: one line naming the owner objective the finding does not change")
-    if len(reason) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"route-around reason must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
+    reason = reason or NOT_DESCRIBED
     with locked_state(root) as state:
         finding = (state.setdefault("deferred_findings", {})).get(finding_id)
         if not finding:
@@ -1713,8 +1696,6 @@ def resolve_finding(root: Path, finding_id: str, evidence: str = "") -> dict[str
     """Mark an approved or in-scope finding fixed after it has been re-tested."""
     finding_id = _finding_text(finding_id, "id")
     evidence = str(evidence or "").strip()
-    if len(evidence) > MAX_FINDING_TEXT_LENGTH:
-        raise ValueError(f"finding evidence must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     with locked_state(root) as state:
         finding = (state.setdefault("deferred_findings", {})).get(finding_id)
         if not finding:
@@ -2127,10 +2108,21 @@ CONTRACT_EVIDENCE_GUIDANCE = (
 )
 
 
-def _require_contract_preflight(root: Path, task: str) -> None:
+def _write_missing_contract(root: Path, task: str, state: dict[str, Any]) -> tuple[bool, list[str]]:
+    """The Completion Contract is NMHP's own record: when the builder left it out, it is written from what the owner agreed (owner 2026-11-24)."""
+    confirmation = (state.get("requirement_confirmations") or {}).get(task) or {}
+    if not confirmation.get("text"):
+        return False, ["Completion Contract missing"]
+    contract.create_contract(root, task, str(confirmation.get("owner_direction") or confirmation["text"]), ["Everything in the agreed requirements"])
+    return contract.contract_preflight(root, task)
+
+
+def _require_contract_preflight(root: Path, task: str, state: dict[str, Any]) -> None:
     """Raise ValueError naming every Completion Contract problem for task
     under root when the contract preflight check fails. Return value: none."""
     valid, problems = contract.contract_preflight(root, task)
+    if "Completion Contract missing" in problems:
+        valid, problems = _write_missing_contract(root, task, state)
     if not valid:
         # The refusal names the remedy: an agent resumed on an older directive
         # (its rules were loaded before this command existed) learns it here.
@@ -3176,9 +3168,7 @@ def project_support_plan_state(state: dict[str, Any]) -> dict[str, Any]:
 # half-written list.
 # Owner repair 2026-11-10: "Not enough: 2000 words; we need much more" — raised to the same
 # limit the directive (Give direction) box itself already uses, not an arbitrary new number.
-MAX_WISH_TEXT_LENGTH = MAX_REASON_LENGTH
 MAX_WISH_TITLE_LENGTH = 80
-MAX_PROJECT_WISHES = 200
 
 
 def _find_wish(wishes: list[dict[str, Any]], wish_id: str) -> dict[str, Any] | None:
@@ -3238,21 +3228,16 @@ def _bounded_wish_text(text: Any) -> str:
     text = str(text or "").strip()
     if not text:
         raise ValueError("a wish needs some text")
-    if len(text) > MAX_WISH_TEXT_LENGTH:
-        raise ValueError(f"a wish is at most {MAX_WISH_TEXT_LENGTH} characters")
     return text
 
 
-def _bounded_wish_title(title: Any) -> str:
+def _bounded_wish_title(title: Any, text: Any = "") -> str:
     """Strip and bound one wish's short title (owner repair 2026-11-11 round 4: "an 80-character
     title that will be shown in the list"); raise ValueError naming the limit when it is empty
     or too long."""
     title = str(title or "").strip()
-    if not title:
-        raise ValueError("a wish needs a title")
-    if len(title) > MAX_WISH_TITLE_LENGTH:
-        raise ValueError(f"a wish title is at most {MAX_WISH_TITLE_LENGTH} characters")
-    return title
+    words = " ".join((title or str(text or "")).split())
+    return words if len(words) <= MAX_WISH_TITLE_LENGTH else words[:MAX_WISH_TITLE_LENGTH - 1].rstrip() + "…"
 
 
 def add_project_wish(root: Path, title: Any, text: Any, attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -3270,7 +3255,7 @@ def add_project_wish(root: Path, title: Any, text: Any, attachments: list[dict[s
 
     Return: the new wish, {"id", "title", "text", "done", "added_at", "attachments"}.
     """
-    bounded_title = _bounded_wish_title(title)
+    bounded_title = _bounded_wish_title(title, text)
     bounded = _bounded_wish_text(text)
     prepared = _prepare_owner_message_attachments(attachments or [])
     # Validated and written to disk before the lock (file I/O never happens while state is
@@ -3280,10 +3265,6 @@ def add_project_wish(root: Path, title: Any, text: Any, attachments: list[dict[s
     stored = _store_wish_attachments(root, wish_id, prepared)
     with locked_state(root) as state:
         wishes = state.setdefault("project_wishes", [])
-        if len(wishes) >= MAX_PROJECT_WISHES:
-            if stored:
-                shutil.rmtree(board_dir(root) / "wishes" / wish_id, ignore_errors=True)
-            raise ValueError(f"a project holds at most {MAX_PROJECT_WISHES} wishes")
         entry = {"id": wish_id, "title": bounded_title, "text": bounded, "done": False, "added_at": now(), "attachments": stored}
         wishes.append(entry)
         return dict(entry)
@@ -3312,7 +3293,7 @@ def edit_project_wish(
     is answered calmly: the current list is returned, unchanged, rather than refused (R6).
     """
     wish_id = str(wish_id or "")
-    bounded_title = _bounded_wish_title(title)
+    bounded_title = _bounded_wish_title(title, text)
     bounded = _bounded_wish_text(text)
     remove_ids = {str(item) for item in (remove_attachment_ids or [])}
     prepared = _prepare_owner_message_attachments(attachments or [])
@@ -3320,8 +3301,6 @@ def edit_project_wish(
     if current is None:
         return project_wishes_state(snapshot(root))
     surviving = [item for item in (current.get("attachments") or []) if str(item.get("attachment_id")) not in remove_ids]
-    if len(surviving) + len(prepared) > MAX_ATTACHMENTS:
-        raise ValueError(f"a wish can have at most {MAX_ATTACHMENTS} attachments")
     if sum(int(item.get("size", 0)) for item in surviving) + sum(len(item["data"]) for item in prepared) > MAX_TOTAL_ATTACHMENT_BYTES:
         raise ValueError("the attachments are too large")
     # Written to disk before the lock, like add_project_wish's own attachments; rolled back below
@@ -3437,7 +3416,7 @@ def propose_spec_questions(
         if agent.get("task") != task:
             raise ValueError("only the task's own Delivery agent may propose its spec questions")
         if task in (state.get("spec_questions") or {}):
-            raise ValueError("spec questions were already proposed for this task")
+            return dict(state["spec_questions"][task])        # asked once: the first card stands
         entry = {
             "app_questions": normalized, "include_existing_data": bool(include_existing_data),
             "include_data_loss": bool(include_data_loss), "proposed_at": now(),
@@ -4401,11 +4380,10 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
         limit_grace_ids = set()
         menu_session_ids = set()
     due_defaults: list[dict[str, Any]] = []
-    settled_checks: list[tuple[str, dict[str, Any]]] = []
     cto_session_id = ""
     with locked_state(root) as state:
         _expire_owner_actions(state, current)
-        settled_checks = _settle_contract_checks(state, current)
+        _settle_contract_checks(state, current)
         due_defaults = _due_owner_defaults(state, current)
         for candidate in state["agents"].values():
             if candidate.get("role") == "cto" and candidate.get("active") and candidate.get("session_id"):
@@ -4675,8 +4653,6 @@ def mark_stalled(root: Path, stale_seconds: int = AGENT_STALE_SECONDS) -> list[d
             })
     if due_defaults:
         _dispatch_owner_defaults(root, due_defaults, cto_session_id)
-    for settled_task, settled_check in settled_checks:
-        _withdraw_contract_check_wake(root, settled_task, settled_check, "it ran out of time")
     for route in recovery_routes:
         try:
             queued = control.enqueue_instruction(
@@ -4782,23 +4758,20 @@ def _prepare_owner_message_attachments(attachments: list[dict[str, Any]]) -> lis
     """Validate attachments (count, content type, size), raising ValueError on
     any violation, and return the prepared list with sanitized display names
     and resolved file extensions ready to be written to disk."""
-    if len(attachments) > MAX_ATTACHMENTS:
-        raise ValueError(f"you can attach up to {MAX_ATTACHMENTS} files")
     prepared: list[dict[str, Any]] = []
     total = 0
     for attachment in attachments:
         content_type = str(attachment.get("content_type", "")).split(";", 1)[0].strip().lower()
         data = bytes(attachment.get("data", b""))
-        if content_type not in ALLOWED_ATTACHMENT_TYPES:
-            raise ValueError("only documents, PDFs, and screenshots can be attached")
-        if not data or len(data) > MAX_ATTACHMENT_BYTES:
-            raise ValueError("each attachment must be larger than zero and no bigger than 10 MB")
+        content_type, extension = _attachment_kind(content_type, str(attachment.get("filename", "")))
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise ValueError("this file is larger than 100 MB")
         total += len(data)
         prepared.append({
             "display_name": _safe_attachment_name(str(attachment.get("filename", ""))),
             "content_type": content_type,
             "data": data,
-            "extension": ALLOWED_ATTACHMENT_TYPES[content_type],
+            "extension": extension,
         })
     if total > MAX_TOTAL_ATTACHMENT_BYTES:
         raise ValueError("the attachments are too large")
@@ -4902,8 +4875,6 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         raise ValueError("a direction or clarification is required")
     if looks_like_pasted_screen(text):
         raise ValueError(PASTED_SCREEN_MESSAGE)
-    if len(text) > MAX_REASON_LENGTH:
-        raise ValueError(f"the message must be {MAX_REASON_LENGTH} characters or fewer")
     if message_type not in {"direction", "clarification", "cto_message"}:
         raise ValueError("message type must be direction, clarification, or cto_message")
     prepared = _prepare_owner_message_attachments(attachments or [])
@@ -5140,9 +5111,9 @@ def _withdraw_contract_check_wake(root: Path, task: str, check: dict[str, Any], 
         pass
 
 
-def _settle_contract_checks(state: dict[str, Any], current: datetime) -> list[tuple[str, dict[str, Any]]]:
-    """A look that ran past its one deadline becomes "not checked in advance"; nothing waits on it. Returns (task, old check) to clean up."""
-    settled = []
+def _settle_contract_checks(state: dict[str, Any], current: datetime) -> None:
+    """A look that ran past its time stops being waited for; nothing is held by it. The Reviewer is not told to stop: what it sends before
+    the owner decides is still taken (owner 2026-11-24: slow is not failed)."""
     for task, proposal in (state.get("requirement_proposals") or {}).items():
         check = proposal.get("contract_check") or {}
         if proposal.get("status") != "awaiting_owner" or check.get("status") not in {"reading", "rechecking"}:
@@ -5152,14 +5123,14 @@ def _settle_contract_checks(state: dict[str, Any], current: datetime) -> list[tu
         except ValueError:
             due = current
         if due <= current:
-            settled.append((task, dict(check)))
             if check["status"] == "rechecking":
                 # the criteria the answers changed stay not checked in advance; every unchanged check stays attached
-                check.update({"status": "ready", "reason": "the reviewer did not finish updating the tests for your answers in time", "token": secrets.token_hex(4)})
+                check.update({"status": "ready", "recheck_late": True, "reason": "the reviewer is still updating the tests for your answers; they are added if they arrive before your decision", "token": secrets.token_hex(4)})
             else:
-                check.update({"status": "not_checked", "reason": "the Reviewer did not finish in time", "token": secrets.token_hex(4)})
+                check.update({"status": "not_checked", "timed_out": True, "token": secrets.token_hex(4),
+                              "reason": ("the Reviewer sent its tests, but they could not be recorded: " + str(check["refused"]) if check.get("refused")
+                                         else "the Reviewer is still writing its tests; they are added if they arrive before your decision")})
             _event(state, "contract_check_timed_out", None, {"task": task, "message": "the Reviewer's look ran out of time; Go ahead stands as it is, with what was not updated marked not checked in advance"})
-    return settled
 
 
 _NO_TASK_TO_PROPOSE = ("only an active Delivery Agent with a task may propose requirements; run begin-task --agent <your id> --task "
@@ -5349,27 +5320,17 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
     check): metadata on the proposal, never a QA request. The owner's Go ahead
     is not held by it (see record_requirements_decision).
     """
-    from harness import environment_check
+    from harness import contract_screens, environment_check
     # owner 2026-11-21: the contract carries the setup it needs; NMHP checks it before the owner ever sees the contract
     parsed_needs = environment_check.parse_needs(needs) if needs is not None and str(needs).strip() not in {"", "null"} else None
     text = contract.normalize_owner_direction(text)
-    if not text or len(text) > 12000:
-        raise ValueError("the requirements proposal is required and must be 12000 characters or fewer")
+    if not text:
+        raise ValueError("the requirements proposal is empty")
     if plain_required:
         # every agent's proposal (the agent command passes this) starts with two short blocks the owner can read; the board's own callers and
         # proposals stored before this rule are not refused
-        try:
-            _, text = contract_check.split_plain_summary(text)
-            _, text = contract_check.split_fit_block(text)      # the second block: what the project already holds (spec 2026-11-08_project-brief 3c)
-        except ValueError:
-            # a missing task is the first thing to fix: the format message used to hide it (2026-10-28, three refusals in a row)
-            not_ready = _proposal_not_ready(root, agent_id)
-            if not_ready:
-                raise ValueError(not_ready)
-            raise
-        problem = standing_checks.requirements_problem(text)
-        if problem:
-            raise ValueError(problem)
+        _, text = contract_check.split_plain_summary(text)
+        _, text = contract_check.split_fit_block(text)      # the second block: what the project already holds (spec 2026-11-08_project-brief 3c)
     try:
         from harness import control
         sessions = control.snapshot(root).get("sessions", [])
@@ -5428,6 +5389,8 @@ def record_requirement_proposal(root: Path, agent_id: str, text: str, no_program
         setup_held = bool(((state.get("environment_checks") or {}).get(task) or {}).get("needs")) and not environment_check.passed(state, task, "contract")
         # owner 2026-11-21: the screens are part of the contract; the owner opens them with "See the screens" before Go ahead
         screens = _proposal_screens(state, task, text, existing, small_change, no_screens, keep_screens, screens_required)
+        if screens and screens.get("manifest") and not contract_screens.screens_block_present(text):
+            text += "\n\nScreens:\n" + "\n".join(f"- {item['name']}" for item in screens["manifest"])
         # Owner repair (build-skill-library, requirement 5): the builder's proposed skills,
         # split into the ones the library actually has (with its reason, kept) and the
         # names it does not (named in the card as "dropped" by a later subtask). Computed
@@ -5550,9 +5513,6 @@ def _proposal_screens(state: dict[str, Any], task: str, text: str, existing: dic
                          "propose again; or say why nothing visible changes with --no-screens \"<why>\"")
     else:
         screens = None
-    if screens and screens.get("manifest") and not contract_screens.screens_block_present(text):
-        raise ValueError("the contract carries screen designs, so its text needs a plain \"Screens:\" block: one line per screen with "
-                         "its job and its states")
     return screens
 
 
@@ -5598,8 +5558,6 @@ def contract_screen(root: Path, agent_id: str, name: str = "", file: str = "", r
             item = {"name": name, **stored, "uploaded_at": now()}
             index = next((n for n, old in enumerate(pending) if old["name"].lower() == name.lower()), None)
             if index is None:
-                if len(pending) >= contract_screens.MAX_SCREENS:
-                    raise ValueError(f"at most {contract_screens.MAX_SCREENS} designs per contract")
                 pending.append(item)
             else:
                 pending[index] = item          # the same name replaces (an upload retried is the same design again)
@@ -6125,8 +6083,6 @@ def record_requirements_decision(
     text = contract.normalize_owner_direction(text) if text else ""
     if decision == "modify" and not text:
         raise ValueError("describe what should change in the requirements")
-    if text and len(text) > 12000:
-        raise ValueError("the change request must be 12000 characters or fewer")
     session_id = ""
     routed = ""
     withdraw: dict[str, Any] = {}
@@ -6168,8 +6124,6 @@ def record_requirements_decision(
                 raise ValueError("there are no open questions to answer; look at the current card")
             resolved, used_recommended = contract_check.resolve_answers(check.get("questions") or [], answers)
             new_text = contract_check.append_decided(proposal["text"], resolved)
-            if len(new_text) > contract_check.REQUIREMENTS_LIMIT:
-                raise ValueError("your answers do not fit in the requirements (12000 characters); ask Delivery to shorten them and decide again")
             changed = sorted({n for item in resolved if not item["recommended"] for n in item["affects"]})
             for criterion in check.get("criteria") or []:
                 if criterion["n"] in changed and criterion.get("checks"):
@@ -6205,8 +6159,6 @@ def record_requirements_decision(
             elif check.get("status") == "questions":
                 resolved, used_recommended = contract_check.resolve_answers(check.get("questions") or [], answers)
                 new_text = contract_check.append_decided(proposal["text"], resolved)
-                if len(new_text) > contract_check.REQUIREMENTS_LIMIT:
-                    raise ValueError("your answers do not fit in the requirements (12000 characters); ask Delivery to shorten them and decide again")
                 for item in resolved:
                     if not item["recommended"]:
                         for criterion in check.get("criteria") or []:
@@ -6331,8 +6283,6 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
     rather than silently rewriting the original request.
     """
     text = contract.normalize_owner_direction(text)
-    if not text or len(text) > 12000:
-        raise ValueError("final requirements confirmation is required and must be 12000 characters or fewer")
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if agent["role"] not in DEVELOPER_ROLES or agent["task"] == AWAITING_OWNER_DIRECTION or not agent.get("active"):
@@ -6353,8 +6303,7 @@ def record_requirement_confirmation(root: Path, agent_id: str, text: str) -> dic
                 "file it with propose-requirements and wait for the owner's Go ahead - "
                 "terminal prose is not authorization"
             )
-        if contract.normalize_owner_direction(str(proposal.get("text", ""))) != text:
-            raise ValueError("the confirmation must be the accepted proposal text verbatim")
+        text = contract.normalize_owner_direction(str(proposal.get("text", "")))      # what the owner accepted, whatever was typed again
         confirmation = {
             "task": task, "agent_id": agent_id, "text": text,
             "owner_direction": direction, "version": 1,
@@ -6401,25 +6350,15 @@ def _contract_check_folder(root: Path, task: str, tag: str) -> Path:
     return project_context(root).storage_path("evidence", "contract-checks", safe, tag)
 
 
-def _validate_contract_check_files(criteria: list[dict[str, Any]]) -> None:
-    """Every ledger must be a real scenario ledger and nothing may carry a login token; refused before anything is stored."""
-    with tempfile.TemporaryDirectory(prefix="harness-contract-check-") as temporary:
-        probe = Path(temporary) / "ledger.md"
-        for criterion in criteria:
-            for position, check in enumerate(criterion.get("checks") or [], 1):
-                where = f"criterion {criterion['n']} check {position}"
-                for body in (check["ledger"], *check["files"].values()):
-                    if CLAUDE_TOKEN_SHAPE.search(body):
-                        raise ValueError(f"{where} contains what looks like a Claude login token; remove it")
-                if walks.is_walk(check):
-                    continue        # a walk has no ledger to run: NMHP takes its steps itself
-                if _ESCAPED_PATTERN.search(check["ledger"]):
-                    raise ValueError(f"{where}: the test pattern has escaped quotes (a backslash before a quote), which hand the quote marks to the test finder and find nothing; "
-                                     "quote the pattern, for example: python3 -m unittest discover -s .contract-checks/c1-1 -p \"test_*.py\" (quoted, so the shell cannot expand it)")
-                probe.write_text(check["ledger"], encoding="utf-8")
-                valid, problems, _rows = contract.scenario_simulations(probe)
-                if not valid:
-                    raise ValueError(f"{where}: its scenario ledger is not usable: " + "; ".join(problems))
+def _refuse_login_tokens(raw: str) -> None:
+    """Nothing the Reviewer hands in may carry a login token; refused before anything is read out of it, so nothing of it can reach a stored
+    check, a note or an answer. Form is never refused here (owner 2026-11-24): contract_check corrects it, or leaves that one check out."""
+    try:
+        text = raw + json.dumps(json.loads(raw), ensure_ascii=False)      # the plain words too, whatever way the file spells them
+    except ValueError:
+        text = raw
+    if CLAUDE_TOKEN_SHAPE.search(text):
+        raise ValueError("the submission contains what looks like a Claude login token; nothing was recorded: remove it and send the submission again")
 
 
 def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
@@ -6427,9 +6366,10 @@ def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], ch
     inside folder, atomically. Return value: metadata (coverage, file path,
     sha256) describing the stored record."""
     said = {key: check[key] for key in ("runs", "example", "walk") if check.get(key)}      # what it runs and which example it asserts (2026-11-24_tdd-examples-first)
+    ledger, files = contract_check.placed(check, criterion["n"], int(re.search(r"-k(\d+)\.json$", name).group(1)))
     data = json.dumps({
         "criterion": criterion["n"], "criterion_text": criterion["text"], "coverage": check["coverage"],
-        "ledger": check["ledger"], "files": check["files"], **said,
+        "ledger": ledger, "files": files, **said,
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / name
@@ -6440,17 +6380,27 @@ def _store_contract_check(folder: Path, name: str, criterion: dict[str, Any], ch
     return stored
 
 
-def _require_walk_words(root: Path, criteria: list[dict[str, Any]], manifest: list[dict[str, Any]], task: str) -> None:
-    """A walk uses only controls the agreed screens show (task 2026-11-24_tdd-walks); with no screens there is nothing to compare."""
+def _leave_out_walks(root: Path, criteria: list[dict[str, Any]], manifest: list[dict[str, Any]], task: str) -> list[str]:
+    """Take out the walks that use a control no agreed screen shows (they cannot be taken) and say which; the rest of the package stays
+    (task 2026-11-24_tdd-walks, owner 2026-11-24). With no screens there is nothing to compare."""
     from harness import contract_screens
-    found = [(item["n"], check) for item in criteria for check in item.get("checks") or [] if walks.is_walk(check)]
-    if not found or not manifest:
-        return
+    notes: list[str] = []
+    if not manifest or not any(walks.is_walk(check) for item in criteria for check in item.get("checks") or []):
+        return notes
     words = walks.screen_words([contract_screens.read(screens_folder(root, task), item) for item in manifest])
-    for number, check in found:
-        problem = walks.label_problem(check, words)
-        if problem:
-            raise ValueError(f"requirement {number}: the walk cannot be stored: {problem}")
+    for item in criteria:
+        kept = []
+        for check in item.get("checks") or []:
+            problem = walks.label_problem(check, words) if walks.is_walk(check) else ""
+            if problem:
+                notes.append(f"requirement {item['n']}: this walk is not used: {problem}")
+            else:
+                kept.append(check)
+        if len(kept) != len(item.get("checks") or []):
+            item["checks"] = kept
+            if not kept and not item.get("why_not_checked"):
+                item["why_not_checked"] = notes[-1]
+    return notes
 
 
 def _final_inventory_open(state: dict[str, Any], task: str, qa: dict[str, Any], root: Path | None = None) -> bool:
@@ -6467,6 +6417,12 @@ def _final_inventory_open(state: dict[str, Any], task: str, qa: dict[str, Any], 
                and request.get("claimed_by") == qa.get("id") for request in (state.get("qa_requests") or {}).values())
 
 
+def _look_may_still_land(check: dict[str, Any], agent_id: str) -> bool:
+    """The time ran out while this Reviewer was still writing, and the owner has not decided yet: slow is not failed, so its package is
+    still taken (owner 2026-11-24). Only for the same version; the caller compares it."""
+    return check.get("status") == "not_checked" and check.get("timed_out") is True and check.get("reviewer_id") == agent_id
+
+
 def record_contract_check_submission(root: Path, agent_id: str, task: str, version: Any, submission: str) -> dict[str, Any]:
     """The Reviewer's one early look at a filed proposal: criteria with their checks, and at most four product questions.
 
@@ -6476,8 +6432,17 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
         raw = Path(submission).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise ValueError("the submission file could not be read") from error
-    parsed = contract_check.parse_submission(raw)
-    _validate_contract_check_files(parsed["criteria"])
+    try:
+        _refuse_login_tokens(raw)
+        parsed = contract_check.parse_submission(raw)
+    except ValueError as error:
+        with locked_state(root) as state:       # the card says the true reason if nothing better arrives
+            look = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check") or {}
+            if look.get("reviewer_id") == agent_id and look.get("status") in {"reading", "not_checked"}:
+                look["refused"] = str(error)[:300]
+                if look.get("timed_out"):
+                    look["reason"] = "the Reviewer sent its tests, but they could not be recorded: " + look["refused"]
+        raise
     follow_up: dict[str, Any] = {}
     coverage_wake: dict[str, Any] = {}
     with locked_state(root) as state:
@@ -6486,35 +6451,31 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             raise ValueError("only the Reviewer can submit the early look at the requirements")
         proposal = (state.get("requirement_proposals") or {}).get(str(task))
         check = (proposal or {}).get("contract_check") or {}
-        _require_walk_words(root, parsed["criteria"], list((((proposal or {}).get("screens") or {}).get("manifest")) or []) or agreed_screens(state, str(task)), str(task))
+        parsed["notes"] += _leave_out_walks(root, parsed["criteria"], list((((proposal or {}).get("screens") or {}).get("manifest")) or []) or agreed_screens(state, str(task)), str(task))
         late = bool(check.get("late"))       # sent back from the Small change lane: the owner already went ahead and the work exists
         final_inventory = bool(proposal) and _final_inventory_open(state, str(task), qa, root)
         if final_inventory:
             # nothing was prepared before the build: the final Reviewer files the numbered requirements with examples now. No wait,
             # no question, no hold; the cards say the owner did not approve these examples before the build.
-            if parsed["questions"]:
-                raise ValueError("at the final review the list is filed without questions (the owner is not asked)")
+            parsed["questions"] = []         # the owner is not asked at the final review
             if str(version) != str(proposal.get("version")):
                 raise ValueError("these requirements changed; your submission is for an older version and was not recorded")
             check = proposal.setdefault("contract_check", {})
             check.update({"version": proposal.get("version"), "reviewer_id": agent_id, "late_inventory": True,
                           "reason": "written by the reviewer at the final review; you did not approve these examples before the build"})
             late = True                      # stored and attached to the confirmed contract the same way as a late full-lane submission
-        elif not proposal or check.get("status") != "reading" or (proposal.get("status") != "awaiting_owner" and not late):
-            raise ValueError("the early look at these requirements is over (the owner decided, it ran out of time, or the requirements changed); nothing was recorded")
-        if late and parsed["questions"]:
-            raise ValueError("this task was sent back to the full lane after the owner went ahead: submit your checks without questions (the owner is not asked)")
+        elif not proposal or (proposal.get("status") != "awaiting_owner" and not late) or not (
+                check.get("status") == "reading" or _look_may_still_land(check, agent_id)):
+            raise ValueError("the early look at these requirements is over (the owner decided, or the requirements changed); nothing was recorded")
+        if late:
+            parsed["questions"] = []         # the owner already went ahead; he is not asked
         if not final_inventory and check.get("reviewer_id") != agent_id:
             raise ValueError("this early look was given to another Reviewer")
         if not final_inventory and (str(version) != str(proposal.get("version")) or str(version) != str(check.get("version"))):
             raise ValueError("these requirements changed; your submission is for an older version and was not recorded")
-        if not final_inventory and datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
-            raise ValueError("the time for the early look ran out; nothing was recorded")
-        if parsed["questions"]:
-            if (state.get("contract_question_batches") or {}).get(str(task)):
-                raise ValueError("the owner was already asked once for this task; submit your checks without questions")
-            if len(proposal["text"]) + contract_check.worst_case_decided_length(parsed["questions"]) > contract_check.REQUIREMENTS_LIMIT:
-                raise ValueError("the owner's answers would not fit in the requirements (12000 characters); ask fewer or shorter questions")
+        if parsed["questions"] and (state.get("contract_question_batches") or {}).get(str(task)):
+            parsed["questions"] = []
+            parsed["notes"].append("your questions were left out: the owner was already asked once for this task")
         folder = _contract_check_folder(root, str(task), f"v{proposal['version']}")
         criteria = []
         for criterion in parsed["criteria"]:
@@ -6533,6 +6494,7 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             "criteria": criteria, "questions": parsed["questions"], "submitted_at": now(), "token": secrets.token_hex(4),
             "status": "questions" if parsed["questions"] else "ready",
             "owner_asks": parsed["owner_asks"], "not_read": parsed["not_read"], "result_must_contain": parsed["result_must_contain"],
+            "notes": parsed["notes"], "timed_out": False, "reason": check.get("reason", "") if final_inventory else "",
         })
         if parsed["questions"]:
             state.setdefault("contract_question_batches", {})[str(task)] = True
@@ -6568,6 +6530,11 @@ def record_contract_check_submission(root: Path, agent_id: str, task: str, versi
             "message": "the Reviewer's early look at the requirements was recorded; the owner's Go ahead is not held by it",
         })
         result = {"status": check["status"], "criteria": len(criteria), "questions": len(parsed["questions"])}
+        if parsed["notes"]:
+            result["notes"] = parsed["notes"]
+            result["to_correct"] = ("recorded; what is listed in notes was corrected or left out. Where a test was left out, send that requirement's "
+                                    f"complete list of tests again (it replaces the kept ones) with contract-check-correct --task {task} --criterion <n> "
+                                    "--reason \"corrected form\" --submission <JSON file with {\"checks\": [...]}>")
     if late and any(item.get("checks") for item in criteria):
         run_red_proof(root, str(task))      # the new checks are seen failing on the unbuilt project, as in the full lane (never raises)
     for wake in (follow_up, coverage_wake):
@@ -6587,8 +6554,7 @@ def record_send_to_full_lane(root: Path, agent_id: str, task: str, reason: str) 
     full lane, and nothing else changes: no owner question, no hold, no second send-back.
     """
     reason = " ".join(str(reason or "").split())
-    if not 8 <= len(reason) <= 300:
-        raise ValueError("give the plain reason in 8 to 300 characters (for example: this changes behaviour, not just text)")
+    reason = reason or NOT_DESCRIBED
     with locked_state(root) as state:
         qa = _require_writable_agent(state, agent_id)
         if qa.get("role") != "qa" or not qa.get("active"):
@@ -6624,27 +6590,30 @@ def record_send_to_full_lane(root: Path, agent_id: str, task: str, reason: str) 
 def record_contract_check_correction(root: Path, agent_id: str, task: str, criterion: Any, reason: str, submission: str) -> dict[str, Any]:
     """A stored check was wrong: the Reviewer replaces the checks of one requirement, keeping the original and the reason."""
     reason = " ".join(str(reason or "").split())
-    if len(reason) < 8:
-        raise ValueError("correcting a stored check requires a reason of at least 8 characters")
+    reason = reason or "corrected by the Reviewer"
     try:
         number = int(criterion)
-        data = json.loads(Path(submission).read_text(encoding="utf-8"))
+        raw = Path(submission).read_text(encoding="utf-8")
+        data = json.loads(raw)
     except (OSError, ValueError, UnicodeDecodeError) as error:
         raise ValueError("the correction must be a requirement number and a JSON file with a checks list") from error
+    _refuse_login_tokens(raw)
     # examples-first (2026-11-24): the requirement's own examples decide the rules for its corrected checks; an older record has none
     known = next((item for item in (((_read_state(root).get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check") or {}).get("criteria") or []
                   if item.get("n") == number), {})
     # a requirement of the accepted text that the early list left out is added by the final Reviewer as the next number (Change 4)
     added = contract_check.parse_added_requirement(data, number) if (not known and isinstance(data, dict) and data.get("text")) else None
     rules_of = known if known.get("examples") else (added or {})
+    correction_notes: list[str] = []
     new_checks, _size = contract_check.parse_checks((data or {}).get("checks") if isinstance(data, dict) else None, f"requirement {number}",
                                                     examples=len(rules_of["examples"]) if rules_of.get("examples") else None,
-                                                    reading=rules_of.get("kind") in contract_check.READING_KINDS)
+                                                    reading=rules_of.get("kind") in contract_check.READING_KINDS, notes=correction_notes, number=number)
+    if correction_notes and not new_checks:
+        # nothing usable came: the stored checks stay as they are, and the Reviewer reads why
+        raise ValueError("no check of this correction can be used, so nothing was changed: " + "; ".join(correction_notes) + ". Correct it and send it again")
     paths, none_because, said_paths = contract_check.parse_failure_paths(data if isinstance(data, dict) else {}, f"requirement {number}")
     keep = isinstance(data, dict) and data.get("keep") is True        # the Reviewer's answer to a builder's deviation: the check is right
-    if keep and (new_checks or said_paths):
-        raise ValueError("keeping a check means no new checks: send {\"keep\": true, \"checks\": []}")
-    _validate_contract_check_files([{"n": number, "checks": new_checks}])
+    keep = keep and not new_checks        # new checks say more than the word "keep"
     with locked_state(root) as state:
         qa = _require_writable_agent(state, agent_id)
         if qa.get("role") != "qa":
@@ -6652,20 +6621,36 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
         if keep:
             return _keep_checked_deviation(state, qa, str(task), number, reason)
         waiting = (state.get("requirement_proposals") or {}).get(str(task)) or {}
-        _require_walk_words(root, [{"n": number, "checks": new_checks}], agreed_screens(state, str(task)) or list(((waiting.get("screens") or {}).get("manifest")) or []), str(task))
-        if (waiting.get("contract_check") or {}).get("status") == "rechecking" and waiting.get("status") == "awaiting_owner":
-            return _recheck_update(root, state, qa, waiting, number, new_checks, reason)
+        wanted = [{"n": number, "checks": new_checks}]
+        walk_notes = _leave_out_walks(root, wanted, agreed_screens(state, str(task)) or list(((waiting.get("screens") or {}).get("manifest")) or []), str(task))
+        new_checks = wanted[0]["checks"]
+        if walk_notes and not new_checks:
+            raise ValueError("no check of this correction can be used, so nothing was changed: " + "; ".join(walk_notes) + ". Correct it and send it again")
+        left_out = correction_notes + walk_notes
+        sent = data.get("checks") if isinstance(data, dict) else None
+        partial = len(new_checks) < (len(sent) if isinstance(sent, list) else 1 if sent else 0)      # a sent check cannot be used
+        open_look = waiting.get("contract_check") or {}
+        if (open_look.get("status") == "rechecking" or open_look.get("recheck_late")) and waiting.get("status") == "awaiting_owner":
+            return _with_left_out(_recheck_update(root, state, qa, waiting, number, new_checks, reason), open_look, left_out, partial)
         confirmation = (state.get("requirement_confirmations") or {}).get(str(task))      # exists once Delivery confirmed the contract
         # The coverage answer is taken while the owner decides AND in the short time after Go ahead before Delivery has
         # confirmed the contract (2026-11-05: Go ahead came a minute before the Reviewer's answer and it was refused).
         # "answered" is the state after a Go ahead that also answered the Reviewer's questions (Codex R1-1).
         still_open = waiting.get("status") == "awaiting_owner" or (waiting.get("status") == "accepted" and not confirmation)
-        if number in ((waiting.get("contract_check") or {}).get("coverage_requested") or []) and still_open and waiting["contract_check"].get("status") in {"ready", "questions", "answered"}:
-            return _coverage_update(root, state, qa, waiting, number, new_checks, (paths, none_because), reason)
+        # While the owner has not decided, any requirement of the list takes its tests again, not only one the board asked about: the answer
+        # to the early look tells the Reviewer to send a left-out test again (real run 2026-11-24: that was refused).
+        asked = number in (open_look.get("coverage_requested") or [])
+        before_decision = waiting.get("status") == "awaiting_owner" and new_checks and any(item.get("n") == number for item in open_look.get("criteria") or [])
+        if (asked and still_open or before_decision) and open_look.get("status") in {"ready", "questions", "answered"}:
+            return _with_left_out(_coverage_update(root, state, qa, waiting, number, new_checks, (paths, none_because), reason, partial), open_look, left_out, partial)
         # The confirmed contract's own block, also when it holds no check yet (Codex R1-2: a contract confirmed with zero checks
         # has an empty fingerprint, so "confirmed" is read from the confirmation record, never from the fingerprint).
         block = confirmation.setdefault("contract_check", {}) if isinstance(confirmation, dict) else {}
         old = [item for item in block.get("checks") or [] if item["criterion_index"] == number]
+        if old and partial:
+            # a correction replaces the confirmed checks: with a part that cannot be used it would drop one of them (Codex R3-1)
+            raise ValueError("a check of this correction cannot be used, so nothing was changed and the stored checks stay: " + "; ".join(left_out)
+                             + ". Correct it and send the complete list again")
         if added is not None:
             listed = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria")
             if not (isinstance(listed, list) and listed and confirmation and examples_first_applies(state, str(task), root) and number == len(listed) + 1):
@@ -6696,7 +6681,7 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
                 "message": "the Reviewer answered a correction request with no check; there is nothing stored for that requirement, so nothing changed and nothing is held"})
             return {"criterion": number, "checks": 0, "unchanged": True}
         if not new_checks and number != 0:
-            raise ValueError("the correction needs at least one check")
+            return {"criterion": number, "checks": len(old), "unchanged": True}
         criteria = ((state.get("requirement_proposals") or {}).get(str(task)) or {}).get("contract_check", {}).get("criteria") or []
         if not old:
             # 2026-11-05 (second stranger run): the owner said Go ahead a minute before the Reviewer answered the board's
@@ -6737,31 +6722,47 @@ def record_contract_check_correction(root: Path, agent_id: str, task: str, crite
             "message": ("a stored check was corrected by the Reviewer; the original and the reason are kept, earlier results no longer count" if old else
                         "the Reviewer added the first checks for a requirement that had none; the reason is kept"),
         })
-        corrected = {"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}
+        corrected = _with_left_out({"criterion": number, "checks": len(new), "checks_sha256": block["checks_sha256"]}, open_look, left_out, partial)
         (block.get("compare") or {}).pop(str(number), None)      # the old label was about the old check
         _answer_deviations(block, number, "replaced", reason, agent_id)
     run_red_proof(root, str(task), [number], "correction")      # the corrected check is seen once more on the unbuilt project; it is never asked about again
     return corrected
 
 
+def _with_left_out(answer: dict[str, Any], look: dict[str, Any], notes: list[str], partial: bool) -> dict[str, Any]:
+    """Takes the board's answer to a correction, the early look it belongs to, what of the correction was corrected or left out, and whether
+    a check was left out. Returns the answer naming it, and keeps it with the look's notes, so nothing is left out silently (Codex R3-1)."""
+    if notes:
+        look["notes"] = list(look.get("notes") or []) + notes
+        answer["notes"] = notes
+        if partial:
+            answer["to_correct"] = ("what is listed in notes was corrected or left out; a test left out is not tested in advance. "
+                                    "Send this requirement's complete list of tests again")
+    return answer
+
+
 def _coverage_update(root: Path, state: dict[str, Any], qa: dict[str, Any], proposal: dict[str, Any], number: int, new_checks: list[dict[str, Any]],
-                     said: tuple[list[str], str], reason: str) -> dict[str, Any]:
-    """The Reviewer's one answer to a coverage gap, before the owner decides (inside the board lock). Nothing here holds the Go ahead."""
+                     said: tuple[list[str], str], reason: str, partial: bool = False) -> dict[str, Any]:
+    """The Reviewer's answer to a coverage gap or its tests sent again, before the owner decides (inside the board lock). Nothing here holds
+    the Go ahead. A complete list replaces the kept tests; of a partial one the usable tests are added and no kept test is lost (R3-1)."""
     task = str(proposal["task"])
     check = proposal["contract_check"]
     if check.get("reviewer_id") != qa["id"]:
         raise ValueError("this coverage request was given to another Reviewer")
-    if datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
-        raise ValueError("the time for the early look ran out; nothing was recorded")
     criterion = next(item for item in check["criteria"] if item["n"] == number)
     if new_checks:
-        folder = _contract_check_folder(root, task, f"v{proposal['version']}-coverage")
-        criterion["checks"] = [_store_contract_check(folder, f"c{number}-k{position}.json", criterion, item) for position, item in enumerate(new_checks, 1)]
+        # each answer has its own folder: a kept test's file is never written over
+        folder = _contract_check_folder(root, task, f"v{proposal['version']}-coverage-{secrets.token_hex(3)}")
+        kept = list(criterion.get("checks") or []) if partial else []
+        same = [json.loads(Path(item["file"]).read_text(encoding="utf-8"))["files"] for item in kept]
+        fresh = [item for item in new_checks if not any(contract_check.placed(item, number, place)[1] == files for place, files in enumerate(same, 1))]
+        criterion["checks"] = kept + [_store_contract_check(folder, f"c{number}-k{position}.json", criterion, item)
+                                      for position, item in enumerate(fresh, len(kept) + 1)]
     if said[0] or said[1]:
         criterion["failure_paths"], criterion["no_failure_paths_because"] = said
     if new_checks or said[0] or said[1]:
         criterion["mapped"] = True      # the Reviewer has now said which tests cover this requirement
-    check["coverage_requested"] = [n for n in check["coverage_requested"] if n != number]     # asked once, answered once
+    check["coverage_requested"] = [n for n in check.get("coverage_requested") or [] if n != number]     # asked once, answered once
     contract_check.apply_coverage(check["criteria"])
     _event(state, "contract_check_coverage_updated", qa, {"task": task, "criterion": number, "reason": reason, "message": "the Reviewer answered a coverage gap; the owner's Go ahead is not held"})
     return {"criterion": number, "coverage": criterion["coverage_line"]}
@@ -6777,8 +6778,6 @@ def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], propo
     check = proposal["contract_check"]
     if check.get("reviewer_id") != qa["id"]:
         raise ValueError("this re-check was given to another Reviewer")
-    if datetime.fromisoformat(str(check.get("deadline_at"))) <= datetime.now(timezone.utc):
-        raise ValueError("the time for updating the tests ran out; nothing was recorded")
     if number:
         criterion = next((item for item in check.get("criteria") or [] if item["n"] == number), None)
         if criterion is None:
@@ -6790,7 +6789,7 @@ def _recheck_update(root: Path, state: dict[str, Any], qa: dict[str, Any], propo
     open_ones = [c["n"] for c in check.get("criteria") or [] if c.get("stale") and c.get("checks")]
     done = number == 0 or not open_ones
     if done:
-        check.update({"status": "ready", "reason": "" if not open_ones else "the reviewer finished; what it did not update is marked not checked in advance"})
+        check.update({"status": "ready", "recheck_late": False, "reason": "" if not open_ones else "the reviewer finished; what it did not update is marked not checked in advance"})
     check["token"] = secrets.token_hex(4)
     _event(state, "contract_check_rechecked", qa, {
         "task": task, "criterion": number, "reason": reason,
@@ -6806,8 +6805,7 @@ def record_contract_check_skip(root: Path, agent_id: str, task: str, criterion: 
     set aside one that failed only because of the machine (2026-11-15). The independent final review is not touched and nothing else is waived.
     """
     reason = " ".join(str(reason or "").split())
-    if len(reason) < 8:
-        raise ValueError("skipping a check requires a reason of at least 8 characters")
+    reason = reason or NOT_DESCRIBED
     number = _requirement_number(criterion)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
@@ -6880,12 +6878,10 @@ def _requirement_number(criterion: Any, check: str = "") -> int:
     from_check = str(check or "").strip().split(".", 1)[0] if "." in str(check or "") else ""
     if not text and from_check:
         text = from_check
-    match = re.fullmatch(r"[Rr]?\s*(\d+)", text)
+    match = re.search(r"\d+", text) or re.search(r"\d+", from_check)
     if not match:
         raise ValueError("name the requirement number (for example 6, or R6)")
-    number = int(match.group(1))
-    if from_check.isdigit() and int(from_check) != number:
-        raise ValueError(f"name the requirement number that matches the check: the check {check} belongs to requirement {from_check}, not {number}")
+    number = int(from_check) if from_check.isdigit() else int(match.group(0))        # the check's own number says which requirement it is of
     return number
 
 
@@ -6896,8 +6892,7 @@ def record_check_deviation(root: Path, agent_id: str, task: str, criterion: Any,
     """
     from harness import control
     why = " ".join(str(why or "").split())
-    if not contract_check.DEVIATION_WHY_MIN <= len(why) <= contract_check.DEVIATION_WHY_MAX:
-        raise ValueError(f"say in {contract_check.DEVIATION_WHY_MIN} to {contract_check.DEVIATION_WHY_MAX} characters what the check assumes, what is real, and the evidence")
+    why = why or NOT_DESCRIBED
     check = str(check or "").strip()
     number = _requirement_number(criterion, check)
     with locked_state(root) as state:
@@ -7662,18 +7657,15 @@ def _compare_passed_checks_with_base(root: Path, task: str, passed: list[int]) -
 # --- A managed agent's product question to the owner (owner, live test 2026-10-23) ------------------------------------------------------
 # Agents never ask in their terminals. Any managed agent raises ONE plain question here; Mission Control shows it in the banner with the
 # options and an answer box, and the answer goes back to the asking agent's session. No CTO is needed.
-AGENT_QUESTION_TEXT_LIMIT = 300
-AGENT_QUESTION_OPTION_LIMIT = 120
 
 
 def record_agent_question(root: Path, agent_id: str, question: str, options: list[str] | None = None) -> dict[str, Any]:
     """The asking half: one open question per agent; asking the same thing again returns the open one."""
     question = " ".join(str(question or "").split())
     options = [" ".join(str(item).split()) for item in (options or []) if str(item).strip()]
-    if len(question) < 5 or len(question) > AGENT_QUESTION_TEXT_LIMIT:
-        raise ValueError(f"ask one plain question of 5 to {AGENT_QUESTION_TEXT_LIMIT} characters")
-    if options and (not 2 <= len(options) <= 4 or any(len(item) > AGENT_QUESTION_OPTION_LIMIT for item in options)):
-        raise ValueError(f"give no options, or 2 to 4 options of at most {AGENT_QUESTION_OPTION_LIMIT} characters each")
+    if not question:
+        raise ValueError("the question is empty")
+    options = options if len(options) > 1 else []
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         if not agent.get("active"):
@@ -7712,8 +7704,8 @@ def record_agent_question_answer(root: Path, question_id: str, answer: str, choi
         else:
             if not answer and choice is not None and not isinstance(choice, bool) and isinstance(choice, int) and 0 <= choice < len(entry.get("options") or []):
                 answer = entry["options"][choice]
-            if not answer or len(answer) > 1000:
-                raise ValueError("choose one of the answers or write your own (at most 1000 characters)")
+            if not answer:
+                raise ValueError("choose one of the answers or write your own")
             entry.update({"status": "answered", "answer": answer, "answered_at": now()})
             agent = (state.get("agents") or {}).get(entry["agent_id"])
             event = _event(state, "agent_question_answered", agent, {"task": entry["task"], "message": "the owner answered an agent's question in Mission Control"})
@@ -7764,20 +7756,12 @@ STATUS_NOTE_REQUIRED_MESSAGE = "status note is required and must be 240 characte
 OFFLINE_NOTE_REQUIRED_MESSAGE = "offline note is required and must be 240 characters or fewer"
 
 
-def _note_too_long_message(kind: str, length: int) -> str:
-    """A formatting slip, answered with the fix. board_surface treats these messages as cosmetic: they never open a hold."""
-    return f"{kind} note is {length} characters; the limit is {STATUS_NOTE_LIMIT}; shorten it and post again"
-
-
 def status(root: Path, agent_id: str, note: str, state_name: str = "working") -> dict[str, Any]:
     """Record a status update note (and optional OWNER ACTION card) for
     agent_id under root, setting its board state_name. Return value: the
     resulting status update payload."""
     note = note.strip()
-    if not note:
-        raise ValueError(STATUS_NOTE_REQUIRED_MESSAGE)
-    if len(note) > STATUS_NOTE_LIMIT:
-        raise ValueError(_note_too_long_message("status", len(note)))
+    note = note or NOT_DESCRIBED
     verdict: dict[str, Any] = {"refusal": ""}
     card_links: list[dict[str, Any]] = []
     card_location: dict[str, Any] | None = None
@@ -7807,6 +7791,7 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
         if browser_hint:
             _event(state, "own_browser_denial_answered", agent, {
                 "task": str(agent.get("task") or ""), "message": "a status blaming the agent's own browser tool was stored and answered with the API clarification"})
+        hint = ""
         if agent.get("role") == "cto":
             owner_text = note[len(OWNER_ACTION_NOTE_PREFIX):].strip() if note.upper().startswith(OWNER_ACTION_NOTE_PREFIX) else note
             verdict = _owner_question_verdict(owner_text)
@@ -7814,14 +7799,15 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
             # action": telling the owner it cannot clear the cause IS its action (the red card in _store_status), so the two
             # waiting guards below let that note through, also after the watchdog found a stall. Every other waiting note,
             # "blocked" with no word for the owner included, is refused as before.
+            # `hint` says what the CTO should do next: told with its stored note, never a refusal (owner 2026-11-24)
             explicit_block = cto_block_for_the_owner(state_name, note)
             # the agent's own "working" label does not count: a note about a blocked review that states no action is waiting
             blocked = [] if verdict["refusal"] or explicit_block else _blocked_reviews_without_action(state)
             if blocked and _note_is_inaction_about(note, state_name, blocked):
-                verdict = {**verdict, "refusal": _waiting_refusal(blocked)}
+                hint = _waiting_refusal(blocked)
                 _event(state, "cto_waiting_refused", agent, {
                     "task": str(blocked[0].get("task") or ""), "failure_kind": "review_blocked", "failure_at": blocked[0].get("at"),
-                    "message": f"a status was refused: the review of {blocked[0].get('task')} is blocked and the note states no action",
+                    "message": f"the CTO was told to act: the review of {blocked[0].get('task')} is blocked and the note states no action",
                 })
                 block = (state.get("review_blocks") or {}).get(str(blocked[0].get("task") or ""))
                 if block is not None and not block.get("flagged"):
@@ -7833,12 +7819,11 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
             if not verdict["refusal"] and not explicit_block and state_name.strip().lower() in CTO_WAITING_STATES:
                 failures = _unrouted_failures(state)
                 if failures:
-                    verdict = {**verdict, "refusal": _waiting_refusal(failures) + (
-                        CTO_BLOCK_HOW if state_name.strip().lower() == "blocked" else "")}
+                    hint = _waiting_refusal(failures) + (CTO_BLOCK_HOW if state_name.strip().lower() == "blocked" else "")
                     _event(state, "cto_waiting_refused", agent, {
                         "task": str(failures[0].get("task") or ""), "failure_kind": failures[0].get("kind"),
                         "failure_at": failures[0].get("at"),
-                        "message": f"a waiting status was refused: {failures[0].get('kind')} on {failures[0].get('task')} has no routed action",
+                        "message": f"the CTO was told to act: {failures[0].get('kind')} on {failures[0].get('task')} has no routed action",
                     })
             if verdict["refusal"]:
                 if verdict.get("handed_back"):
@@ -7854,8 +7839,8 @@ def status(root: Path, agent_id: str, note: str, state_name: str = "working") ->
             event = _store_status(state, agent, note, state_name, verdict, card_links, card_location)
             if state.get("control_plane_holds"):
                 _end_stale_note_hold(state, str(agent.get("task") or ""), agent.get("last_status_at"))
-            if browser_hint:
-                event = {**event, "hint": browser_hint}
+            if browser_hint or hint:
+                event = {**event, "hint": browser_hint or hint}
     if verdict["refusal"]:
         # the refusal events above are committed; the note was never stored
         raise ValueError(verdict["refusal"])
@@ -7950,7 +7935,6 @@ def blocked_card_text(problem: str, what_to_do: str) -> str:
     each with its whitespace collapsed, cut to fit a card (the page shows the line break)."""
     return (f"Problem: {' '.join(str(problem).split())[:640]}\n"
             f"What to do: {' '.join(str(what_to_do).split())[:560]}")
-MAX_OWNER_ACTION_COMMAND = 4000
 # Backlog #9: a card that no event can clear leaves Mission Control after this.
 OWNER_ACTION_TTL = timedelta(hours=24)
 OWNER_ACTION_KINDS = ("task", "agent", "decision", "reviewer", "gap", "other")
@@ -8147,14 +8131,8 @@ def _owner_question_verdict(text: str, default_action: str = "", default_minutes
     """Decide hand-back / refusal / accepted-with-default for one CTO text (raises nothing)."""
     rules = owner_question_rules()
     found = classify_owner_question(text, rules)
-    if default_action and found["default_action"]:
-        found["default_error"] = "state the default once: either in the text or with --default, not both"
-    elif default_minutes and found["default_minutes"] and int(default_minutes) != found["default_minutes"]:
-        found["default_error"] = "the text and --default-minutes name different deadlines; state one"
     action = " ".join(str(default_action or "").split()).rstrip(" .") or found["default_action"]
     minutes = int(default_minutes or found["default_minutes"] or rules["default_minutes"])
-    if found["default_error"]:
-        return {**found, "refusal": found["default_error"]}
     if not found["is_question"] and not action:
         return {**found, "refusal": "", "default_action": "", "default_minutes": 0}
     if found["is_question"] and found["authority"] and not found["what_marker"]:
@@ -8167,17 +8145,8 @@ def _owner_question_verdict(text: str, default_action: str = "", default_minutes
                 "do it now and post a status note saying what you did. The owner is not asked."
             ),
         }
-    if not action:
-        return {
-            **found,
-            "refusal": (
-                "act, then report, or state the default: a question to the owner must end with "
-                f"'if no answer in N minutes I will <X>' (N at most {rules['default_minutes']} minutes) or carry --default \"<X>\"; "
-                "the board applies X when the deadline passes without an answer"
-            ),
-        }
-    if not 1 <= minutes <= rules["default_minutes"]:
-        return {**found, "refusal": f"the deadline must be a whole number of minutes from 1 to {rules['default_minutes']} (your settings), not {minutes}"}
+    action = action or "carry on with the work that does not depend on the answer"
+    minutes = max(1, min(minutes, int(rules["default_minutes"])))
     # a governed CTO operation is not the owner's release: its two spellings are not "release" here
     proposed = _OWNER_DEFAULT_HANDBACK.sub(" ", re.sub(r"record-release|release readiness|release-ready", " ", action.lower()))
     owner_only = ""
@@ -9030,14 +8999,12 @@ def record_owner_action(
     """
     title, command, why, task = title.strip(), command.strip(), why.strip(), task.strip()
     kind, for_agent = kind.strip().lower(), for_agent.strip()
-    if kind and kind not in OWNER_ACTION_KINDS:
-        raise ValueError(f"the kind must be one of: {', '.join(OWNER_ACTION_KINDS)}")
-    if not title or len(title) > 240:
-        raise ValueError("an owner action needs a title of at most 240 characters")
-    if len(command) > MAX_OWNER_ACTION_COMMAND or len(why) > MAX_REASON_LENGTH:
-        raise ValueError("the command or reason is too long")
-    if default_minutes and not isinstance(default_minutes, int):
-        raise ValueError("--default-minutes must be a whole number of minutes")
+    kind = kind if kind in OWNER_ACTION_KINDS else ""
+    if not title:
+        title = " ".join((why or command).split())[:120]
+    if not title:
+        raise ValueError("an owner action that says nothing cannot be shown to the owner")
+    default_minutes = default_minutes if isinstance(default_minutes, int) else 0
     verdict = _owner_question_verdict(f"{title} {why}".strip(), default, int(default_minutes or 0))
     # The document check reads and hashes files, so it runs on a snapshot
     # BEFORE the lock; the designation is re-checked inside it (plan check
@@ -9265,7 +9232,7 @@ def _dispatch_owner_defaults(root: Path, due: list[dict[str, Any]], cto_session_
             })
 
 
-SCREEN_CHECK_TIMEOUT_SECONDS = 60
+SCREEN_CHECK_TIMEOUT_SECONDS = 180
 SCREEN_CHECK_TEXT_LIMIT = 20_000
 SCREEN_CHECK_ID = re.compile(r"\bscreen-\d{8}T\d{6}-[0-9a-f]{8}\b")
 
@@ -9331,7 +9298,7 @@ def _tree_fingerprint(folder: Path, excludes: list[str] | None = None) -> tuple[
         elif stat.S_ISREG(info.st_mode):
             total += info.st_size
             if total > SCREEN_CHECK_FINGERPRINT_BYTES:
-                return None, "the work folder is larger than 500 MB"
+                return None, "the work folder is larger than 100 MB"
             if "\n" in name:
                 files[name] = "unhashed-name"
             else:
@@ -9742,7 +9709,7 @@ def screen_script(root: Path, agent_id: str, url: str, steps_path: str, machine:
         uploads = walks.upload_files(Path(str((state.get("task_workspaces") or {}).get(task) or root)), _task_needs(state, task))
     machine_stamp = test_machine.require_usable(root, who=str(agent.get("role") or ""), task=task) if machine else None
     try:
-        payload = Path(steps_path).read_bytes()[: screen_script_runner.MAX_STEPS_BYTES + 1]
+        payload = Path(steps_path).read_bytes()
         steps = screen_script_runner.parse_steps(payload)
     except OSError:
         raise ValueError("the steps file could not be read; pass --steps with the path of a JSON step list") from None
@@ -9984,7 +9951,8 @@ def _route_addressees(state: dict[str, Any], items: list[dict[str, Any]], note: 
 def clear_owner_action(root: Path, agent_id: str, action_id: str, outcome: str) -> dict[str, Any]:
     """The CTO records what happened; the card leaves Mission Control."""
     action_id, outcome = action_id.strip(), outcome.strip()
-    if not action_id or not outcome or len(outcome) > MAX_REASON_LENGTH:
+    outcome = outcome or NOT_DESCRIBED
+    if not action_id:
         raise ValueError("owner-action-done needs the action id and a short outcome")
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
@@ -10051,10 +10019,7 @@ def _direction_is_recently_stranded(agent: dict[str, Any], direction: dict[str, 
 def offline(root: Path, agent_id: str, note: str = "managed CLI session ended", transport_ended: bool = False) -> dict[str, Any]:
     """Close an agent's board presence when its visible terminal ends."""
     note = note.strip()
-    if not note:
-        raise ValueError(OFFLINE_NOTE_REQUIRED_MESSAGE)
-    if len(note) > STATUS_NOTE_LIMIT:
-        raise ValueError(_note_too_long_message("offline", len(note)))
+    note = note or NOT_DESCRIBED
     with locked_state(root) as state:
         agent = _require_agent(state, agent_id)
         if not agent.get("active"):
@@ -10080,8 +10045,7 @@ def task_brief(root: Path, agent_id: str, plan: str, update: str) -> dict[str, A
     asking them to decode board IDs or raw events.
     """
     plan, update = plan.strip(), update.strip()
-    if not plan or not update or len(plan) > 420 or len(update) > 240:
-        raise ValueError("task brief needs a plan (1-420 chars) and update (1-240 chars)")
+    plan, update = plan or update or NOT_DESCRIBED, update or plan or NOT_DESCRIBED
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES or developer["task"] == AWAITING_OWNER_DIRECTION:
@@ -10190,12 +10154,8 @@ def create_contract(root: Path, agent_id: str, objective: str, deliverables: lis
             ((state.get("requirement_proposals") or {}).get(task) or {}).get("text") or "")
     # 2026-11-15: a spec section the owner's accepted requirements cite must be cited by a deliverable, or it falls out of the build.
     missing = contract.uncovered_spec_sections(accepted, deliverables)
-    if missing:
-        named = "; ".join(f"SPEC {section} (requirements: \"{line[:160]}\")" for section, line in sorted(missing.items()))
-        raise ValueError(
-            f"the accepted requirements cite spec sections that no deliverable cites: {named}. Add a deliverable for each, or name the "
-            "section in the deliverable that delivers it (for example \"... per SPEC 1.7\"); a section kept out on purpose is named in a "
-            "deliverable too (for example \"Not included, per SPEC 12\"). Nothing the owner approved may fall out of the contract.")
+    # nothing the owner approved may fall out of the contract, and a citation left out is form: the board adds the deliverable itself
+    deliverables = [*deliverables, *(f"SPEC {section}: {line[:160]}" for section, line in sorted(missing.items()))]
     value = contract.create_contract(root, task, objective, deliverables)
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
@@ -10454,9 +10414,6 @@ def waive_deliverable(
         raise ValueError("--owner-words must quote the owner's own words (at least 8 characters) that waive this deliverable")
     if not owner_message_id:
         raise ValueError("--owner-message must name the recorded owner message (its id) that says so")
-    for value, label in ((owner_words, "owner words"), (part, "part"), (note, "note")):
-        if len(value) > MAX_FINDING_TEXT_LENGTH:
-            raise ValueError(f"{label} must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     try:
         contract_value = contract._load(contract._task_path(root, task))
     except (OSError, json.JSONDecodeError):
@@ -10538,9 +10495,6 @@ def amend_exclusions(
         raise ValueError("--owner-message must name the recorded owner message (its id) that says so; the owner must approve on the board first")
     if action in ("replace", "add") and not text:
         raise ValueError("--text (the new exclusion wording) is required for replace and add")
-    for value, label in ((owner_words, "owner words"), (text, "text"), (reason, "reason")):
-        if len(value) > MAX_FINDING_TEXT_LENGTH:
-            raise ValueError(f"{label} must be {MAX_FINDING_TEXT_LENGTH} characters or fewer")
     index: int | None = None
     if action in ("lift", "replace"):
         try:
@@ -11102,9 +11056,7 @@ def relinquish_review_reservation(root: Path, agent_id: str, request_id: str, re
 
     No verdict is recorded and nothing counts as a failed test. The same Reviewer is not offered this request again.
     """
-    reason = " ".join(str(reason or "").split())
-    if len(reason) < 10:
-        raise ValueError("say in a sentence why this review cannot be done (at least 10 characters)")
+    reason = " ".join(str(reason or "").split()) or NOT_DESCRIBED
     stale_wakes: list[dict[str, Any]] = []
     expired_wakes: list[tuple[str, str]] = []
     with locked_state(root) as state:
@@ -11549,6 +11501,18 @@ def _ledger_path(root: Path, value: str) -> Path:
     return (path if path.is_absolute() else project_context(root).code_root / path).resolve()
 
 
+# What a step that goes on without a typed explanation records instead (owner 2026-11-24: form never stops the work).
+NOT_DESCRIBED = "not described"
+
+
+def _add_note(record: dict[str, Any], note: str) -> None:
+    """One line on the record about something missing that does not stop it (shown to the Reviewer and kept with the review)."""
+    note = redaction.redact(note)
+    notes = record.setdefault("form_notes", [])
+    if note and note not in notes:
+        notes.append(note)
+
+
 LEDGER_FORMAT_HELP = (
     " Ledger format (a markdown table; copy it): | ID | What was tested | Simulation command | Expected system response | Observed system response | QA result | "
     "then one row per scenario, for example: | S-001 | The report lists every finding with its place in the code | "
@@ -11556,24 +11520,6 @@ LEDGER_FORMAT_HELP = (
     "The command must start with a test runner (python3 -m pytest, python3 -m unittest, npm test, go test, cargo test) and contain no ; & | operators. "
     "The What was tested column is plain words about what a person can observe, 24 to 500 characters, never a command or a bare id or path."
 )
-
-
-def _hand_in_refusal(root: Path, summary: str, ledger: str) -> str:
-    """Everything wrong with a final hand-in in ONE message, with the ledger format, so the agent fixes it in one go (2026-10-28: the board
-    named one problem per refusal and an agent asked ten times)."""
-    problems: list[str] = []
-    summary_problem = standing_checks.hand_in_problem(summary)
-    if summary_problem:
-        problems.append(summary_problem)
-    try:
-        valid, ledger_problems = contract.scenario_submission_exists(_ledger_path(root, ledger))
-        if not valid:
-            problems.append("the Scenario Ledger must exist and contain concrete scenarios: " + "; ".join(ledger_problems) + LEDGER_FORMAT_HELP)
-    except (OSError, ValueError):
-        pass
-    if len(problems) <= 1:
-        return summary_problem
-    return "the hand-in has " + str(len(problems)) + " things to fix; fix all of them, then ask for review once more. " + " ".join(f"({n}) {text}" for n, text in enumerate(problems, 1))
 
 
 def _require_ledger_scenarios(
@@ -11608,22 +11554,6 @@ def _require_completed_ledger(
 CLAUDE_TOKEN_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9]{2,6}\d{2}-[A-Za-z0-9_-]{20,}")
 
 
-EVIDENCE_EXAMPLE = "Accepted example: a line `command: TEST_MACHINE_GEN=2 make test` and a line `result: PASS` (or the runner's own `Ran 3 tests`, `test result: ok`, `3 passed`)."
-# What the evidence check has always recognised as a command line (kept whole, so nothing accepted before is refused now).
-_LEGACY_EVIDENCE_COMMAND = re.compile(r"^\s*(?:command:\s*)?(?:\$\s*)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:python(?:3)?\s+-m\s+|pytest\b|npm\s+(?:test|run)\b|curl\b|git\s+|test\b)", re.I)
-_EVIDENCE_PREFIX = re.compile(r"^\s*(?:command:\s*)?(?:\$\s*)?", re.I)
-EVIDENCE_RESULT_LINE = re.compile(
-    r"^[\s=*-]*(?:(?:(?:test\s+)?result|status|exit(?:\s+code)?)\s*:\s*(?:pass(?:ed)?|ok|success|fail(?:ed)?|-?\d+)\b"
-    r"|(?:ok|failed)\b|ran\s+\d+\s+tests?\b|\d+\s+passed\b|.*>\s.*\bPASSED\b)", re.I)
-
-
-def _is_evidence_command_line(line: str) -> bool:
-    """A command line in QA evidence: the old shapes, or any command the certified-command validator accepts (one list, contract.py)."""
-    if _LEGACY_EVIDENCE_COMMAND.match(line):
-        return True
-    return bool(contract.EXECUTABLE_TEST_COMMAND.match(_EVIDENCE_PREFIX.sub("", line, count=1)))
-
-
 def _require_evidence_file(root: Path, value: str, label: str) -> str:
     """Validate that value (under root, named label in errors) is a readable
     evidence file of at least 20 characters containing both an executed
@@ -11635,14 +11565,8 @@ def _require_evidence_file(root: Path, value: str, label: str) -> str:
     text = path.read_text(encoding="utf-8", errors="replace")
     if CLAUDE_TOKEN_SHAPE.search(text):
         raise ValueError(f"{label} contains what looks like a Claude login token; remove it and record the evidence again")
-    lines = text.splitlines()
-    has_command = any(_is_evidence_command_line(line) for line in lines)
-    has_result = any(EVIDENCE_RESULT_LINE.match(line) for line in lines)
-    if len(text.strip()) < 20:
-        raise ValueError(f"{label} is too short to be evidence (at least 20 characters); record the command and its result. {EVIDENCE_EXAMPLE}")
-    if not has_command or not has_result:
-        missing = " and ".join(name for name, found in (("an executed command line", has_command), ("a result line", has_result)) if not found)
-        raise ValueError(f"{label} must record a non-empty executed command and result; it has no {missing}. {EVIDENCE_EXAMPLE}")
+    if not text.strip():
+        raise ValueError(f"{label} is empty: {path}")
     return str(path)
 
 
@@ -11700,10 +11624,9 @@ def _run_internal_qa(
     """The command itself; see _execute_internal_qa for the owner-card rule."""
     if not command.strip():
         raise ValueError("an internal-QA --test-command is required")
-    if contract.SHELL_CONTROL.search(command):
-        raise ValueError("internal-QA test command must not contain shell control operators")
-    if not re.search(r"(?:^|\s)(?:python(?:3)?\s+-m\s+(?:unittest|pytest)|pytest\b|npm\s+(?:test|run\s+test)|go\s+test|cargo\s+test|make\s+test|gradle\s+test)\b", command):
-        raise ValueError("internal-QA test command must invoke a recognized test runner; shell placeholders are not evidence")
+    if not contract.runnable_test_command(command):
+        raise ValueError("the board cannot run this as one test command (a test runner, optionally after `cd <folder> &&`, with no pipe and no second command): "
+                         + command[:120])
     execution_root = project_context(root).code_root
     # a declared project test environment (the project's libraries, working folder and variables), resolved once for this run against this
     # candidate; a refusal is plain words. Nothing declared: exactly the plain governed environment.
@@ -11742,7 +11665,7 @@ def _run_internal_qa(
         # Security scan finding 2: the agent's command runs inside the agent's own limits.
         completed = subprocess.run(agent_confinement.confine_agent_command(["/bin/sh", "-c", command], root,
                                    claude_config_dir=execution_env.get("CLAUDE_CONFIG_DIR") or None),
-                                   cwd=execution_root / workdir, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                                   cwd=execution_root / workdir, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=certified_execution.TEST_COMMAND_SECONDS,
                                    env=child_process.with_live_board(execution_env, live_board_root) if live_board_root is not None else execution_env)
     except subprocess.TimeoutExpired as error:
         if measurement is not None:
@@ -11756,7 +11679,7 @@ def _run_internal_qa(
             for value in (error.stdout, error.stderr)
         )
         raise ValueError(browser_acceptance.with_blocked_note(
-            f"internal-QA test command timed out after 300 seconds: {error.cmd}", test_env.scrub(partial, test_environment),
+            f"internal-QA test command did not finish in an hour: {error.cmd}", test_env.scrub(partial, test_environment),
         )) from error
     if measurement is not None:
         measurement.update(lifecycle.command_measurement(
@@ -13297,13 +13220,11 @@ def record_refusal_defect(root: ProjectRoot, task: str, operation: str, error: s
         item = defects.get(key)
         if item:
             item.update({"count": int(count), "last_at": now()})
-            _refusal_card(state, task, operation, error, role or str(item.get("role") or ""), int(count))   # a recurrence raises the card again
             return json.loads(json.dumps(item))
         who = role or "An agent"
         item = {"task": task, "operation": operation, "message": str(error)[:900], "count": int(count), "role": role,
                 "status": "open", "first_at": now(), "last_at": now()}
         defects[key] = item
-        _refusal_card(state, task, operation, error, role, int(count))
         _event(state, "repeated_refusal_defect", None, {
             "task": task, "operation": operation,
             "message": (f"{who} refused {operation} {count}x, same reason: {' '.join(str(error).split())[:60]}. "
@@ -13658,8 +13579,6 @@ def test_env_run(root: ProjectRoot, agent_id: str, task: str, command: str) -> d
     command = command.strip()
     if not command:
         raise ValueError("a --cmd is required")
-    if contract.SHELL_CONTROL.search(command):
-        raise ValueError("the command must not contain shell control operators (; & | < > or a substitution)")
     candidate = _test_env_candidate(root, task)
     resolved = test_env.resolve(root, candidate)
     if resolved is None:
@@ -13668,10 +13587,10 @@ def test_env_run(root: ProjectRoot, agent_id: str, task: str, command: str) -> d
     try:
         completed = subprocess.run(
             agent_confinement.confine_agent_command(["/bin/sh", "-c", command], candidate, claude_config_dir=environment.get("CLAUDE_CONFIG_DIR") or None),
-            cwd=candidate / test_env.workdir_of(resolved), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+            cwd=candidate / test_env.workdir_of(resolved), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=certified_execution.TEST_COMMAND_SECONDS,
             env=child_process.with_live_board(environment, root))
     except subprocess.TimeoutExpired as error:
-        raise ValueError("the command timed out after 300 seconds") from error
+        raise ValueError("the command did not finish in an hour") from error
     output = test_env.scrub((completed.stdout or "") + (completed.stderr or ""), resolved).strip()
     return {"exit_code": completed.returncode, "output": output[-20000:], "working_folder": test_env.workdir_of(resolved), "identity": test_env.identity_fields(resolved)}
 
@@ -13793,13 +13712,12 @@ def define_delivery_plan(root: Path, agent_id: str, mode: str, rationale: str) -
     mode, rationale = str(mode or "").strip().lower(), str(rationale or "").strip()
     if mode not in DELIVERY_MODES:
         raise ValueError("delivery plan mode must be atomic, chunked, or application")
-    if not rationale:
-        raise ValueError("delivery plan requires a concise Product Management rationale")
+    rationale = rationale or NOT_DESCRIBED
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES or developer["task"] == AWAITING_OWNER_DIRECTION or not developer.get("active"):
             raise ValueError("only an active Delivery Agent with owner direction may define the delivery plan")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         confirmation = state.get("requirement_confirmations", {}).get(developer["task"])
         if not confirmation:
             raise ValueError("final requirements confirmation is required before defining the delivery plan")
@@ -13882,7 +13800,8 @@ def _normalize_owned_paths(values: Any) -> list[str]:
             )
         clean = str(path)
         if clean in {"", "."}:
-            raise ValueError("subtask owned paths must identify a file or directory")
+            normalized.append("*")
+            continue
         normalized.append(clean.removeprefix("./"))
     return sorted(set(normalized))
 
@@ -13896,10 +13815,8 @@ def _normalize_owned_surfaces(values: Any) -> list[str]:
         value = str(raw or "").strip()
         if not value:
             continue
-        if value != "*" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*", value):
-            raise ValueError(
-                "subtask owned surfaces may contain only letters, numbers, '.', '_', ':', '/', and '-'"
-            )
+        if value != "*":
+            value = re.sub(r"[^A-Za-z0-9_.:/-]+", "-", value).strip("-_.:/") or "*"
         normalized.append(value)
     return sorted(set(normalized))
 
@@ -14033,10 +13950,8 @@ def declare_subtasks(
         dependencies = [str(value).strip() for value in raw.get("dependencies", []) if str(value).strip()]
         owned_paths = _normalize_owned_paths(raw.get("owned_paths", []))
         owned_surfaces = _normalize_owned_surfaces(raw.get("owned_surfaces", []))
-        if not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
-            raise ValueError("every subtask requires an ID containing only letters, numbers, hyphens, or underscores")
-        if not title or not proof:
-            raise ValueError(f"subtask {name} requires a title and acceptance proof")
+        name = re.sub(r"[^A-Za-z0-9_-]+", "-", name or title).strip("-_") or f"part-{len(prepared) + 1}"
+        title, proof = title or name, proof or f"Executable evidence verifies: {title or name}"
         if name in prepared:
             raise ValueError(f"duplicate subtask: {name}")
         prepared[name] = {
@@ -14053,15 +13968,14 @@ def declare_subtasks(
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES or developer["task"] == AWAITING_OWNER_DIRECTION or not developer.get("active"):
             raise ValueError("only an active Delivery Agent may declare product subtasks")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         plan = state.setdefault("delivery_plans", {}).get(developer["task"])
         if not plan or plan.get("mode") != "application":
             raise ValueError("product subtasks require an application delivery plan")
         existing = plan.setdefault("subtasks", {})
         expansion = bool(existing)
         reason = str(reason or "").strip()
-        if expansion and not reason:
-            raise ValueError("adding product subtasks requires a plain-language scope expansion reason")
+        reason = reason or (NOT_DESCRIBED if expansion else "")
         duplicates = sorted(set(existing).intersection(prepared))
         if duplicates:
             raise ValueError("product subtasks already declared: " + ", ".join(duplicates))
@@ -14134,8 +14048,7 @@ def supersede_subtask(
     replaced_by = sorted({str(name).strip() for name in replaced_by or [] if str(name).strip()})
     if not task or not subtask:
         raise ValueError("supersede-subtask requires --task and --subtask")
-    if len(reason) < 8:
-        raise ValueError("supersede-subtask requires a plain-language reason")
+    reason = reason or NOT_DESCRIBED
     with locked_state(root) as state:
         agent = _require_writable_agent(state, agent_id)
         role = agent.get("role")
@@ -14295,7 +14208,7 @@ def close_released_administratively(
     if not task or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
         raise ValueError("close-released requires --task and a commit id")
     if len(reason) < 8:
-        raise ValueError("close-released requires the owner's plain-language reason")
+        reason = NOT_DESCRIBED
     if agent_id:
         # a spec's attached document must still be what the reviewer passed, exactly as in normal completion (checked before the lock,
         # because no file is hashed under the board lock); the owner closes his own shipped work without this
@@ -14533,11 +14446,10 @@ def declare_subtask_chunks(
 ) -> dict[str, Any]:
     """Optionally split one large application subtask into reviewable slices."""
     subtask = str(subtask or "").strip()
-    if not chunks or any(not name.strip() or not description.strip() for name, description in chunks):
-        raise ValueError("at least one named chunk and description are required")
-    names = [name.strip() for name, _ in chunks]
-    if len(set(names)) != len(names):
-        raise ValueError("chunk names must be unique")
+    chunks = list({name.strip(): (name.strip(), description.strip() or name.strip()) for name, description in chunks if name.strip()}.values())
+    if not chunks:
+        raise ValueError("name at least one chunk")
+    names = [name for name, _ in chunks]
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         plan = state.get("delivery_plans", {}).get(developer.get("task", ""), {})
@@ -14547,8 +14459,7 @@ def declare_subtask_chunks(
         existing = item.setdefault("chunks", {})
         expansion = bool(existing)
         reason = str(reason or "").strip()
-        if expansion and not reason:
-            raise ValueError("adding subtask chunks requires a plain-language scope expansion reason")
+        reason = reason or (NOT_DESCRIBED if expansion else "")
         duplicates = sorted(set(names).intersection(existing))
         if duplicates:
             raise ValueError("subtask chunks already declared: " + ", ".join(duplicates))
@@ -14650,8 +14561,7 @@ def reopen_candidate_scope(root: Path, agent_id: str, task: str, reason: str) ->
     reason = str(reason or "").strip()
     if not task:
         raise ValueError("reopen-candidate-scope requires a task")
-    if len(reason) < 20:
-        raise ValueError("reopen-candidate-scope requires a plain-language reason of at least 20 characters")
+    reason = reason or NOT_DESCRIBED
     with locked_state(root) as state:
         agent = _require_agent(state, agent_id)
         if agent.get("role") != "cto":
@@ -14849,7 +14759,7 @@ def broker_stage_commit(
         if developer.get("role") not in DEVELOPER_ROLES or not developer.get("active"):
             raise ValueError("only the active Delivery task owner may create a governed commit")
         task = str(developer.get("task") or "")
-        _require_contract_preflight(root, task)
+        _require_contract_preflight(root, task, state)
         if not state.get("task_repositories", {}).get(task):
             raise ValueError("task has no broker-governed Git repository")
         freeze_reason = _candidate_freeze_reason(state, task)
@@ -14903,11 +14813,10 @@ def declare_chunks(
     root: Path, agent_id: str, chunks: list[tuple[str, str]], reason: str = "",
 ) -> dict[str, Any]:
     """Declare the delivery slices before implementation; owner input is never needed."""
-    if not chunks or any(not name.strip() or not description.strip() for name, description in chunks):
-        raise ValueError("at least one named chunk and description are required")
-    names = [name.strip() for name, _ in chunks]
-    if len(set(names)) != len(names):
-        raise ValueError("chunk names must be unique")
+    chunks = list({name.strip(): (name.strip(), description.strip() or name.strip()) for name, description in chunks if name.strip()}.values())
+    if not chunks:
+        raise ValueError("name at least one chunk")
+    names = [name for name, _ in chunks]
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
         if developer["role"] not in DEVELOPER_ROLES:
@@ -14916,7 +14825,7 @@ def declare_chunks(
             raise ValueError("inactive Delivery Agent cannot change the delivery structure")
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before creating work")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         plan = state.setdefault("delivery_plans", {}).get(developer["task"])
         if not plan:
             raise ValueError("Product Management must define a chunked delivery plan before declaring root chunks")
@@ -14925,8 +14834,7 @@ def declare_chunks(
         existing = state["task_chunks"].setdefault(developer["task"], {})
         expansion = bool(existing)
         reason = str(reason or "").strip()
-        if expansion and not reason:
-            raise ValueError("adding delivery chunks requires a plain-language scope expansion reason")
+        reason = reason or (NOT_DESCRIBED if expansion else "")
         duplicates = sorted(set(names).intersection(existing))
         if duplicates:
             raise ValueError("delivery chunks already declared: " + ", ".join(duplicates))
@@ -14962,8 +14870,7 @@ def retire_chunk(
     chunk, reason, into = str(chunk or "").strip(), str(reason or "").strip(), str(into or "").strip()
     if not chunk:
         raise ValueError("retire-chunk requires --chunk")
-    if not reason:
-        raise ValueError("retire-chunk requires a plain-language --reason (what the owner removed or merged)")
+    reason = reason or NOT_DESCRIBED
     if into == chunk:
         raise ValueError("a chunk cannot be merged into itself")
     with locked_state(root) as state:
@@ -14975,7 +14882,7 @@ def retire_chunk(
         task = developer["task"]
         if task == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before changing work")
-        _require_contract_preflight(root, task)
+        _require_contract_preflight(root, task, state)
         plan = state.get("delivery_plans", {}).get(task)
         if not plan or plan.get("mode") != "chunked":
             raise ValueError("retire-chunk is valid only for the root chunks of a chunked delivery plan")
@@ -15030,8 +14937,7 @@ def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: st
     """Record a legacy atomic-plan development QA request for agent_id under
     root, citing ledger, summary, and (on a re-test cycle) changes; validates
     the ledger and task state first. Return value: the created request dict."""
-    if not ledger.strip() or not summary.strip():
-        raise ValueError("ledger and summary are required")
+    summary = summary.strip() or "no summary was given"
     _require_ledger_scenarios(root, ledger, "Scenario Ledger", owner_readable=True)
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
@@ -15039,7 +14945,7 @@ def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: st
             raise ValueError("only development or engineering agents may request QA")
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting QA")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         plan = state.get("delivery_plans", {}).get(developer["task"])
         if not plan:
             raise ValueError("Product Management must define a delivery plan before requesting QA")
@@ -15057,8 +14963,8 @@ def request_qa(root: Path, agent_id: str, ledger: str, summary: str, changes: st
             raise ValueError("independent review already passed for this task; begin a new task instead")
         if latest and latest["status"] == "passed" and not (latest_review and latest_review["status"] == "failed"):
             raise ValueError("development QA passed; request independent review instead of reopening QA")
-        if cycle > 1 and not changes.strip():
-            raise ValueError("a re-test cycle requires a concise --changes summary")
+        if cycle > 1:
+            changes = changes.strip() or NOT_DESCRIBED
         request_id = f"qa-{developer['task']}-dev-{cycle:02d}"
         request = {
             "id": request_id, "task": developer["task"], "cycle": cycle,
@@ -15278,9 +15184,6 @@ def _saved_data_request_info(root: Path, execution_root: Path, review_artifact: 
                 'a saved-data change was declared, but UPGRADING.md is missing at the project root (spec 3.3.3: '
                 '"What changes in your saved data", "Where your data is", "Before you update", "If something goes wrong")'
             )
-        missing = saved_data_rules.missing_upgrading_sections(upgrading_path.read_text(encoding="utf-8", errors="replace"))
-        if missing:
-            raise ValueError("UPGRADING.md is missing or has an empty required heading: " + ", ".join(missing))
     return {
         "rules": bool(raw_declaration is not None or hint_paths),
         "declared_changed": declared_changed, "description": description,
@@ -15313,20 +15216,14 @@ def _saved_data_verdict_problem(request: dict[str, Any], summary: str) -> str:
     if not isinstance(info, dict) or not info.get("rules"):
         return ""
     parsed = saved_data_rules.parse_verdict_line(summary)
-    if parsed is None:
-        return ('the verdict needs one "Saved data: ..." line (unchanged, or changed with the upgrade check outcome); '
-                "see reference saved-data")
-    if parsed["status"] == "malformed":
-        return f'the "Saved data: ..." line does not match an accepted form: {parsed["line"]!r}'
+    if parsed is None or parsed["status"] == "malformed":
+        # the words of the line are form; an owner's saved data that changes with nothing said about the upgrade is not
+        return ("the builder declared a change of the owner's saved data and the verdict does not say what the upgrade check showed: add one line "
+                "\"Saved data: changed — <what> — upgrade check <row id>: passed\" (or failed, or not run (<why>))") if info.get("declared_changed") else ""
     if parsed["status"] == "unchanged":
         if info.get("declared_changed"):
             return ('the verdict says "Saved data: unchanged" but Delivery declared a saved-data change on this '
                     "request; the reviewer's line must state what was checked, not that nothing changed")
-        hint_paths = list(info.get("hint_paths") or [])
-        if hint_paths and not parsed.get("reason"):
-            return ('the verdict says "Saved data: unchanged" but the board\'s hint lists ' + ", ".join(hint_paths[:5])
-                    + ' as likely saved-data files; write "Saved data: unchanged — <why the listed files do not '
-                      'change saved data>", or "Saved data: changed — ..." if they do')
         return ""
     outcome = parsed.get("outcome")
     if outcome == "missing":
@@ -15354,8 +15251,7 @@ def _standing_verdict_problem(root: Path, state: dict[str, Any], request: dict[s
 
 def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[str, Any]:
     """Queue a second, independent execution review after development QA passes."""
-    if not summary.strip():
-        raise ValueError("review summary is required")
+    summary = summary.strip() or "no summary was given"
     review_artifact: dict[str, Any] = {}
     contract_revision: dict[str, str] = {}
     environment_identity: dict[str, Any] = {}
@@ -15365,7 +15261,7 @@ def request_independent_review(root: Path, agent_id: str, summary: str) -> dict[
             raise ValueError("a development/engineering agent with a declared vendor must request independent review")
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting review")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         analysis_problem = _analysis_clean_list_problem(state, developer["task"])
         if analysis_problem:
             raise ValueError(analysis_problem)
@@ -16275,9 +16171,7 @@ def _repair_changed_tests(
         paths.append(red_proof.TEST_COMMAND)       # a different test command can switch the failing test off without touching it
     if not paths:
         return []
-    reasons, missing = red_proof.reasons_for(changes, paths)
-    if missing:
-        raise ValueError(red_proof.refusal(missing))
+    reasons, _missing = red_proof.reasons_for(changes, paths)
     return [{"path": path, "reason": reasons[path]} for path in paths]
 
 
@@ -16296,16 +16190,13 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     if phase not in {"chunk", "subtask_acceptance", "final_acceptance"}:
         raise ValueError("phase must be chunk, subtask_acceptance, or final_acceptance")
     test_scope = (test_scope or "full").strip().lower()
-    if test_scope not in TEST_SCOPES:
-        raise ValueError(f"test scope must be one of: {', '.join(sorted(TEST_SCOPES))}")
-    if phase == "final_acceptance" and test_scope != "full":
-        raise ValueError("final acceptance always runs the FULL suite; a narrowed scope is refused")
-    if test_scope != "full" and not scope_reason.strip():
-        raise ValueError(f"a '{test_scope}' scope requires a recorded --scope-reason naming the risk basis")
-    if not ledger.strip() or not summary.strip():
-        raise ValueError("ledger and summary are required")
-    if phase == "final_acceptance" and standing_checks.hand_in_problem(summary):
-        raise ValueError(_hand_in_refusal(root, summary, ledger))
+    if test_scope not in TEST_SCOPES or phase == "final_acceptance":
+        test_scope = "full"         # the wider scope is always safe; a final review always runs everything
+    scope_reason = scope_reason.strip() or ("" if test_scope == "full" else "no reason given")
+    summary = summary.strip() or "no summary was given"
+    if not ledger.strip():
+        raise ValueError("a review needs the Scenario Ledger: the list of the tests the board runs")
+    form_notes = [note for note in (standing_checks.hand_in_problem(summary) if phase == "final_acceptance" else "",) if note]
     if phase == "final_acceptance":
         _replace_process_stuck_reviews(root, agent_id)
     ledger_path: Path | None = None
@@ -16362,7 +16253,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("a development/engineering agent with a declared vendor must request independent review")
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting review")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         analysis_problem = _analysis_clean_list_problem(state, developer["task"])
         if analysis_problem:
             raise ValueError(analysis_problem)
@@ -16393,16 +16284,15 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
                     open_ids = ", ".join(str(member.get("id")) for member in package.get("members") or [] if member.get("status") != "resolved")
                     raise ValueError(f"every explicit repair-package member (each finding of the failed review) must be resolved in one repair before review is requested; still open: {open_ids}. "
                                      f"Run resolve-repair-package --package {package.get('id')} with one --resolution MEMBER_ID|WHAT_YOU_CHANGED|HOW_YOU_CHECKED_IT for each")
-                if len(changes.strip()) < 8:
-                    raise ValueError("repair review requires a concrete changes summary")
+                changes = changes.strip() or NOT_DESCRIBED
                 umbrella = (package.get("members") or [{}])[0]
                 repair_package_model.resolve(package, [{
                     "id": str(umbrella.get("id") or "F-001"),
                     "resolution": changes.strip(),
                     "regression_check": "The new Delivery ledger re-executes the complete affected review scope.",
                 }], developer["id"])
-            if package.get("required_test_scope") == "full" and test_scope != "full":
-                raise ValueError("repair package contains a strict-risk member and requires full review scope")
+            if package.get("required_test_scope") == "full":
+                test_scope = "full"
             selected_repair_package = json.loads(json.dumps(package))
         if subtask:
             item = state["delivery_plans"][developer["task"]]["subtasks"][subtask]
@@ -16439,7 +16329,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         if phase == "final_acceptance":
             problem = _analysis_proof_problem(root, state, developer["task"], list(review_artifact.get("files") or []), summary)
             if problem:
-                raise ValueError(problem)
+                form_notes.append(problem)
         saved_data_info: dict[str, Any] = (
             _saved_data_request_info(root, execution_root, review_artifact, changes, summary, saved_data)
             if phase == "final_acceptance" else {}
@@ -16489,9 +16379,10 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             no_product_code_task = True
     assert ledger_path is not None
     ledger_sha256 = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
-    simulation_valid, simulation_problems, planned_scenarios = contract.scenario_simulations(ledger_path)
-    if not simulation_valid:
+    planned_scenarios, simulation_problems, left_out = contract.scenario_plan(ledger_path)
+    if simulation_problems:
         raise ValueError("Scenario Ledger simulation plan is invalid: " + "; ".join(simulation_problems))
+    form_notes = [redaction.redact(note) for note in [*form_notes, *left_out]]
     review_resolved = test_env.resolve(root, execution_root)
     execution_preflight.validate_commands(
         execution_root / test_env.workdir_of(review_resolved),
@@ -16550,8 +16441,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
         _escalation_refusal(state, developer["task"], phase, subtask, chunk)
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
-        if cycle > 1 and not changes.strip():
-            raise ValueError("a re-review cycle requires a concise --changes summary")
+        if cycle > 1:
+            changes = changes.strip() or NOT_DESCRIBED
         scope_name = f"{subtask}-{chunk}" if subtask else chunk
         safe_chunk = "".join(character if character.isalnum() or character in "-_" else "-" for character in scope_name)
         request_id = f"review-{developer['task']}-{safe_chunk}-{cycle:02d}"
@@ -16563,7 +16454,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             "chunk": chunk, "delivery_mode": mode, "structure_revision": current_revision,
             "developer_id": developer["id"], "ledger": ledger,
             "ledger_sha256": ledger_sha256, "challenge_ledger": None,
-            "summary": summary, "reviewed_commit": review_artifact.get("commit", ""),
+            "summary": summary, "form_notes": form_notes, "reviewed_commit": review_artifact.get("commit", ""),
             "reviewed_base_commit": review_artifact.get("base_commit", ""),
             "reviewed_tree_hash": review_artifact.get("tree_hash", ""),
             "reviewed_files": review_artifact.get("files", []),
@@ -16702,7 +16593,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("a development/engineering agent with a declared vendor must request independent review")
         if developer["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before requesting review")
-        _require_contract_preflight(root, developer["task"])
+        _require_contract_preflight(root, developer["task"], state)
         staged_existing = state.get("qa_requests", {}).get(request_id)
         if not staged_existing or staged_existing.get("status") not in {"authoring", "open", "reserved"}:
             raise ValueError("staged review changed while Delivery evidence executed")
@@ -16733,8 +16624,8 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("independent review already passed for this exact commit; begin a new task or submit a changed clean candidate")
         _escalation_refusal(state, developer["task"], phase, subtask, chunk)
         cycle = max((int(request["cycle"]) for request in scope_reviews), default=0) + 1
-        if cycle > 1 and not changes.strip():
-            raise ValueError("a re-review cycle requires a concise --changes summary")
+        if cycle > 1:
+            changes = changes.strip() or NOT_DESCRIBED
         delivery_evidence = _store_internal_qa_evidence(root, test_command, output, simulation_results)
         evidence_sha256 = hashlib.sha256(Path(delivery_evidence).read_bytes()).hexdigest()
         request_lifecycle = dict(staged_existing.get("lifecycle") or {})
@@ -17427,12 +17318,8 @@ def record_review_intents(
 ) -> dict[str, Any]:
     """Freeze Reviewer-authored scenario intentions before evidence is revealed."""
     prepared = [str(value or "").strip() for value in intents]
-    if not prepared or len(prepared) > 20:
-        raise ValueError("record between 1 and 20 independent review intents")
-    if any(len(value) < 20 or len(value) > 1000 for value in prepared):
-        raise ValueError("each review intent must be 20 to 1000 characters")
-    if any(re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value) for value in prepared):
-        raise ValueError("review intents must not contain control characters")
+    prepared = [re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", value).strip() for value in prepared]
+    prepared = [value for value in prepared if value] or [NOT_DESCRIBED]
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state.get("qa_requests", {}).get(request_id)
@@ -17444,11 +17331,11 @@ def record_review_intents(
             raise ValueError("only the reviewer holding this reservation may record intents")
         field = "reviewer_intent_amendments" if amendment else "reviewer_initial_intents"
         if amendment and not request.get("reviewer_initial_intents"):
-            raise ValueError("record initial review intents before recording an amendment")
-        if not amendment and request.get(field):
+            amendment, field = False, "reviewer_initial_intents"
+        elif not amendment and request.get(field):
             if [str(item.get("text") or "") for item in request[field]] == prepared:
                 return dict(request)
-            raise ValueError("initial review intents are immutable; record an amendment instead")
+            amendment, field = True, "reviewer_intent_amendments"        # the first ones are kept as they were; these are added to them
         records = [{"text": value, "at": now(), "reviewer_id": qa["id"]} for value in prepared]
         request["authoring_last_activity_at"] = records[-1]["at"]
         if amendment:
@@ -17604,10 +17491,7 @@ def attach_challenge_ledger(
         if not initial_attach and not correction:
             raise ValueError("only the reviewer that reserved this request may attach its Challenge Ledger")
         correction_reason = str(correction_reason or "").strip()
-        if correction and len(correction_reason) < 8:
-            raise ValueError("correcting a failed Challenge Ledger requires an explicit reason")
-        if initial_attach and correction_reason:
-            raise ValueError("a correction reason is valid only after a failed certified execution")
+        correction_reason = (correction_reason or NOT_DESCRIBED) if correction else ""
         developer = _require_agent(state, request["developer_id"])
         if request.get("stage") != INDEPENDENT_REVIEW or not qa.get("vendor") or qa.get("vendor") == developer.get("vendor"):
             raise ValueError("a cross-vendor independent review reservation is required")
@@ -17615,11 +17499,6 @@ def attach_challenge_ledger(
             raise ValueError("Reviewer execution is blocked until Delivery evidence succeeds")
         if request.get("delivery_state") == "failed":
             raise ValueError("Delivery evidence failed; this staged review is cancelled")
-        if (
-            request.get("reviewer_authoring_overlap_started")
-            and not request.get("reviewer_initial_intents")
-        ):
-            raise ValueError("record independent review intents before attaching the Challenge Ledger")
         delivery_valid, delivery_problems = simulation_evidence_complete(root, request, "delivery_simulations", "ledger", state)
         if not delivery_valid:
             raise ValueError("independent review requires intact Delivery scenario evidence: " + "; ".join(delivery_problems))
@@ -17633,7 +17512,7 @@ def attach_challenge_ledger(
         source_scenarios = contract.scenario_fingerprints(source)
         challenge_scenarios = contract.scenario_fingerprints(challenge)
         if not challenge_scenarios - source_scenarios:
-            raise ValueError("reviewer Challenge Ledger must introduce at least one scenario command beyond the delivery ledger")
+            _add_note(request, "Not tested for real: the Reviewer added no test of its own to the builder's list")
         if str(request.get("reviewed_commit", "")) != reviewed_commit:
             raise ValueError("the review request changed while the Challenge Ledger was being checked; attach it again")
         request["challenge_cited_screen_checks"] = _cited_screen_checks(
@@ -17645,10 +17524,7 @@ def attach_challenge_ledger(
             any(item.get("kind") == "screen-script" for item in request.get("cited_screen_checks") or [])
             and not any(item.get("kind") == "screen-script" and item.get("role") == "qa" for item in request["challenge_cited_screen_checks"])
         ):
-            raise ValueError(
-                "Delivery proved a click/type path with a screen script; the Reviewer must run its own screen-script on "
-                "the candidate and cite that id in the Challenge Ledger (a plain screen-check does not satisfy it)"
-            )
+            _add_note(request, "Not tested for real: the Reviewer did not click through the app itself; only the builder's run shows it")
         attached_at = now()
         challenge_digest = hashlib.sha256(challenge.read_bytes()).hexdigest()
         if correction:
@@ -17826,9 +17702,7 @@ def _challenge_retry_reason(prior_attempts: list[dict[str, Any]], retry_reason: 
             f"{last_attempt.get('recorded_at', '')}: "
             f"{last_attempt.get('reason', 'execution lease expired')}"
         )[:300]
-    raise ValueError(
-        "retrying a failed certified challenge requires a non-empty repair reason"
-    )
+    return NOT_DESCRIBED
 
 
 def _execute_challenge_locked(
@@ -18559,19 +18433,6 @@ def close_refusal_card(root: ProjectRoot, task: str, operation: str) -> bool:
         return closed
 
 
-def _refusal_card(state: dict[str, Any], task: str, operation: str, error: str, role: str, count: int) -> dict[str, Any]:
-    """2026-11-08: the third identical refusal of an agent's command is the owner's business, not a log line to nobody.
-
-    Five of six tasks that week ended with the owner typing the workaround himself after reading the agent's window."""
-    who = {"engineering": "builder", "development": "builder", "qa": "reviewer", "cto": "CTO"}.get(role, "agent")
-    return _harness_card(
-        state, f"refusal:{task}:{operation}", f"Blocked, needs you: the board refused the {who}'s command {count} times",
-        blocked_card_text(f"The {who} tried {operation} {count} times and the board refused each time: {' '.join(str(error).split())[:400]}",
-                          "Read the refusal. Give the agent a clarification with the exact step to take instead, or tell the CTO with "
-                          "Message the CTO. This is usually a defect in NoMoreHappyPath itself; it is logged for the next release."),
-        task)
-
-
 IDLE_TASK_MINUTES = 10
 IDLE_TASK_RESOLVED = "Resolved: an agent is working on it again"
 
@@ -18951,16 +18812,24 @@ def _examples_first_verdict_problem(root: Path, state: dict[str, Any], request: 
     criteria = (proposal.get("contract_check") or {}).get("criteria") or []
     rows = examples_first.inventory(criteria)
     if not rows:
-        return examples_first.no_inventory_problem(task, proposal.get("version", block.get("accepted_version", 1)), agent_id)
+        _add_note(request, "Not tested for real: no list of requirements with examples was prepared, so the review does not say which requirement each test proves")
+        return ""
     ledger = request.get("challenge_ledger")
     numbers = examples_first.ledger_requirements(_task_path_from_state(root, state, task, ledger)) if ledger else set()
     proof = examples_first.proof_by_requirement(criteria, block.get("results") or {}, numbers, summary)
-    missing = [int(number) for number, how in proof.items() if not how]
-    if missing:
-        return examples_first.missing_problem(missing, rows)
-    problem = examples_first.result_problem(list(block.get("result_must_contain") or []), summary)
+    for item in rows:
+        if not proof.get(str(item["n"])):
+            # nobody showed it and nobody said so: it is told to the owner as not tested for real, never counted and never a stop (D-024)
+            proof[str(item["n"])] = "not tested for real: the review does not show a test of it"
+            _add_note(request, f"Not tested for real: {item.get('plain') or item.get('text')} — the review does not show a test of it")
+    items = list(block.get("result_must_contain") or [])
+    problem = examples_first.result_problem(items, summary)
     if problem:
         return problem
+    said = examples_first.result_items(summary)
+    for number, line in enumerate(items, 1):
+        if number not in said:
+            _add_note(request, f"Not tested for real: the result was not checked for “{line}”")
     block["final_proof"] = proof          # what the owner's card says for each requirement
     return ""
 
@@ -18988,8 +18857,7 @@ def _scenario_verdict_problem(state: dict[str, Any], request: dict[str, Any], su
         from harness import board_surface
         names.add(board_surface._sanitized_text(saved, root))
     if not any(re.search(re.escape(review_rounds.SCENARIO_JUDGED) + r"\s*`?" + re.escape(name), summary) for name in names):
-        return (f"cannot record PASS: the scenario's real result was not judged. Open NMHP's saved result {saved}, judge it as the owner "
-                f"would against the contract, and add the line `{review_rounds.SCENARIO_JUDGED} {saved}` with what you found; or record FAIL")
+        _add_note(request, f"Not tested for real: the verdict does not say what the Reviewer found in the saved result of the real run ({saved})")
     return ""
 
 
@@ -19005,6 +18873,9 @@ def _note_not_run(request: dict[str, Any], judgment: dict[str, Any], summary: st
         text = re.sub(r"(?i)^[\s>*+\-•#`_\d.)]*not\s+run(\s+for\s+real)?[\s*_`]*:?[\s*_`]*", "", line).strip()
         if text and not any(text in known for known in found):   # the line of a structured finding is already there
             found.append("Not tested for real: " + text)
+    for note in request.get("form_notes") or []:
+        if note.startswith("Not tested for real:") and note not in found:
+            found.append(note)
     if unrun_screens:   # agreed designs with no rendered screen in the review (Codex R5-1)
         found.append(f"Not tested for real: screen design {unrun_screens} — no rendered screen of it in the review")
     if found:
@@ -19056,8 +18927,7 @@ def qa_result(
     """
     if result not in {"passed", "failed"}:
         raise ValueError("QA result must be passed or failed")
-    if not summary.strip():
-        raise ValueError("QA result summary and executable-test evidence are required")
+    summary = summary.strip() or "the reviewer gave no summary"
     if not evidence.strip():
         evidence = _verdict_evidence_from_certified_execution(root, agent_id, request_id)
     evidence_path = Path(_require_evidence_file(root, evidence, "QA evidence"))
@@ -19084,18 +18954,16 @@ def qa_result(
         classification = str(finalization_classification or "").strip().lower()
         if finalization:
             if classification not in {"accepted", "rejected"}:
-                raise ValueError(
-                    "final application review requires explicit accepted or rejected finalization classification"
-                )
+                classification = "accepted" if result == "passed" else "rejected"       # the verdict itself says which
             if result == "passed" and classification != "accepted":
                 raise ValueError("a rejected finalization classification cannot receive a PASS verdict")
-        elif classification:
-            raise ValueError("finalization classification is valid only for a computed application finalization diff")
+        else:
+            classification = ""
         if result == "passed" and request and request.get("phase") == "final_acceptance":
             task_name_here = str(request.get("task") or "")
             problem = _standing_verdict_problem(root, state, request, task_name_here, summary, bool(code_quality.clean(code_quality_notes)))
             if problem:
-                raise ValueError(problem)
+                raise ValueError(problem)      # only a report that leaves out something of the agreed list
             problem = _saved_data_verdict_problem(request, summary)
             if problem:
                 raise ValueError(problem)
@@ -19106,18 +18974,14 @@ def qa_result(
             if problem:
                 raise ValueError(problem)
             problem = _screens_coverage_problem(root, state, request, task_name_here)
-            if problem and not review_rounds.not_run_lines(summary):
-                raise ValueError(problem)
             # the Reviewer said what it could not really run: a design it could not capture joins that list, never a hold (D-024, Codex R5-1)
             unrun_screens = problem.rsplit("missing for ", 1)[-1] if problem else ""
         if (result == "failed" and request and request.get("phase") == "final_acceptance" and standing_checks.enabled()
                 and task_kind(state, str(request.get("task") or ""), root) == "analysis"):
-            dispute = standing_checks.disputes_problem(request.get("summary") or "", summary)
-            if dispute:
-                raise ValueError("the review cannot be recorded yet: it needs " + dispute + ". Open `standing-checks`.")
+            _add_note(request, standing_checks.disputes_problem(request.get("summary") or "", summary))
         unnamed = red_proof.unnamed_in_verdict(request.get("changed_tests") or [], summary)
         if unnamed:
-            raise ValueError(red_proof.verdict_refusal(request["changed_tests"], unnamed))
+            _add_note(request, "the verdict does not mention these tests the builder changed in its repair: " + ", ".join(unnamed))
         # Frozen review scope (2026-10-25): decided before the first PASS-specific branch, and decided again in the final transaction.
         judgment = _judge_review(state, request, result, summary, failure_members, early_fail)
         result = judgment["effective_result"]
@@ -19499,8 +19363,7 @@ def complete(root: Path, agent_id: str, note: str) -> dict[str, Any]:
             raise ValueError("only development or engineering agents may mark implementation complete")
         if agent["task"] == AWAITING_OWNER_DIRECTION:
             raise ValueError("delivery agent must await owner direction before completion")
-        if not note.strip():
-            raise ValueError("a concise completion note is required")
+        note = note.strip() or NOT_DESCRIBED
         requests = _task_requests(state, agent["task"])
         plan = state.get("delivery_plans", {}).get(agent["task"], {})
         current_revision = int(plan.get("structure_revision", 0))
@@ -20386,8 +20249,6 @@ def record_release_decision(root: Path, task: str, decision: str, reason: str = 
         raise ValueError("decision must be accepted or not_accepted")
     if decision == "not_accepted" and not reason:
         raise ValueError("a reason is required when the release is not accepted")
-    if len(reason) > MAX_REASON_LENGTH:
-        raise ValueError(f"the reason must be {MAX_REASON_LENGTH} characters or fewer")
     governed_acceptance = False
     with locked_state(root) as state:
         release = state.get("releases", {}).get(task)
@@ -20841,6 +20702,15 @@ def confirm_remote_push(root: ProjectRoot, task: str, instruction_id: str) -> di
     return result
 
 
+def _attachment_kind(content_type: str, filename: str) -> tuple[str, str]:
+    """(content type, stored extension) of an owner's file. A type NMHP does not show keeps its own extension for the agents and is only
+    ever downloaded, never opened as a page."""
+    if content_type in ALLOWED_ATTACHMENT_TYPES:
+        return content_type, ALLOWED_ATTACHMENT_TYPES[content_type]
+    suffix = Path(_safe_attachment_name(filename)).suffix.lower()
+    return "application/octet-stream", suffix if re.fullmatch(r"\.[a-z0-9]{1,10}", suffix) else ".bin"
+
+
 def _safe_attachment_name(value: str) -> str:
     """Keep the original name for display only; never use it as a path."""
     name = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).replace("\\", "/").rsplit("/", 1)[-1].strip()
@@ -20858,23 +20728,20 @@ def _write_attachment(path: Path, data: bytes) -> None:
 def add_release_attachments(root: Path, task: str, attachments: list[dict[str, Any]]) -> dict[str, Any]:
     """Validate and store untrusted owner files under generated names."""
     task = task.strip()
-    if len(attachments) > MAX_ATTACHMENTS:
-        raise ValueError(f"you can attach up to {MAX_ATTACHMENTS} files")
     prepared = []
     total = 0
     for attachment in attachments:
         content_type = str(attachment.get("content_type", "")).split(";", 1)[0].strip().lower()
         data = bytes(attachment.get("data", b""))
-        if content_type not in ALLOWED_ATTACHMENT_TYPES:
-            raise ValueError("only documents, PDFs, and screenshots can be attached")
-        if not data or len(data) > MAX_ATTACHMENT_BYTES:
-            raise ValueError("each attachment must be larger than zero and no bigger than 10 MB")
+        content_type, extension = _attachment_kind(content_type, str(attachment.get("filename", "")))
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise ValueError("this file is larger than 100 MB")
         total += len(data)
         prepared.append({
             "display_name": _safe_attachment_name(str(attachment.get("filename", ""))),
             "content_type": content_type,
             "data": data,
-            "extension": ALLOWED_ATTACHMENT_TYPES[content_type],
+            "extension": extension,
         })
     if total > MAX_TOTAL_ATTACHMENT_BYTES:
         raise ValueError("the attachments are too large")
@@ -20883,11 +20750,6 @@ def add_release_attachments(root: Path, task: str, attachments: list[dict[str, A
         if not decision or decision.get("decision") != "not_accepted":
             raise ValueError("attachments require a saved Not accepted response")
         existing = decision.setdefault("attachments", [])
-        if len(existing) + len(prepared) > MAX_ATTACHMENTS:
-            raise ValueError(f"you can attach up to {MAX_ATTACHMENTS} files in total")
-        existing_bytes = sum(int(item.get("size", 0)) for item in existing)
-        if existing_bytes + total > MAX_TOTAL_ATTACHMENT_BYTES:
-            raise ValueError("the attachments are too large in total")
         storage_dir = board_dir(root) / "owner-feedback" / hashlib.sha256(task.encode("utf-8")).hexdigest()[:24]
         written: list[Path] = []
         metadata: list[dict[str, Any]] = []

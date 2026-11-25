@@ -22,7 +22,6 @@ from harness import environment_check, owner_env, screen_script, test_env, works
 
 FILE = "nmhp-walk.json"
 RUNS = "the app's own screens, in the browser"
-MAX_FILES = 10
 NOTHING_BUILT = "nothing is built yet: there is no app here that NMHP knows how to start (start.sh, app.py, server.py, main.py or npm start)"
 # The steps that use a control of the page, and the words that name it.
 CONTROL_STEPS = {"click": "text", "fill": "field", "choose": "field", "upload": "field"}
@@ -61,13 +60,15 @@ def sentence(steps: list[dict[str, Any]]) -> str:
 
 def parse(raw: Any, where: str) -> dict[str, Any]:
     """One walk of a submission as the check it is stored as; ValueError with the plain reason."""
-    if not isinstance(raw, dict) or set(raw) - {"steps", "files"}:
+    if isinstance(raw, list):
+        raw = {"steps": raw}
+    if not isinstance(raw, dict):
         raise ValueError(f"{where}: a walk is {{\"steps\": [...], \"files\": {{\"note.txt\": \"<text>\"}}}} (files optional)")
     files = raw.get("files") or {}
-    if not isinstance(files, dict) or len(files) > MAX_FILES or not all(
+    if not isinstance(files, dict) or not all(
             isinstance(body, str) and isinstance(name, str) and name and Path(name).name == name and name not in {".", ".."}
             for name, body in files.items()):
-        raise ValueError(f"{where}: a walk's files are at most {MAX_FILES} plain file names, each with its text")
+        raise ValueError(f"{where}: a walk's files are plain file names, each with its text")
     try:
         steps = screen_script.parse_steps(json.dumps(raw.get("steps")))
     except screen_script.ScriptError as error:

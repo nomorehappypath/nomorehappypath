@@ -78,10 +78,8 @@ class NotesForNextTask(unittest.TestCase):
         self.assertIn("`SECURITY.md` and the app's error module", text)
         self.assertIn("the error module and the task notes are product files", flat(rc.delivered_card("engineering")))
 
-    def test_card_sizes(self):
+    def test_cards_are_numbered_and_point_at_chapters(self):
         for role in ("engineering", "qa", "cto"):
-            size = len(rc.delivered_card(role).encode("utf-8"))
-            self.assertLess(size, rc.MAX_CARD_BYTES, role)
             self.assertEqual(rc.card_problems(role), [], role)
 
 

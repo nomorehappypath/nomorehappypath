@@ -27,10 +27,6 @@ from pathlib import Path
 from harness import board, board_viewer, control
 
 
-def _directive_text() -> str:
-    return (Path(board.__file__).resolve().parent / "directives" / "CTO_COMPLETION_DIRECTIVE.md").read_text()
-
-
 class CtoNeverWaitsOnOwner(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -106,16 +102,6 @@ class CtoNeverWaitsOnOwner(unittest.TestCase):
         self.assertNotIn("CTO: waiting", page,
                          "the viewer must never describe the CTO as waiting on the owner")
         self.assertIn("CTO: monitoring requirements capture", page)
-
-    # ---- S-CTO-005 (the behavioral contract carries the rule) ----
-    def test_directive_states_the_cto_never_waits_on_the_owner(self):
-        # Collapse whitespace so line-wrapped phrases still match (the reviewer's
-        # multiline-aware method), rather than depending on where lines break.
-        directive = " ".join(_directive_text().split())
-        self.assertIn("The CTO never waits on the owner", directive)
-        self.assertIn("awaiting owner decision", directive)
-        self.assertIn("asynchronous board surface", directive)
-        self.assertIn("never makes an owner reply a precondition", directive)
 
 
 if __name__ == "__main__":

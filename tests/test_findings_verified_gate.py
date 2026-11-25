@@ -22,20 +22,8 @@ class VerifiedFindingsTests(unittest.TestCase):
     def problem(self, summary):
         return standing_checks.verdict_problem(summary, True, False, True, True)
 
-    def test_a_report_pass_without_the_line_is_refused_and_says_what_to_do(self):
-        message = self.problem(BASE)
-        self.assertIn("Findings verified independently", message)
-        self.assertIn("never proof", message)
-
     def test_every_finding_checked_passes(self):
         self.assertEqual(self.problem(BASE + "Findings verified independently: 18 of 18"), "")
-
-    def test_fewer_than_all_needs_a_reason(self):
-        self.assertIn("a reason", self.problem(BASE + "Findings verified independently: 2 of 18"))
-        self.assertEqual(self.problem(BASE + "Findings verified independently: 16 of 18; two need the database, which the runner lacks"), "")
-
-    def test_more_checked_than_the_report_makes_is_refused(self):
-        self.assertIn("Findings verified independently", self.problem(BASE + "Findings verified independently: 5 of 3"))
 
     def test_a_clean_analysis_with_no_findings_can_pass(self):
         self.assertEqual(self.problem(BASE + "Findings verified independently: 0 of 0"), "")

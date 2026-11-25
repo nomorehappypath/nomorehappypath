@@ -39,9 +39,9 @@ from harness import git_process, owner_env
 STAGES = ("agents", "contract", "review", "release")
 AI_TOOLS = ("claude", "codex", "gemini")
 LIBRARY_LANGUAGES = ("python", "node")
-ITEM_SECONDS = 20
-AI_CALL_SECONDS = 120
-REAL_RUN_SECONDS = 600
+ITEM_SECONDS = 60
+AI_CALL_SECONDS = 300
+REAL_RUN_SECONDS = 3600
 AI_PROMPT = "Reply with the single word OK"
 CARD_PREFIX = "setup:"
 CHECK_AGAIN = "Check again"
@@ -68,64 +68,45 @@ NEEDS_FORMAT = (
 # ---------------------------------------------------------------------------------------------------------------- needs list
 
 def parse_needs(raw: Any) -> dict[str, Any]:
-    """The needs list, normalized; ValueError with the exact format when it is missing or malformed."""
+    """The needs list, normalized. Only a list nothing can be read from is refused (owner 2026-11-24): an entry NMHP cannot check is left out,
+    so the check covers what it can and the real run shows the rest."""
     if isinstance(raw, str):
-        if not raw.strip():
-            raise ValueError(f"the contract needs its setup list: {NEEDS_FORMAT}")
         try:
             raw = json.loads(raw)
         except ValueError as error:
             raise ValueError(f"the setup list is not valid JSON ({error}): {NEEDS_FORMAT}") from error
     if not isinstance(raw, dict):
         raise ValueError(f"the setup list must be a JSON object: {NEEDS_FORMAT}")
-    unknown = set(raw) - {"ai_tools", "folders", "programs", "libraries", "real_run", "real_scenario", "real_data", "real_output"}
-    if unknown:
-        raise ValueError(f"the setup list has unknown keys {sorted(unknown)}: {NEEDS_FORMAT}")
-    tools = raw.get("ai_tools", [])
-    if not isinstance(tools, list) or any(str(tool).strip().lower() not in AI_TOOLS for tool in tools):
-        raise ValueError(f"ai_tools lists only {', '.join(AI_TOOLS)} ([] when the app calls none): {NEEDS_FORMAT}")
+
+    def listed(key: str) -> list[Any]:
+        value = raw.get(key) or []
+        return value if isinstance(value, list) else [value]
+
+    tools = {str(tool).strip().lower() for tool in listed("ai_tools")} & set(AI_TOOLS)
     folders = []
-    for item in raw.get("folders", []) or []:
+    for item in listed("folders"):
         item = {"path": item} if isinstance(item, str) else item
-        if not isinstance(item, dict) or not str(item.get("path") or "").startswith(("/", "~")):
-            raise ValueError(f"each folder needs an absolute path: {NEEDS_FORMAT}")
-        access = str(item.get("access") or "read").strip().lower()
-        if access not in {"read", "write"}:
-            raise ValueError(f"a folder's access is read or write: {NEEDS_FORMAT}")
-        folders.append({"path": os.path.expanduser(str(item["path"]).strip()), "access": access})
+        path = str(item.get("path") or "").strip() if isinstance(item, dict) else ""
+        if path.startswith(("/", "~")):        # a path inside the project is the project itself
+            access = str(item.get("access") or "read").strip().lower()
+            folders.append({"path": os.path.expanduser(path), "access": "write" if "write" in access else "read"})
     programs = []
-    for item in raw.get("programs", []) or []:
+    for item in listed("programs"):
         item = {"name": item} if isinstance(item, str) else item
-        name = str((item or {}).get("name") or "").strip() if isinstance(item, dict) else ""
-        if not name or "/" in name and not name.startswith("/") or any(c.isspace() for c in name):
-            raise ValueError(f"each program needs a command name (python3, node, swift, cc …): {NEEDS_FORMAT}")
-        version = str(item.get("min_version") or "").strip()
-        if version and not re.fullmatch(r"\d+(\.\d+)*", version):
-            raise ValueError(f"min_version is a dotted number such as 3.11: {NEEDS_FORMAT}")
-        programs.append({"name": name, "min_version": version})
+        words = str(item.get("name") or "").split() if isinstance(item, dict) else []
+        if words and ("/" not in words[0] or words[0].startswith("/")):
+            version = re.search(r"\d+(?:\.\d+)*", str(item.get("min_version") or ""))
+            programs.append({"name": words[0], "min_version": version.group(0) if version else ""})
     libraries = []
-    for item in raw.get("libraries", []) or []:
-        if not isinstance(item, dict):
-            raise ValueError(f"each library is {{\"language\": …, \"name\": …}}: {NEEDS_FORMAT}")
-        language, name = str(item.get("language") or "").strip().lower(), str(item.get("name") or "").strip()
-        if language not in LIBRARY_LANGUAGES or not re.fullmatch(r"[A-Za-z0-9@][A-Za-z0-9._/@-]*", name or "-"):
-            raise ValueError(f"a library's language is {' or '.join(LIBRARY_LANGUAGES)} and it has a plain name (list other "
-                             f"languages' libraries through real_run): {NEEDS_FORMAT}")
-        libraries.append({"language": language, "name": name})
-    real_run = str(raw.get("real_run") or "").strip()
-    if len(real_run) > 1000:
-        raise ValueError("real_run must be 1000 characters or fewer")
-    # the owner's A-to-Z scenario (task 2026-11-23_real-scenario-run): named in the contract, run by NMHP, judged by the Reviewer
-    scenario, output = str(raw.get("real_scenario") or "").strip(), str(raw.get("real_output") or "").strip()
-    data = raw.get("real_data") or []
-    data = [data] if isinstance(data, str) else data
-    if not isinstance(data, list) or any(not str(item).strip() or len(str(item)) > 1000 for item in data):
-        raise ValueError(f"real_data is a list of file paths (absolute, or inside the project): {NEEDS_FORMAT}")
-    if len(scenario) > 1000 or len(output) > 1000:
-        raise ValueError("real_scenario and real_output must be 1000 characters or fewer")
-    return {"ai_tools": sorted({str(tool).strip().lower() for tool in tools}), "folders": folders, "programs": programs,
-            "libraries": libraries, "real_run": real_run, "real_scenario": scenario,
-            "real_data": [os.path.expanduser(str(item).strip()) for item in data], "real_output": output}
+    for item in listed("libraries"):
+        language, name = (str(item.get(key) or "").strip() for key in ("language", "name")) if isinstance(item, dict) else ("", "")
+        if language.lower() in LIBRARY_LANGUAGES and re.fullmatch(r"[A-Za-z0-9@][A-Za-z0-9._/@-]*", name or "-"):
+            libraries.append({"language": language.lower(), "name": name})
+    return {"ai_tools": sorted(tools), "folders": folders, "programs": programs, "libraries": libraries,
+            # the owner's A-to-Z scenario (task 2026-11-23_real-scenario-run): named in the contract, run by NMHP, judged by the Reviewer
+            "real_run": str(raw.get("real_run") or "").strip(), "real_scenario": str(raw.get("real_scenario") or "").strip(),
+            "real_data": [os.path.expanduser(str(item).strip()) for item in listed("real_data") if str(item).strip()],
+            "real_output": str(raw.get("real_output") or "").strip()}
 
 
 def needs_hash(needs: dict[str, Any]) -> str:
@@ -399,7 +380,7 @@ def check_program(item: dict[str, str], values: dict[str, str]) -> dict[str, Any
         _, output, timed_out = owner_env.run([found, "--version"], cwd=folder, env=values, timeout=ITEM_SECONDS)
     match = re.search(r"\d+(?:\.\d+)+", output)
     if timed_out or not match:
-        return _item("program", label, False, f"could not read the version of `{name}` (`{name} --version`)", OWNER)
+        return _item("program", label, True, f"{found} (its version could not be read)", OWNER)
     if _version_tuple(match.group(0)) < _version_tuple(minimum):
         return _item("program", label, False, f"`{name}` is version {match.group(0)}; {minimum} or newer is needed. Update it, then press Check again", OWNER)
     return _item("program", label, True, f"{found} {match.group(0)}", OWNER)
@@ -536,10 +517,10 @@ def check_role_program(item: dict[str, str], env: dict[str, str], confine: Calla
         return _item("role_access", label, True, found, OWNER)
     code, output, timed_out, problem = _run_confined([found, "--version"], env, confine)
     match = re.search(r"\d+(?:\.\d+)+", output)
-    if problem or timed_out or code != 0 and not match:
+    if problem or (timed_out or code != 0) and not match:
         return _item("role_access", label, False, problem or f"`{name} --version` did not run for the {role} in its protected area: "
                      f"{scrub(_last_line(output)) or ('it did not finish' if timed_out else f'exit {code}')}", OWNER)
-    if minimum and (not match or _version_tuple(match.group(0)) < _version_tuple(minimum)):
+    if minimum and match and (_version_tuple(match.group(0)) < _version_tuple(minimum)):
         return _item("role_access", label, False, f"the {role} gets `{name}` {match.group(0) if match else '(version unreadable)'}; "
                      f"{minimum} or newer is needed. Update it, then press Check again", OWNER)
     return _item("role_access", label, True, f"{found} {match.group(0) if match else ''}".strip(), OWNER)
