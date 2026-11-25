@@ -2,6 +2,8 @@
 
 **Others give you an AI developer. NoMoreHappyPath gives you the software company.**
 
+**Governance built in, not bolted on.** Others govern what an AI agent can access. NoMoreHappyPath governs what it delivers: requirements you approve, tests the builder can’t change, independent review, evidence you can read, and nothing is done until you say so.
+
 NoMoreHappyPath (nomorehappypath.com) is an open-source delivery system for building commercial software with AI agents. It gives you every department a software company has, already hired: Product writes the full spec, QA writes the tests first, proves they can fail and locks them, Engineering builds to those tests and cannot edit them, Security and Code audit check the work, a CTO unsticks the team, Release prepares a try-it copy, Support turns errors from your shipped app into reviewed fixes, and Finance estimates each task's Claude and Codex cost at published API prices. The work is checked by an AI from a different company than the one that built it, through 26 steps from idea to commercial software, and Mission Control shows every step in plain English. You are the CEO: nothing is done until you accept it. It runs real coding agents on your own accounts: Codex CLI, Claude Code CLI and, optionally, Gemini through Google's Antigravity CLI.
 
 Built by [Gerard Rafie](https://www.linkedin.com/in/gerardrafie/), 35 years building and selling commercial fintech software.
