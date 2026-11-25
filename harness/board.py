@@ -10717,6 +10717,10 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
         source = _require_agent(state, source_agent_id)
         if agent["role"] not in DEVELOPER_ROLES or agent["task"] != AWAITING_OWNER_DIRECTION:
             raise ValueError("replacement must be a standing-by Delivery Agent")
+        # Only the owner cancels a task (a stopped terminal never does), so nobody takes it up again: its records are gone and
+        # Mission Control would neither show nor cancel it (2026-11-25).
+        if task in (state.get("cancelled_tasks") or {}):
+            raise ValueError(f"the owner cancelled the task {task}; it is not taken up again. Wait for the owner's direction, then begin it under another short task name")
         if source["role"] not in DEVELOPER_ROLES or source["task"] != task:
             raise ValueError("source Delivery Agent does not own the requested task")
         if source.get("active"):
@@ -10727,14 +10731,6 @@ def resume_task(root: Path, agent_id: str, source_agent_id: str, task: str) -> d
         brief = state.get("task_briefs", {}).get(task, {})
         next_action = brief.get("update") or "Poll the board and resume the preserved task from its latest review or release gate."
         resumed_at = now()
-        # A replacement Delivery that resumes a cancelled task revives it. Without
-        # this, the task stays in cancelled_tasks and Mission Control hides it.
-        revived = (state.get("cancelled_tasks") or {}).pop(task, None)
-        if revived is not None:
-            _event(state, "task_uncancelled", agent, {
-                "task": task, "cancelled": revived,
-                "message": "replacement Delivery resumed a cancelled task; it is live again",
-            })
         agent.update({
             "task": task,
             "status": "recovered",

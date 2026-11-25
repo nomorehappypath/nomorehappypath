@@ -39,9 +39,9 @@ a safety problem, lost or changed work, the wrong version, or a decision that is
 typed reason never does. The board keeps what it can read, corrects or leaves out the rest, says so in one line, and goes on; a test that did
 not run is always shown as not tested, never as passed. Do the same: never refuse, fail, hold or send back work for its form, and never wait
 for a form to be perfect. If the board could not read something you sent, nothing was recorded: correct it and send it again.
-Three things are the owner's own orders, never form: their own rules stay exactly as written. In-code documentation missing from a file or
-function the task created or changed is a bug (FAIL; the wording or layout of a note that is there never is), slide density, and a requirement
-nobody really ran.
+Two things are the owner's own orders, never form: their own rules stay exactly as written. In-code documentation missing from a file or
+function the task created or changed is a bug (FAIL; the wording or layout of a note that is there never is), and a requirement nobody
+really ran. A crowded slide is form: a slide is not an app (owner 2026-11-25).
 
 ## harness-storage
 
@@ -1608,21 +1608,15 @@ hypotheses and deliberate recaps are fine. This overrides the wording and style
 exclusions and the executable-proof rule for such content; punctuation and
 cosmetic polish stay non-material.
 
-Slide decks (client-facing): density is content, not polish. Count the visible
-body text of each slide of the delivered, rendered deck (open the file; text
-inside an image counts). The title, speaker notes, source line and chart or
-table labels are not body text. A bullet with its explanation, and its nested
-sub-bullets, is ONE item; a paragraph is one item. A slide with more than 3
-items, or more than about 50 words of body text, is a MATERIAL finding; prove it
-by listing the slide numbers with their item and word counts for the exact
-inspected file, and say plainly if no viewer could open it. Delivery builds
-within the limit from the start: one idea per slide, detail moved to speaker
-notes or a companion document that is delivered with the deck (the substance
-must stay in the package the client receives), never as many sentences as fit on
-a page. Required fixes block completion and the corrected deck gets a fresh
-judgment. This overrides the style exclusions and the rule that formats the
-contract does not require are not progress; layout polish (alignment, spacing,
-fonts) stays non-material.
+Slide decks (client-facing): a slide is not an app, so a crowded slide never
+fails a review, never blocks anything and never needs a new judgment (owner
+2026-11-25). Delivery still aims for at most 3 items and about 50 words of body
+text per slide: one idea per slide, detail moved to speaker notes or a companion
+document that is delivered with the deck (the substance must stay in the package
+the client receives). The title, speaker notes, source line and chart or table
+labels are not body text; a bullet with its explanation and nested sub-bullets is
+one item. The Reviewer names a crowded slide, by its number, in one summary note
+and goes on.
 
 ## not-tested
 

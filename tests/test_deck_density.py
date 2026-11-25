@@ -1,6 +1,5 @@
-"""2026-10-16: the Stage 2 Customer Research deck had 23 of 25 slides over 60 words and one of 229, and no directive
-let the CTO or the Reviewer fail it or told Delivery how to build slides. Client-facing decks must be readable at a glance:
-more than 3 items or about 50 words of body text on a slide is a material finding, proven by slide numbers and counts."""
+"""2026-11-25 (owner: "A slide is not an app it should not fail the review"): a crowded slide is one note. It never fails a
+review, blocks or holds a deck; Delivery still aims for 3 items and about 50 words a slide."""
 import unittest
 from pathlib import Path
 
@@ -14,30 +13,25 @@ def flat(path):
 
 
 class DeckDensity(unittest.TestCase):
-    def test_cto_rule_is_short_and_material(self):
-        text = flat("directives/CTO.md")
-        for phrase in ("Slide decks: density is content, not polish.",
-                       "more than 3 items (a bullet with its explanation is one) or about 50 words of body text is material",
-                       "counted on the delivered rendered slides (title, notes, sources excluded)",
-                       "prove it by listing slide numbers with counts",
-                       "Delivery splits it, one idea per slide, moves detail to speaker notes or a delivered companion document, never drops substance",
-                       "This overrides the style exclusions and the executable-proof rule; punctuation and polish stay non-material"):
-            self.assertIn(phrase, text)
-
-    def test_full_rule_defines_the_counting_boundary_and_the_delivery_build_rule(self):
-        for path in FULL:
-            text = flat(path)
+    def test_a_crowded_slide_never_fails_or_blocks_anywhere(self):
+        for path, phrase in (
+            ("directives/AGENT.md", "a crowded slide never fails a review, never blocks anything and never needs a new judgment"),
+            ("directives/CTO.md", "A crowded slide never fails a review, never blocks and is never a reason to hold or send back a deck"),
+            ("directives/cards/CTO.md", "a crowded slide is only a note and never holds a deck"),
+            ("directives/cards/REVIEWER.md", "never fails a review: a slide is not an app"),
+        ):
             with self.subTest(path=path):
-                self.assertIn("Slide decks (client-facing): density is content, not polish.", text)
-                self.assertIn("(open the file; text inside an image counts)", text)          # image text counts
-                self.assertIn("The title, speaker notes, source line and chart or table labels are not body text", text)  # notes excluded
-                self.assertIn("A bullet with its explanation, and its nested sub-bullets, is ONE item", text)  # 3 explained bullets are fine
-                self.assertIn("A slide with more than 3 items, or more than about 50 words of body text, is a MATERIAL finding", text)
-                self.assertIn("prove it by listing the slide numbers with their item and word counts for the exact inspected file", text)
-                self.assertIn("one idea per slide, detail moved to speaker notes or a companion document that is delivered with the deck", text)
-                self.assertIn("the substance must stay in the package the client receives", text)
-                self.assertIn("the corrected deck gets a fresh judgment", text)
-                self.assertIn("layout polish (alignment, spacing, fonts) stays non-material", text)
+                self.assertIn(phrase, flat(path))
+        for path in ("directives/AGENT.md", "directives/CTO.md", "directives/cards/CTO.md", "directives/cards/DELIVERY.md", "directives/cards/REVIEWER.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("slide density", flat(path))
+                self.assertNotIn("density is content", flat(path))
+                self.assertNotRegex(flat(path), r"(?i)50 words[^.]{0,60} (is|are) (a )?material")
+
+    def test_the_build_guidance_and_the_substance_are_kept(self):
+        text = flat("directives/AGENT.md")
+        self.assertIn("Delivery still aims for at most 3 items and about 50 words of body text per slide: one idea per slide", text)
+        self.assertIn("the substance must stay in the package the client receives", text)
 
     def test_the_text_content_rule_is_kept_whole(self):
         self.assertIn("Text deliverables (deck, copy, strategy, report): reading the text is the evidence", flat("directives/CTO.md"))
@@ -52,8 +46,7 @@ class DeckDensity(unittest.TestCase):
             self.assertTrue(rules, role)
             self.assertIn("3 items", rules[0])
         chapter = reference_chapters.role_chapters("engineering")["text-deliverables"]
-        self.assertIn("Slide decks (client-facing): density is content, not polish", chapter)
-        self.assertIn("text inside an image counts", " ".join(chapter.split()))
+        self.assertIn("Slide decks (client-facing): a slide is not an app", chapter)
 
 
 if __name__ == "__main__":

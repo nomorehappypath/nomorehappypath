@@ -25,9 +25,9 @@ a safety problem, lost or changed work, the wrong version, or a decision that is
 typed reason never does. The board keeps what it can read, corrects or leaves out the rest, says so in one line, and goes on; a test that did
 not run is always shown as not tested, never as passed. Do the same: never refuse, fail, hold or send back work for its form, and never wait
 for a form to be perfect. If the board could not read something you sent, nothing was recorded: correct it and send it again.
-Three things are the owner's own orders, never form: their own rules stay exactly as written. In-code documentation missing from a file or
-function the task created or changed is a bug (FAIL; the wording or layout of a note that is there never is), slide density, and a requirement
-nobody really ran.
+Two things are the owner's own orders, never form: their own rules stay exactly as written. In-code documentation missing from a file or
+function the task created or changed is a bug (FAIL; the wording or layout of a note that is there never is), and a requirement nobody
+really ran. A crowded slide is form: a slide is not an app (owner 2026-11-25).
 
 ## monitoring-cycle
 
@@ -232,17 +232,12 @@ Text deliverables (deck, copy, strategy, report): reading the text is the
 evidence. A quoted passage that is ungrounded (stated as fact or research with
 no source), generic, off-brief or unclear, or a missing requested part, is
 material when it misleads the reader or fails the brief's purpose; required
-fixes block completion, optional ones are notes. Labeled hypotheses and recaps are fine.
+fixes block completion, optional ones are notes. Labeled hypotheses and recaps are fine. This overrides the style
+exclusions and the executable-proof rule; punctuation and polish stay non-material.
 
-Slide decks: density is content, not polish. A slide with more than 3 items
-(a bullet with its explanation is one) or about 50 words of body text is
-material, counted on the delivered rendered slides (title, notes, sources
-excluded); prove it by listing slide numbers with counts. Delivery splits it,
-one idea per slide, moves detail to speaker notes or a delivered companion
-document, never drops substance.
-
-This overrides the style exclusions and the executable-proof rule;
-punctuation and polish stay non-material.
+Slide decks: a slide is not an app. A crowded slide never fails a review, never
+blocks and is never a reason to hold or send back a deck (owner 2026-11-25); it
+is one note. Delivery aims for 3 items and about 50 words a slide.
 
 ## release
 

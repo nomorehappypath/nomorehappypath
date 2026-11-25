@@ -90,9 +90,7 @@ class CardShapeTests(unittest.TestCase):
         ):
             self.assertIn(text, reviewer)
         self.assertIn("Open `materiality` before you hold or block", said["cto"])
-        # the slide-counting detail that changes a decision is named on both cards that apply it
-        self.assertIn("title, notes, sources and chart labels excluded", reviewer)
-        self.assertIn("text inside an image counted", reviewer)
+        self.assertIn("never fails a review: a slide is not an app", reviewer)
 
 
 class ReferenceCommandTests(unittest.TestCase):

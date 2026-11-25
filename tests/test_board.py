@@ -209,17 +209,22 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(source_control["superseded_by_session_id"], replacement_session["id"])
         self.assertEqual(control.take_instructions(self.root, source["session_id"]), [])
 
-    def test_resuming_a_cancelled_task_makes_it_live_again(self):
-        source = self.delivery("TASK-REVIVE")
-        with board.locked_state(self.root) as state:
-            state.setdefault("cancelled_tasks", {})["TASK-REVIVE"] = {"cancelled_at": board.now(), "reason": "owner stopped the Delivery"}
-        board.offline(self.root, source["id"], "visible CLI terminal ended", transport_ended=True)
+    def test_a_task_the_owner_cancelled_is_never_taken_up_again_and_the_next_one_is_live(self):
+        # 2026-11-25: right after the owner's Cancel a new builder resumed the task; Mission Control then neither showed nor cancelled it
+        source = self.delivery("TASK-CANCELLED")
+        board.cancel_task(self.root, "TASK-CANCELLED")
         replacement_session = control.create(self.root, "codex_delivery")
         replacement = board.register(self.root, "engineering", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=replacement_session["id"])
-        board.resume_task(self.root, replacement["id"], source["id"], "TASK-REVIVE")
+        with self.assertRaisesRegex(ValueError, "the owner cancelled the task TASK-CANCELLED; it is not taken up again"):
+            board.resume_task(self.root, replacement["id"], source["id"], "TASK-CANCELLED")
         snapshot = board.snapshot(self.root)
-        self.assertNotIn("TASK-REVIVE", snapshot.get("cancelled_tasks", {}))
-        self.assertTrue(any(e["kind"] == "task_uncancelled" and e.get("task") == "TASK-REVIVE" for e in snapshot["events"]))
+        self.assertEqual(snapshot["agents"][replacement["id"]]["task"], board.AWAITING_OWNER_DIRECTION)
+        self.assertIn("TASK-CANCELLED", snapshot["cancelled_tasks"])
+        board.record_owner_direction(self.root, replacement_session["id"], "Do it again from the start.")
+        board.begin_task(self.root, replacement["id"], "TASK-AGAIN")
+        snapshot = board.snapshot(self.root)
+        self.assertEqual(snapshot["agents"][replacement["id"]]["task"], "TASK-AGAIN")
+        self.assertNotIn("TASK-AGAIN", snapshot["cancelled_tasks"])
 
     def test_failed_task_recovery_is_transactional_and_leaves_predecessor_unchanged(self):
         source = self.delivery("TASK-RECOVERY-ROLLBACK")
