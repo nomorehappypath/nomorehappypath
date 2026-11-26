@@ -26,7 +26,6 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict, deque
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -34,6 +33,7 @@ from urllib.parse import urlparse
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from harness.local_server import ThreadingHTTPServer
 from harness import upload_on_accept
 from harness import board, board_viewer, contract_check, control, control_plane, cost_center, environment_check, cto_wakes, difficulty_note, global_settings, project_chat, project_memory, release_coordinator, release_preview, review_cost, revert_proof, runtime_identity, self_heal, warning_email
 from harness import platform_support

@@ -85,10 +85,11 @@ codex login                                     # the independent reviewer's own
 Without them a case still reaches Replicated, and its card says in plain words which
 sign-in is missing instead of pretending a repair was tried.
 
-## 7. Settings (repository, GitHub credential, notice email, spending ceiling)
+## 7. Settings (repository, app address, GitHub credential, notice email, spending ceiling)
 
 Sign in on the case-card page (`/support`) with the owner key, then save under **Support settings**: the
-app's GitHub repository, a GitHub credential scoped to that one repository
+app's GitHub repository, the app's own address (checked every 5 minutes; you
+are emailed when it stops answering and when it is back), a GitHub credential scoped to that one repository
 (push `support/` branches, open and merge pull requests), your notice email,
 the mail server, and a positive spending ceiling. Without a positive
 ceiling, Support stays receive-and-show only — it collects and shows cases

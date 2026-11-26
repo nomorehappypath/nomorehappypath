@@ -178,6 +178,26 @@ class WhenNobodySolvesItTheOwnerGetsTheRedCard(_Stall):
         card = next(c for c in self.cards() if c.get("blocked"))
         self.assertIn("The CTO was asked first; its answer: The sign-in needs the owner's password; I cannot supply it.", card["why"])
 
+    def test_a_reviewer_with_no_review_waiting_is_not_stuck(self):
+        """2026-11-25, the owner's project paused at 17:03 CST: Delivery withdrew its review request to repair a check, the
+        Reviewer said it had nothing to review and the CTO judged it correctly idle. No pause, no red card, no email."""
+        _, reviewer, _ = self.reviewer("weather-app")
+        _, cto, _ = self.cto()
+        board.status(self.root, reviewer["id"], "Cannot continue QA: the request was withdrawn; Delivery is repairing.", "blocked")
+        with board.locked_state(self.root) as state:
+            state["qa_requests"]["review-1"]["status"] = "cancelled"
+        self.blocked_for(reviewer["id"], 2 * self.window + 120)
+        self.judged(cto["id"], "nothing", "Reviewer is correctly idle: Delivery is fixing it and will request the review again.",
+                    self.window + 30)
+        self.assertEqual(self.actions(), [], "nothing to review: waiting, not stuck")
+        self.assertEqual((board.pause_state(self.root)["status"], self.cards()), ("active", []))
+        # Delivery asks for the review again: the old block is counted from that request, so the Reviewer gets its window
+        with board.locked_state(self.root) as state:
+            state["qa_requests"]["review-2"] = {**state["qa_requests"]["review-1"], "id": "review-2", "status": "open",
+                                                "requested_at": _ago(5)}
+        self.assertNotIn("stall_pause", self.actions(), "a review just requested is not a block older than the window")
+        self.assertEqual(board.pause_state(self.root)["status"], "active")
+
     def test_a_fix_the_cto_just_routed_is_given_a_window_to_land(self):
         _, reviewer, _ = self.reviewer("weather-app")
         _, cto, _ = self.cto()

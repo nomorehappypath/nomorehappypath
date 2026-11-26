@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -39,6 +39,7 @@ from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from harness.local_server import ThreadingHTTPServer
 from harness import board, board_surface, cli_capabilities, control, cost_center, global_settings, project_chat, project_memory, project_registry as registry, runtime_identity, update_check, warning_email
 from harness.project_context import context_cli_arguments
 from harness import story, upload_on_accept, workspace_settings

@@ -16,12 +16,13 @@ import tempfile
 from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default as email_default
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from harness.local_server import ThreadingHTTPServer
 from harness import board, board_surface, child_process, cli_capabilities, contract, control, git_process, global_settings, workspace_settings, release_coordinator, lifecycle_metrics, runtime_identity
 from harness import upload_on_accept
 from harness import platform_support, web_guard, agent_view, test_machine, failure_words, review_rounds, review_cost, difficulty_note, revert_proof, code_quality, cost_center, story

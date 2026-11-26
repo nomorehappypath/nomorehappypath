@@ -1162,7 +1162,8 @@ bounded, and the process still exits non-zero; never resume after one.
 Each report is one JSON event with the fixed fields and limits of
 `directives/ERROR_SINK_CONTRACT.md` (next to this directive in the harness
 root; read it before building the sink): `schema` `nmhp-error/1`, `id`, `app`,
-`version`, `env`, `source`, `time`, `level`, `kind`, `message`, `stack`, `where`,
+`version` (the running commit or tag, `""` when unknown, never typed in the
+code), `env`, `source`, `time`, `level`, `kind`, `message`, `stack`, `where`,
 `request_id`, `reference` (short id also shown to the user where there is a
 response), `fingerprint`, `context` (allowlisted keys only). Destinations come
 from the environment, never from code: `ERROR_SINK_FILE` (append-only JSON
@@ -1183,14 +1184,15 @@ exposes the hook. The README says where errors go, how to set forwarding and
 the rate, and how drops become visible.
 
 Prove it with a few decisive Delivery Scenario Ledger rows, each only where the
-app has that part (the contract lists all eight): an induced server failure
+app has that part (the contract lists all nine): an induced server failure
 yields one event with every field and a plain user message carrying the same
 reference and no stack; a fatal error leaves one event and a non-zero exit; a
 browser failure arrives as one `browser` event; with `ERROR_SINK_URL` set to a
 loopback receiver the test starts (settings from the test's fixtures, never
 inherited) the event arrives there; the test's planted secret appears in no
 event; a dead receiver, a denied write and floods of repeated and of distinct
-errors neither crash nor slow the app and the counters show what was lost.
+errors neither crash nor slow the app and the counters show what was lost;
+`version` is the running commit or tag.
 
 ## enhanced-security
 

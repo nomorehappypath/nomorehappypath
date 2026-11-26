@@ -573,12 +573,22 @@ def _stall_actions(state: dict[str, Any], control_state: dict[str, Any], agents_
                 continue
             if _stall_blocked(state, agent, session, current):
                 continue
+            if role == "qa" and agent.get("status") == "blocked" and not _review_waiting_for(state, agent):
+                # 2026-11-25 (owner's project paused at 17:03 CST): Delivery withdrew its review request to repair a check; the
+                # Reviewer said it had nothing to review and the CTO judged it correctly idle. With no review waiting for it the
+                # Reviewer is waiting for Delivery, not stuck: no pause, no red card. The next request routed to it wakes it.
+                continue
             if role != "cto" and agent.get("status") == "blocked":
                 # Codex R1-2, R2-1 (2026-11-05): an agent that SAID it is blocked is escalated on its own clock, whether or not it
                 # keeps polling the board or repeating the same report (neither is progress): the clock starts at the block's
                 # first report (_block_gate). Once the block is a full window old: the CTO is asked if it was not,
                 # gets its turn, and then the owner gets the pause and the red card. Once per gate, like the ladder's limit.
                 gate = _block_gate(agent, resumed)
+                if role == "qa":
+                    # a block reported before the review it now has was requested is counted from that request, not from before it
+                    asked = _parsed(_review_waiting_for(state, agent))
+                    if asked is not None and (_parsed(gate) is None or asked > _parsed(gate)):
+                        gate = asked.isoformat()
                 said = _parsed(gate)
                 if said is not None and (current - said).total_seconds() >= window:
                     if ((state.get("stall_wake_counts") or {}).get(key) or {}).get("gate") == gate and \
@@ -873,6 +883,15 @@ def _somebody_waits_on_the_cto(state: dict[str, Any]) -> bool:
         return True
     return any(agent.get("active") and agent.get("status") == "blocked" and agent.get("role") != "cto"
                for agent in (state.get("agents") or {}).values())
+
+
+def _review_waiting_for(state: dict[str, Any], reviewer: dict[str, Any]) -> str:
+    """When the newest review request open for this Reviewer (routed to it or claimed by it) was made, as an ISO time; "" when
+    none is open, or "0" when its time is unknown. Takes the board state and the Reviewer's agent record."""
+    times = [str(request.get("requested_at") or "0") for request in (state.get("qa_requests") or {}).values()
+             if request.get("status") in {"authoring", "open", "reserved", "claimed"}
+             and reviewer.get("id") in {request.get("routed_to"), request.get("claimed_by")}]
+    return max(times, default="")
 
 
 def _stuck_item(state: dict[str, Any], agent: dict[str, Any], gate: str) -> dict[str, Any] | None:

@@ -236,7 +236,11 @@ CONCURRENT_BOARD_OPERATIONS = {
 # command (finding: agent commands failed under load while the worker
 # reported ready). They skip only the gateway's coarse serialization; the
 # board's own file lock still orders every state access.
-SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status", "reference"}
+# 2026-11-26: `hook-event` (every agent tool call asks it first; fail closed) and `register` (a new terminal, before its CLI
+# starts) waited behind a 43-minute certified check: every agent was frozen, the CTO went silent and its restarts died
+# "busy". Both only take the durable state lock briefly.
+SHORT_BOARD_OPERATIONS = {"status", "recover", "findings", "snapshot", "view", "machine-status", "reference",
+                          "hook-event", "register"}
 # A refused read changes nothing, so it never opens a hold (backlog #15).
 READ_ONLY_BOARD_OPERATIONS = {"findings", "snapshot", "view", "contract-checks", "retained-plan", "reference", "project-history"}
 

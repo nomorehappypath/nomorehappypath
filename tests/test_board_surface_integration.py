@@ -289,6 +289,55 @@ class BoardArtifactIngestionTests(unittest.TestCase):
         self.assertEqual(long_result[0]["result"]["operation"], "request-review")
         self.assertEqual(second_result[0]["result"]["operation"], "begin-task")
 
+    def test_the_hook_gate_and_a_new_terminal_never_wait_behind_a_long_check(self):
+        # 2026-11-26: a 43-minute certified check froze every agent's tool calls ("harness gate unreachable") and both CTO
+        # restarts died registering ("board worker is unavailable or temporarily busy").
+        _, delivery, _, delivery_token, delivery_gateway = self.session()
+        _, cto, _, cto_token, cto_gateway = self.session("claude_cto", "cto", "GLOBAL_MONITOR")
+        fresh = control.create(self.context, "claude_reviewer")
+        fresh_authority = SessionTokenAuthority(self.context)
+        fresh_authority.prepare(fresh["id"])
+        control.attach(self.context, fresh["id"], os.getpid())
+        fresh_token = fresh_authority.claim(fresh["id"], os.getpid())
+        started, release, mutation_entered = threading.Event(), threading.Event(), threading.Event()
+
+        def fake_main(arguments):
+            operation = next(name for name in ("request-review", "hook-event", "register", "begin-task") if name in arguments)
+            if operation == "request-review":
+                started.set()
+                self.assertTrue(release.wait(timeout=5))
+            if operation == "begin-task":
+                mutation_entered.set()
+            print(json.dumps({"operation": operation}))
+            return 0
+
+        def command(gateway, token, nonce, arguments):
+            return gateway.execute(token, {"protocol": PROTOCOL_VERSION, "nonce": nonce, "operation": arguments[0],
+                                           "arguments": arguments, "artifacts": {}})
+
+        long_result, mutation_result = [], []
+        with mock.patch.object(board, "main", side_effect=fake_main):
+            long_thread = threading.Thread(target=lambda: long_result.append(delivery_gateway.execute(
+                delivery_token, self.request(delivery["id"], 101, self.artifact(b"# ledger\n")))))
+            long_thread.start()
+            self.assertTrue(started.wait(timeout=2))
+            try:
+                hooked = command(cto_gateway, cto_token, 201, ["hook-event", "--event", "PreToolUse", "--payload", "{}"])
+                self.assertEqual(hooked["result"]["operation"], "hook-event")
+                registered = command(CommandGateway(self.context, fresh_authority), fresh_token, 301,
+                                     ["register", "--role", "qa", "--task", "REVIEW_QUEUE"])
+                self.assertEqual(registered["result"]["operation"], "register")
+                mutation = threading.Thread(target=lambda: mutation_result.append(command(
+                    delivery_gateway, delivery_token, 102, ["begin-task", "--agent", delivery["id"], "--task", "T"])))
+                mutation.start()
+                self.assertFalse(mutation_entered.wait(timeout=0.15))   # other mutations still wait, as before
+            finally:
+                release.set()
+                long_thread.join(timeout=3)
+            mutation.join(timeout=3)
+        self.assertEqual(long_result[0]["result"]["operation"], "request-review")
+        self.assertEqual(mutation_result[0]["result"]["operation"], "begin-task")
+
     def test_poll_transport_retries_are_bounded_and_not_called_incompatible(self):
         class Response:
             def __enter__(self): return self

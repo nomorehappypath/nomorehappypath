@@ -29,7 +29,7 @@ timeout below, then exit non-zero. Never resume after an uncaught exception.
 | `schema` | string | yes | exactly `nmhp-error/1` | contract version |
 | `id` | string | yes | UUID v4 | one per event; receivers deduplicate on it |
 | `app` | string | yes | ≤ 64 chars | the app's stable name (set by the server, never by the browser) |
-| `version` | string | yes | ≤ 64 | app version or commit |
+| `version` | string | yes (may be `""`) | ≤ 64 | the git commit or release tag this running copy was built from, read at start (the deployment's own commit setting, a file the build writes, or git). Support checks out exactly this. Unknown = `""`; never a number typed in the code |
 | `env` | string | yes | ≤ 32 | `development`, `test`, `staging`, `production` or the app's own |
 | `source` | string | yes | `server` or `browser` | set by the server |
 | `time` | string | yes | ISO 8601 UTC, e.g. `2026-10-12T10:00:00Z` | when the error happened |
@@ -120,6 +120,9 @@ receiver URL without a token, or reports nothing and says so in its README.
    path stays fast, `suppressed_repeats` / `dropped_rate` count them.
 8. An error raised inside the sink's own writer: one fallback line, no second
    report.
+9. `version` in the app's git checkout is the commit it runs from (or a tag on
+   it), and changes with the next commit; started where no commit can be known,
+   it is `""`.
 
 ## 8. README (operating notes the app ships)
 

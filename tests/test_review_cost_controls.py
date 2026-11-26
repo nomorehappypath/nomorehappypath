@@ -23,7 +23,8 @@ from tests.test_requirements_contract import context, delivery_with_direction
 
 def git(repo: Path, *args: str) -> str:
     environment = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    return subprocess.run(["git", *args], cwd=repo, env=environment, check=True, capture_output=True, text=True).stdout.strip()
+    # 2026-11-26: git 2.54 starts its upkeep in the background after a big commit; it wrote into .git while the temp folder was removed
+    return subprocess.run(["git", "-c", "maintenance.auto=false", *args], cwd=repo, env=environment, check=True, capture_output=True, text=True).stdout.strip()
 
 
 class ReducedReadingTests(unittest.TestCase):

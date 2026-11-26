@@ -29,12 +29,16 @@ import threading
 import time
 from contextlib import closing
 from datetime import datetime, timezone
+from http.client import HTTPException
 from http.cookies import SimpleCookie
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
+from harness.local_server import ThreadingHTTPServer
 from harness import support_fix, support_github, support_repair, support_replicate, warning_email, web_guard
 
 DB_FILENAME = "support_cases.db"
@@ -62,6 +66,12 @@ GLOBAL_RATE_PER_MINUTE = 600
 PER_SOURCE_RATE_PER_MINUTE = 120
 FINGERPRINT_TABLE_MAX = 1000
 CASE_EXPIRY_DAYS = 30
+# After Deploy the app's own hosting still needs time to replace the old copy; within this time a report from the old version is not a return.
+DEPLOY_SETTLE_SECONDS = 60 * 60
+# A dead app sends no report, so Support asks the app's address itself. Two failures in a row make it down, so one lost answer does not.
+APP_CHECK_SECONDS = 5 * 60
+APP_CHECK_TIMEOUT_SECONDS = 10
+APP_DOWN_AFTER_FAILURES = 2
 
 ERROR_REQUIRED_FIELDS = (
     "schema", "id", "app", "env", "source", "time", "level",
@@ -267,7 +277,8 @@ class CaseStore:
                     replication TEXT NOT NULL DEFAULT '', replication_notes TEXT NOT NULL DEFAULT '',
                     fix_state TEXT NOT NULL DEFAULT '', fix_notes TEXT NOT NULL DEFAULT '',
                     pull_request_url TEXT NOT NULL DEFAULT '', deployed INTEGER NOT NULL DEFAULT 0,
-                    emails_sent TEXT NOT NULL DEFAULT '', last_report_id TEXT NOT NULL DEFAULT ''
+                    emails_sent TEXT NOT NULL DEFAULT '', last_report_id TEXT NOT NULL DEFAULT '',
+                    deployed_at TEXT NOT NULL DEFAULT ''
                 )"""
             )
             connection.execute(
@@ -291,9 +302,20 @@ class CaseStore:
                     id INTEGER PRIMARY KEY CHECK (id = 1), app_repo TEXT NOT NULL DEFAULT '',
                     notice_email TEXT NOT NULL DEFAULT '', mail_host TEXT NOT NULL DEFAULT '',
                     mail_port TEXT NOT NULL DEFAULT '', mail_user TEXT NOT NULL DEFAULT '',
-                    spending_ceiling TEXT NOT NULL DEFAULT '', has_github_token INTEGER NOT NULL DEFAULT 0
+                    spending_ceiling TEXT NOT NULL DEFAULT '', has_github_token INTEGER NOT NULL DEFAULT 0,
+                    app_address TEXT NOT NULL DEFAULT ''
                 )"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS app_watch (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), address TEXT NOT NULL, state TEXT NOT NULL,
+                    since TEXT NOT NULL, reason TEXT NOT NULL, failures INTEGER NOT NULL, emailed INTEGER NOT NULL
+                )"""
+            )
+            # A store made by an older release keeps its rows and gains the new columns.
+            for table, column in (("cases", "deployed_at"), ("settings", "app_address")):
+                if column not in {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         """Close the underlying SQLite connection.
@@ -518,7 +540,7 @@ class CaseStore:
     def save_settings(
         self, *, app_repo: str = "", notice_email: str = "", mail_host: str = "",
         mail_port: str = "", mail_user: str = "", spending_ceiling: str = "",
-        github_token: str | None = None, mail_password: str | None = None,
+        github_token: str | None = None, mail_password: str | None = None, app_address: str = "",
     ) -> None:
         """Save the Support settings page's fields (this installation's one row).
 
@@ -532,11 +554,11 @@ class CaseStore:
         """
         with self._lock, self._connection as connection:
             connection.execute(
-                "INSERT INTO settings (id, app_repo, notice_email, mail_host, mail_port, mail_user, spending_ceiling) "
-                "VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET app_repo=excluded.app_repo, "
+                "INSERT INTO settings (id, app_repo, notice_email, mail_host, mail_port, mail_user, spending_ceiling, app_address) "
+                "VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET app_repo=excluded.app_repo, "
                 "notice_email=excluded.notice_email, mail_host=excluded.mail_host, mail_port=excluded.mail_port, "
-                "mail_user=excluded.mail_user, spending_ceiling=excluded.spending_ceiling",
-                (app_repo, notice_email, mail_host, mail_port, mail_user, spending_ceiling),
+                "mail_user=excluded.mail_user, spending_ceiling=excluded.spending_ceiling, app_address=excluded.app_address",
+                (app_repo, notice_email, mail_host, mail_port, mail_user, spending_ceiling, app_address),
             )
         if github_token is not None:
             self._save_secret_file(GITHUB_TOKEN_FILENAME, github_token)
@@ -575,14 +597,14 @@ class CaseStore:
         """Return the saved Support settings, never including a secret's value.
 
         Return: {app_repo, notice_email, mail_host, mail_port, mail_user,
-        spending_ceiling, has_github_token, has_mail_password}.
+        spending_ceiling, app_address, has_github_token, has_mail_password}.
         """
         with self._lock:
             row = self._connection.execute("SELECT * FROM settings WHERE id = 1").fetchone()
         if row is None:
             return {
                 "app_repo": "", "notice_email": "", "mail_host": "", "mail_port": "", "mail_user": "",
-                "spending_ceiling": "", "has_github_token": False, "has_mail_password": False,
+                "spending_ceiling": "", "app_address": "", "has_github_token": False, "has_mail_password": False,
             }
         value = dict(row)
         value["has_github_token"] = bool(value.pop("has_github_token", 0))
@@ -681,12 +703,13 @@ class CaseStore:
             level: the simple fixed Level rule's result for this event.
 
         Return: True if this created a new case (its own pipeline should run); False if it only
-        bumped a repeat of an already-processed case (the pipeline is not re-run on a repeat: a
-        later occurrence of the same problem must never regress a case Support already fixed).
+        bumped a repeat of an already-processed case (the pipeline is not re-run on a repeat).
+        A Deployed case whose error arrives from another version, or from the same version more
+        than DEPLOY_SETTLE_SECONDS after Deploy, becomes "came_back" and takes the new report's facts.
         """
         now = _now()
         with self._lock, self._connection as connection:
-            row = connection.execute("SELECT count FROM cases WHERE fingerprint = ?", (fingerprint,)).fetchone()
+            row = connection.execute("SELECT status, version, deployed_at FROM cases WHERE fingerprint = ?", (fingerprint,)).fetchone()
             if row is None:
                 connection.execute(
                     "INSERT INTO cases (fingerprint, app, env, count, first_seen, last_seen, version, "
@@ -699,6 +722,12 @@ class CaseStore:
                 "UPDATE cases SET count = count + 1, last_seen = ?, last_report_id = ? WHERE fingerprint = ?",
                 (now, report_id, fingerprint),
             )
+            settled = row["deployed_at"] < _iso_minus_seconds(DEPLOY_SETTLE_SECONDS)
+            if row["status"] == "deployed" and (settled or (version and version != row["version"])):
+                connection.execute(
+                    "UPDATE cases SET status = 'came_back', version = ?, trace_excerpt = ?, description = ? WHERE fingerprint = ?",
+                    (version or row["version"], trace_excerpt, description, fingerprint),
+                )
             return False
 
     def list_cases(self) -> list[dict]:
@@ -768,7 +797,7 @@ class CaseStore:
         """Mark this case Deployed, once GitHub confirms the pull request's merge."""
         with self._lock, self._connection as connection:
             connection.execute(
-                "UPDATE cases SET status = 'deployed', deployed = 1 WHERE fingerprint = ?", (fingerprint,),
+                "UPDATE cases SET status = 'deployed', deployed = 1, deployed_at = ? WHERE fingerprint = ?", (_now(), fingerprint),
             )
 
     def record_email_once(self, fingerprint: str, milestone: str) -> bool:
@@ -777,7 +806,7 @@ class CaseStore:
         Args:
             fingerprint: the case's key.
             milestone: the milestone's name ("received", "replicated", "not_replicated",
-                "version_unknown", "fixed", "not_fixed", "ready_to_deploy", "deployed").
+                "version_unknown", "fixed", "not_fixed", "ready_to_deploy", "deployed", "came_back").
 
         Return: True the first time (record it, send it); False if already recorded (never
         retried, and never a second email for the same milestone).
@@ -792,6 +821,31 @@ class CaseStore:
                 "UPDATE cases SET emails_sent = ? WHERE fingerprint = ?", (",".join(sorted(sent)), fingerprint),
             )
         return True
+
+    # -- the app's own address ----------------------------------------------
+
+    def app_watch(self) -> dict[str, Any]:
+        """Return the last known answer of the app's address, {} when it was never checked.
+
+        Return: {address, state ("up" or "down"), since, reason, failures, emailed}.
+        """
+        with self._lock:
+            row = self._connection.execute("SELECT * FROM app_watch WHERE id = 1").fetchone()
+        return dict(row) if row else {}
+
+    def save_app_watch(self, watch: dict[str, Any]) -> None:
+        """Keep the app address's last known answer, so a restart of Support neither forgets nor repeats it.
+
+        Args:
+            watch: the fields app_watch() returns.
+
+        Return: None.
+        """
+        with self._lock, self._connection as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_watch (id, address, state, since, reason, failures, emailed) VALUES (1, ?, ?, ?, ?, ?, ?)",
+                (watch["address"], watch["state"], watch["since"], watch["reason"], watch["failures"], watch["emailed"]),
+            )
 
     def expire_old_cases(self) -> int:
         """Delete cases whose last activity is older than CASE_EXPIRY_DAYS,
@@ -815,8 +869,13 @@ def _iso_minus_days(days: int) -> str:
 
     Return: a string in the same format as _now().
     """
+    return _iso_minus_seconds(days * 86400)
+
+
+def _iso_minus_seconds(seconds: int) -> str:
+    """Return an ISO 8601 UTC timestamp `seconds` seconds before now, in the same format as _now()."""
     return datetime.fromtimestamp(
-        datetime.now(timezone.utc).timestamp() - days * 86400, tz=timezone.utc,
+        datetime.now(timezone.utc).timestamp() - seconds, tz=timezone.utc,
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -831,6 +890,7 @@ MILESTONE_SUBJECTS = {
     "not_fixed": "Could not fix",
     "ready_to_deploy": "Ready to deploy: {pull_request_url}",
     "deployed": "Deployed",
+    "came_back": "Came back after Deploy: {description}",
 }
 
 
@@ -1070,7 +1130,104 @@ def ingest(store: CaseStore, body: dict) -> dict:
     )
     if is_new:
         process_case(store, fingerprint)
+    else:
+        case = store.get_case(fingerprint)
+        if case is not None and case["status"] == "came_back":
+            _send_milestone_email(store, case, "came_back")  # sent once per case
     return {"status": "stored"}
+
+
+# ------------------------------------------------------- is the app up? --
+
+def ask_app(address: str) -> str:
+    """Ask the app's address once.
+
+    Args:
+        address: the saved http(s) address.
+
+    Return: "" when the app answered (any answer below 500, a sign-in page included), otherwise why not.
+    """
+    try:
+        with urlopen(Request(address, headers={"User-Agent": "NoMoreHappyPath-Support"}), timeout=APP_CHECK_TIMEOUT_SECONDS):
+            return ""
+    except HTTPError as error:
+        return f"it answered {error.code}" if error.code >= 500 else ""
+    except (OSError, ValueError, HTTPException) as error:
+        return str(getattr(error, "reason", None) or error or type(error).__name__)[:200]
+
+
+def check_app(store: "CaseStore", ask: Callable[[str], str] = ask_app) -> None:
+    """Check the saved app address once; email once when it stops answering and once when it is back.
+
+    Args:
+        store: this installation's CaseStore.
+        ask: what asks the address (a seam for tests).
+
+    Return: None. With no address saved, nothing is checked.
+    """
+    address = store.settings()["app_address"]
+    if not address:
+        return
+    watch = store.app_watch()
+    if watch.get("address") != address:
+        watch = {"address": address, "state": "", "since": "", "reason": "", "failures": 0, "emailed": 0}
+    reason = ask(address)
+    watch["failures"] = watch["failures"] + 1 if reason else 0
+    state = "down" if watch["failures"] >= APP_DOWN_AFTER_FAILURES else watch["state"] if reason else "up"
+    if state != watch["state"]:
+        watch["state"], watch["since"] = state, _now()
+    watch["reason"] = _scrub_text(reason)
+    store.save_app_watch(watch)  # the page is right at once; a mail server can be slow
+    if state == "up" and watch["emailed"]:
+        # The message about the way back goes out only when the owner was told it was down.
+        # A message the mail server refused is tried again at the next check.
+        watch["emailed"] = int(not _send_app_email(
+            store, f"The app is answering again: {address}", f"Answering again, noticed {watch['since']}.",
+        ))
+    if state == "down" and not watch["emailed"]:
+        watch["emailed"] = int(_send_app_email(
+            store, f"The app is not answering: {address}", f"Not answering, noticed {watch['since']}: {watch['reason']}",
+        ))
+    store.save_app_watch(watch)
+
+
+def _send_app_email(store: "CaseStore", subject: str, line: str) -> bool:
+    """Send one message about the app's address to the saved notice email.
+
+    Args:
+        store: this installation's CaseStore.
+        subject: the message's subject, after the product's name.
+        line: the one line that says what happened.
+
+    Return: whether it was sent (False with no notice email saved; a failed send is counted).
+    """
+    if not store.settings()["notice_email"]:
+        return False
+    body = f"{line}\nSupport page: http://127.0.0.1:{SUPPORT_ADMIN_PORT}/support\n"
+    sent = bool(warning_email.send_message(
+        store.mail_settings(), store.mail_password(), "NoMoreHappyPath Support: " + subject, body,
+    ).get("sent"))
+    if not sent:
+        store.bump_counter("send_failures")
+    return sent
+
+
+def watch_app(store: "CaseStore", stop: threading.Event) -> None:
+    """Check the app's address every APP_CHECK_SECONDS until told to stop.
+
+    Args:
+        store: this installation's CaseStore.
+        stop: set when Support ends.
+
+    Return: None. A failed check never ends the watch; it is printed.
+    """
+    while not stop.is_set():
+        try:
+            check_app(store)
+        except Exception as error:  # noqa: BLE001 - one bad check must not end the watch
+            if not stop.is_set():
+                print(f"The app's address could not be checked: {error}", flush=True)
+        stop.wait(APP_CHECK_SECONDS)
 
 
 # ------------------------------------------------------------------ HTTP --
@@ -1152,6 +1309,8 @@ SUPPORT_SETTINGS_TEMPLATE = """<h2>Support settings</h2>
 <p>{ceiling_notice}</p>
 <form method="post" action="/support/settings">
 <div><label>App GitHub repository <input name="app_repo" value="{app_repo}" placeholder="https://github.com/owner/app" size="40"></label></div>
+<div><label>App address (checked every 5 minutes) <input name="app_address" value="{app_address}" placeholder="https://app.example.com" size="40"></label></div>
+<p>{app_watch}</p>
 <div><label>GitHub credential (push support/ branches, open and merge pull requests) <input type="password" name="github_token" placeholder="{github_token_placeholder}" size="40"></label></div>
 <div><label>Owner notice email <input name="notice_email" value="{notice_email}" size="40"></label></div>
 <div><label>Mail server host <input name="mail_host" value="{mail_host}" size="30"></label>
@@ -1265,7 +1424,7 @@ def _case_status_line(case: dict, action_token: str, signed_in: bool) -> str:
 
     Return: an escaped HTML fragment naming the stage (Received, Version unknown cannot
     replicate, Replicated/Not replicated with what was tried, Fixed/Not fixed with why,
-    Ready to deploy with the pull request link and a Deploy button, or Deployed), or the
+    Ready to deploy with the pull request link and a Deploy button, Deployed, or Came back), or the
     receive-and-show-only notice when no spending ceiling is set.
     """
     status = case["status"]
@@ -1300,6 +1459,11 @@ def _case_status_line(case: dict, action_token: str, signed_in: bool) -> str:
             parts.append("<p>Only the owner can deploy: sign in with the owner key at the top of this page.</p>")
     if case["deployed"]:
         parts.append("<p><strong>Deployed.</strong></p>")
+    if case["status"] == "came_back":
+        parts.append(
+            f"<p><strong>Came back after Deploy</strong>, on version {html.escape(case['version'] or '(unknown)')}. "
+            "Support does not repair it a second time by itself.</p>"
+        )
     return "".join(parts)
 
 
@@ -1325,6 +1489,24 @@ def _render_case_card(case: dict, action_token: str, signed_in: bool) -> str:
     )
 
 
+def _app_watch_line(store: CaseStore) -> str:
+    """Say in one plain sentence whether the app is answering.
+
+    Args:
+        store: this installation's CaseStore.
+
+    Return: the sentence, not yet escaped.
+    """
+    address, watch = store.settings()["app_address"], store.app_watch()
+    if not address:
+        return "No app address is saved, so Support cannot notice when the app is down."
+    if watch.get("address") != address or not watch["state"]:
+        return "The app has not been checked yet."
+    if watch["state"] == "down":
+        return f"The app is NOT ANSWERING (noticed {watch['since']}): {watch['reason']}"
+    return f"The app is answering (noticed {watch['since']})."
+
+
 def _render_settings(store: CaseStore) -> str:
     """Render the Support settings section: never a saved secret's value, just whether one is saved.
 
@@ -1341,6 +1523,8 @@ def _render_settings(store: CaseStore) -> str:
     return SUPPORT_SETTINGS_TEMPLATE.format(
         ceiling_notice=html.escape(ceiling_notice),
         app_repo=html.escape(settings["app_repo"]),
+        app_address=html.escape(settings["app_address"]),
+        app_watch=html.escape(_app_watch_line(store)),
         github_token_placeholder="a credential is saved (leave blank to keep it)" if settings["has_github_token"] else "not set",
         notice_email=html.escape(settings["notice_email"]),
         mail_host=html.escape(settings["mail_host"]),
@@ -1588,7 +1772,12 @@ def make_admin_handler(store: CaseStore):
                     return _send_json(self, 400, {"error": "the settings form must be form-encoded"})
                 length = int(self.headers.get("Content-Length") or 0)
                 fields = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
+                app_address = str(fields.get("app_address", [""])[0]).strip()
+                if app_address and not re.match(r"https?://[^\s/]+", app_address):
+                    return self._html("<p>Nothing was saved: the app address must be a full address starting with https:// or http://. "
+                                       "<a href=\"/support\">Back</a></p>", 400)
                 store.save_settings(
+                    app_address=app_address,
                     app_repo=str(fields.get("app_repo", [""])[0]).strip(),
                     notice_email=str(fields.get("notice_email", [""])[0]).strip(),
                     mail_host=str(fields.get("mail_host", [""])[0]).strip(),
@@ -1654,6 +1843,8 @@ def serve_support(home: Path, host: str, port: int, admin_port: int = SUPPORT_AD
     admin_server = ThreadingHTTPServer(("127.0.0.1", admin_port), make_admin_handler(store))
     intake_thread = threading.Thread(target=intake_server.serve_forever, daemon=True)
     intake_thread.start()
+    watch_stop = threading.Event()
+    threading.Thread(target=watch_app, args=(store, watch_stop), daemon=True).start()
     print(f"NoMoreHappyPath Support receiver on http://{host}:{intake_server.server_address[1]}/ "
           f"(admin: http://127.0.0.1:{admin_server.server_address[1]}/)", flush=True)
     try:
@@ -1661,6 +1852,7 @@ def serve_support(home: Path, host: str, port: int, admin_port: int = SUPPORT_AD
     except KeyboardInterrupt:
         pass
     finally:
+        watch_stop.set()
         intake_server.shutdown()
         intake_server.server_close()
         admin_server.server_close()
