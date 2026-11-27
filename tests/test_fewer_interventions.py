@@ -218,6 +218,17 @@ class R4NobodyWorking(BoardCase):
             state["project_pause"] = {"status": "paused"}
         self.assertEqual(board.harness_cards_pass(self.root), [], "nothing while paused")
 
+    def test_no_card_while_the_task_is_with_the_reviewer(self):
+        # owner 2026-11-27: the builder waited for an open review and the board called the task abandoned
+        self.gone(minutes_ago=30, status="awaiting_independent_review", note="independent review 8 requested")
+        for status in ("open", "reserved", "claimed"):
+            with board.locked_state(self.root, operation="test") as state:
+                state.setdefault("qa_requests", {})["review-x"] = {"id": "review-x", "task": TASK, "status": status, "requested_at": board.now(), "developer_id": self.builder["id"], "phase": "final_acceptance", "stage": "independent_review", "subtask": "", "chunk": "", "cycle": 8, "claimed_by": "", "review_wait_started_at": ""}
+            self.assertEqual(board.harness_cards_pass(self.root), [], status)
+        with board.locked_state(self.root, operation="test") as state:
+            state["qa_requests"]["review-x"]["status"] = "failed"
+        self.assertEqual(len(board.harness_cards_pass(self.root)), 1, "a finished review leaves the old rule in force")
+
 
 class R5ACheckThatCouldNotRunIsNotAFailure(unittest.TestCase):
     def setUp(self):

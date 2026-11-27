@@ -1445,6 +1445,14 @@ the controller has not already claimed it, then repair the candidate and start
 a new QA, independent-review, and release cycle. Do not alter the historical
 release certification or discard the saved owner files.
 
+The owner's reason is a failure he really hit, so it is the first check of the
+repair (owner 2026-11-26: a repair passed review twice and failed his test the
+same way twice). Before you fix, replay his exact steps from the reason the way
+he ran them (a new project, the same choices, the same agents' protected area
+where he went through agents) and watch them fail; after the fix replay them
+and watch them pass. Attach both runs as evidence and name them in the review
+request. A run of a different path, however close, is not this proof.
+
 ## review-workflow
 
 In a managed terminal, wait at the interactive prompt until the supervisor
@@ -1493,6 +1501,12 @@ scenario meaning. In both cases rerun every retained command against the new
 candidate, run the complete suite for final acceptance, and form a fresh
 semantic verdict. This reuse saves authoring time; it never reuses a PASS.
 
+When the repair follows the owner's Not accepted (the brief names the saved
+owner response), replay his exact steps from his reason yourself, the way he ran
+them, as a row of your ledger, and FAIL if they still fail. Delivery's replay is
+its claim, not your proof. A failure the owner really hit is never a `Not run for
+real` line: if you cannot replay it, the review is not a PASS.
+
 ## challenge-ledger
 
 Create your own Challenge Ledger in a temporary directory you create (the board
@@ -1508,7 +1522,11 @@ that states the response you EXPECT (these entries declare the success
 condition; they are not observations); a row left pending makes
 `execute-challenge` refuse before it runs anything, and the way out is
 `attach-challenge-ledger --correction-reason` and then `execute-challenge
---retry-reason`. Your observations and judgment of the real output are the
+--retry-reason`. Those two are only for a run that failed or was cut off.
+A run that completed is never run again and its ledger cannot be corrected (the
+CTO cannot allow it either): when a row you need is missing from its certified
+output, or was not run by it, record a FAIL that names the row and what it must
+be, so Delivery makes it a check the board can run and the next review runs it. Your observations and judgment of the real output are the
 certified output and the `qa-result` verdict, which may be FAIL; name the row. Record
 the verdict with `qa-result` and leave `--evidence` out to use that certified
 output, or pass the real path of a file you wrote. Do not run those commands manually first, and do not ask
@@ -1714,4 +1732,32 @@ what you saw against the design; a design without a row is told to the owner as 
 step of the agreed flow that does not work, a broken house-standard item, misleading or technical wording, or lost input is
 MATERIAL; spacing, fonts or colours that differ a little from the design are notes. `Not run` never completes a design row: a
 state NMHP's browser cannot reach needs its own page or test route, or the owner's decision on it.
+
+## phone-apps
+
+**Phone apps, step 1 of 4 (owner 2026-11-25).** Phone apps are built in Flutter. A new direction's "Give direction" dialog asks
+"Does this task need a mobile build or test environment?" (No, or Yes with a further iPhone choice), stored once with the
+direction (`harness/board.py`'s `task_mobile`, frozen at `begin_task` the same way `task_kinds` is) and read from your poll's
+context bundle under `mobile`. Yes with iPhone left unticked is refused ("Choose iPhone."); iPhone off a Mac is refused
+("Running an iPhone app needs a Mac with Xcode.") — both enforced on the server, not only in the dialog. A task answered Yes
+shows a "Phone: iPhone" chip on its header.
+
+**The six-step proof (`harness/phone_setup.py`, called by `harness/environment_check.py` at the contract stage, only for Yes,
+never inside an agent's own area).** Xcode and Flutter both answer; a simulated iPhone exists; it starts, with no window; a
+Flutter starter app builds for it; it installs, opens and is still running a moment later with one picture kept; then cleanup.
+It stops at the first failing step, each with its own named card ("Blocked, needs you: Xcode is not ready" / "...Flutter is not
+installed" / "...no simulated iPhone" / "...the simulated iPhone did not start" / "...the starter app did not build for iPhone"
+/ "...the starter app did not open"), and Check again re-runs it. NMHP never creates, erases or deletes a simulated phone: it
+boots one that already exists, shuts it down again only when it is the one it itself booted (an iPhone the owner already had
+open stays open), and removes only its own temporary folder and the app it installed, on success or failure alike.
+
+**Delivery.** With No, promise nothing on a phone (card `directives/cards/DELIVERY.md` rule 42). With Yes, the contract says in
+one sentence that the app is a Flutter app and runs on iPhone; an existing phone project that is not Flutter is not supported
+yet. The real proof is `python3 scripts/phone_proof.py ready` (the setup list's `real_run`, calling `harness/phone_setup.check`
+directly, never a copy or a stand-in), writing `build/phone-proof/ready/result.html` (not committed) with the phone's name and
+version, all six steps, and the starter app's picture embedded in the page.
+
+**Reviewer.** Open the saved `result.html` and judge it directly: it is the real proof, and is never marked "not run for real"
+because you could not open a simulated phone yourself. Check it names the phone's name and version, shows all six steps
+passed, and shows the starter app open on the simulated iPhone.
 

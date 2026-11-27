@@ -183,6 +183,10 @@ def build(
         context.code_root, request, list(request.get("reviewed_files") or []),
         context.storage_path("reviews", f"{_text(request.get('id')) or 'request'}.reading-list.json"),
     )
+    # the owner's saved Not accepted while its repair is open (board.ACTIVE_REPAIR_STATUSES); {} otherwise
+    owner_repair = (state.get("release_repairs") or {}).get(task) or {}
+    if owner_repair.get("status") not in board.ACTIVE_REPAIR_STATUSES:
+        owner_repair = {}
     brief = {
         "version": 1, "task": task, "request_id": _text(request.get("id")),
         "requirements": {
@@ -262,6 +266,15 @@ def build(
         "owner_clarifications": _bounded([{
             "text": _text(value.get("text")), "at": _text(value.get("created_at")),
         } for value in (state.get("owner_clarifications") or {}).get(task, [])]),
+        # Owner 2026-11-26: a repair passed review twice and failed his test the same way twice; the Reviewer never saw his
+        # Not accepted reason. While a repair of his rejection is open, the brief carries his own words, to be replayed.
+        **({"owner_rejection": {
+            "reason": _text(owner_repair.get("reason")),
+            "attachments": _bounded(list(owner_repair.get("attachments") or [])),
+            "rejected_at": _text(owner_repair.get("created_at")),
+            "rule": "The owner really hit this failure. Replay his exact steps from this reason yourself, the way he ran "
+                    "them, as a row of your ledger, and FAIL if they still fail. It is never a `Not run for real` line.",
+        }} if owner_repair else {}),
         "prior_failures_and_repairs": _bounded(failures),
         "repair_package": request.get("repair_package"),
         "repair_authoring": repair_authoring,

@@ -27,6 +27,10 @@ LIVE_HARNESS_PORTS = {8740, 8741, 8742}
 SETTLE_MILLISECONDS = 5_000
 _IDENTITIES: dict[tuple[str, int, int], dict[str, str]] = {}
 _PROCESS_LOCK = threading.Lock()
+# the session holding _PROCESS_LOCK and since when: a holder left open past every screen check's own limit (screen_script.WALL_SECONDS)
+# is freed by the next launch, so a lost session never needs the owner's Pause/Resume (owner 2026-11-27)
+_HOLDER: dict[str, Any] = {}
+STALE_HOLD_SECONDS = 900
 _UNSAFE_EXTRA_ARG_PREFIXES = (
     "--headless", "--user-data-dir", "--disk-cache-dir",
     "--crash-dumps-dir", "--remote-debugging-port", "--password-store",
@@ -77,6 +81,21 @@ def resolve_binary() -> str:
         "/usr/bin/google-chrome). A rendered test cannot run in a governed command here; keep it out and capture the "
         "page with the screen-check board command"
     )
+
+
+def _free_stale_holder() -> bool:
+    """Close a session that has held the browser past STALE_HOLD_SECONDS, then take the lock; False when there is none."""
+    holder = _HOLDER.get("session")
+    if holder is None or time.monotonic() - float(_HOLDER.get("since") or 0) < STALE_HOLD_SECONDS:
+        return False
+    _report_blocked(f"a screen check held the harness browser for more than {STALE_HOLD_SECONDS // 60} minutes; it was closed")
+    try:
+        holder.close(validate=False)
+    except Exception:  # noqa: BLE001 - a broken holder is still released below
+        holder.process_lock_held and _PROCESS_LOCK.release()
+        holder.process_lock_held = False
+        _HOLDER.clear()
+    return _PROCESS_LOCK.acquire(timeout=LAUNCH_LOCK_TIMEOUT_SECONDS)
 
 
 def _release_launch_lock(lock_handle) -> None:
@@ -473,6 +492,8 @@ class BrowserProcess:
             fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
             self.lock_handle.close()
         if self.process_lock_held:
+            if _HOLDER.get("session") is self:
+                _HOLDER.clear()
             _PROCESS_LOCK.release()
             self.process_lock_held = False
 
@@ -669,7 +690,7 @@ def launch(
     # caller blocked forever on _PROCESS_LOCK.acquire(). One handler now covers
     # every exit, including the ones that were never anticipated - an
     # unreadable process table among them.
-    if not _PROCESS_LOCK.acquire(timeout=LAUNCH_LOCK_TIMEOUT_SECONDS):
+    if not _PROCESS_LOCK.acquire(timeout=LAUNCH_LOCK_TIMEOUT_SECONDS) and not _free_stale_holder():
         raise RuntimeError(
             f"another browser check held the harness browser for more than {LAUNCH_LOCK_TIMEOUT_SECONDS} seconds; "
             "run the screen check again in a moment"
@@ -727,13 +748,15 @@ def launch(
             name=f"harness-browser-observer-{process.pid}", daemon=True,
         )
         observer.start()
-        return BrowserProcess(
+        session = BrowserProcess(
             process=process, runtime=runtime, identity=identity, pid=process.pid,
             start_token=start_token, pgid=os.getpgid(process.pid),
             baseline_apps=_app_processes(baseline), baseline_handlers=_default_handlers_digest(), url=url,
             owned_identities=owned_identities, observer_stop=observer_stop,
             observer=observer, lock_handle=lock_handle,
         )
+        _HOLDER.update(session=session, since=time.monotonic())
+        return session
     except BaseException as error:
         _report_blocked(f"the browser could not start: {str(error)[:200]}")
         if observer_stop is not None:

@@ -483,6 +483,89 @@ class RealProjectRootV0291(unittest.TestCase):
             self.assertEqual(environment_check.run_due(self.context), [])
 
 
+class CheckRolesMobileWideningTests(unittest.TestCase):
+    """Owner release repair 2026-11-26 (round 2): the per-role setup check
+    (check_roles -> check_role_program/check_role_folder) must widen each role's own
+    confinement with phone_setup.mobile_extra_writable() for a Yes-iPhone task, the
+    identical folders the real agent launch and the mobile setup-check item already
+    get, or the owner-reported failure ("Builder / Reviewer / CTO can use flutter")
+    reappears even once the check that found it is itself fixed."""
+
+    def _run_roles(self, *, mobile: bool) -> list[list[str]]:
+        """Run check_roles against one real folder need for every role; returns each
+        call's own extra_writable list, captured from a patched confine_agent_command."""
+        from harness import agent_confinement, phone_setup
+        calls: list[list[str]] = []
+
+        def fake_confine(argv, root, claude_config_dir=None, extra_writable=None, path_env=""):
+            calls.append(list(extra_writable or []))
+            return argv
+
+        with tempfile.TemporaryDirectory() as readable:
+            needs = {"folders": [{"path": readable, "access": "read"}]}
+            with mock.patch.object(phone_setup, "mobile_extra_writable", return_value=["/fake/flutter-sdk"]), \
+                 mock.patch.object(phone_setup, "host_env", return_value={"PATH": os.environ.get("PATH", "")}), \
+                 mock.patch.object(agent_confinement, "confine_agent_command", side_effect=fake_confine), \
+                 mock.patch.object(environment_check, "role_providers", return_value={"delivery": "", "reviewer": "", "cto": ""}):
+                environment_check.check_roles(Path(readable), needs, dict(os.environ), lambda text: text,
+                                              signed_in=True, mobile=mobile)
+        return calls
+
+    def test_mobile_true_widens_every_roles_confinement_with_flutters_folders(self):
+        for extra_writable in self._run_roles(mobile=True):
+            self.assertIn("/fake/flutter-sdk", extra_writable)
+
+    def test_mobile_false_never_widens_any_roles_confinement(self):
+        for extra_writable in self._run_roles(mobile=False):
+            self.assertNotIn("/fake/flutter-sdk", extra_writable)
+
+    def test_an_iphone_tasks_flutter_is_really_run_in_each_role(self):
+        # owner 2026-11-27: with no version asked the check only tested the file, so it passed while `flutter --version`
+        # failed in the agents' sandbox
+        argvs = []
+        with mock.patch.object(environment_check, "_run_confined",
+                               side_effect=lambda argv, env, confine: (argvs.append(argv), (0, "Flutter 3.50.1", False, ""))[1]), \
+             mock.patch.object(environment_check, "role_providers", return_value={"delivery": "", "reviewer": "", "cto": ""}), \
+             mock.patch("shutil.which", return_value="/opt/homebrew/bin/flutter"):
+            for mobile in (True, False):
+                argvs.clear()
+                items = environment_check.check_roles(Path("."), {"programs": [{"name": "flutter", "min_version": ""}]},
+                                                      dict(os.environ), lambda text: text, signed_in=True, mobile=mobile)
+                self.assertEqual(len(items), 3)
+                ran = [argv for argv in argvs if argv[-1:] == ["--version"]]
+                self.assertEqual(len(ran), 3 if mobile else 0, mobile)
+
+
+class XcodeVersionIsReadFromItsOwnCall(unittest.TestCase):
+    """Codex review R2-1 2026-11-27: `xcodebuild --version` fails (exit 64) and the check read its error's timestamp as
+    Xcode 01.307, so a healthy Mac was refused the contract. The version is read only from a call that succeeded."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp(prefix="nmhp-xcode-"))
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.program = self.folder / "xcodebuild"
+        self.program.write_text('#!/bin/sh\nif [ "$1" = "-version" ]; then echo "Xcode 27.2"; echo "Build version 27C52"; exit 0; fi\n'
+                                'echo "2026-11-27 01:30:07.307 xcodebuild[123:456] invalid option \'$1\'" >&2\nexit 64\n')
+        self.program.chmod(0o755)
+
+    def test_the_owners_check_reads_27_2_and_passes(self):
+        item = environment_check.check_program({"name": str(self.program), "min_version": "15"}, dict(os.environ))
+        self.assertTrue(item["ok"], item)
+        self.assertIn("27.2", item["detail"])
+
+    def test_every_role_reads_27_2_and_passes(self):
+        item = environment_check.check_role_program({"name": str(self.program), "min_version": "15"}, dict(os.environ),
+                                                    lambda argv: argv, "Builder", lambda text: text)
+        self.assertTrue(item["ok"], item)
+        self.assertIn("27.2", item["detail"])
+
+    def test_a_failed_version_call_is_never_read_as_a_version(self):
+        self.program.write_text('#!/bin/sh\necho "2026-11-27 27.295 tool[1:2] broken" >&2\nexit 64\n')
+        item = environment_check.check_role_program({"name": str(self.program), "min_version": "15"}, dict(os.environ),
+                                                    lambda argv: argv, "Builder", lambda text: text)
+        self.assertFalse(item["ok"], item)
+
+
 class AnUpdateRunsAStaleFailureAgain(unittest.TestCase):
     """Owner's Lease project 2026-11-23: the "env: node" failure from v0.30.1 was replayed on v0.30.2 forever, because the
     identity a result is kept under never changed when NMHP's checking code did."""

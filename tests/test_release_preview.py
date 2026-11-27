@@ -980,6 +980,66 @@ class ReleaseCardRenderTests(unittest.TestCase):
         self.assertNotIn("/x/Weather.app", html)
 
 
+class NestedAgentCleanupTests(unittest.TestCase):
+    def test_stopping_a_harness_checkout_preview_stops_its_own_agent_sessions(self):
+        # CTO finding, owner release repair 2026-11-26: a candidate preview of NMHP itself can launch its
+        # own Builder/Reviewer/CTO terminals for a test project the owner creates inside it; those are
+        # independent windowed processes, never members of the preview's own process group, so stopping
+        # the preview used to leave them running. Stand-ins for is_harness_checkout, the nested home's
+        # project registry, and control.snapshot/stop prove the sweep reaches every active session.
+        with tempfile.TemporaryDirectory() as directory_name:
+            directory = Path(directory_name)
+            (directory / "state" / "home").mkdir(parents=True)
+            preview = release_preview.Preview("TASK", "deadbeef", directory)
+            with mock.patch.object(release_preview, "is_harness_checkout", return_value=True), \
+                 mock.patch("harness.project_registry.entries", return_value=[{
+                     "code_root": "/nested/project", "data_root": "/nested/adopted-data", "workspace_root": "/nested/adopted-work"}]), \
+                 mock.patch("harness.control.snapshot", return_value={"sessions": [
+                     {"id": "test-50", "status": "running"}, {"id": "test-c8", "status": "launching"},
+                     {"id": "test-ended", "status": "stopped"},
+                 ]}), \
+                 mock.patch("harness.control.stop") as stop:
+                preview._stop_nested_agents()
+            self.assertEqual(
+                sorted(call.args[1] for call in stop.call_args_list), ["test-50", "test-c8"],
+                "every active session is stopped, and an already-stopped one is left alone",
+            )
+            for call in stop.call_args_list:
+                # an adopted project keeps its sessions under its registered data root (Codex review 2026-11-27, R1-1)
+                self.assertEqual(str(call.args[0].code_root), "/nested/project")
+                self.assertEqual(str(call.args[0].data_root), "/nested/adopted-data")
+
+    def test_an_adopted_projects_running_agent_process_is_really_stopped(self):
+        # Codex review 2026-11-27, R1-1: real registry, real control store, a real running process
+        import subprocess
+        from harness import control, project_registry
+        with tempfile.TemporaryDirectory() as directory_name:
+            root = Path(directory_name)
+            preview = release_preview.Preview("TASK", "deadbeef", root / "preview")
+            preview.directory.mkdir()
+            code = root / "adopted-project"
+            code.mkdir()
+            entry = project_registry.register(preview.state_dir / "home", "Adopted phone project", code, kind="adopted")
+            context = project_registry.context_for_entry(entry)
+            self.assertNotEqual(Path(context.data_root), code / ".harness", "the adopted project keeps its data elsewhere")
+            session = control.create(context, "codex_delivery")
+            process = subprocess.Popen(["/bin/sleep", "120"], start_new_session=True)
+            self.addCleanup(lambda: process.poll() is None and process.kill())
+            control.attach(context, session["id"], process.pid)
+            with mock.patch.object(release_preview, "is_harness_checkout", return_value=True):
+                preview._stop_nested_agents()
+            process.wait(timeout=20)
+            self.assertNotIn(control.snapshot(context)["sessions"][0]["status"], control.ACTIVE_STATUSES)
+
+    def test_a_preview_that_is_not_a_harness_checkout_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as directory_name:
+            preview = release_preview.Preview("TASK", "deadbeef", Path(directory_name))
+            with mock.patch.object(release_preview, "is_harness_checkout", return_value=False), \
+                 mock.patch("harness.control.stop") as stop:
+                preview._stop_nested_agents()
+            stop.assert_not_called()
+
+
 from tests.release_fixture_support import allow_fixture_releases  # noqa: E402
 
 setUpModule, tearDownModule = allow_fixture_releases()   # bare release fixtures: production demands a final review (2026-10-24)

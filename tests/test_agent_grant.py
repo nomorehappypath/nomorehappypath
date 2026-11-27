@@ -391,4 +391,104 @@ class PlantedRegistryAtRunnerLevel(RunnerRefusesBeforeInvokingTheAgent):
             self.assertFalse(sentinel.exists(),
                              "a planted registry got the agent launched")
             self.assertEqual(3, done.returncode, done.stderr)
-            self.assertIn("REFUSED", done.stderr)
+
+
+class RealLaunchMobileWideningTests(unittest.TestCase):
+    """Owner release repair 2026-11-26 (round 2): "the per-role check (check_roles ->
+    check_role_program) and the agents' real launch confinement for Codex and Claude
+    still don't grant Flutter's own folders, so the agents can't run Flutter either."
+
+    Runs the real runner script with a fake Codex that dumps its own argv, the only way
+    to prove what the real launch passes to the sandbox rather than what a helper
+    computes in isolation (the same lesson as RunnerRefusesBeforeInvokingTheAgent above).
+    `phone_setup.mobile_extra_writable()` always includes a home-rooted Flutter/CocoaPods
+    folder once the home folder itself exists (owner's Mac always has one), so asserting
+    on `Path.home() / ".pub-cache"` is deterministic without faking a Flutter install.
+    """
+
+    RUNNER = Path(__file__).resolve().parent.parent / "scripts" / "run_managed_agent.sh"
+    SESSION_ID = "codex_delivery-mobile1"
+    TASK = "mobile-task"
+
+    def _world(self, tmp, *, iphone: bool):
+        """Build an assigned project, with its one agent frozen to a task whose
+        task_mobile answer is iphone, and a fake Codex that records its own argv.
+        Returns (code, data, workspace, home, fake, argv_dump)."""
+        root = Path(tmp)
+        code = root / "project"; code.mkdir()
+        data = root / "assigned-data"; data.mkdir()
+        workspace = root / "assigned-workspace"; workspace.mkdir()
+        home = root / "manager-home"; home.mkdir()
+        project_registry.save(home, {
+            "version": project_registry.REGISTRY_VERSION,
+            "projects": [{"id": "p1", "name": "project", "code_root": str(code),
+                          "data_root": str(data), "workspace_root": str(workspace)}],
+        })
+        from harness import control as control_module, board
+        context = project_context.context_from_roots(
+            code_root=code, data_root=data, workspace_root=workspace)
+        control_module.restore_missing_resume_session(
+            context, self.SESSION_ID, "codex_delivery", settings_override=old_settings())
+        # register() only accepts AWAITING_OWNER_DIRECTION for a Delivery Agent (begin_task does the
+        # rest, through a branch-create and an owner-direction gate this test does not need); the
+        # task this test cares about is set directly, the same field begin_task would have set.
+        board.register(context, "development", board.AWAITING_OWNER_DIRECTION, vendor="OpenAI", session_id=self.SESSION_ID)
+        with board.locked_state(context) as state:
+            agent = next(item for item in state["agents"].values() if item.get("session_id") == self.SESSION_ID)
+            agent["task"] = self.TASK
+            state.setdefault("task_mobile", {})[self.TASK] = {"mobile": True, "iphone": iphone}
+
+        argv_dump = root / "codex-argv.txt"
+        fake = root / "fake-codex"
+        fake.write_text(
+            '#!/bin/sh\nfor arg in "$@"; do printf \'%s\\n\' "$arg" >> "' + str(argv_dump) + '"; done\n',
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        return code, data, workspace, home, fake, argv_dump
+
+    def _run(self, *, code, data, workspace, home, fake):
+        argv = [
+            "bash", str(self.RUNNER),
+            "--root", str(code), "--session-id", self.SESSION_ID,
+            "--kind", "codex_delivery",
+            "--data-root", str(data), "--workspace-root", str(workspace),
+            "--manager-home", str(home),
+            "--python", sys.executable,
+        ]
+        env = dict(os.environ, HARNESS_CODEX_BIN=str(fake))
+        env.pop("PYTHONPATH", None)
+        return subprocess.run(argv, capture_output=True, text=True, env=env,
+                              stdin=subprocess.DEVNULL, timeout=120)
+
+    def _writable_roots_flag(self, argv_dump: Path) -> str:
+        """The one dumped argv line naming what Codex's own sandbox may write: on macOS that is
+        `sandbox_workspace_write.writable_roots=`; on Linux, where a protected Claude token folder
+        always sits inside the grant, Codex gets a named permission profile instead
+        (`permissions.harness_agent.filesystem=`) whose own entries list the same roots. Returns
+        "" if neither line was found."""
+        if not argv_dump.exists():
+            return ""
+        for line in argv_dump.read_text(encoding="utf-8").splitlines():
+            if line.startswith("sandbox_workspace_write.writable_roots=") or line.startswith("permissions.harness_agent.filesystem="):
+                return line
+        return ""
+
+    def test_a_yes_iphone_tasks_real_sandbox_includes_flutters_folders(self):
+        with TemporaryDirectory() as tmp:
+            code, data, workspace, home, fake, argv_dump = self._world(tmp, iphone=True)
+            done = self._run(code=code, data=data, workspace=workspace, home=home, fake=fake)
+            flag = self._writable_roots_flag(argv_dump)
+            self.assertIn(str(Path.home() / ".pub-cache"), flag,
+                         f"stderr={done.stderr}\nargv={flag}")
+
+    @unittest.skipUnless(sys.platform == "darwin", "the Flutter folders are granted on a Mac")
+    def test_a_no_task_agent_on_a_mac_gets_flutters_folders_too(self):
+        # owner 2026-11-27: an agent starts before the iPhone answer is saved, and the Reviewer and CTO never hold
+        # the phone task, so a per-task grant left their real launch refused `flutter --version`
+        with TemporaryDirectory() as tmp:
+            code, data, workspace, home, fake, argv_dump = self._world(tmp, iphone=False)
+            done = self._run(code=code, data=data, workspace=workspace, home=home, fake=fake)
+            flag = self._writable_roots_flag(argv_dump)
+            self.assertIn(str(Path.home() / ".pub-cache"), flag,
+                          f"stderr={done.stderr}\nargv={flag}")

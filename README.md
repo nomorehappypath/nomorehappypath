@@ -182,6 +182,28 @@ What it does not do: it never creates, resets or deletes the machine, one machin
 
 Existing projects keep their old acceptance card: *Get the build* appears only for a new task whose Delivery declared the build, so `why.exe` itself would need a new task to be downloadable this way. A task that declares a build and also a web app keeps *View app*.
 
+## Phone apps
+
+Phone apps are built in Flutter. When you give a task its direction, you are asked:
+
+> Does this task need a mobile build or test environment?
+> - **No** — nothing is built or run on a phone. Right for writing a spec, or reading and reviewing the code of a phone app, on any computer.
+> - **Yes** — NMHP builds the Flutter app and runs it on a simulated phone on this computer. (Shown only under Yes: **iPhone**.)
+
+No is the default the first time; after that, your last answer for this project is remembered. Choosing Yes without ticking iPhone is refused with "Choose iPhone."
+
+**iPhone needs a Mac with Xcode.** On another computer the iPhone box is disabled, with "Running an iPhone app needs a Mac with Xcode. Specs and code reviews for iPhone apps work here: choose No." A task answered Yes shows a "Phone: iPhone" chip, and before its contract is shown, NMHP itself (never an agent) proves this Mac is ready: Xcode and Flutter both answer, a simulated iPhone exists and starts, a small starter app builds, installs and opens on it with one picture kept, and everything NMHP made along the way is cleaned up (a simulator you already had open is left open; NMHP never creates or deletes a simulated phone). Any failing step shows its own "Blocked, needs you" card with *Check again*.
+
+Publishing a finished phone app to the App Store, and app signing, stay with you; NMHP does not do either.
+
+**Setting up this Mac for iPhone work**, each step saying how you know it worked:
+1. Install Homebrew if `brew` is not already found (`brew -v` answers).
+2. `brew install --cask flutter` (`flutter --version` answers).
+3. `brew install cocoapods` (`pod --version` answers).
+4. Install Xcode from the App Store and open it once to accept its terms (`xcodebuild -version` answers).
+5. In Xcode, Settings, Components, add an iOS simulator (it appears in Xcode's device list).
+6. Run `flutter doctor`: it shows a tick beside Flutter and beside Xcode.
+
 ## When an update changes your saved data
 
 A release can pass every test on fresh, empty data and still break or erase the data you already have the first time you start it. So when a task changes how your app keeps its data (a database, data files, uploads or settings files), NMHP checks the update and the way back before you are asked to accept.

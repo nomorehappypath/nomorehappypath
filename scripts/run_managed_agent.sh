@@ -588,6 +588,26 @@ except GrantTooBroad as error:
     echo "         Fix the project's data or workspace root, then relaunch." >&2
     exit 3
   fi
+  # Phone apps, step 1 (owner release repair 2026-11-26, round 2): the per-role setup check already
+  # widens its OWN confined calls for a Yes-iPhone task (environment_check.py); this agent's REAL
+  # launch (Codex's sandbox, Gemini's and Claude's --add-dir, and the Linux wrap() below) must get
+  # the identical Flutter/Xcode/CocoaPods folders from phone_setup.mobile_extra_writable(), or the
+  # agent itself still cannot run `flutter --version` even though NMHP's own check now can. Granted on
+  # every Mac launch (agent_confinement.phone_folders): an agent starts before the owner's iPhone answer
+  # is saved, and the Reviewer and CTO never hold a phone task, so a per-task lookup left them refused.
+  mobile_extra_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement
+print(json.dumps(agent_confinement.phone_folders()))
+' "$harness_root" 2>/dev/null)" || mobile_extra_json="[]"
+  if [[ "$mobile_extra_json" != "[]" ]]; then
+    writable_roots_json="$("$python_bin" -E -c '
+import json, sys
+granted = json.loads(sys.argv[1]); extra = json.loads(sys.argv[2])
+print(json.dumps(granted + [path for path in extra if path not in granted]))
+' "$writable_roots_json" "$mobile_extra_json")"
+  fi
   protected_writes_json="[]"
   if [[ -n "$board_surface" ]]; then
     # NMHP's shared skill library (harness_root/skills) is passed in here too, so it

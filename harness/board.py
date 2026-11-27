@@ -3160,6 +3160,17 @@ def project_support_plan_state(state: dict[str, Any]) -> dict[str, Any]:
     return {"on": bool(entry.get("on")), "updated_at": str(entry.get("updated_at") or "")}
 
 
+def host_is_macos() -> bool:
+    """Whether NMHP itself is running on a Mac: only there can it build and run an iPhone simulator."""
+    return sys.platform == "darwin"
+
+
+def task_mobile_state(state: dict[str, Any], task: str) -> dict[str, Any]:
+    """This task's frozen "mobile build/test environment" answer (No, i.e. both False, when never set)."""
+    entry = (state.get("task_mobile") or {}).get(task) or {}
+    return {"mobile": bool(entry.get("mobile")), "iphone": bool(entry.get("iphone"))}
+
+
 # task build-wish-list: a per-project list of the owner's own ideas, beside Advanced (SPEC.md
 # chapters 1-2). Order in the stored list is display order (newest appended at the end; drag
 # reorders the whole list), and every write replaces the whole list through locked_state, which
@@ -3659,6 +3670,7 @@ def _task_context_bundle(state: dict[str, Any], task: str) -> dict[str, Any]:
         "enhanced_security": {**task_security_state(state, task), "rule": TASK_SECURITY_RULE,
                               **({"open_reference": reference_chapters.reference_hint("enhanced-security")} if task_security_state(state, task)["on"] else {})},
         "support_plan": task_support_plan_state(state, task),
+        "mobile": task_mobile_state(state, task),
         "spec_questions": spec_questions_state(state, task),
         "spec_answers": spec_answers_state(state, task),
         "project_spec": task_spec_state(state, task),
@@ -4861,13 +4873,17 @@ def _copy_attachments_into_task_workspace(root: Path, workspace: Path, attachmen
     return copied
 
 
-def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False, check_agents: bool = False) -> dict[str, Any]:
+def record_owner_message(root: Path, agent_id: str, text: str, message_type: str = "direction", attachments: list[dict[str, Any]] | None = None, document_only: bool = False, task_kind: str = "", allow_split: bool = False, check_agents: bool = False, mobile: bool = False, iphone: bool = False) -> dict[str, Any]:
     """Record one atomic owner message and route it to a Delivery terminal.
 
     Initial direction messages authorize a waiting Delivery Agent. Clarifications
     are append-only task messages and never rewrite the original direction.
     Attachments are stored under generated names and included only as metadata in
-    the board event and routed terminal message.
+    the board event and routed terminal message. `mobile`/`iphone` (owner 2026-11-25)
+    are a direction-only answer to "does this task need a mobile build or test
+    environment": stored once per task and per project, and refused (ValueError) when
+    `iphone` is true without `mobile`, or `iphone` is true on a non-Mac host. Returns
+    the stored message record.
     """
     text = contract.normalize_owner_direction(text)
     message_type = str(message_type or "").strip().lower()
@@ -4877,6 +4893,11 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
         raise ValueError(PASTED_SCREEN_MESSAGE)
     if message_type not in {"direction", "clarification", "cto_message"}:
         raise ValueError("message type must be direction, clarification, or cto_message")
+    mobile, iphone = bool(mobile), bool(iphone)
+    if message_type == "direction" and mobile and not iphone:
+        raise ValueError("Choose iPhone.")
+    if iphone and not host_is_macos():
+        raise ValueError("Running an iPhone app needs a Mac with Xcode.")
     prepared = _prepare_owner_message_attachments(attachments or [])
     session_id = ""
     message: dict[str, Any]
@@ -4950,7 +4971,11 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
                 "task_kind": normalize_task_kind(task_kind, document_only),
                 "document_only": normalize_task_kind(task_kind, document_only) == "spec",
                 "allow_split": bool(allow_split),    # owner 2026-11-04: only the owner's direction can allow a split into reviewed parts
+                "mobile": mobile, "iphone": iphone,
             }
+            # owner 2026-11-25: remembered project-wide, like project_support_plan, so the next new
+            # task's direction dialog defaults to whatever was last chosen rather than always to No.
+            state["project_mobile"] = {"mobile": mobile, "iphone": iphone, "updated_at": created_at}
             if check_agents:
                 _request_agents_check(state, state["owner_directions"][session_id], session_id)
             # P6: the event log's own copy is redacted; state["owner_directions"][session_id]["text"]
@@ -4988,6 +5013,9 @@ def record_owner_message(root: Path, agent_id: str, text: str, message_type: str
     if attachment_lines:
         routed += "\nAttachments saved by Mission Control:" + attachment_lines
     if message_type == "direction":
+        routed += ("\n\nMobile build/test environment: Yes — iPhone. NMHP will build a Flutter app and run it on a "
+                   "simulated iPhone before this task's contract is shown." if mobile and iphone else
+                   "\n\nMobile build/test environment: No. Nothing is built or run on a phone for this task.")
         routed += "\n" + reference_chapters.reference_hint("requirements")
     if message_type == "direction" and check_agents:
         # gate 1: the Builder is not woken until every agent's sign-in passed; the passed check sends this message
@@ -10679,6 +10707,13 @@ def begin_task(root: Path, agent_id: str, task: str) -> dict[str, Any]:
         state.setdefault("task_kinds", {})[task] = kind
         state.setdefault("task_document_only", {})[task] = kind == "spec"
         state.setdefault("task_split_allowed", {})[task] = bool(direction.get("allow_split")) if agent.get("session_id") else False
+        # owner 2026-11-25: the mobile build/test-environment answer is asked with a new task's first
+        # direction and frozen into the task the same way task_kind is - a later change to it (another
+        # task's own direction) never retargets a task already building.
+        state.setdefault("task_mobile", {})[task] = {
+            "mobile": bool(direction.get("mobile")) if agent.get("session_id") else False,
+            "iphone": bool(direction.get("iphone")) if agent.get("session_id") else False,
+        }
         if workspace:
             state.setdefault("task_workspaces", {})[task] = str(workspace)
         inherited_count = len(baseline.get("dirty_files", []))
@@ -18473,6 +18508,9 @@ def idle_task_cards(root: Path, current: datetime | None = None) -> list[dict[st
             for task, agents in groups.items():
                 if _task_closed_for_checks(state, task):
                     continue
+                if any(isinstance(r, dict) and r.get("task") == task and r.get("status") in {"open", "reserved", "claimed"}
+                       for r in (state.get("qa_requests") or {}).values()):
+                    continue        # the task is with the Reviewer, whose own stall steps watch it (owner 2026-11-27: a false card)
                 # any agent of the task (a Reviewer at work on its review counts) seen within the grace period means the task is alive;
                 # a successor that registered but never checked the board does not (Codex plan check 2026-11-08, finding 7)
                 # a replacement that registered within the grace period but has not polled yet counts by its spawn time (Codex task

@@ -120,6 +120,7 @@ PAGE = r"""<!doctype html>
 .mc-others{flex:1 1 100%;margin:0;padding:10px 0 0;border-top:1px solid var(--line);color:var(--mc-muted);font-size:13px;list-style:none}.mc-others li{margin:4px 0}
 .mc-tell{margin-top:12px;min-height:46px;font-size:15px}
 .task-kind-choice{border:1px solid var(--line,#cfd8e3);border-radius:8px;padding:10px 12px;margin:10px 0}.task-kind-choice label{display:block;margin:6px 0;line-height:1.4}
+.mobile-choice{border:1px solid var(--line,#cfd8e3);border-radius:8px;padding:10px 12px;margin:10px 0}.mobile-choice label{display:block;margin:6px 0;line-height:1.4}.mobile-iphone-row{margin:6px 0 2px 24px;padding:8px 10px;border-radius:7px;background:var(--blue-soft,#eaf1ff)}.mobile-iphone-row label{margin:0;font-weight:600}.mobile-iphone-row.disabled{background:#f1f3f6}.mobile-iphone-row.disabled label{color:var(--muted,#687583)}.mobile-non-mac-note{margin:6px 0 0;font-size:13px;color:var(--muted,#687583)}
 .mc-cancel{margin-top:12px;min-height:40px}
 .mc-agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:18px}
 .mc-agent{background:#fff;border:1px solid var(--line);border-top:4px solid var(--mc-teal);border-radius:14px;padding:16px 18px;min-width:0}
@@ -220,10 +221,10 @@ PAGE = r"""<!doctype html>
 </div>
 <dialog id="screens-dialog" class="screens-dialog" aria-labelledby="screens-dialog-title"><div class="modal"><h2 id="screens-dialog-title" tabindex="-1">The screens</h2><p class="screens-note">These are the builder's designs, so you can see each screen before it is built. They are pictures, not the working app.</p><p id="screens-dialog-name" class="screens-name" aria-live="polite"></p><iframe id="screens-frame" sandbox="" referrerpolicy="no-referrer" title="Screen design"></iframe><p id="screens-dialog-error" class="notice" role="alert"></p><div class="modal-actions"><button type="button" class="secondary" id="screens-prev">Previous</button><span id="screens-pos" class="screens-pos"></span><button type="button" class="secondary" id="screens-next">Next</button><button type="button" id="screens-close">Close</button></div></div></dialog>
 <dialog id="status-dialog" aria-labelledby="status-dialog-title"><div class="modal"><h2 id="status-dialog-title" tabindex="-1">Agent status</h2><div id="status-dialog-body"></div><div class="modal-actions"><button class="secondary" id="status-dialog-close">Close</button></div></div></dialog>
-<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This colour identifies this CLI window. It starts on this agent's colour from Settings; pick another for this start only. Cancel uses the Settings colour.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use the Settings colour</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
+<dialog id="color-dialog" aria-labelledby="color-dialog-title"><form class="modal" id="color-form"><h2 id="color-dialog-title">Choose terminal color</h2><div id="launch-choice" hidden><fieldset class="task-kind-choice" id="launch-task-kind"><legend><strong>What kind of work is this?</strong></legend><label><input type="radio" name="launch-task-kind" value="development" checked> <strong>Write code</strong> — build or change code. Full process: tests first, independent review, end to end.</label><label><input type="radio" name="launch-task-kind" value="analysis"> <strong>Analyze code</strong> — read the code and report issues and refactoring ideas. Changes no code; the reviewer checks every finding.</label><label><input type="radio" name="launch-task-kind" value="spec"> <strong>Write specs</strong> — a spec, a deck or text. No code to build or examine.</label></fieldset><fieldset id="launch-mobile" class="mobile-choice"><legend>Does this task need a mobile build or test environment?</legend><label><input type="radio" name="launch-mobile-choice" id="launch-mobile-no" checked> No — nothing is built or run on a phone. Right for writing a spec or reading and reviewing code of a phone app, on any computer.</label><label><input type="radio" name="launch-mobile-choice" id="launch-mobile-yes"> Yes — NMHP builds the Flutter app and runs it on a simulated phone on this computer.</label><div id="launch-mobile-iphone-row" class="mobile-iphone-row" hidden><label><input type="checkbox" id="launch-mobile-iphone"> iPhone</label><p id="launch-mobile-non-mac" class="mobile-non-mac-note" hidden>Running an iPhone app needs a Mac with Xcode. Specs and code reviews for iPhone apps work here: choose No.</p></div></fieldset><p class="launch-choice-origin" id="launch-choice-origin">Loading Settings…</p><div class="launch-choice"><label>Provider<select id="launch-provider" disabled></select></label><label>Model<select id="launch-model-select" disabled></select><input id="launch-model" placeholder="type a model id" autocomplete="off" hidden disabled></label><label>Reasoning effort<select id="launch-effort" disabled></select></label></div><p class="launch-choice-note" id="launch-choice-note"></p></div><p id="color-dialog-copy">This colour identifies this CLI window. It starts on this agent's colour from Settings; pick another for this start only. Cancel uses the Settings colour.</p><div id="color-options" class="color-options"></div><div class="modal-actions"><button type="button" class="secondary" id="color-close">Close</button><button type="button" class="secondary" id="color-cancel">Cancel — use the Settings colour</button><button type="submit" id="color-launch">Launch selected color</button></div><p class="modal-links"><a id="launch-settings-link" href="#" hidden>Open Settings</a></p></form></dialog>
 <dialog id="decision-dialog" aria-labelledby="decision-dialog-title"><form class="modal" id="decision-form"><h2 id="decision-dialog-title">Tell us what needs changing</h2><p>Explain why you did not accept this release. Your explanation is saved with the release record and sent to Delivery.</p><label for="decision-reason"><strong>What should be changed?</strong></label><textarea id="decision-reason" rows="9" required placeholder="Add as much detail as you need."></textarea><label for="decision-attachments"><strong>Documents or screenshots</strong></label><input id="decision-attachments" type="file" multiple><small>Any files, up to 100 MB each. Files are stored safely and are not displayed as web pages.</small><p id="decision-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="decision-cancel">Cancel</button><button type="submit" id="decision-submit">Send response</button></div></form></dialog>
 <dialog id="push-dialog" aria-labelledby="push-dialog-title"><form class="modal" id="push-form"><h2 id="push-dialog-title">Push the accepted commit</h2><p id="push-help">This is separate from accepting the local release. Choose an existing approved remote and branch. Nothing contacts the remote until you confirm in the next step.</p><label for="push-remote"><strong>Configured remote</strong></label><input id="push-remote" value="origin" required><label for="push-branch"><strong>Branch</strong></label><input id="push-branch" value="main" required><p id="push-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="push-cancel">Cancel</button><button type="submit" id="push-submit">Record push instruction</button></div></form></dialog>
-<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label id="owner-message-split" class="task-kind-note" hidden><input type="checkbox" id="owner-message-allow-split"> Allow Delivery to split this task into parts that are each reviewed on their own. Leave it off for one build and one review.</label><label id="owner-message-support-plan" class="task-kind-note" hidden><input type="checkbox" id="owner-message-support-plan-check"> This app gets Support. Delivery writes <code>SUPPORT_PLAN.md</code> into the build and makes the app send its version and an <code>nmhp.support.check</code> event, so a dedicated Support installation can watch it.</label><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 units written.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple><small id="owner-message-attachments-help">Attachments stay separate from the message. Any files, up to 100 MB each. Choosing files again adds to this list rather than replacing it. Nothing is sent until you press Send.</small><ul id="owner-message-attachments-list"></ul><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
+<dialog id="owner-message-dialog" aria-labelledby="owner-message-title"><form class="modal" id="owner-message-form"><h2 id="owner-message-title">Give direction</h2><p id="owner-message-help">This message is sent as one complete instruction to Delivery. Pressing Enter starts a new line; it does not send the message. Use the Send button when you are ready.</p><div id="owner-message-kind-choice" hidden></div><p id="owner-message-task-kind" class="task-kind-note" hidden></p><label id="owner-message-split" class="task-kind-note" hidden><input type="checkbox" id="owner-message-allow-split"> Allow Delivery to split this task into parts that are each reviewed on their own. Leave it off for one build and one review.</label><label id="owner-message-support-plan" class="task-kind-note" hidden><input type="checkbox" id="owner-message-support-plan-check"> This app gets Support. Delivery writes <code>SUPPORT_PLAN.md</code> into the build and makes the app send its version and an <code>nmhp.support.check</code> event, so a dedicated Support installation can watch it.</label><fieldset id="owner-message-mobile" class="mobile-choice" hidden><legend>Does this task need a mobile build or test environment?</legend><label><input type="radio" name="owner-message-mobile-choice" id="owner-message-mobile-no" checked> No — nothing is built or run on a phone. Right for writing a spec or reading and reviewing code of a phone app, on any computer.</label><label><input type="radio" name="owner-message-mobile-choice" id="owner-message-mobile-yes"> Yes — NMHP builds the Flutter app and runs it on a simulated phone on this computer.</label><div id="owner-message-mobile-iphone-row" class="mobile-iphone-row" hidden><label><input type="checkbox" id="owner-message-mobile-iphone"> iPhone</label><p id="owner-message-mobile-non-mac" class="mobile-non-mac-note" hidden>Running an iPhone app needs a Mac with Xcode. Specs and code reviews for iPhone apps work here: choose No.</p></div></fieldset><label for="owner-message-text"><strong>What should Delivery do?</strong></label><textarea id="owner-message-text" rows="12" required placeholder="Write the full direction or clarification here…"></textarea><small id="owner-message-count">0 units written.</small><div class="directive-file-panel"><label for="owner-message-directive-file"><strong>Or use a .md or .txt file as the complete message</strong></label><input id="owner-message-directive-file" type="file" accept=".md,.txt,text/markdown,text/plain"><small id="owner-message-file-status">You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.</small></div><label for="owner-message-attachments" id="owner-message-attachments-label"><strong>Separate supporting documents or screenshots</strong></label><input id="owner-message-attachments" type="file" multiple><small id="owner-message-attachments-help">Attachments stay separate from the message. Any files, up to 100 MB each. Choosing files again adds to this list rather than replacing it. Nothing is sent until you press Send.</small><ul id="owner-message-attachments-list"></ul><p id="owner-message-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="owner-message-cancel">Cancel</button><button type="submit" id="owner-message-submit">Send direction</button></div></form></dialog>
 </main>
 <dialog id="spec-questions-dialog" aria-labelledby="spec-questions-title"><form class="modal" id="spec-questions-form"><h2 id="spec-questions-title">A few questions before the plan is written</h2><p id="spec-questions-help">Answer what you want; skip anything and NMHP assumes a sensible default from your description, written into the plan as its own line.</p><div id="spec-questions-app" class="spec-questions-app"></div><fieldset class="spec-question"><legend>How do you use it?</legend><label><input type="checkbox" name="how_used" value="Web page, hosted"> Web page, hosted</label><label><input type="checkbox" name="how_used" value="Desktop app"> Desktop app</label><label><input type="checkbox" name="how_used" value="Phone app"> Phone app</label><label><input type="checkbox" name="how_used" value="No screen, just reports"> No screen, just reports</label></fieldset><fieldset class="spec-question"><legend>Who uses it?</legend><label><input type="checkbox" name="who_uses" value="Just me"> Just me</label><label><input type="checkbox" name="who_uses" value="Me and a few people I invite"> Me and a few people I invite</label><label><input type="checkbox" name="who_uses" value="The public"> The public</label></fieldset><fieldset class="spec-question" id="spec-question-concurrency" hidden><legend>At its busiest, how many people at the same time?</legend><label><input type="checkbox" name="concurrency" value="A few"> A few</label><label><input type="checkbox" name="concurrency" value="Dozens"> Dozens</label><label><input type="checkbox" name="concurrency" value="Hundreds or more"> Hundreds or more</label></fieldset><fieldset class="spec-question"><legend>What will it hold?</legend><label><input type="checkbox" name="what_holds" value="Nothing private"> Nothing private</label><label><input type="checkbox" name="what_holds" value="My own private information"> My own private information</label><label><input type="checkbox" name="what_holds" value="Other people's personal information"> Other people's personal information</label><label><input type="checkbox" name="what_holds" value="Money, payments or bank access"> Money, payments or bank access</label></fieldset><fieldset class="spec-question"><legend>If it stops for a day, what happens?</legend><label><input type="checkbox" name="if_stops" value="No big deal"> No big deal</label><label><input type="checkbox" name="if_stops" value="Annoying"> Annoying</label><label><input type="checkbox" name="if_stops" value="It costs me money or customers"> It costs me money or customers</label></fieldset><fieldset class="spec-question"><legend>Internet connection?</legend><label><input type="checkbox" name="internet" value="Always online"> Always online</label><label><input type="checkbox" name="internet" value="Must also work offline"> Must also work offline</label></fieldset><fieldset class="spec-question" id="spec-question-existing-data" hidden><legend>Is there existing data to bring in?</legend><label><input type="checkbox" name="existing_data" value="No"> No</label><label><input type="checkbox" name="existing_data" value="From spreadsheets or files"> From spreadsheets or files</label><label><input type="checkbox" name="existing_data" value="From another app"> From another app</label></fieldset><fieldset class="spec-question" id="spec-question-data-loss" hidden><legend>If its data were lost, what happens?</legend><label><input type="checkbox" name="data_loss" value="Nothing, it can be rebuilt"> Nothing, it can be rebuilt</label><label><input type="checkbox" name="data_loss" value="I lose some work"> I lose some work</label><label><input type="checkbox" name="data_loss" value="Serious loss (money, customers, records I can't recreate)"> Serious loss (money, customers, records I can't recreate)</label></fieldset><fieldset class="spec-question" id="spec-question-data-loss-window" hidden><legend>How much recent data could you afford to lose?</legend><label><input type="checkbox" name="data_loss_window" value="A day"> A day</label><label><input type="checkbox" name="data_loss_window" value="An hour"> An hour</label><label><input type="checkbox" name="data_loss_window" value="Nothing"> Nothing</label></fieldset><p id="spec-questions-error" class="notice" role="alert" aria-live="polite"></p><div class="modal-actions"><button type="button" class="secondary" id="spec-questions-cancel">Close</button><button type="submit" id="spec-questions-continue">Continue</button></div></form></dialog>
 <dialog id="agent-view-dialog" aria-labelledby="agent-view-title" style="width:min(1050px,calc(100% - 32px))"><div class="modal"><div class="row"><h2 id="agent-view-title">Live agent</h2><button class="secondary" id="agent-view-close">Close view</button></div><p>Type here to interact with this existing session. Closing this view leaves the agent running. Select text with the mouse, copy with Ctrl+Shift+C and paste with Ctrl+Shift+V.</p><p id="agent-view-error" role="alert"></p><div id="agent-terminal" style="background:#111827;padding:12px;overflow:auto"></div></div></dialog>
@@ -249,6 +250,7 @@ const terminalColors=[
 const el=selector=>document.querySelector(selector);
 let refreshing=false;
 let lastBoard=null;
+let lastSentMobile=null;   // the owner's most recently sent mobile/iPhone choice this page has seen, independent of lastBoard (which can still be null on a fresh page, e.g. the dialog's very first open)
 let historyEntries=[];
 let historyLoaded=false;
 let historyLoadedAtVersion='';
@@ -1011,6 +1013,15 @@ function realScenarioHtml(proposal){
   if(!real.scenario)return '';
   return `<div class="delivery-brief" data-real-scenario><strong>Your real test, from start to finish</strong><p>${esc(real.scenario)}</p>${(real.files||[]).length?`<p>Files it uses: ${(real.files||[]).map(esc).join(', ')}</p>`:''}<small>Before each review and before release, NoMoreHappyPath runs this through your app with its real AI tools, on the Settings model for testing apps.</small></div>`;
 }
+// Phone apps, step 1 (owner 2026-11-25): the contract's "what was checked" line for a task that answered
+// Yes - iPhone, read straight from the passed contract-stage setup check (never recomputed here).
+function mobileSetupHtml(state,name){
+  if(!((state.task_mobile||{})[name]||{}).iphone)return'';
+  const run=(((state.environment_checks||{})[name]||{}).runs||{}).contract;
+  const item=run&&run.status==='passed'?(run.items||[]).find(entry=>entry.kind==='mobile'):null;
+  if(!item||!item.ok)return'';
+  return `<div class="delivery-brief" data-mobile-setup><strong>What was checked</strong><p>iPhone: ${esc(item.detail)}.</p></div>`;
+}
 function proposalCardHtml(name,proposal){
   const cc=proposal.contract_check||{};
   const status=cc.status||'';
@@ -1059,6 +1070,9 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
   const proposalBlock=!confirmation.text&&proposal.status==='awaiting_owner'?proposalCardHtml(name,proposal)
     :!confirmation.text&&proposal.status==='modify_requested'?`<div class="next requirements-pending"><strong>Requirements change requested.</strong> Your change request was sent to Delivery${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}; the Go ahead buttons return when it files a revised proposal.</div>`
     :!confirmation.text&&proposal.status==='accepted'?`<div class="next requirements-pending"><strong>You accepted the requirements${proposal.decided_at?` at ${esc(proposal.decided_at)}`:''}.</strong> Delivery is recording the contract and starting work.${(proposal.contract_check?.answers||[]).length?` Your answers were added at the end of the requirements under “Decided before coding”${proposal.contract_check.used_recommended?' (the recommended answers were used)':''}.`:''}</div>`
+    // owner 2026-11-25 (Phone apps, step 1): while NMHP checks the project's setup before showing the
+    // contract, say so - with the phone-specific words for a task that answered Yes to the mobile question.
+    :!confirmation.text&&proposal.status==='checking_setup'?`<div class="next contract-check-note" data-contract-check="checking_setup"><strong>${((state.task_mobile||{})[name]||{}).iphone?'Checking the phone setup: building a starter app for iPhone. A first build can take several minutes.':'NMHP is checking the project’s setup before showing you the contract.'}</strong></div>`
     :'';
   // task build-skill-library, requirement 9: the owner's frozen skill-library agreement,
   // once Go ahead has recorded one, next to the other confirmed facts of the task.
@@ -1071,12 +1085,13 @@ function _taskCardParts(state,name,facts,gate,brief,directive,confirmation,clari
     :skillsAgreed?`<p class="skills-agreed-line" data-skills-agreed>Skills agreed: ${skillsAgreed.length?skillsAgreed.map(item=>esc(item.plain_name)).join(', '):'none'}</p>`:'';
   const skillsUsedLines=(state.task_skill_usage||{})[name]||[];
   const skillsUsedLine=skillsUsedLines.length?`<p class="skills-used-line" data-skills-used>Skills used: ${skillsUsedLines.map(esc).join(' ')}</p>`:'';
-  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation,name)}${screensButtonHtml(name,confirmation.screens,'contract')}${skillsAgreedLine}${skillsUsedLine}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
+  const confirmationBlock=confirmation.text?`<div class="requirements-confirmation"><div class="requirements-title">Final agreed requirements</div>${plainRequirementsHtml(confirmation.text,confirmation.contract_check?.answers,'confirmed',copyButtonHtml('requirements',name,confirmation.text))}<small>Confirmed ${esc(confirmation.confirmed_at||'Time unavailable')} · version ${esc(confirmation.version||1)}. Status and remaining-work statements above describe this confirmation moment, not the live task.</small>${checkedInAdvanceHtml(confirmation,name)}${mobileSetupHtml(state,name)}${screensButtonHtml(name,confirmation.screens,'contract')}${skillsAgreedLine}${skillsUsedLine}</div>`:proposalBlock||`<div class="next requirements-pending"><strong>Final requirements confirmation:</strong> Delivery is clarifying the request and has not filed its requirements proposal yet. The Go ahead and Modify buttons appear here the moment it does; nothing is built before your recorded decision.</div>`;
   const clarificationBlock=clarifications.length?`<div class="owner-clarifications"><div class="requirements-title">Owner clarifications</div>${clarifications.slice(-3).map(item=>`<div class="clarification-item"><div>${directionHtml(item.text)}</div><small>${esc(item.created_at||'')} · ${Number(item.attachments?.length||0)} attachment(s)</small></div>`).join('')}</div>`:'';
   // TITLE-FIRST: the task-head (title + key + status badge) leads the card, then
   // the static directive/requirements, then the live progress region.
   const kindWords={development:'Write code',analysis:'Analyze code',spec:'Write specs'}[(state.task_kinds||{})[name]]||'Write code';
-  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3><span class="mc-kind" data-task-kind>${esc(kindWords)}</span></div>${badge(gate.status)}</div><details class="technical-details" data-keep="technical-details"><summary>Technical details</summary><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div>${technicalStructure}</details>`;
+  const mobileChip=((state.task_mobile||{})[name]||{}).iphone?`<span class="mc-kind" data-task-mobile>Phone: iPhone</span>`:'';
+  const head=`<div class="task-head"><div><h3>${esc(objectiveSummary(name))}</h3><span class="mc-kind" data-task-kind>${esc(kindWords)}</span>${mobileChip}</div>${badge(gate.status)}</div><details class="technical-details" data-keep="technical-details"><summary>Technical details</summary><div class="task-key">Task: ${esc(name)} · ${esc(facts.mode)}</div>${technicalStructure}</details>`;
   const staticRegion=`${head}<div class="directive"><div class="directive-title">Full user directive ${copyButtonHtml('directive',name,directive)}</div><div class="directive-body">${directive?directionHtml(directive):'<p>No user directive has been recorded for this task.</p>'}</div></div>${confirmationBlock}${clarificationBlock}${deliveredDocumentsHtml(name,'task')}`;
   const progress=taskProgress(state,name,facts,gate,confirmation),overallWidth=Math.round(100*progress.overall.completed/progress.overall.total),currentWidth=Math.round(100*progress.current.completed/progress.current.total);
   const accepted=progress.overall.completed===progress.overall.total;
@@ -1959,11 +1974,43 @@ function openAgentsInto(out,state,contracts,sessionItems=[]){
   }
 }
 
+// Takes `prefix` ('owner-message', the default, or 'launch' for the Start-a-Delivery-Agent dialog's own
+// copy - CTO finding, owner release repair 2026-11-26, requirement 1). Returns nothing; the effect is
+// showing or hiding that fieldset's iPhone row and disabling it off a Mac. The iPhone choice only shows
+// under Yes, and is greyed with an explanation off a Mac (NMHP itself refuses such a direction either
+// way; this is only so the owner is not surprised by that).
+function updateMobileIphoneRow(prefix){
+  prefix=prefix||'owner-message';
+  const yes=el('#'+prefix+'-mobile-yes'),row=el('#'+prefix+'-mobile-iphone-row');
+  if(!yes||!row)return;
+  row.hidden=!yes.checked;
+  // Unknown (lastBoard not loaded yet, e.g. the dialog opened the instant the page did) must never greÿ the box:
+  // the server refuses a non-Mac iPhone choice regardless (record_owner_message), so this is graying-for-convenience
+  // only, and defaulting it to "disabled" on a fresh page could silently swallow a real click meant for it.
+  const macKnown=!!(lastBoard&&lastBoard.state&&Object.prototype.hasOwnProperty.call(lastBoard.state,'host_is_mac'));
+  const mac=macKnown?!!lastBoard.state.host_is_mac:true;
+  const box=el('#'+prefix+'-mobile-iphone'),note=el('#'+prefix+'-mobile-non-mac');
+  if(box){box.disabled=!mac; if(!mac)box.checked=false;}
+  row.classList.toggle('disabled',!mac);
+  if(note)note.hidden=mac;
+}
+// Takes the agent to message and the message type ('direction'|'clarification'|'cto_message'); shows
+// the composer pre-filled for it (direction only: task kind, split, support plan, and the mobile/iPhone
+// choice, defaulted from the last sent answer, the project's remembered one, or a Start-a-Delivery-Agent
+// launch choice just made, in that order). Returns nothing; the effect is opening the dialog.
 function openOwnerMessageDialog(agentId,type){
   requirementsModifyTask='';
   directionLauncher=false; setAttachmentFields(true); setTaskKindField(type==='direction');
   {const split=el('#owner-message-split');if(split){split.hidden=type!=='direction';el('#owner-message-allow-split').checked=false;}}   // off unless the owner ticks it: the app never splits a task on its own (owner 2026-11-04)
   {const supportPlan=el('#owner-message-support-plan');if(supportPlan){supportPlan.hidden=type!=='direction';el('#owner-message-support-plan-check').checked=!!(lastBoard&&lastBoard.state&&lastBoard.state.project_support_plan&&lastBoard.state.project_support_plan.on);}}
+  {const mobile=el('#owner-message-mobile');if(mobile){
+    mobile.hidden=type!=='direction';
+    const saved=lastSentMobile||(lastBoard&&lastBoard.state&&lastBoard.state.project_mobile)||storedLaunchMobile()||{};
+    el('#owner-message-mobile-no').checked=!saved.mobile; el('#owner-message-mobile-yes').checked=!!saved.mobile;
+    el('#owner-message-mobile-iphone').checked=!!saved.iphone;
+    el('#owner-message-mobile-no').onchange=()=>updateMobileIphoneRow('owner-message'); el('#owner-message-mobile-yes').onchange=()=>updateMobileIphoneRow('owner-message');
+    updateMobileIphoneRow();
+  }}
   ownerMessageAgentId=agentId; ownerMessageType=type;
   el('#owner-message-title').textContent=type==='direction'?'Give direction to Delivery':type==='cto_message'?'Message the CTO':'Send clarification to Delivery';
   el('#owner-message-help').textContent=type==='direction'?'This message will be sent as one complete owner instruction. Delivery will clarify it before asking you to say go ahead.':type==='cto_message'?'Your message reaches the CTO as one complete message in its terminal. It is saved on the board, so nothing is lost if the CTO is busy or restarts.':'This response is appended to the current or pending task and sent to its Delivery Agent. You can approve the proposal or request changes; the original directive is never replaced.';
@@ -1972,11 +2019,19 @@ function openOwnerMessageDialog(agentId,type){
   el('#owner-message-dialog').showModal();
 }
 
+// Takes the form submit event; validates the text and, for a direction, the mobile/iPhone choice
+// (refuses "Choose iPhone." when Yes is chosen without it). Sends the message (or, with no Delivery
+// agent yet, starts the agents first) and closes the dialog. Returns false always, so the browser
+// never submits the form itself.
 async function submitOwnerMessage(event){
   event.preventDefault();
   const error=el('#owner-message-error'),directiveFile=el('#owner-message-directive-file').files?.[0];
   if(ownerDirectiveLoading){error.textContent='Wait for the directive file to finish loading.';return false;}
   let validated;try{validated=validateOwnerMessageText(el('#owner-message-text').value);}catch(failure){error.textContent=failure.message;return false;}
+  const mobileYes=el('#owner-message-mobile-yes'),mobileIphoneBox=el('#owner-message-mobile-iphone');
+  const mobileChosen=ownerMessageType==='direction'&&mobileYes&&mobileYes.checked;
+  const iphoneChosen=mobileChosen&&mobileIphoneBox&&mobileIphoneBox.checked===true;
+  if(mobileChosen&&!iphoneChosen){error.textContent='Choose iPhone.';return false;}
   if(directionLauncher){
     // No Delivery agent exists yet: keep the words, start the three agents with the owner's saved launch settings, then send.
     // 2026-11-08: the board reads the words first, so a pasted terminal screen starts no agent at all.
@@ -1987,13 +2042,13 @@ async function submitOwnerMessage(event){
     // The saved reference to the wish's files must match what the owner left in the list: a file
     // he removed is never fetched back and sent later (advanceDirectionStart), one he kept still is.
     const wishSource=keptWishAttachmentSource(pendingWishAttachmentSource,pendingDirectionAttachments);
-    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,savedAt:Date.now(),wishAttachmentSource:wishSource});
+    writePendingDirection({text:validated.text,taskKind:selectedTaskKind(),allowSplit:el('#owner-message-allow-split')?.checked===true,mobile:mobileChosen,iphone:iphoneChosen,savedAt:Date.now(),wishAttachmentSource:wishSource});
     pendingWishAttachmentSource=null;
     try{await call('/api/support-plan',{on:el('#owner-message-support-plan-check')?.checked===true});}catch(failure){/* project-level choice only; the direction itself is still sent */}
     el('#owner-message-dialog').close(); directionLauncher=false;
     await advanceDirectionStart(); return false;
   }
-  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('task_kind',selectedTaskKind()); if(selectedTaskKind()==='spec')form.append('document_only','1'); form.append('allow_split',el('#owner-message-allow-split')?.checked?'1':''); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
+  const form=new FormData(); form.append('message_type',ownerMessageType); form.append('text',validated.text); form.append('task_kind',selectedTaskKind()); if(selectedTaskKind()==='spec')form.append('document_only','1'); form.append('allow_split',el('#owner-message-allow-split')?.checked?'1':''); form.append('mobile',mobileChosen?'1':''); form.append('iphone',iphoneChosen?'1':''); form.append('directive_source',directiveFile?'file':'text'); form.append('directive_filename',directiveFile?.name||'');
   for(const file of Array.from(el('#owner-message-attachments').files||[]))form.append('attachments',file,file.name);
   const submit=el('#owner-message-submit'); submit.disabled=true; error.textContent='';
   try{
@@ -2006,7 +2061,15 @@ async function submitOwnerMessage(event){
       await callMultipart('/api/agents/'+encodeURIComponent(ownerMessageAgentId)+'/owner-message',form);
     }
     el('#owner-message-dialog').close(); el('#notice').textContent=ownerMessageType==='direction'?'Your complete direction was sent to Delivery.':ownerMessageType==='cto_message'?'Your message was sent to the CTO.':'Your clarification and attachments were sent to the current Delivery Agent.';
-    if(ownerMessageType==='direction')await startMissingAgents(); else await refresh();
+    if(ownerMessageType==='direction'){
+      // The choice just sent must be there the instant the dialog is reopened (owner 2026-11-25), never only
+      // from lastBoard: that can still be null on a fresh page (its first populate is the page's own first
+      // refresh() tick, which the dialog's very first open can race), and even once loaded it only updates on
+      // the next 2s poll (refresh() silently skips when one is already in flight). This page-level variable
+      // needs neither.
+      lastSentMobile={mobile:mobileChosen,iphone:iphoneChosen};
+      await startMissingAgents();
+    }else await refresh();
   }catch(failure){error.textContent=failure.message;}
   finally{submit.disabled=false;}
   return false;
@@ -2885,6 +2948,8 @@ async function showColorDialog(kind){
   el('#color-options').innerHTML=terminalColors.map((color,index)=>`<label class="color-choice"><input type="radio" name="terminal-color" value="${color.id}"${index===0?' checked':''}><span class="color-swatch" style="background:${color.id==='settings'?fromSettings.hex:color.hex}"></span><span>${color.id==='settings'?`${color.label} (${esc(fromSettings.label.replace(/^Settings colour \(|\)$/g,''))})`:color.label}</span></label>`).join('');
   const choice=el('#launch-choice'), isDelivery=kind==='codex_delivery';
   {const radio=el('#launch-task-kind input[value="'+storedTaskKind()+'"]');if(radio)radio.checked=true;}
+  {const saved=storedLaunchMobile()||(lastBoard&&lastBoard.state&&lastBoard.state.project_mobile)||{};el('#launch-mobile-no').checked=!saved.mobile;el('#launch-mobile-yes').checked=!!saved.mobile;el('#launch-mobile-iphone').checked=!!saved.iphone;
+   el('#launch-mobile-no').onchange=()=>updateMobileIphoneRow('launch');el('#launch-mobile-yes').onchange=()=>updateMobileIphoneRow('launch');updateMobileIphoneRow('launch');}
   choice.hidden=!isDelivery; launchChoiceReady=false; launchChoiceDamaged=false; launchChoiceSettings=null;
   el('#color-dialog-title').textContent=isDelivery?'Start a Delivery Agent':'Choose terminal color';
   el('#color-cancel').textContent=isDelivery?'Cancel — use Settings':'Cancel — use the Settings colour';
@@ -3046,9 +3111,40 @@ function launchTaskKind(){
   const picked=el('#launch-task-kind input[name="launch-task-kind"]:checked');
   return picked?picked.value:'development';
 }
+// CTO finding, owner release repair 2026-11-26 (requirement 1): the mobile question belongs in the
+// Start-a-Delivery-Agent dialog too, since it is reachable with no direction yet; remembered the same
+// way launchTaskKind is, so a direction given afterwards is pre-filled with it instead of asking again.
+const launchMobileKey='launch-mobile:'+apiPrefix;
+let launchMobileMemory=null;
+// Takes nothing. Returns the mobile/iPhone choice last made in the Start-a-Delivery-Agent dialog, as
+// {mobile, iphone}, from localStorage (falling back to this page's own memory if that throws), or null
+// if the owner has never chosen there yet.
+function storedLaunchMobile(){
+  let raw=launchMobileMemory;
+  try{const saved=window.localStorage.getItem(launchMobileKey);if(saved)raw=JSON.parse(saved);}catch(error){}
+  return raw&&typeof raw==='object'?raw:null;
+}
+// Takes the mobile/iPhone booleans chosen in the Start-a-Delivery-Agent dialog; returns nothing. The
+// effect is saving them (page memory and localStorage) so a direction given afterwards is pre-filled
+// with this answer instead of asking again.
+function storeLaunchMobile(mobile,iphone){
+  const value={mobile:!!mobile,iphone:!!iphone};
+  launchMobileMemory=value;
+  try{window.localStorage.setItem(launchMobileKey,JSON.stringify(value));}catch(error){}
+}
+// Takes nothing. Returns the Start-a-Delivery-Agent dialog's own mobile fieldset's current choice, read
+// live from its radio/checkbox, as {mobile, iphone}.
+function launchMobileChoice(){
+  const yes=el('#launch-mobile-yes'),box=el('#launch-mobile-iphone');
+  return {mobile:!!(yes&&yes.checked),iphone:!!(yes&&yes.checked&&box&&box.checked)};
+}
 function setAttachmentFields(visible){
   for(const id of ['owner-message-attachments-label','owner-message-attachments','owner-message-attachments-help','owner-message-attachments-list']){const node=el('#'+id);if(node)node.hidden=!visible;}
 }
+// Takes `launched` (true once the Start-a-Delivery-Agent dialog's own choices, if any, are already
+// made; omitted/falsy on the first call). Returns nothing; the effect is either opening that dialog
+// first (with no Delivery agent running yet) or showing the direction composer, pre-filled from any
+// saved draft, the stored kind of work and the stored mobile/iPhone launch choice.
 function openDirectionStart(launched){
   // Delivery is not running yet: the owner picks the kind of work, provider, model and effort first (the same dialog as the Delivery button)
   const board=lastBoard&&lastBoard.state;
@@ -3062,6 +3158,20 @@ function openDirectionStart(launched){
   const saved=readPendingDirection();
   {const kind=saved&&(saved.taskKind||(saved.documentOnly?'spec':''));if(kind)storeTaskKind(kind);setTaskKindField(true);}
   {const split=el('#owner-message-split');if(split){split.hidden=false;el('#owner-message-allow-split').checked=!!(saved&&saved.allowSplit===true);}}   // the first direction may allow a split too (stranger run 2026-11-05: the box was hidden here)
+  {const mobile=el('#owner-message-mobile');if(mobile){
+    mobile.hidden=false;
+    const rememberedMobile=saved&&saved.mobile===true,rememberedIphone=saved&&saved.iphone===true;
+    // The owner may have just answered this in the Start-a-Delivery-Agent dialog that preceded this
+    // composer (CTO finding, owner release repair 2026-11-26): that choice outranks the project's
+    // older remembered answer, so the same answer is not asked for and then silently overridden.
+    const launchMobile=storedLaunchMobile();
+    const projectMobile=launchMobile||(lastBoard&&lastBoard.state&&lastBoard.state.project_mobile)||{};
+    el('#owner-message-mobile-no').checked=!(saved?rememberedMobile:projectMobile.mobile);
+    el('#owner-message-mobile-yes').checked=saved?rememberedMobile:!!projectMobile.mobile;
+    el('#owner-message-mobile-iphone').checked=saved?rememberedIphone:!!projectMobile.iphone;
+    el('#owner-message-mobile-no').onchange=()=>updateMobileIphoneRow('owner-message'); el('#owner-message-mobile-yes').onchange=()=>updateMobileIphoneRow('owner-message');
+    updateMobileIphoneRow();
+  }}
   el('#owner-message-text').value=pendingWishBuildText!==null?pendingWishBuildText:(saved?saved.text:''); pendingWishBuildText=null; el('#owner-message-directive-file').value=''; el('#owner-message-error').textContent=''; el('#owner-message-file-status').className=''; el('#owner-message-file-status').textContent='You can use a plain text file (.txt or .md). Its text fills the message box; check it before sending.'; el('#owner-message-submit').disabled=false; updateOwnerMessageCount();
   // Owner repair 2026-11-11 round 4: Build this carries the wish's own attachments in as this
   // first message's "Separate supporting documents or screenshots" — the one case this first
@@ -3133,12 +3243,12 @@ async function advanceDirectionStart(){
         form.append('message_type','direction'); form.append('text',pending.text);
         form.append('task_kind',pending.taskKind||(pending.documentOnly?'spec':'development'));
         form.append('document_only',(pending.taskKind||(pending.documentOnly?'spec':''))==='spec'?'1':'');
-        form.append('allow_split',pending.allowSplit===true?'1':'');
+        form.append('allow_split',pending.allowSplit===true?'1':''); form.append('mobile',pending.mobile===true?'1':''); form.append('iphone',pending.iphone===true?'1':'');
         for(const file of attachmentFiles)form.append('attachments',file,file.name);
         await callMultipart('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',form);
         pendingDirectionAttachments=[];
       }else{
-        await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec',allow_split:pending.allowSplit===true});
+        await call('/api/agents/'+encodeURIComponent(waiting.id)+'/owner-message',{message_type:'direction',text:pending.text,task_kind:pending.taskKind||(pending.documentOnly?'spec':'development'),document_only:(pending.taskKind||(pending.documentOnly?'spec':''))==='spec',allow_split:pending.allowSplit===true,mobile:pending.mobile===true,iphone:pending.iphone===true});
       }
       writePendingDirection(null); renderDirectionNote(null);
       el('#notice').textContent='Your complete direction was sent to Delivery.';
@@ -3274,8 +3384,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(cancel)cancel.addEventListener('click',()=>el('#spec-questions-dialog').close());
 });
 el('#color-close').onclick=()=>{launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';directionAfterLaunch=false;};
-el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;launchChoiceToken++;el('#color-dialog').close();const kind=pendingLaunchKind;pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:'settings',choice:null};openDirectionStart(true);return;}start(kind,'settings');}};
-el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'settings';const kind=pendingLaunchKind;const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:selected,choice};openDirectionStart(true);return;}start(kind,selected,choice);}};
+el('#color-cancel').onclick=()=>{if(launchChoiceDamaged)return;const kind=pendingLaunchKind;if(kind==='codex_delivery'){const mobile=launchMobileChoice();if(mobile.mobile&&!mobile.iphone){el('#launch-choice-note').textContent='Choose iPhone.';return;}storeLaunchMobile(mobile.mobile,mobile.iphone);}launchChoiceToken++;el('#color-dialog').close();pendingLaunchKind='';if(kind==='codex_delivery')storeTaskKind(launchTaskKind());if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:'settings',choice:null};openDirectionStart(true);return;}start(kind,'settings');}};
+el('#color-form').onsubmit=event=>{event.preventDefault();if(el('#color-launch').disabled)return;const kind=pendingLaunchKind;if(kind==='codex_delivery'){const mobile=launchMobileChoice();if(mobile.mobile&&!mobile.iphone){el('#launch-choice-note').textContent='Choose iPhone.';return;}storeLaunchMobile(mobile.mobile,mobile.iphone);}const selected=el('#color-options').querySelector('input[name="terminal-color"]:checked')?.value||'settings';const choice=kind==='codex_delivery'?launchChoiceFromDialog():null;if(kind==='codex_delivery'&&!choice)return;if(kind==='codex_delivery')storeTaskKind(launchTaskKind());pendingLaunchKind='';launchChoiceToken++;el('#color-dialog').close();if(kind){const after=kind==='codex_delivery'&&directionAfterLaunch;directionAfterLaunch=false;if(after){pendingDirectionLaunch={kind,color:selected,choice};openDirectionStart(true);return;}start(kind,selected,choice);}};
 el('#decision-cancel').onclick=()=>el('#decision-dialog').close();
 el('#decision-form').onsubmit=submitRejection;
 el('#push-cancel').onclick=()=>el('#push-dialog').close();
@@ -3710,6 +3820,9 @@ def _compact_dashboard_state(
     # 2026-10-26: the latest difficulty note per role, one plain line per task (information only)
     compact["task_difficulty"] = {task: {"line": difficulty_note.line(state, task)} for task in live}
     compact["task_kinds"] = {task: (state.get("task_kinds") or {}).get(task, "development") for task in live}
+    # owner 2026-11-25: whether this computer can even try to build/run an iPhone app, read fresh each
+    # time (never persisted) so the "Give direction" dialog greys the iPhone choice correctly.
+    compact["host_is_mac"] = board.host_is_macos()
     # 2026-10-26: which changed files no test notices, one plain line per task (information only)
     compact["task_revert_proof"] = {task: {"line": revert_proof.line((state.get("revert_proofs") or {}).get(task))} for task in live}
     # 2026-09-27: an accepted task is no longer live, so its decision is not in
@@ -5296,7 +5409,7 @@ def parse_release_multipart(raw: bytes, content_type: str) -> tuple[dict[str, st
         elif name in {
             "decision", "reason", "text", "message_type",
             "directive_source", "directive_filename", "document_only", "task_kind", "allow_split",
-            "remove_attachments", "title",
+            "remove_attachments", "title", "mobile", "iphone",
         }:
             try:
                 fields[name] = data.decode("utf-8", errors="strict")
@@ -5935,6 +6048,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             document_only=str(fields.get("document_only", "")).strip().lower() in {"1", "true", "on", "yes"},
                             task_kind=str(fields.get("task_kind", "")),
                             allow_split=str(fields.get("allow_split", "")).strip().lower() in {"1", "true", "on", "yes"},
+                            mobile=str(fields.get("mobile", "")).strip().lower() in {"1", "true", "on", "yes"},
+                            iphone=str(fields.get("iphone", "")).strip().lower() in {"1", "true", "on", "yes"},
                             check_agents=True,
                         )
                     else:
@@ -5951,6 +6066,8 @@ def make_handler(root: Path, project_name: str = "", project_description: str = 
                             document_only=data.get("document_only") is True,
                             task_kind=str(data.get("task_kind", "")),
                             allow_split=data.get("allow_split") is True,
+                            mobile=data.get("mobile") is True,
+                            iphone=data.get("iphone") is True,
                             check_agents=True,
                         )
                     response["input"] = input_metadata

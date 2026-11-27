@@ -54,6 +54,16 @@ ORDINARY_OUTPUT = (
 )
 
 
+
+PHONE_FOLDER_MARKS = ("flutter", "/Library/Developer/CoreSimulator", "/Library/Developer/Xcode/DerivedData", "/.pub-cache",
+                      "/.dart-tool", "/.cocoapods", "/Library/Caches/CocoaPods")
+
+
+def without_phone_folders(roots):
+    """The grant minus the Flutter/Xcode/simulator folders every Mac launch adds (agent_confinement.phone_folders,
+    owner 2026-11-27); nothing else may be added."""
+    return [root for root in roots if not any(mark in root for mark in PHONE_FOLDER_MARKS)]
+
 class PromptRecognitionTests(unittest.TestCase):
     def test_the_real_claude_prompt_is_recognised_across_split_reads_and_redraws(self):
         watch = attention.PromptWatch()
@@ -357,7 +367,7 @@ class RunnerPermissionTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "bypassPermissions")
         expected = self._granted_outside_execution_root()
         self.assertTrue(expected, "the grant must name the data and workspace roots")
-        self.assertEqual(sorted(self._add_dirs(argv)), sorted(expected))
+        self.assertEqual(sorted(without_phone_folders(self._add_dirs(argv))), sorted(expected))
         self.assertIn("--session-id", argv)
         minted = argv[argv.index("--session-id") + 1]
 
@@ -370,7 +380,7 @@ class RunnerPermissionTests(unittest.TestCase):
         self.assertIn("--resume", argv)
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "bypassPermissions",
                          "bypass is never restored on resume by the CLI, so the runner passes it every time")
-        self.assertEqual(sorted(self._add_dirs(argv)), sorted(expected))
+        self.assertEqual(sorted(without_phone_folders(self._add_dirs(argv))), sorted(expected))
 
     def test_codex_launch_is_unchanged_and_never_gets_claude_flags(self):
         session = control.create(self.root, "codex_delivery", settings_override=old_settings())

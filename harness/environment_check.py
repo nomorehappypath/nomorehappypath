@@ -367,6 +367,24 @@ def _version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split(".") if part.isdigit())
 
 
+VERSION_FLAGS = ("--version", "-version")
+
+
+def _version_answer(run: Callable[[list[str]], tuple[int, str, bool]], found: str) -> tuple[int, str, bool, str]:
+    """Ask the program its version: `--version`, else `-version` (xcodebuild, Java). A version is read only from a call that
+    succeeded, never from an error message (Codex review R2-1 2026-11-27: `xcodebuild --version` fails and its error's
+    timestamp was read as Xcode 01.307). (exit code, output, timed out, version or "")."""
+    code, output, timed_out = -1, "", False
+    for flag in VERSION_FLAGS:
+        code, output, timed_out = run([found, flag])
+        if code == 0 and not timed_out:
+            match = re.search(r"\d+(?:\.\d+)+", output)
+            return code, output, timed_out, match.group(0) if match else ""
+        if timed_out:
+            break
+    return code, output, timed_out, ""
+
+
 def check_program(item: dict[str, str], values: dict[str, str]) -> dict[str, Any]:
     """The program is found (on the owner's PATH) and, when asked, at least the minimum version."""
     name, minimum = item["name"], item.get("min_version", "")
@@ -377,13 +395,13 @@ def check_program(item: dict[str, str], values: dict[str, str]) -> dict[str, Any
     if not minimum:
         return _item("program", label, True, found, OWNER)
     with tempfile.TemporaryDirectory(prefix="nmhp-setup-") as folder:
-        _, output, timed_out = owner_env.run([found, "--version"], cwd=folder, env=values, timeout=ITEM_SECONDS)
-    match = re.search(r"\d+(?:\.\d+)+", output)
-    if timed_out or not match:
+        _, _, _, version = _version_answer(
+            lambda argv: owner_env.run(argv, cwd=folder, env=values, timeout=ITEM_SECONDS), found)
+    if not version:
         return _item("program", label, True, f"{found} (its version could not be read)", OWNER)
-    if _version_tuple(match.group(0)) < _version_tuple(minimum):
-        return _item("program", label, False, f"`{name}` is version {match.group(0)}; {minimum} or newer is needed. Update it, then press Check again", OWNER)
-    return _item("program", label, True, f"{found} {match.group(0)}", OWNER)
+    if _version_tuple(version) < _version_tuple(minimum):
+        return _item("program", label, False, f"`{name}` is version {version}; {minimum} or newer is needed. Update it, then press Check again", OWNER)
+    return _item("program", label, True, f"{found} {version}", OWNER)
 
 
 PYTHON_PROBE = ("import importlib.metadata as m, importlib.util as u, sys\n"
@@ -515,15 +533,23 @@ def check_role_program(item: dict[str, str], env: dict[str, str], confine: Calla
             return _item("role_access", label, False, problem or f"the {role} cannot run `{name}` ({found}) from its protected area",
                          OWNER)
         return _item("role_access", label, True, found, OWNER)
-    code, output, timed_out, problem = _run_confined([found, "--version"], env, confine)
-    match = re.search(r"\d+(?:\.\d+)+", output)
-    if problem or (timed_out or code != 0) and not match:
-        return _item("role_access", label, False, problem or f"`{name} --version` did not run for the {role} in its protected area: "
-                     f"{scrub(_last_line(output)) or ('it did not finish' if timed_out else f'exit {code}')}", OWNER)
-    if minimum and match and (_version_tuple(match.group(0)) < _version_tuple(minimum)):
-        return _item("role_access", label, False, f"the {role} gets `{name}` {match.group(0) if match else '(version unreadable)'}; "
+    problems: list[str] = []
+
+    def run(argv: list[str]) -> tuple[int, str, bool]:
+        code, output, timed_out, problem = _run_confined(argv, env, confine)
+        if problem:
+            problems.append(problem)
+            return -1, "", False
+        return code, output, timed_out
+
+    code, output, timed_out, version = _version_answer(run, found)
+    if problems or timed_out or code != 0:
+        return _item("role_access", label, False, problems[0] if problems else f"`{name} --version` did not run for the {role} in its "
+                     f"protected area: {scrub(_last_line(output)) or ('it did not finish' if timed_out else f'exit {code}')}", OWNER)
+    if version and _version_tuple(version) < _version_tuple(minimum):
+        return _item("role_access", label, False, f"the {role} gets `{name}` {version}; "
                      f"{minimum} or newer is needed. Update it, then press Check again", OWNER)
-    return _item("role_access", label, True, f"{found} {match.group(0) if match else ''}".strip(), OWNER)
+    return _item("role_access", label, True, f"{found} {version}".strip(), OWNER)
 
 
 def check_role_folder(item: dict[str, str], env: dict[str, str], confine: Callable[[list[str]], list[str]], role: str,
@@ -540,11 +566,14 @@ def check_role_folder(item: dict[str, str], env: dict[str, str], confine: Callab
 
 
 def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub: Callable[[str], str],
-                signed_in: bool = False) -> list[dict[str, Any]]:
+                signed_in: bool = False, mobile: bool = False) -> list[dict[str, Any]]:
     """For each role (builder, Reviewer, CTO): its own sign-in, on every project (owner 2026-11-22: "The sign in should be tested
     before contract acceptance for any type of project"), then one item per need: every AI tool's minimal real call, every
     program's version call and every folder's probe, as that role's commands run. A sign-in never reaches an item: it is hidden
-    like the owner's values."""
+    like the owner's values. `mobile` (owner release repair 2026-11-26, round 2: a Yes-iPhone task's own Flutter program
+    need still failed `flutter --version` for every role) widens each role's own confinement with
+    `phone_setup.mobile_extra_writable()`, the identical folders the task's real agent launch and its mobile setup-check
+    item already get, so this check and the agent it stands in for can never disagree."""
     tools = list(needs.get("ai_tools") or [])
     providers = role_providers(root)
     token = AGENT_TOKEN() if ("claude" in tools and providers.get("reviewer")) or "claude" in providers.values() else ""
@@ -558,6 +587,10 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
         provider = providers.get(role, "")
         codex_home = ([env.get("CODEX_HOME") or str(Path(env.get("HOME") or Path.home()) / ".codex")]
                       if "codex" in tools or provider == "codex" else [])
+        if mobile:
+            from harness import phone_setup
+            codex_home = codex_home + [path for path in phone_setup.mobile_extra_writable(phone_setup.host_env())
+                                       if path not in codex_home]
 
         def confine(argv: list[str], path_env: str = "", codex_home: list[str] = codex_home, env: dict[str, str] = env) -> list[str]:
             """argv inside the agents' confinement for this project (the role's Codex home writable, its PATH's tools readable)."""
@@ -568,7 +601,10 @@ def check_roles(root: Path, needs: dict[str, Any], values: dict[str, str], scrub
         if provider in {"claude", "codex", "gemini"} and provider not in tools and not signed_in:
             items.append(check_ai_tool(provider, env, hide, role=name, confine=confine, label=f"{name} is signed in to {provider.title()}"))
         items += [check_ai_tool(tool, env, hide, role=name, confine=confine) for tool in tools]
-        items += [check_role_program(item, env, confine, name, hide) for item in needs.get("programs") or []]
+        # an iPhone task's flutter is always really run (`--version`), never only found: a found-only pass let the owner's own
+        # check fail on `flutter --version` in the agents' sandbox (owner 2026-11-27)
+        items += [check_role_program({**item, "min_version": item.get("min_version") or "0"} if mobile and item.get("name") == "flutter" else item,
+                                     env, confine, name, hide) for item in needs.get("programs") or []]
         items += [check_role_folder(item, env, confine, name, hide) for item in needs.get("folders") or []]
     return items
 
@@ -825,7 +861,28 @@ def execute(root: Path, state: dict[str, Any], task: str, stage: str, run: dict[
         items += [check_library(item, values, workspace, python) for item in needs.get("libraries") or []]
         items += [check_ai_tool(tool, values, both) for tool in tools]
         launch_scrub = owner_env.redactor(launch)
-        items += check_roles(root, needs, launch, lambda text: launch_scrub(both(text)), signed_in=signed_in)
+        mobile_task = bool(((state.get("task_mobile") or {}).get(task) or {}).get("iphone"))
+        items += check_roles(root, needs, launch, lambda text: launch_scrub(both(text)), signed_in=signed_in, mobile=mobile_task)
+        # Phone apps, step 1 (owner 2026-11-25): only for a task whose frozen direction answered Yes - iPhone.
+        # NMHP runs it itself (never a private agent of its own), but every Xcode/Flutter/simulator call goes
+        # through the same OS write confinement a managed agent runs under (CTO finding, owner release repair
+        # 2026-11-26: a real project's setup check failed `flutter --version` with "Operation not permitted" on
+        # Flutter's own cache inside that confinement; the proof must run Flutter the way agents do, not outside
+        # their protected area, so that exact failure reaches the owner here instead of only in real agent use).
+        if mobile_task:
+            from harness import agent_confinement, phone_setup
+            mobile_env = phone_setup.host_env()
+            mobile_extra_writable = phone_setup.mobile_extra_writable(mobile_env)
+
+            def mobile_confine(argv: list[str], root: Path = root, extra_writable: list[str] = mobile_extra_writable,
+                              mobile_env: dict[str, str] = mobile_env) -> list[str]:
+                """argv inside the agents' confinement, widened to let Xcode/Flutter/CocoaPods use their own
+                folders, with Homebrew's own bin (where `flutter` and `pod` live) reachable on PATH."""
+                return agent_confinement.confine_agent_command(argv, root, extra_writable=extra_writable,
+                                                               path_env=mobile_env.get("PATH", ""))
+
+            mobile_result = phone_setup.check(confine=mobile_confine)
+            items.append(_item("mobile", mobile_result["label"], mobile_result["ok"], mobile_result["detail"], OWNER))
     elif stage in {"review", "release"}:
         if stage == "release":
             items += [check_ai_tool(tool, values, both) for tool in tools]

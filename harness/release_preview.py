@@ -445,6 +445,41 @@ class Preview:
         # P18: the wrapping shell may already be gone (a start script that daemonizes) while the real server
         # lives on. Signal each remembered member that still has the same start time, one pid at a time.
         self._stop_remembered_members()
+        self._stop_nested_agents()
+
+    def _stop_nested_agents(self) -> None:
+        """When this preview is a candidate copy of NMHP itself, a test project the owner created inside
+        it may have launched its own Builder/Reviewer/CTO agent terminals; those are independent windowed
+        processes, never members of this preview's own process group, so stopping the preview's own process
+        never reached them (owner, candidate-preview test 2026-11-26: sessions it launched stayed open after
+        the preview ended). Stop every active session of every project registered under the preview's own
+        nested home, best-effort: a project or session this cannot reach is skipped, never raised."""
+        if not is_harness_checkout(self.source):
+            return
+        nested_home = self.state_dir / "home"
+        if not nested_home.is_dir():
+            return
+        from harness import control, project_registry
+        try:
+            projects = project_registry.entries(nested_home)
+        except (OSError, ValueError):
+            return
+        for entry in projects:
+            if not entry.get("code_root"):
+                continue
+            try:
+                # the registered roots, not the code root alone: an adopted project keeps its sessions under its own data root
+                # (Codex review 2026-11-27, R1-1)
+                root = project_registry.context_for_entry(entry)
+                sessions = control.snapshot(root).get("sessions", [])
+            except (OSError, ValueError, KeyError):
+                continue
+            for session in sessions:
+                if session.get("status") in control.ACTIVE_STATUSES:
+                    try:
+                        control.stop(root, session["id"])
+                    except (OSError, ValueError):
+                        pass
 
     def _stop_remembered_members(self) -> None:
         """Signal each still-live remembered member process, first SIGTERM then SIGKILL for whatever remains after a short grace period. Return: none; the effect is terminating the remembered members."""

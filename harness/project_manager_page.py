@@ -503,6 +503,7 @@ PAGE = r'''<!doctype html>
           <a href="#help-group-talking-to-agents"><strong>Talking to agents</strong><span>Say go ahead, message an agent, view its screen, ask about your project.</span></a>
           <a href="#help-group-skill-library"><strong>Skill Library</strong><span>Shared guides for Claude and Codex, agreed on the Go ahead card.</span></a>
           <a href="#help-group-windows-programs"><strong>Windows programs</strong><span>Connect a test machine and download the tested build.</span></a>
+          <a href="#help-group-phone-apps"><strong>Phone apps</strong><span>The mobile question, iPhone setup, and what Yes and No mean.</span></a>
           <a href="#help-group-costs-and-limits"><strong>Costs and limits</strong><span>What happens when Claude or Codex runs out of allowance.</span></a>
           <a href="#help-group-when-stuck"><strong>When something is stuck</strong><span>What the app does by itself, and the rare times it needs you.</span></a>
           <a href="#help-group-legal"><strong>Legal</strong><span>Licence, disclaimer, and what is your responsibility.</span></a>
@@ -821,6 +822,30 @@ PAGE = r'''<!doctype html>
             </ul>
           </section>
 
+        </div>
+
+        <div class="help-group" id="help-group-phone-apps" data-help-group>
+          <h2 class="help-group-title">Phone apps</h2>
+          <section class="help-section" data-help-item id="help-phone-apps" aria-labelledby="help-phone-apps-title">
+            <h2 id="help-phone-apps-title">Phone Apps</h2>
+            <p>Phone apps are built in Flutter. When you give a task its direction, you are asked <strong>&ldquo;Does this task need a mobile build or test environment?&rdquo;</strong> next to the question of what kind of work it is.</p>
+            <ul class="help-list">
+              <li><strong>No</strong> &mdash; nothing is built or run on a phone. Right for writing a spec, or reading and reviewing the code of a phone app, on any computer.</li>
+              <li><strong>Yes</strong> &mdash; NMHP builds the Flutter app and runs it on a simulated phone on this computer; a further box then lets you choose <strong>iPhone</strong>. Choosing Yes without it is refused.</li>
+            </ul>
+            <p>No is the default the first time; after that, your last answer for this project is remembered and given to Delivery. A task answered Yes shows a &ldquo;Phone: iPhone&rdquo; chip on its header.</p>
+            <p><strong>iPhone needs a Mac with Xcode.</strong> On any other computer the iPhone box is shown disabled, with &ldquo;Running an iPhone app needs a Mac with Xcode. Specs and code reviews for iPhone apps work here: choose No.&rdquo; beside it. Before the contract for a Yes task is shown, NMHP itself (never an agent) proves this Mac is ready: Xcode and Flutter both answer, a simulated iPhone exists and starts, a small starter app builds for it, installs and opens on it with one picture kept, and then NMHP cleans up everything it made (a simulator you already had open is left open; NMHP never creates or deletes a simulated phone). Any step that fails shows its own &ldquo;Blocked, needs you&rdquo; card with <strong>Check again</strong>.</p>
+            <p><strong>Publishing to the App Store, and app signing, stay with you.</strong> NMHP never signs or publishes a phone app.</p>
+            <p>To make this Mac ready for iPhone work, each step saying how you know it worked:</p>
+            <ol class="help-steps">
+              <li>Install Homebrew if <code>brew</code> is not already found (<code>brew -v</code> answers).</li>
+              <li><code>brew install --cask flutter</code> (<code>flutter --version</code> answers).</li>
+              <li><code>brew install cocoapods</code> (<code>pod --version</code> answers).</li>
+              <li>Install Xcode from the App Store and open it once to accept its terms (<code>xcodebuild -version</code> answers).</li>
+              <li>In Xcode, Settings, Components, add an iOS simulator (it appears in Xcode&rsquo;s device list).</li>
+              <li>Run <code>flutter doctor</code>: it shows a tick beside Flutter and beside Xcode.</li>
+            </ol>
+          </section>
         </div>
 
         <div class="help-group" id="help-group-costs-and-limits" data-help-group>

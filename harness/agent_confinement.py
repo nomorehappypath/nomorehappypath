@@ -295,6 +295,19 @@ def read_guard(argv: list[str], *, home: str | Path, store: Path, claude_config_
     return implementation.read_guard(list(argv), protected, store=Path(store))
 
 
+def phone_folders() -> list[str]:
+    """On a Mac, the folders Flutter, Xcode and the iPhone simulator write (phone_setup.mobile_extra_writable), granted to
+    every confined command and every agent launch, not only a Yes-iPhone task's setup check (owner 2026-11-26: the check
+    passed while the agents and the board's own test runs were still refused `flutter --version`). Empty elsewhere."""
+    from harness import board, phone_setup
+    if not board.host_is_macos():
+        return []
+    try:
+        return phone_setup.mobile_extra_writable(phone_setup.host_env())
+    except OSError:
+        return []
+
+
 def confine_agent_command(argv: list[str], project_root, *, home: str | Path | None = None,
                           claude_config_dir: str | None = None, implementation=None,
                           extra_writable: list[str] | None = None, path_env: str | None = None) -> list[str]:
@@ -327,7 +340,7 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
         return list(argv)
     context = project_context(project_root)
     writable = [str(Path(context.code_root).resolve()), str(Path(context.workspace_root).resolve())] + [
-        str(Path(item).expanduser().resolve()) for item in extra_writable or []]
+        str(Path(item).expanduser().resolve()) for item in list(extra_writable or []) + phone_folders()]
     protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root)
     store = Path(context.storage_path("control"))
     store.mkdir(parents=True, exist_ok=True)

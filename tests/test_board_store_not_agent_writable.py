@@ -43,6 +43,16 @@ def _real(path) -> str:
     return os.path.realpath(str(path))
 
 
+
+PHONE_FOLDER_MARKS = ("flutter", "/Library/Developer/CoreSimulator", "/Library/Developer/Xcode/DerivedData", "/.pub-cache",
+                      "/.dart-tool", "/.cocoapods", "/Library/Caches/CocoaPods")
+
+
+def without_phone_folders(roots):
+    """The grant minus the Flutter/Xcode/simulator folders every Mac launch adds (agent_confinement.phone_folders,
+    owner 2026-11-27); nothing else may be added."""
+    return [root for root in roots if not any(mark in root for mark in PHONE_FOLDER_MARKS)]
+
 class GrantTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -284,7 +294,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("sandbox_mode=workspace-write", flags)
         roots = json.loads(next(f for f in flags if f.startswith("sandbox_workspace_write.writable_roots=")).split("=", 1)[1])
         self.assertNotIn(_real(self.context.data_root), roots)
-        self.assertEqual(roots, [_real(self.context.code_root), _real(self.context.workspace_root)])
+        self.assertEqual(without_phone_folders(roots), [_real(self.context.code_root), _real(self.context.workspace_root)])
         self.assertIn("sandbox_workspace_write.network_access=true", flags)
 
     def test_codex_on_a_scaffolded_project_gets_a_profile_and_the_real_sandbox_refuses_the_board_store(self):
