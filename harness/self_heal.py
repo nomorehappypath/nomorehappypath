@@ -947,6 +947,52 @@ def _cto_answer(state: dict[str, Any], agent: dict[str, Any], gate: str) -> str:
     return " The CTO was asked first and has not cleared it."
 
 
+def _hand_over_instead_of_pause(root: Path, task: str) -> str:
+    """Owner 2026-11-27: "a cancelled review where the reason is not a materail bug is considered hard PASS" and "this has to be
+    fixed by code". Before the stall step pauses a project, the code applies that rule and, when the task has a counted final pass
+    waiting for its release, runs the release itself and does NOT pause: a stuck process is never a reason to hold the app back.
+    A release check that fails is retried by the coordinator; the owner gets one plain card naming it, never a pause. Returns the
+    line for the board ("" when the task has no pass waiting, so the pause goes ahead as before)."""
+    from harness import release_coordinator
+    if not task:
+        return ""
+    try:
+        board.apply_cancelled_review_rule(root)
+        waiting = dict(board.unreleased_final_passes(board.snapshot(root)))
+    except (OSError, ValueError):
+        return ""
+    if task not in waiting:
+        return ""
+    try:
+        outcomes = [o for o in release_coordinator.coordinate(root) if o.get("task") == task]
+    except (OSError, ValueError) as error:
+        outcomes = [{"task": task, "status": "incident", "error": str(error)[:200]}]
+    failed = next((o for o in outcomes if o.get("status") in {"checks_failed", "incident", "unchanged_checks_failed"}), None)
+    if failed:
+        what = board.release_check_words(list(failed.get("failed") or []))
+        with board.locked_state(root) as state:
+            board._harness_card(
+                state, f"release_waiting:{task}", f"{task} passed but cannot be handed to you yet",
+                board.blocked_card_text(
+                    f"The work passed, but this release check failed: {what}. NMHP tries it again by itself every few minutes; "
+                    "the project is not paused.",
+                    "Nothing to do unless it names something on your side (a sign-in, a missing tool). Message the CTO if it stays."),
+                task, incident=what)
+        return f"{task} has a passed final review waiting for its release; not paused. Release check failed ({what}); retried by itself."
+    # Codex plan check R2-4: the code records the release itself (the same board call the CTO's release step uses), so the owner
+    # gets the test card even when no CTO acts
+    state = board.snapshot(root)
+    ctos = [a for a in (state.get("agents") or {}).values() if a.get("role") == "cto"]
+    cto = next((a for a in ctos if a.get("active")), ctos[0] if ctos else None)
+    if cto is None:
+        return f"{task} has a passed final review waiting for its release; prepared instead of pausing (no CTO to record it)."
+    try:
+        board.record_release(root, str(cto["id"]), task)
+    except (OSError, ValueError) as error:
+        return f"{task} has a passed final review waiting for its release; not paused. Recording it failed ({str(error)[:200]}); retried by itself."
+    return f"{task} passed and was handed to the owner for testing instead of pausing the project."
+
+
 def _cost_line(root: Path) -> str:
     """The project's cost line for the pause card (API-equivalent, information only), or '' when it cannot be computed."""
     try:
@@ -1113,6 +1159,10 @@ def _execute_stall(root: Path, action: dict[str, Any], launch: Callable[[dict[st
                           f"{who} answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new ({quiet}; its last word: {last_word or 'none'}). "
                           "The harness stops waking it; the next request routed to it wakes it, and nothing is lost.", task=task)
             return {"action": name, "stall_key": key, "step": "stop_waking"}
+        handed = _hand_over_instead_of_pause(root, task)
+        if handed:
+            _ladder_event(root, action, "handed_over", handed, task=task)
+            return {"action": name, "stall_key": key, "step": "handed_over"}
         cost = _cost_line(root)
         stalled = (f"{who} has been blocked {quiet} and nobody could clear it. " if action.get("said_blocked") else
                    f"{who} has made no progress {quiet} and answered {WAKES_WITHOUT_PROGRESS} wake-ups with nothing new. ")

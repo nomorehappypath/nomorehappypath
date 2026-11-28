@@ -43,9 +43,13 @@ def _inside(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
-def validate(directory: Path, agent_write_paths: list[str], socket_names: tuple[str, ...] = ("t.sock", "h.sock")) -> None:
-    """Refuse when an agent could write the directory, or a socket path would be too long."""
+def validate(directory: Path, agent_write_paths: list[str], socket_names: tuple[str, ...] = ("t.sock", "h.sock"),
+             protected: list[str] | None = None) -> None:
+    """Refuse when an agent could write the directory, or a socket path would be too long. A directory inside a `protected` root
+    (denied to agents after their grant, e.g. NMHP's own home while the owner's home folder is granted) is not agent-writable."""
     real = os.path.realpath(directory)
+    if any(_inside(real, root) for root in protected or []):
+        agent_write_paths = [root for root in agent_write_paths if _inside(root, real)]
     for root in agent_write_paths:
         if _inside(real, root) or _inside(root, real):
             raise RuntimeDirectoryRefused(f"the harness runtime directory {real} is inside an agent write grant ({root})")

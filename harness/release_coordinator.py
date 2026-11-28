@@ -285,6 +285,22 @@ def _signoff_grace_over(passed_at: str) -> bool:
     return (datetime.now(timezone.utc) - passed).total_seconds() >= board.RELEASE_SIGNOFF_GRACE_SECONDS
 
 
+def _recheck_due(rows: list[dict[str, Any]]) -> bool:
+    """Owner 2026-11-27 (Codex plan check R2-2): a task released under the cancelled-review rule is never skipped for ever on a
+    failed check - its evidence may be repaired later. True once board.RELEASE_RECHECK_SECONDS have passed since the newest
+    checks_failed row (no readable time: True)."""
+    failed = [row for row in rows if row.get("step") == "checks_failed"]
+    if not failed:
+        return True
+    try:
+        at = datetime.fromisoformat(str(failed[-1].get("at") or ""))
+    except (TypeError, ValueError):
+        return True
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - at).total_seconds() >= board.RELEASE_RECHECK_SECONDS
+
+
 def _coordinatable_tasks(state: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """Scan state for tasks that passed final acceptance, are not cancelled, and whose development is complete (either a development_complete event after the pass, or no developer agent still active on the task). Return the list of (task, request) pairs eligible for this coordination pass."""
     cancelled = state.get("cancelled_tasks") or {}
@@ -358,7 +374,8 @@ def _coordinate_locked(root: Path, crash_after: str = "", crash_before_journal: 
             if not environment_ok:
                 outcomes.append({"task": task, "status": "waiting_for_setup_check"})
                 continue
-            if any(row.get("step") == "checks_failed" and not set(row.get("failed") or []) <= SETUP_CHECK_ONLY for row in matching):
+            if any(row.get("step") == "checks_failed" and not set(row.get("failed") or []) <= SETUP_CHECK_ONLY for row in matching) and not (
+                    board.cancelled_review_pass(state, request) and _recheck_due(matching)):
                 outcomes.append({"task": task, "status": "unchanged_checks_failed"})
                 continue
             _journal(root, {"task": task, "commit": commit, "step": "begin", "coordination_key": coordination_key})
@@ -452,6 +469,11 @@ def coordinate(root: Path, crash_after: str = "", crash_before_journal: str = ""
         # owner 2026-11-21: a final pass of an app that calls an AI tool gets NMHP's fresh release setup check (real calls and the
         # app's real run) first; its result is the release's environment_ready product check
         board.request_release_environment_checks(root)
+    except (OSError, ValueError):
+        pass
+    try:
+        # owner 2026-11-27: a final review NMHP cancelled without finding a bug counts as a pass, recorded by code before each pass
+        board.apply_cancelled_review_rule(root)
     except (OSError, ValueError):
         pass
     with _coordination_lock(root):

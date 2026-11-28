@@ -846,6 +846,7 @@ def serve(
         watchdog.warn = warn
         watchdog.start()
         preview_supervisor.start()
+        _stop_when_orphaned(server)
         print(f"Live Harness Project Worker: {address['endpoint']}/", flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
@@ -856,6 +857,25 @@ def serve(
             server=server, bootstrap_server=bootstrap_server, bootstrap_thread=bootstrap_thread,
             bootstrap_path=bootstrap_path, bootstrap_directory=bootstrap_directory,
         ))
+
+
+PARENT_CHECK_SECONDS = 2.0
+
+
+def _stop_when_orphaned(server) -> None:
+    """Stop serving once the app that started this worker is gone (owner 2026-11-27: after an update restart the old worker
+    kept its port, so every new project failed with "worker exited before serving on port 8741"). serve_forever then returns
+    and the normal cleanup runs."""
+    parent = os.getppid()
+
+    def watch() -> None:
+        """Wait until this worker's parent process changes, then shut the web server down. Return: none."""
+        while os.getppid() == parent:
+            time.sleep(PARENT_CHECK_SECONDS)
+        print("HARNESS WORKER | the app that started this worker is gone; stopping", flush=True)
+        server.shutdown()
+
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
 
 
 def _shutdown_steps(*, preview_supervisor, watchdog, chat, previous_term, server, bootstrap_server, bootstrap_thread,

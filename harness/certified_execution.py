@@ -269,6 +269,21 @@ _AMBIENT_PROBLEMS = (
 def _run_observed(
     command: str, execution_root: Path, environment: Mapping[str, str], timeout_seconds: int, cwd: Path | None = None,
 ) -> tuple[int, str, dict[str, Any]]:
+    """Execute while independently observing descendants and owner UI. Owner 2026-11-27 ("nothing should block the reviewer"):
+    when the sandbox refused a folder the check needs, that folder is opened for this project (agent_confinement.learn_denied)
+    and the check runs once more, by code, with no human step. Returns the last run's exit code, output and audit."""
+    exit_code, output, audit = _run_observed_once(command, execution_root, environment, timeout_seconds, cwd)
+    if exit_code != 0:
+        learned = agent_confinement.learn_denied(execution_root, output)
+        if learned:
+            exit_code, output, audit = _run_observed_once(command, execution_root, environment, timeout_seconds, cwd)
+            audit["environment_opened"] = learned
+    return exit_code, output, audit
+
+
+def _run_observed_once(
+    command: str, execution_root: Path, environment: Mapping[str, str], timeout_seconds: int, cwd: Path | None = None,
+) -> tuple[int, str, dict[str, Any]]:
     """Execute once while independently observing descendants and owner UI."""
     baseline = browser_acceptance._process_table()
     baseline_apps = browser_acceptance._app_processes(baseline)

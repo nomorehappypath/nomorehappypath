@@ -767,7 +767,9 @@ def release_check(root: Path, task: str, ledger: Path, repo: Path, profile: dict
         "internal_final_qa_evidence_present": internal_final_proof,
         "latest_development_qa_request": latest_qa.get("id") if latest_qa else None,
         # accept-after-repair R8/R9: the owner's review waiver for exactly this candidate counts as the PASS (the FAIL record stays)
-        "independent_review_passed": bool(latest_review and board.review_counts_as_passed(state, latest_review) and latest_review.get("evidence")),
+        # owner 2026-11-27: a review NMHP cancelled without finding a bug is a pass; its proof is Delivery's certified run on that version
+        "independent_review_passed": bool(latest_review and board.review_counts_as_passed(state, latest_review) and (
+            latest_review.get("evidence") or (board.cancelled_review_pass(state, latest_review) and latest_review.get("unit_test_evidence")))),
         "latest_independent_review_request": latest_review.get("id") if latest_review else None,
         "final_acceptance_review_present": bool(latest_review),
         "final_review_says_task_done_yes": final_review_says_task_done_yes(latest_review) or board.owner_review_waiver_for(state, latest_review) is not None,

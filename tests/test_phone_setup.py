@@ -193,6 +193,8 @@ class MobileExtraWritableTests(unittest.TestCase):
         self.assertIn(str(flutter_root), roots)
         self.assertIn(str(home / "Library" / "Developer" / "CoreSimulator"), roots)
         self.assertIn(str(home / ".pub-cache"), roots)
+        # test567 2026-11-27: `flutter analyze` failed creating ~/.dartServer ("Operation not permitted")
+        self.assertIn(str(home / ".dartServer"), roots)
 
     def test_no_flutter_on_path_grants_only_the_fixed_home_folders(self):
         with tempfile.TemporaryDirectory() as home_name:

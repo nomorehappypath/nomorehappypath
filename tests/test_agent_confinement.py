@@ -196,13 +196,14 @@ class RunnerBoundaryTests(unittest.TestCase):
         session = control.create(self.root, "claude_cto")
         completed = run_runner(self.root, session, self.environment)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("DENIED_OUTSIDE", completed.stdout, completed.stdout + completed.stderr)
+        # owner 2026-11-27: "all the rights available to modify the environment": a folder in the home folder is writable now
+        self.assertIn("WROTE_OUTSIDE", completed.stdout, completed.stdout + completed.stderr)
         self.assertIn("WROTE_DATA_ROOT", completed.stdout, completed.stdout + completed.stderr)
         # The task-workspace root did not exist before the launch; creating it
         # inside the boundary would be a write to its parent, so the harness
         # creates it first (found by the end-to-end run with the real CLI).
         self.assertIn("WROTE_WORKSPACE", completed.stdout, completed.stdout + completed.stderr)
-        self.assertFalse((self.outside / "probe.txt").exists())
+        self.assertTrue((self.outside / "probe.txt").exists())
         argv = (self.root / "captured.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "bypassPermissions")
         if isinstance(platform_support.agent_confinement(), linux._BwrapAgentConfinement):

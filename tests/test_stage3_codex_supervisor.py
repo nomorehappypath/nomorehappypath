@@ -270,10 +270,9 @@ class RunnerTests(unittest.TestCase):
         tui = next(argv for argv in launches if argv[:1] != ["app-server"])
         self.assertEqual(server[:3], ["app-server", "--listen", "stdio://"], "stdio: no socket for any agent to reach")
         self.assertIn("approval_policy=never", server)
-        if sys.platform.startswith("linux"):  # Linux always carries the permission profile (saved-token folder denied)
-            self.assertIn('default_permissions="harness_agent"', server)
-        else:
-            self.assertIn("sandbox_mode=workspace-write", server, "the same sandbox flags as today's launch")
+        # Owner 2026-11-27 (agents may change their environment): the home folder is granted and NMHP's own records are denied
+        # inside it, so every launch carries the permission profile (Linux did already, for the saved-token folder)
+        self.assertIn('default_permissions="harness_agent"', server)
         self.assertEqual(tui[0], "--remote")
         self.assertTrue(tui[1].startswith(f"unix://{os.path.realpath(self.home)}/rt/"), tui[1])
         # The owner's first launch died on overrides in this line ("... not

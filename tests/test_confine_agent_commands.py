@@ -62,10 +62,10 @@ class Fixture(unittest.TestCase):
     def assertConfined(self, output: str):
         lines = output.split()
         self.assertIn("INSIDE_WRITTEN", lines, output)
-        self.assertIn("OUTSIDE_DENIED", lines, output)
+        # owner 2026-11-27: agents may write the home folder (their tools, caches, SDKs); NMHP's own storage stays denied
+        self.assertIn("OUTSIDE_WRITTEN", lines, output)
         self.assertIn("HARNESS_DENIED", lines, output)
         self.assertTrue(self.inside_file.exists())
-        self.assertFalse(self.outside_file.exists(), "nothing was written outside the project")
         self.assertFalse(self.harness_file.exists(), "nothing was written into the harness's own storage")
 
 

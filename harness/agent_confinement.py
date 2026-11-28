@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -308,6 +309,120 @@ def phone_folders() -> list[str]:
         return []
 
 
+PACKAGE_FOLDERS = ("/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew")
+
+
+def environment_folders() -> list[str]:
+    """Owner 2026-11-27, verbatim: "the reviewer should have all the rights available to modify the environment to make the test
+    feasible". Every agent launch and every confined command may write the owner's whole home folder (tool caches, SDKs, installs),
+    on every platform, plus the phone folders; NMHP's own records stay closed (`nmhp_protected_roots`, denied after the grant)."""
+    folders = [str(Path.home().resolve())]
+    # the package managers' own install folders (Homebrew, a Flutter SDK installed by it), when the owner can write them
+    folders += [os.path.realpath(path) for path in PACKAGE_FOLDERS if os.path.isdir(path) and os.access(path, os.W_OK)]
+    return folders + [path for path in phone_folders() if path not in folders]
+
+
+GRANTS_FILE = "environment-grants.json"
+_DENIED_LINE = re.compile(r"Operation not permitted")
+_ABSOLUTE_PATH = re.compile(r"""(?:(?<=[\s'"=(:])|^)(/[^\s'":,)]+)""")
+
+
+def learned_grants(project_root) -> list[str]:
+    """Folders this project's checks were refused by the sandbox and NMHP opened since (learn_denied)."""
+    from harness.project_context import project_context
+    try:
+        path = Path(project_context(project_root).storage_path("control")) / GRANTS_FILE
+        return [str(item) for item in json.loads(path.read_text(encoding="utf-8")) if isinstance(item, str)]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def learn_denied(project_root, output: str) -> list[str]:
+    """Owner 2026-11-27: the builder and Reviewer may change their environment so the test can run. Read the folders a check's
+    output says the sandbox refused ("Operation not permitted"), and open each one for this project: the folder itself when it
+    exists as a folder, else its parent, never one of NMHP's own records and never one the operating system itself forbids the
+    owner to write. Saved in the project's control store; every later confined command gets them. Returns the newly opened ones."""
+    from harness import agent_grant
+    from harness.project_context import project_context
+    context = project_context(project_root)
+    protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root) + nmhp_protected_roots(context.code_root)
+    known = set(learned_grants(project_root))
+    opened: list[str] = []
+    for line in str(output or "").splitlines():
+        if not _DENIED_LINE.search(line):
+            continue
+        for raw in _ABSOLUTE_PATH.findall(line):
+            path = Path(raw.rstrip(".;"))
+            folder = path if path.is_dir() else path.parent
+            folder_text = os.path.realpath(str(folder))
+            if folder_text in ("/", os.path.realpath(str(Path.home()))) or folder_text in known or folder_text in opened:
+                continue
+            if not outside_agent_writes(folder_text, [folder_text], protected) and os.access(folder_text if Path(folder_text).exists() else os.path.dirname(folder_text), os.W_OK):
+                opened.append(folder_text)
+    if opened:
+        store = Path(context.storage_path("control"))
+        store.mkdir(parents=True, exist_ok=True)
+        (store / GRANTS_FILE).write_text(json.dumps(sorted(known | set(opened)), indent=1), encoding="utf-8")
+    return opened
+
+
+def _deny_around(roots: list[str], keep: list[str]) -> list[str]:
+    """A denied root that contains a path the agent must write (its task workspace) is replaced by its other children, down to
+    that path, so the deny never covers the agent's own work (Seatbelt and Codex apply a deny over a nested grant)."""
+    out: list[str] = []
+    keep = [os.path.realpath(k) for k in keep if k]
+
+    def inside(child: str, root: str) -> bool:
+        return child == root or child.startswith(root.rstrip("/") + "/")
+    for root in roots:
+        if any(inside(root, k) for k in keep):
+            continue                                   # the denied path is the agent's own work (or inside it)
+        holders = [k for k in keep if inside(k, root)]
+        if not holders:
+            out.append(root)
+            continue
+        try:
+            children = [os.path.realpath(entry) for entry in Path(root).iterdir()]
+        except OSError:
+            continue
+        out += _deny_around(children, holders)
+    return out
+
+
+def nmhp_protected_roots(project_code_root=None, manager_home=None, keep: list[str] | None = None) -> list[str]:
+    """NMHP's own records no agent may write even though its home folder is granted: everything in NMHP's home except the task
+    workspaces (agents build there), and NMHP's install (its code and gates), unless that install IS this project's code (a project
+    built on NMHP itself). Resolved, so a link cannot slip past."""
+    from harness import project_registry
+    home = Path(manager_home) if manager_home else project_registry.default_home()
+    roots: list[str] = []
+    try:
+        roots += [os.path.realpath(entry) for entry in sorted(home.iterdir()) if entry.name != "workspaces"]
+    except OSError:
+        pass
+    # NMHP's own folders that may not exist yet at launch (the plumbing runtime folder is made per session after the grant)
+    from harness import runtime_dir
+    roots += [os.path.realpath(home / name) for name in (runtime_dir.RUNTIME_DIRECTORY, "projects", "secrets", "registry.json", "settings.json")
+              if os.path.realpath(home / name) not in roots]
+    install = os.path.realpath(str(Path(__file__).resolve().parents[1]))
+    code = os.path.realpath(str(project_code_root)) if project_code_root else ""
+    if not code or not (code == install or code.startswith(install.rstrip("/") + "/") or install.startswith(code.rstrip("/") + "/")):
+        roots.append(install)
+    return list(dict.fromkeys(_deny_around(roots, list(keep or []) + ([code] if code else []))))
+
+
+def outside_agent_writes(path, writable: list[str], protected: list[str]) -> bool:
+    """True when an agent cannot write `path`: it is outside every granted root, or inside a protected (denied) one."""
+    real = os.path.realpath(str(path))
+
+    def inside(child: str, root: str) -> bool:
+        root = os.path.realpath(root)
+        return child == root or child.startswith(root.rstrip("/") + "/")
+    if any(inside(real, root) for root in protected):
+        return True
+    return not any(inside(real, root) for root in writable)
+
+
 def confine_agent_command(argv: list[str], project_root, *, home: str | Path | None = None,
                           claude_config_dir: str | None = None, implementation=None,
                           extra_writable: list[str] | None = None, path_env: str | None = None) -> list[str]:
@@ -340,8 +455,9 @@ def confine_agent_command(argv: list[str], project_root, *, home: str | Path | N
         return list(argv)
     context = project_context(project_root)
     writable = [str(Path(context.code_root).resolve()), str(Path(context.workspace_root).resolve())] + [
-        str(Path(item).expanduser().resolve()) for item in list(extra_writable or []) + phone_folders()]
+        str(Path(item).expanduser().resolve()) for item in list(extra_writable or []) + environment_folders() + learned_grants(project_root)]
     protected = agent_grant.agent_protected_roots(context.code_root, context.data_root, context.workspace_root)
+    protected += [root for root in nmhp_protected_roots(context.code_root, keep=[str(context.workspace_root)]) if root not in protected]
     store = Path(context.storage_path("control"))
     store.mkdir(parents=True, exist_ok=True)
     # Reads too (Linux): the command is the agent's own, so it must not read what the agent may not

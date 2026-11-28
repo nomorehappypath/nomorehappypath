@@ -120,6 +120,48 @@ class RepairPackageBoardIntegrationTests(unittest.TestCase):
             {"id": "UI", "resolution": "Made the phone list scroll within its viewport.", "regression_check": "The phone-sized render keeps all controls visible."},
         ])
 
+    def resolve_and_request(self):
+        board.resolve_repair_package(self.root, self.delivery["id"], self.package["id"], [
+            {"id": "AUTH", "resolution": "Bound reads to the authenticated task.", "regression_check": "The forged task request is rejected."},
+            {"id": "UI", "resolution": "Made the phone list scroll within its viewport.", "regression_check": "The phone-sized render keeps all controls visible."},
+        ])
+        return board.request_review(
+            self.root, self.delivery["id"], str(self.ledger), "review repairs", chunk="core", changes="repaired both failures",
+            test_command="python3 -m unittest test_smoke", repair_package_id=self.package["id"],
+        )
+
+    def request_again(self):
+        return board.request_review(
+            self.root, self.delivery["id"], str(self.ledger), "review repairs again", chunk="core", changes="same repairs",
+            test_command="python3 -m unittest test_smoke", repair_package_id=self.package["id"],
+        )
+
+    def test_a_withdrawn_review_frees_its_repair_for_the_replacement_review(self):
+        # Owner 2026-11-27 (test567): the review was withdrawn, the repair stayed "under review", every request-review was refused.
+        first = self.resolve_and_request()
+        self.assertEqual(board.snapshot(self.root)["repair_packages"][self.package["id"]]["status"], "under_review")
+        with board.locked_state(self.root) as state:
+            board._withdraw_open_request(state, state["qa_requests"][first["id"]], "its checks could not run in the clean review copy")
+        self.assertEqual(board.snapshot(self.root)["repair_packages"][self.package["id"]]["status"], "ready_for_review")
+        second = self.request_again()
+        self.assertNotEqual(second["id"], first["id"])
+        self.assertEqual(board.snapshot(self.root)["repair_packages"][self.package["id"]]["review_request_id"], second["id"])
+
+    def test_a_board_already_stuck_that_way_is_freed_by_the_next_request(self):
+        first = self.resolve_and_request()
+        with board.locked_state(self.root) as state:  # the state a board saved before the fix holds
+            state["qa_requests"][first["id"]].update({"status": "withdrawn", "withdrawn_reason": "old board"})
+        second = self.request_again()
+        self.assertEqual(board.snapshot(self.root)["repair_packages"][self.package["id"]]["review_request_id"], second["id"])
+
+    def test_a_new_request_replaces_a_review_still_open(self):
+        # Owner 2026-11-27 rule 1: the builder's request is never refused because an older review of the same scope is open
+        first = self.resolve_and_request()
+        second = self.request_again()
+        state = board.snapshot(self.root)
+        self.assertEqual(state["qa_requests"][first["id"]]["status"], "withdrawn")
+        self.assertEqual(state["repair_packages"][self.package["id"]]["review_request_id"], second["id"])
+
     def test_only_source_reviewer_can_split_and_each_child_recomputes_depth(self):
         other = board.register(self.root, "qa", "REVIEW_QUEUE", vendor="Anthropic")
         with self.assertRaisesRegex(ValueError, "source Reviewer"):

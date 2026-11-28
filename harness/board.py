@@ -62,6 +62,13 @@ REVIEW_EXECUTION_HEARTBEAT_SECONDS = 5
 REVIEW_ROUTE_RETRY_SECONDS = 90
 # Owner 2026-11-20: a builder's "complete" is paperwork. After a final PASS the release waits this long for it, then goes ahead.
 RELEASE_SIGNOFF_GRACE_SECONDS = 600
+# Owner 2026-11-27: a release check that failed for a task released under "cancelled without a material bug = PASS" is tried
+# again after this long, so evidence repaired later is never skipped for ever (Codex plan check R2-2).
+RELEASE_RECHECK_SECONDS = 300
+CANCELLED_REVIEW_PASS_KIND = "cancelled_without_bug"
+# Owner 2026-11-27: when every Reviewer check ran and passed but no verdict was recorded this long after (a process jam), the
+# review's result - no bug - is a hard PASS.
+REVIEW_VERDICT_GRACE_SECONDS = 1200
 # Batch 2 item C: a review waiting on a signed-out reviewer this long alerts the owner once.
 REVIEWER_SIGN_IN_ALERT_SECONDS = 600
 REVIEWER_SIGN_IN_HEADLINE = "Reviewer needs sign-in: nothing will progress"
@@ -8342,7 +8349,10 @@ def review_counts_as_passed(state: dict[str, Any], request: dict[str, Any] | Non
     (the request's own FAIL record is never edited). Every release gate reads final reviews through this one test."""
     if not isinstance(request, dict):
         return False
-    return request.get("status") == "passed" or owner_review_waiver_for(state, request) is not None
+    waiver = owner_review_waiver_for(state, request)
+    if waiver and waiver.get("kind") == CANCELLED_REVIEW_PASS_KIND and (request.get("status") == "failed" or request.get("reopened_for_fail_at")):
+        return False   # the Reviewer recorded (or is recording) a real FAIL after all: the bug decides
+    return request.get("status") == "passed" or waiver is not None
 
 
 def _flag_ready_claim(state: dict[str, Any], agent: dict[str, Any], text: str) -> None:
@@ -13682,6 +13692,30 @@ PROCESS_CHECK_WORDS = {
 }
 
 
+# Owner 2026-11-27: the product release checks in plain words, for the card that says why a passed app is not handed over yet.
+RELEASE_CHECK_WORDS = {
+    "unit_tests_passed": "the builder's recorded test run", "independent_review_passed": "the review's pass record",
+    "final_review_says_task_done_yes": "the review's \"task done\" answer", "final_acceptance_review_present": "the final review record",
+    "delivery_scenario_simulations_executed": "the builder's recorded checks", "reviewer_scenario_simulations_executed": "the reviewer's recorded checks",
+    "build_collected": "collecting the built app", "environment_ready": "NMHP's own real run of the app on this version",
+    "owner_artifacts_readable": "the documents you read", "contract_scope_intact": "the agreed scope",
+    "completion_product_ready": "the deliverables", "in_scope_findings_resolved": "open findings in scope",
+    "git_clean": "saving the work", "main_branch": "saving the work", "main_pushed": "saving the work", "candidate_branch": "saving the work",
+    "main_fast_forward_safe": "saving the work", "mirror_candidate_verified": "saving the work",
+    "main_health_verified": "the app starting cleanly", "candidate_health_verified": "the app starting cleanly",
+}
+
+
+def release_check_words(keys: list[str]) -> str:
+    """The failed release checks in the owner's words, each once ("a release step" for one without words)."""
+    words: list[str] = []
+    for key in keys:
+        word = RELEASE_CHECK_WORDS.get(key) or PROCESS_CHECK_WORDS.get(key) or "a release step"
+        if word not in words:
+            words.append(word)
+    return ", ".join(words) or "a release step"
+
+
 def release_prepared_with_notes(root: ProjectRoot, task: str, commit: str, advisory: list[str]) -> None:
     """The release is prepared: close a "cannot be released yet" card the owner's decision raised, and name the open paperwork in
     one plain line on the task's Story, once per candidate — never a hold, never a card (owner 2026-11-20: only bugs stop a
@@ -16288,6 +16322,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
         analysis_problem = _analysis_clean_list_problem(state, developer["task"])
         if analysis_problem:
             raise ValueError(analysis_problem)
+        _supersede_active_reviews(state, developer["task"], phase, subtask, chunk)
         if phase == "final_acceptance" and any(
             request.get("task") == developer["task"]
             and request.get("status") not in TERMINAL_QA
@@ -16308,6 +16343,11 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             raise ValueError("multiple repair packages are open for this scope; select one exact --repair-package")
         if packages:
             package = packages[0]
+            linked = (state.get("qa_requests") or {}).get(str(package.get("review_request_id") or "")) or {}
+            if package.get("status") == "under_review" and linked.get("status") not in {"authoring", "open", "reserved", "claimed", "passed", "failed"}:
+                # its review ended without a verdict (withdrawn, cancelled, gone): free the package for this request
+                _reset_interrupted_repair_package(state, {**linked, "id": package.get("review_request_id"), "repair_package_id": package.get("id")},
+                                                  "its review ended without a verdict")
             if package.get("status") == "under_review":
                 raise ValueError("repair package is already under independent review")
             if package.get("status") == "open":
@@ -16441,6 +16481,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
     # but execution and evidence remain unavailable until Delivery succeeds.
     with locked_state(root) as state:
         developer = _require_writable_agent(state, agent_id)
+        _supersede_active_reviews(state, developer["task"], phase, subtask, chunk)
         prior = _task_requests(state, developer["task"])
         active = [request for request in prior if request.get("status") not in TERMINAL_QA]
         if phase == "final_acceptance" and active:
@@ -16641,6 +16682,7 @@ def request_review(root: Path, agent_id: str, ledger: str, summary: str, phase: 
             state, developer["task"], subtask, pipeline_item,
         ) not in {"in_progress", "in_review"}:
             raise ValueError("subtask pipeline changed while Delivery evidence executed; retry from its current state")
+        _supersede_active_reviews(state, developer["task"], phase, subtask, chunk, keep_id=request_id)
         active = [request for request in prior if request["status"] not in TERMINAL_QA]
         if phase == "final_acceptance" and active:
             raise ValueError("final acceptance cannot start while another review is active")
@@ -16879,6 +16921,34 @@ def review_brief(
 LOST_EVIDENCE_PREFIX = "independent review requires intact Delivery scenario evidence: "
 
 
+SUPERSEDED_REVIEW_REASON = "the builder sent a newer version for review"
+
+
+def _supersede_active_reviews(state: dict[str, Any], task: str, phase: str, subtask: str, chunk: str, keep_id: str = "") -> list[str]:
+    """Owner 2026-11-27, verbatim: "The dev passes the code for reviewer to check. In no way this can be blocked". Inside the lock:
+    every still-open review of the same scope (an older version of the same part, or of the final review) is withdrawn - it judges an older version - and its Reviewer goes back to the queue. Its repair package, if
+    any, is freed. Returns the withdrawn ids."""
+    withdrawn: list[str] = []
+    for request in list(_task_requests(state, task)):
+        if request.get("id") == keep_id or request.get("status") in TERMINAL_QA:
+            continue
+        same = request.get("phase") == phase and (
+            phase == "final_acceptance" or (request.get("subtask", "") == subtask and request.get("chunk", "") == chunk))
+        if not same:
+            continue   # a review of another part is not stale: its verdict still counts (full suite, 2026-11-27)
+        reviewer = (state.get("agents") or {}).get(str(request.get("claimed_by") or request.get("reserved_by") or request.get("routed_to") or ""))
+        _withdraw_open_request(state, request, SUPERSEDED_REVIEW_REASON)
+        if reviewer and reviewer.get("role") == "qa":
+            reviewer.update({"task": "REVIEW_QUEUE", "status": "waiting", "last_status_at": now(),
+                             "status_note": f"Review {request['id']} was replaced by the builder's newer version; waiting for it."})
+        _event(state, "review_superseded_by_new_request", None, {
+            "task": task, "request_id": request["id"],
+            "message": f"review {request['id']} withdrawn: {SUPERSEDED_REVIEW_REASON}; the newer version goes to the Reviewer instead",
+        })
+        withdrawn.append(str(request["id"]))
+    return withdrawn
+
+
 def _withdraw_open_request(state: dict[str, Any], request: dict[str, Any], reason: str) -> tuple[dict[str, Any], str]:
     """Close an open review request that can never reach a verdict and free its scope (inside the state lock).
 
@@ -16889,6 +16959,9 @@ def _withdraw_open_request(state: dict[str, Any], request: dict[str, Any], reaso
     scope = str(request.get("subtask") or request.get("chunk") or request.get("phase") or "the task")
     withdrawn_at = now()
     request.update({"status": "withdrawn", "withdrawn_at": withdrawn_at, "withdrawn_reason": reason})
+    # Owner 2026-11-27 (test567): a withdrawn review left its repair package "under_review", so every replacement request-review
+    # was refused and the project stalled. The package goes back to ready-for-review, as for an interrupted review.
+    _reset_interrupted_repair_package(state, request, f"its review was withdrawn: {reason}")
     subtask = str(request.get("subtask") or "")
     item = (((state.get("delivery_plans") or {}).get(str(request.get("task") or "")) or {}).get("subtasks") or {}).get(subtask)
     if isinstance(item, dict) and item.get("active_review_request") == request.get("id"):
@@ -18178,6 +18251,8 @@ def reviewer_checks_satisfied(state: dict[str, Any], request: dict[str, Any] | N
     review after the board ran the Reviewer's checks to a FAIL — that completed run (Codex r3-1). Returns (ok, note)."""
     if bundle_ok:
         return True, ""
+    if cancelled_review_pass(state, request):
+        return True, "NMHP cancelled its own review without finding a bug in the app; under the owner's rule that is a pass"
     if owner_review_waiver_for(state, request) is not None and _reviewer_checks_ran(request):
         return True, "the reviewer's checks ran on this version and failed; released on the owner's decision"
     return False, ""
@@ -18240,6 +18315,153 @@ def owner_decisions_text(state: dict[str, Any], task: str) -> str:
     return "OWNER DECISIONS (binding; judge without them and do not restate them under another id):\n- " + "\n- ".join(lines)
 
 
+def cancelled_without_bug(state: dict[str, Any], request: dict[str, Any] | None) -> str:
+    """Owner 2026-11-27, verbatim: "a cancelled review where the reason is not a materail bug is considered hard PASS".
+
+    Returns the plain reason NMHP ended this FINAL review without a verdict when it qualifies, else "". It qualifies when NMHP
+    withdrew or cancelled it (never a Reviewer verdict), no check of the app ran and failed on it (a failed run that completed and
+    was not only about the review's own copy is an app failure), Delivery's own certified run on exactly that version passed, and
+    it names a mirrored version. A failed Delivery run or a real failed app check never qualifies: those go to repair as before."""
+    if not isinstance(request, dict) or request.get("phase") != "final_acceptance":
+        return ""
+    if request.get("integrity_invalidated"):
+        return ""
+    status = request.get("status")
+    if status == "claimed":
+        # every Reviewer check ran and passed (a certified run), but no verdict followed: the checks' result decides
+        executed = str((request.get("challenge_execution") or {}).get("executed_at") or "")
+        try:
+            waited = (datetime.now(timezone.utc) - datetime.fromisoformat(executed)).total_seconds()
+        except (TypeError, ValueError):
+            return ""
+        if waited < REVIEW_VERDICT_GRACE_SECONDS:
+            return ""
+    elif status not in {"withdrawn", "cancelled"}:
+        return ""
+    if request.get("delivery_state") != "passed" or not request.get("unit_test_evidence"):
+        return ""
+    if (state.get("task_repositories") or {}).get(str(request.get("task") or "")) and not (request.get("reviewed_commit") and request.get("mirror_ref")):
+        return ""   # a Git task releases only the exact version the board mirrored
+    for attempt in request.get("challenge_execution_attempts") or []:
+        if isinstance(attempt, dict) and attempt.get("status") == "failed" and (
+                (attempt.get("completed") is True and not attempt.get("process_only"))
+                or _shows_app_failure(str(attempt.get("reason") or ""), tuple(request.get("challenge_support_files") or {}))):
+            return ""
+    if str(request.get("task") or "") in (state.get("cancelled_tasks") or {}):
+        return ""
+    if status == "claimed":
+        return "every reviewer check ran and passed, but the review never recorded its verdict"
+    reason = " ".join(str(request.get("withdrawn_reason") or request.get("cancel_reason") or "NMHP cancelled it").split())
+    return reason[:300]
+
+
+# A failed check's own output: an assertion about the app that failed (a finding), unless the same output only says the check could
+# not load or run. Unsure counts as a finding: a real bug is never passed by mistake.
+_APP_FAILURE_MARKS = re.compile(r"AssertionError|Expected:|Some tests failed|FAILED \(|failures=|\bFAIL:|assert(?:ion)? failed|expected .* (?:but|got) ", re.I)
+# Only a clear environment problem is "could not run" (Codex final review R3-1: a SyntaxError or a failed import in the app itself is
+# a real failure of the app, never a process problem). A load/compile failure counts as could-not-run only when it is in the
+# Reviewer's OWN check files (.review-checks/ or a file the Reviewer supplied).
+_COULD_NOT_RUN_MARKS = re.compile(r"command not found|Operation not permitted|not signed in|Not run for real|timed out", re.I)
+_LOAD_FAILURE_MARKS = re.compile(r"Failed to load|Compilation failed|SyntaxError|ModuleNotFoundError|ImportError|Error: .*\.dart:\d+", re.I)
+
+
+def _error_places(row: str) -> list[str]:
+    """The files where a load/compile error happened: Python's innermost traceback frame (the last `File "...", line N`, which for a
+    SyntaxError is the broken file itself) and every Dart `path.dart:L:C: Error` location."""
+    python = re.findall(r'File "([^"]+)", line \d+', row)
+    dart = re.findall(r"([\w./-]+\.dart):\d+:\d+: Error", row)
+    places = ([python[-1]] if python else []) + dart
+    # no location line: every source file the output names counts (any one outside the Reviewer's own files makes it the app's)
+    return places or re.findall(r"[\w./-]+\.(?:py|dart|js|mjs|ts|tsx|swift|kt|go|rb)\b", row)
+
+
+def _shows_app_failure(reason: str, reviewer_files: tuple[str, ...] = ()) -> bool:
+    """True when a failed check's output shows a check that ran against the app and failed (owner 2026-11-27: only the review's
+    finding counts; a process problem never does). Each failed row is judged on its own text (rows are separated by " | ").
+    Unsure counts as a finding: a real bug is never passed by mistake."""
+    own = (".review-checks/",) + tuple(name for name in reviewer_files if name)
+    for row in re.split(r" \| (?=S-[\w-]+:)", reason or ""):
+        if "failed with exit code" not in row and not _APP_FAILURE_MARKS.search(row) and not _LOAD_FAILURE_MARKS.search(row):
+            continue
+        if _APP_FAILURE_MARKS.search(row):
+            return True
+        if _LOAD_FAILURE_MARKS.search(row):
+            # where the error happened, not which files the output mentions (Codex R4-1: a Reviewer check that imports a broken app
+            # names the Reviewer's file first and the app's file last)
+            places = _error_places(row)
+            if not places or not all(any(name in place for name in own) for place in places):
+                return True                 # the app itself does not load or compile (or nobody can tell where)
+            continue                        # only the Reviewer's own check file failed to load
+        if not _COULD_NOT_RUN_MARKS.search(row):
+            return True
+    return False
+
+
+def _reopen_auto_passed_for_fail(state: dict[str, Any], request: dict[str, Any] | None, qa: dict[str, Any], result: str) -> None:
+    """Codex task review R1-1 (2026-11-27): a review the cancelled-review rule closed as a PASS (every check passed, no verdict) can
+    still get a real FAIL from the Reviewer that claimed it - the bug decides. Inside the lock: the request is claimed again by that
+    Reviewer and a hand-over of exactly that version the owner has not answered yet is taken back. Never when a newer review of
+    the task exists (its verdict decides)."""
+    if result != "failed" or not isinstance(request, dict) or request.get("status") != "withdrawn":
+        return
+    if not request.get("auto_passed_claimed_by") or request.get("auto_passed_claimed_by") != qa.get("id"):
+        return
+    task = str(request.get("task") or "")
+    newest = _newest_final_request(state, task)
+    if newest and newest.get("id") != request.get("id"):
+        raise ValueError("a newer version of this task is already under review; record your finding on that review")
+    request.update({"status": "claimed", "claimed_by": qa["id"], "withdrawn_reason": "", "reopened_for_fail_at": now()})
+    release = (state.get("releases") or {}).get(task)
+    if release and str(release.get("head_commit") or "") == str(request.get("reviewed_commit") or "") and task not in (state.get("release_decisions") or {}):
+        state["releases"].pop(task, None)
+        _event(state, "release_withdrawn_for_review_fail", None, {
+            "task": task, "request_id": request["id"],
+            "message": f"{task}: the Reviewer recorded a failure on the version handed to the owner; the hand-over is taken back",
+        })
+
+
+def cancelled_review_pass(state: dict[str, Any], request: dict[str, Any] | None) -> bool:
+    """True when this exact final review counts as passed under the owner's cancelled-review rule (its waiver is recorded)."""
+    waiver = owner_review_waiver_for(state, request)
+    return bool(waiver and waiver.get("kind") == CANCELLED_REVIEW_PASS_KIND and (request or {}).get("status") != "failed")
+
+
+def apply_cancelled_review_rule(root: Path) -> list[str]:
+    """Record the owner's standing PASS for each task whose newest final review NMHP cancelled without a material bug, by code
+    (owner 2026-11-27: "this has to be fixed by code not directive only"). The same waiver the owner's own decision writes, so
+    every release gate, the release coordinator and the owner's test card treat it as a pass. Returns the tasks it released."""
+    finishes: list[tuple[str, dict[str, Any]]] = []
+    with locked_state(root) as state:
+        tasks = {str(r.get("task") or "") for r in (state.get("qa_requests") or {}).values() if r.get("phase") == "final_acceptance"}
+        for task in sorted(t for t in tasks if t):
+            request = _newest_final_request(state, task)
+            reason = cancelled_without_bug(state, request)
+            if not reason or owner_review_waiver_for(state, request) is not None:
+                continue
+            if _candidate_moved_problem(root, state, task, request):
+                continue   # the builder moved past that version: the review of the new one decides
+            if request.get("status") == "claimed":
+                # closed with its checks' result, so it holds no further review and its Reviewer is free for the next one; that
+                # Reviewer may still record a real FAIL on it (qa_result reopens it: Codex task review R1-1)
+                request["auto_passed_claimed_by"] = str(request.get("claimed_by") or "")
+                _withdraw_open_request(state, request, reason)
+            if not request.get("certified_artifacts"):
+                # the proof files are frozen as a PASS freezes them (the release checks read them): the builder's certified run,
+                # and the Reviewer's run when it had one. Found by the real run on a copy of test567 (2026-11-27).
+                evidence = str(request.get("delivery_evidence") or request.get("unit_test_evidence") or "")
+                try:
+                    request["certified_artifacts"] = _certify_request_artifacts(root, request, Path(evidence), state) if evidence else {}
+                except (OSError, ValueError):
+                    continue   # a proof file is gone: no pass on missing proof; the next pass looks again
+            finish = _write_owner_review_waiver(root, state, task, request, CANCELLED_REVIEW_PASS_KIND, [], [],
+                                                f"NMHP cancelled its own review ({reason}); no bug was found in the app", None)
+            finishes.append((task, finish))
+    for task, finish in finishes:
+        if finish.get("completed"):
+            _after_development_complete(root, task, finish.get("cto_session", ""), finish.get("cto_item", ""), finish.get("cto_suffix", ""))
+    return [task for task, _ in finishes]
+
+
 def _write_owner_review_waiver(root: Path, state: dict[str, Any], task: str, request: dict[str, Any], kind: str,
                                closed: list[str], left_open: list[str], words: str, proof_check: Any) -> dict[str, Any]:
     """Inside the lock: the owner's review waiver for exactly this candidate, the escalation settled, the Delivery completed the
@@ -18263,7 +18485,8 @@ def _write_owner_review_waiver(root: Path, state: dict[str, Any], task: str, req
     release_lifecycle.setdefault("final_pass_at", at)
     _event(state, "owner_review_waiver_recorded", None, {
         "task": task, "request_id": waiver["request_id"], "head_commit": waiver["head_commit"], "waiver_kind": kind,
-        "message": (f"{task}: released on the owner's decision — version {waiver['head_commit'][:12]}; "
+        "message": (f"{task}: released under the owner's rule (a review NMHP cancelled without finding a bug is a pass) — version "
+                    f"{waiver['head_commit'][:12]}; {words}") if kind == CANCELLED_REVIEW_PASS_KIND else (f"{task}: released on the owner's decision — version {waiver['head_commit'][:12]}; "
                     + (f"findings closed by him: {', '.join(closed)}" if closed else "no finding closed")
                     + (f"; left open: {', '.join(left_open)}" if left_open else "")),
     })
@@ -18979,6 +19202,7 @@ def qa_result(
     with locked_state(root) as state:
         qa = _require_agent(state, agent_id)
         request = state["qa_requests"].get(request_id)
+        _reopen_auto_passed_for_fail(state, request, qa, result)
         early_fail = _early_fail_allowed(request, qa, result)
         if not early_fail and (qa["role"] != "qa" or not request or request["claimed_by"] != qa["id"] or request["status"] != "claimed"):
             raise ValueError("only the QA agent that claimed this request may submit its result")
@@ -20102,7 +20326,10 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
             "checks": {key: True for key in sorted(required_checks)},
             "owner_test_steps": contract.owner_test_steps(root, task),
             # D-023 / C5: what the last review round could not run for real, in plain words, on the owner's test card
-            "not_tested_for_real": list((_newest_final_request(state, task) or {}).get("unproven_requirements") or []),
+            "not_tested_for_real": list((_newest_final_request(state, task) or {}).get("unproven_requirements") or []) + (
+                [f"NMHP cancelled its own review for a reason that is not a bug in your app ({cancelled_without_bug(state, _newest_final_request(state, task))}). "
+                 "Your rule counts that as a pass. The builder's own tests passed on this version; test it yourself before you accept."]
+                if cancelled_review_pass(state, _newest_final_request(state, task)) else []),
             "lifecycle": lifecycle_record.get("phases", {}),
         }
         if checks.get("build_required"):
@@ -20111,6 +20338,9 @@ def record_release_ready(root: Path, agent_id: str, task: str, checks: dict[str,
         release["saved_data"] = _saved_data_release_snapshot(root, state, task, _newest_final_request(state, task))
         state.setdefault("release_lifecycle", {})[task] = lifecycle_record
         state.setdefault("releases", {})[task] = release
+        for card in list((state.get("owner_actions") or {}).values()):
+            if isinstance(card, dict) and card.get("status") == "open" and card.get("card_key") == f"release_waiting:{task}":
+                _resolve_owner_action(state, card, "Resolved: the app was handed to you for testing", "release_recorded")
         # A NEW release candidate supersedes any earlier owner response. Without
         # this, a task the owner rejected once could never be accepted after its
         # repair: record_release_decision refuses a second response, so the

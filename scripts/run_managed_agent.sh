@@ -599,7 +599,7 @@ except GrantTooBroad as error:
 import json, sys
 sys.path.insert(0, sys.argv[1])
 from harness import agent_confinement
-print(json.dumps(agent_confinement.phone_folders()))
+print(json.dumps(agent_confinement.environment_folders()))
 ' "$harness_root" 2>/dev/null)" || mobile_extra_json="[]"
   if [[ "$mobile_extra_json" != "[]" ]]; then
     writable_roots_json="$("$python_bin" -E -c '
@@ -620,6 +620,15 @@ from harness.agent_grant import agent_protected_roots
 print(json.dumps(agent_protected_roots(sys.argv[2], sys.argv[3], sys.argv[4], harness_root=sys.argv[1])))
 ' "$harness_root" "$target_root" "$data_root" "$workspace_root")"
   fi
+  # Owner 2026-11-27 ("all the rights available to modify the environment"): the agent may write the owner's whole home folder
+  # (environment_folders above); NMHP's own records and install stay denied, on every launch, with or without the board surface.
+  protected_writes_json="$("$python_bin" -E -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from harness import agent_confinement
+protected = json.loads(sys.argv[2])
+print(json.dumps(protected + [root for root in agent_confinement.nmhp_protected_roots(sys.argv[3], sys.argv[4] or None, keep=json.loads(sys.argv[5])[:1] + [sys.argv[6]]) if root not in protected]))
+' "$harness_root" "$protected_writes_json" "$target_root" "$manager_home" "$writable_roots_json" "$workspace_root")" || { echo "REFUSED: could not compute the folders NMHP keeps closed to agents" >&2; exit 3; }
   # Codex's workspace-write sandbox cannot deny a subpath of a writable root.
   # When a protected path lies inside the grant (scaffolded/legacy layout), the
   # same grant is expressed as a Codex permission profile instead: the whole
@@ -706,7 +715,8 @@ if provider == "gemini":
     raise SystemExit(0)          # the board tools of a Gemini session are a plugin in its runtime directory (harness/gemini_runtime.py)
 status = cli_capabilities.stage_status(home, "stage2_board_mcp", provider)
 real = os.path.realpath(harness_root)
-if status["enabled"] and any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in writable):
+from harness import agent_confinement
+if status["enabled"] and not agent_confinement.outside_agent_writes(real, writable, json.loads(sys.argv[8])):
     status = {"enabled": False, "reason": "PLUMBING FALLBACK stage2_board_mcp harness install is inside an agent write grant"}
 if not status["enabled"]:
     if status["reason"].startswith("PLUMBING FALLBACK"):
@@ -726,7 +736,7 @@ else:
             # the board CLI, which needs no approval either.
             "-c", "mcp_servers.harness_board.default_tools_approval_mode=\"approve\""]
 sys.stdout.write("\0".join(args) + "\0")
-' "$harness_root" "$manager_home" "$provider" "$mcp_role" "$python_bin" "$writable_roots_json" "${agent_id:-}" 2>>"${transcript_path:-/dev/null}")
+' "$harness_root" "$manager_home" "$provider" "$mcp_role" "$python_bin" "$writable_roots_json" "${agent_id:-}" "$protected_writes_json" 2>>"${transcript_path:-/dev/null}")
   fi
   # PLUMBING STAGE 3, Codex (docs/specs/PLUMBING_MODERNIZATION.md): harness
   # messages without typing. The supervisor runs this session's `codex
@@ -759,7 +769,7 @@ if status["reason"]:
 directory = runtime_dir.session_directory(home, project, session)
 try:
     grant = agent_confinement.writable_paths(writable, home=os.path.expanduser("~"))
-    runtime_dir.validate(directory, grant)
+    runtime_dir.validate(directory, grant, protected=json.loads(sys.argv[9]))
 except (runtime_dir.RuntimeDirectoryRefused, agent_confinement.ConfinementUnavailable) as error:
     refuse(f"PLUMBING FALLBACK stage3_codex_app_server {error}")
 plumbing = global_settings.load(home)["plumbing"]
@@ -779,7 +789,7 @@ sys.stdout.write("\0".join(["--codex-app-server-json", json.dumps(argv), "--code
                             "--receipt-timeout", str(plumbing["delivery_receipt_timeout_seconds"]),
                             "--app-server-timeout", str(plumbing["app_server_start_timeout_seconds"])]) + "\0")
 ' "$harness_root" "$manager_home" "$session_id" "$data_root" "$writable_roots_json" "${HARNESS_CODEX_BIN:-codex}" \
-      "$("$python_bin" -E -c 'import json,sys; print(json.dumps(sys.argv[1:]))' -c "model=\"${model}\"" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"})" "${transcript_path:-}" \
+      "$("$python_bin" -E -c 'import json,sys; print(json.dumps(sys.argv[1:]))' -c "model=\"${model}\"" -c "model_reasoning_effort=${effort}" -c "approval_policy=never" "${codex_access[@]}" ${board_mcp_args[@]+"${board_mcp_args[@]}"})" "${transcript_path:-}" "$protected_writes_json" \
       2>>"${transcript_path:-/dev/null}")
   fi
   if [[ "$provider" == "codex" ]]; then
@@ -959,7 +969,8 @@ harness_root, home, writable, python = sys.argv[1], Path(sys.argv[2]), json.load
 status = cli_capabilities.stage_status(home, "stage1_hooks", "claude")
 if status["enabled"]:
     real = os.path.realpath(harness_root)
-    if any(real == os.path.realpath(root) or real.startswith(os.path.realpath(root).rstrip("/") + "/") for root in writable):
+    from harness import agent_confinement
+    if not agent_confinement.outside_agent_writes(real, writable, json.loads(sys.argv[5])):
         status = {"enabled": False, "reason": "PLUMBING FALLBACK stage1_hooks harness install is inside an agent write grant"}
 if not status["enabled"]:
     if status["reason"].startswith("PLUMBING FALLBACK"):
@@ -978,7 +989,7 @@ print(json.dumps({"hooks": {
     "SessionStart": hook("SessionStart"), "UserPromptSubmit": hook("UserPromptSubmit"),
     "Stop": hook("Stop"), "SessionEnd": hook("SessionEnd"),
 }}, separators=(",", ":")))
-' "$harness_root" "$manager_home" "$writable_roots_json" "$python_bin" 2>>"${transcript_path:-/dev/null}")"
+' "$harness_root" "$manager_home" "$writable_roots_json" "$python_bin" "$protected_writes_json" 2>>"${transcript_path:-/dev/null}")"
       # PLUMBING STAGE 3, Claude (spec §4.3, amended by measurement): harness
       # messages through the session's own inbox. Needs Stage 1's hooks (the
       # SessionStart hook starts the relay). Adds: the supervisor's handover
@@ -1006,7 +1017,7 @@ if status["reason"]:
 directory = runtime_dir.session_directory(home, project, session)
 try:
     grant = agent_confinement.writable_paths(writable, home=os.path.expanduser("~"), claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR") or None)
-    runtime_dir.validate(directory, grant)
+    runtime_dir.validate(directory, grant, protected=json.loads(sys.argv[7]))
 except (runtime_dir.RuntimeDirectoryRefused, agent_confinement.ConfinementUnavailable) as error:
     refuse(f"PLUMBING FALLBACK stage3_claude_socket_delivery {error}")
 plumbing = global_settings.load(home)["plumbing"]
@@ -1016,7 +1027,7 @@ sys.stdout.write("\0".join([json.dumps(settings, separators=(",", ":")), claude_
                             "--busy-wait", str(plumbing["delivery_busy_wait_seconds"]),
                             "--receipt-timeout", str(plumbing["delivery_receipt_timeout_seconds"]),
                             "--app-server-timeout", str(plumbing["app_server_start_timeout_seconds"])]) + "\0")
-' "$harness_root" "$manager_home" "$session_id" "$data_root" "$writable_roots_json" "$hook_settings_json" 2>>"${transcript_path:-/dev/null}")
+' "$harness_root" "$manager_home" "$session_id" "$data_root" "$writable_roots_json" "$hook_settings_json" "$protected_writes_json" 2>>"${transcript_path:-/dev/null}")
         if [[ ${#stage3_claude[@]} -gt 2 ]]; then
           hook_settings_json="${stage3_claude[0]}"
           claude_system_layer="${stage3_claude[1]}"

@@ -56,13 +56,15 @@ ORDINARY_OUTPUT = (
 
 
 PHONE_FOLDER_MARKS = ("flutter", "/Library/Developer/CoreSimulator", "/Library/Developer/Xcode/DerivedData", "/.pub-cache",
-                      "/.dart-tool", "/.cocoapods", "/Library/Caches/CocoaPods")
+                      "/.dart-tool", "/.dartServer", "/.cocoapods", "/Library/Caches/CocoaPods")
 
 
 def without_phone_folders(roots):
     """The grant minus the Flutter/Xcode/simulator folders every Mac launch adds (agent_confinement.phone_folders,
     owner 2026-11-27); nothing else may be added."""
-    return [root for root in roots if not any(mark in root for mark in PHONE_FOLDER_MARKS)]
+    from harness import agent_confinement   # owner 2026-11-27: the home folder and package folders are granted to every launch too
+    extra = set(agent_confinement.environment_folders())
+    return [root for root in roots if root not in extra and not any(mark in root for mark in PHONE_FOLDER_MARKS)]
 
 class PromptRecognitionTests(unittest.TestCase):
     def test_the_real_claude_prompt_is_recognised_across_split_reads_and_redraws(self):

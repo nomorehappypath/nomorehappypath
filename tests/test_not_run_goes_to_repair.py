@@ -517,10 +517,14 @@ class AReviewStuckOnARowThatCannotRunNeverHoldsTheRepair(test_board.BoardTests):
         dev, _, request, message = self.final_review_failing_with([self.BROKEN, self.SCREEN])
         attempt = board.snapshot(self.root)["qa_requests"][request["id"]]["challenge_execution_attempts"][-1]
         self.assertFalse(attempt["process_only"], "a real failed check beside it is never explained away")
-        with self.assertRaisesRegex(ValueError, "another review is active"):
-            board.request_review(self.root, dev["id"], self.ledger("stuck-delivery.md"), "final review again", phase="final_acceptance",
-                                 test_command=self.qa_command(), changes="again")
-        self.assertEqual(board.snapshot(self.root)["qa_requests"][request["id"]]["status"], "claimed")
+        # Owner 2026-11-27 rule 1 ("In no way this can be blocked"): the builder's newer version replaces the open review; the old
+        # review's real failure is never counted as a pass (it is not the newest review and it is withdrawn, not passed)
+        newer = board.request_review(self.root, dev["id"], self.ledger("stuck-delivery.md"), "final review again", phase="final_acceptance",
+                                     test_command=self.qa_command(), changes="again")
+        state = board.snapshot(self.root)
+        self.assertEqual(state["qa_requests"][request["id"]]["status"], "withdrawn")
+        self.assertNotEqual(newer["id"], request["id"])
+        self.assertFalse(board.review_counts_as_passed(state, state["qa_requests"][request["id"]]))
 
     def test_a_real_failure_in_the_same_command_as_a_step_that_cannot_run_keeps_the_review(self):
         # Codex R4-1: one unittest command printed "Not run for real" for a skipped Linux step AND failed a real assertion
@@ -534,10 +538,14 @@ class AReviewStuckOnARowThatCannotRunNeverHoldsTheRepair(test_board.BoardTests):
         self.assertNotIn("To fix it:", message)
         attempt = board.snapshot(self.root)["qa_requests"][request["id"]]["challenge_execution_attempts"][-1]
         self.assertFalse(attempt["process_only"], "a failing runner is a real failure, whatever else it printed")
-        with self.assertRaisesRegex(ValueError, "another review is active"):
-            board.request_review(self.root, dev["id"], self.ledger("stuck-delivery.md"), "final review again", phase="final_acceptance",
-                                 test_command=self.qa_command(), changes="again")
-        self.assertEqual(board.snapshot(self.root)["qa_requests"][request["id"]]["status"], "claimed")
+        # Owner 2026-11-27 rule 1 ("In no way this can be blocked"): the builder's newer version replaces the open review; the old
+        # review's real failure is never counted as a pass (it is not the newest review and it is withdrawn, not passed)
+        newer = board.request_review(self.root, dev["id"], self.ledger("stuck-delivery.md"), "final review again", phase="final_acceptance",
+                                     test_command=self.qa_command(), changes="again")
+        state = board.snapshot(self.root)
+        self.assertEqual(state["qa_requests"][request["id"]]["status"], "withdrawn")
+        self.assertNotEqual(newer["id"], request["id"])
+        self.assertFalse(board.review_counts_as_passed(state, state["qa_requests"][request["id"]]))
 
 
 def load_tests(loader, tests, pattern):

@@ -81,6 +81,7 @@ def mobile_extra_writable(env: dict[str, str]) -> list[str]:
         home / "Library" / "Developer" / "Xcode" / "DerivedData",
         home / ".pub-cache",
         home / ".dart-tool",
+        home / ".dartServer",  # `flutter analyze` (Dart's analysis server); test567 2026-11-27: "Operation not permitted"
         home / ".cocoapods",
         home / "Library" / "Caches" / "CocoaPods",
     ):

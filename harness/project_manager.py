@@ -2421,6 +2421,10 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = MANAGER_PORT,
     except KeyboardInterrupt:
         pass
     finally:
+        if previous_term is not None:
+            # An update restart sends SIGTERM twice (the app's own restart and the launcher's); the second must not cut this
+            # shutdown short and leave the worker on its port (owner 2026-11-27).
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         manager.shutdown()
         server.server_close()
         if previous_term is not None:

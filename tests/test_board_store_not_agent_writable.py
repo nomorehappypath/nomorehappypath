@@ -45,13 +45,15 @@ def _real(path) -> str:
 
 
 PHONE_FOLDER_MARKS = ("flutter", "/Library/Developer/CoreSimulator", "/Library/Developer/Xcode/DerivedData", "/.pub-cache",
-                      "/.dart-tool", "/.cocoapods", "/Library/Caches/CocoaPods")
+                      "/.dart-tool", "/.dartServer", "/.cocoapods", "/Library/Caches/CocoaPods")
 
 
 def without_phone_folders(roots):
     """The grant minus the Flutter/Xcode/simulator folders every Mac launch adds (agent_confinement.phone_folders,
     owner 2026-11-27); nothing else may be added."""
-    return [root for root in roots if not any(mark in root for mark in PHONE_FOLDER_MARKS)]
+    from harness import agent_confinement   # owner 2026-11-27: the home folder and package folders are granted to every launch too
+    extra = set(agent_confinement.environment_folders())
+    return [root for root in roots if root not in extra and not any(mark in root for mark in PHONE_FOLDER_MARKS)]
 
 class GrantTests(unittest.TestCase):
     def setUp(self):
@@ -291,11 +293,13 @@ class RunnerTests(unittest.TestCase):
         if sys.platform.startswith("linux"):
             self.skipTest("on Linux every Codex launch uses the permission profile (saved-token folder denial); see the test above")
         flags = self._codex_flags(scaffold=False)
-        self.assertIn("sandbox_mode=workspace-write", flags)
-        roots = json.loads(next(f for f in flags if f.startswith("sandbox_workspace_write.writable_roots=")).split("=", 1)[1])
-        self.assertNotIn(_real(self.context.data_root), roots)
-        self.assertEqual(without_phone_folders(roots), [_real(self.context.code_root), _real(self.context.workspace_root)])
-        self.assertIn("sandbox_workspace_write.network_access=true", flags)
+        # Owner 2026-11-27 (agents may change their environment): the home folder is granted, so NMHP's own records inside it
+        # are denied through the permission profile on every launch; the data root is never writable
+        profile = next(f for f in flags if f.startswith("permissions.harness_agent.filesystem="))
+        self.assertIn(f'"{_real(self.context.code_root)}" = "write"', profile)
+        self.assertIn(f'"{_real(self.context.workspace_root)}" = "write"', profile)
+        self.assertNotIn(f'"{_real(self.context.data_root)}" = "write"', profile)
+        self.assertIn("permissions.harness_agent.network.enabled=true", flags)
 
     def test_codex_on_a_scaffolded_project_gets_a_profile_and_the_real_sandbox_refuses_the_board_store(self):
         flags = self._codex_flags(scaffold=True)
