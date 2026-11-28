@@ -20163,7 +20163,7 @@ def _release_app_openable(root: Path, state: dict[str, Any], task: str) -> bool:
         settings = workspace_settings.load(root).get("preview") or {}
         if str(settings.get("command") or "").strip():
             return True
-        if release_preview.find_app_bundle(workspace) is not None:
+        if release_preview.find_app_bundle(workspace) is not None or release_preview.phone_project(workspace):
             return True
         return bool(release_preview.detect_start(Path(workspace)))
     except OSError:
@@ -20384,7 +20384,7 @@ def record_preview_tick_failure(root: Path, message: str) -> dict[str, Any]:
         })
 
 
-PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle", "skipped"}
+PREVIEW_STATUSES = {"unconfigured", "starting", "ready", "failed", "app_bundle", "skipped", "phone", "phone_open"}
 
 
 def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> dict[str, Any]:
@@ -20399,13 +20399,13 @@ def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> di
         head_commit = str(preview.get("head_commit") or "")
         if head_commit and str(release.get("head_commit") or "") != head_commit:
             raise ValueError("the preview does not match the current release candidate")
-        if status == "ready" and _in_review_pipeline(state, task) and not _final_pass_for(state, task, str(release.get("head_commit") or "")):
+        if status in {"ready", "phone_open"} and _in_review_pipeline(state, task) and not _final_pass_for(state, task, str(release.get("head_commit") or "")):
             raise ValueError("the candidate preview cannot be offered: no valid final independent review stands on this version")
         previous = release.get("preview") or {}
         previous_status = str(previous.get("status") or "")
         if (
             previous.get("requested") == "view_app" and previous_status == "starting"
-            and status in {"unconfigured", "app_bundle", "skipped"}
+            and status in {"unconfigured", "app_bundle", "skipped", "phone"}
         ):
             # 2026-09-28 backlog #12: a supervisor pass that read the board
             # before the owner's View app click must not erase that click. Only
@@ -20416,7 +20416,7 @@ def record_release_preview(root: Path, task: str, preview: dict[str, Any]) -> di
             key: preview[key] for key in (
                 "status", "url", "command", "pid", "start_token", "head_commit",
                 "workspace", "branch", "started_at", "error", "log_tail",
-                "app_path", "app_name", "built_at", "skipped_at",
+                "app_path", "app_name", "built_at", "skipped_at", "device", "kind",
                 "requested", "requested_at", "run_yourself",
             ) if preview.get(key) is not None
         }

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import sys
 import ast
 import shlex
 import shutil
@@ -303,6 +305,7 @@ def request_view(root: Any, task: str) -> dict[str, Any]:
         "status": "starting", "requested": VIEW_APP, "requested_at": board.now(),
         "head_commit": str(release.get("head_commit") or ""),
         "workspace": str((state.get("task_workspaces") or {}).get(task) or ""), "branch": branch,
+        **({"kind": "phone"} if phone_project((state.get("task_workspaces") or {}).get(task)) else {}),
     })
     wake()
     return {"status": "starting"}
@@ -347,6 +350,75 @@ def open_app_bundle(root: Any, task: str) -> dict[str, Any]:
     if completed.returncode != 0:
         raise ValueError(f"the app could not be opened: {completed.stderr.strip()[:200]}")
     return {"opened": True, "app_path": str(app_path), "app_name": app_path.stem}
+
+
+PHONE_BUILD_SECONDS = 900
+PHONE_APP = "build/ios/iphonesimulator/Runner.app"
+
+
+def phone_project(source: Any) -> bool:
+    """Owner 2026-11-28 ("Open on iPhone"): a Flutter app with an iOS folder, on a Mac, opens on the iPhone simulator, not in a
+    browser tab."""
+    try:
+        if sys.platform != "darwin" or not str(source or "").strip():
+            return False
+        root = Path(str(source))
+        pubspec = root / "pubspec.yaml"
+        return pubspec.is_file() and (root / "ios").is_dir() and "flutter" in pubspec.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def phone_run_yourself(source: Path) -> str:
+    """The command the owner can paste into Terminal to open the same copy on the simulator himself."""
+    return f"open -a Simulator && cd {shlex.quote(str(source))} && flutter run"
+
+
+def _simulator_device(environment: dict[str, str]) -> tuple[str, str]:
+    """(id, name) of the iPhone simulator already running, else of the newest installed one."""
+    listed = subprocess.run(["xcrun", "simctl", "list", "devices", "available", "-j"],
+                            capture_output=True, text=True, timeout=60, env=environment)
+    if listed.returncode != 0:
+        raise ValueError("the iPhone simulator is not available on this Mac (Xcode's simulator tools did not answer)")
+    phones = []
+    for runtime, rows in (json.loads(listed.stdout or "{}").get("devices") or {}).items():
+        if ".iOS-" not in runtime:
+            continue
+        version = tuple(int(part) for part in runtime.rpartition(".iOS-")[2].split("-") if part.isdigit())
+        phones += [(row.get("state") == "Booted", version, row) for row in rows if str(row.get("name", "")).startswith("iPhone")]
+    if not phones:
+        raise ValueError("no iPhone simulator is installed. In Xcode open Settings, then Components, add an iOS simulator and try again.")
+    _, _, row = max(phones, key=lambda item: (item[0], item[1]))
+    return str(row["udid"]), str(row.get("name") or "iPhone")
+
+
+def open_on_iphone(source: Path, environment: dict[str, str], log_path: Path) -> str:
+    """Build the copy at `source` for the simulator, start an iPhone simulator, open its window, install and launch the app.
+    Return: the simulator's name. Raises ValueError with a plain reason."""
+    if not shutil.which("flutter", path=environment.get("PATH")):
+        raise ValueError("Flutter is not installed on this Mac (the flutter command was not found)")
+    with log_path.open("ab") as log:
+        log.write(f"\n=== open on iPhone {board.now()} | flutter build ios --simulator --debug\n".encode())
+        log.flush()
+        try:
+            built = subprocess.run(["flutter", "build", "ios", "--simulator", "--debug"], cwd=source, env=environment,
+                                   stdout=log, stderr=log, timeout=PHONE_BUILD_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"building the app for the iPhone simulator took longer than {PHONE_BUILD_SECONDS // 60} minutes") from None
+    app = source / PHONE_APP
+    if built.returncode != 0 or not app.is_dir():
+        raise ValueError("the app did not build for the iPhone simulator (the log below says why)")
+    with (app / "Info.plist").open("rb") as handle:
+        bundle_id = str(plistlib.load(handle).get("CFBundleIdentifier") or "")
+    udid, name = _simulator_device(environment)
+    subprocess.run(["xcrun", "simctl", "boot", udid], capture_output=True, text=True, timeout=180, env=environment)  # already running is fine
+    subprocess.run(["/usr/bin/open", "-a", "Simulator"], capture_output=True, text=True, timeout=60)
+    subprocess.run(["xcrun", "simctl", "terminate", udid, bundle_id], capture_output=True, text=True, timeout=60, env=environment)
+    for step in (["xcrun", "simctl", "install", udid, str(app)], ["xcrun", "simctl", "launch", udid, bundle_id]):
+        done = subprocess.run(step, capture_output=True, text=True, timeout=180, env=environment)
+        if done.returncode != 0:
+            raise ValueError(f"the app could not be opened on the {name} simulator: {done.stderr.strip()[:200]}")
+    return name
 
 
 class Preview:
@@ -693,6 +765,12 @@ class ReleasePreviewSupervisor:
                 # worker death later would orphan it invisibly.
                 preview.stop()
                 shutil.rmtree(preview.directory, ignore_errors=True)
+            if phone_project(workspace):
+                # Owner 2026-11-28: a phone app waits for "Open on iPhone"; an opened one stays recorded as opened.
+                if recorded.get("status") not in {"phone", "phone_open"} or preview is not None:
+                    self._record(task, {"status": "phone", "kind": "phone", "head_commit": head_commit, "workspace": workspace,
+                                        "branch": branch})
+                return
             bundle = find_app_bundle(workspace)
             if bundle is not None:
                 built_at = datetime.fromtimestamp(
@@ -781,6 +859,9 @@ class ReleasePreviewSupervisor:
                     project_context(self.root).code_root, preview.source,
                     list(settings.get("owner_files") or workspace_settings.DEFAULT_PREVIEW["owner_files"]),
                 )
+                if phone_project(preview.source):
+                    self._open_phone(task, preview, head_commit, workspace, branch)
+                    return
                 start = detect_start(preview.source)
                 if not start:
                     raise ValueError(
@@ -851,6 +932,23 @@ class ReleasePreviewSupervisor:
             return
         self.previews[task] = preview
         self._record(task, self._ready_value(preview, workspace, branch))
+
+    def _open_phone(self, task: str, preview: Preview, head_commit: str, workspace: str, branch: str) -> None:
+        """Owner 2026-11-28 ("Open on iPhone"): build the reviewed copy and open it on the iPhone simulator, with the owner's own
+        environment (his Flutter and Xcode), and record "phone_open" with the simulator's name, or the plain reason it failed."""
+        owner_values, _ = owner_preview_environment()
+        hide = owner_env.redactor(owner_values) if owner_values else (lambda text: text)
+        base = {"head_commit": head_commit, "workspace": workspace, "branch": branch, "requested": VIEW_APP, "kind": "phone"}
+        environment = preview_environment(os.environ, None, owner_values)
+        environment.setdefault("HOME", os.path.expanduser("~"))   # Flutter and Xcode keep their packages under the owner's home
+        try:
+            device = open_on_iphone(preview.source, environment, preview.log_path)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            self._record(task, {**base, "status": "failed", "command": "flutter build ios --simulator --debug",
+                                "error": hide(str(error)[:300]), "log_tail": hide(_log_tail(preview.log_path)),
+                                "run_yourself": phone_run_yourself(preview.source)})
+            return
+        self._record(task, {**base, "status": "phone_open", "device": device, "started_at": board.now()})
 
     def _materialize(self, preview: Preview, workspace: str) -> None:
         """Check out the exact reviewed commit without touching the workspace."""

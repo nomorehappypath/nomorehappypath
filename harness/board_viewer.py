@@ -549,21 +549,28 @@ function releasePreviewHtml(release){
   const where=preview.workspace?`<p class="preview-where"><strong>Where the delivered work is:</strong> <code>${esc(preview.workspace)}</code>${location?` <small>(${location})</small>`:''}</p>`:'';
   // Owner, 2026-11-07: decided once at delivery (record_release_ready), not recomputed here on
   // every render — a change to a non-app's workspace after release never makes the button return.
-  if(release?.app_openable===false){
+  // Owner 2026-11-28: a phone app (Flutter with an iOS folder) opens on the iPhone simulator; a release recorded before this
+  // knew phone apps said "not an app to open", so the supervisor's "phone" status wins over that older answer.
+  const phone=preview.kind==='phone';
+  if(release?.app_openable===false&&!phone){
     return `<div class="release-preview"><strong>This work is not an app to open.</strong>${where}</div>`;
   }
   const run=viewAppRuns[name];
   const starting=Boolean(run)||(preview.status==='starting'&&preview.requested==='view_app');
   const failed=!run&&preview.status==='failed';
   const notStartable=failed&&/nothing here we know how to start/.test(String(preview.error||''));
-  const tone=failed?' failed':(preview.status==='ready'||preview.status==='app_bundle')?' ready':'';
+  const tone=failed?' failed':(preview.status==='ready'||preview.status==='app_bundle'||preview.status==='phone_open')?' ready':'';
   const line=starting?viewAppStartingText(run?.started||Date.parse(preview.requested_at||'')||Date.now())
     :failed?(notStartable?`Mission Control could not find a web page to open here, and no download was kept for this release. See the note above for how to get the program.`:`The app could not start: ${esc(preview.error||'unknown reason')}`)
-    :preview.status==='ready'?'The reviewed version is running on this computer.':'';
+    :preview.status==='ready'?'The reviewed version is running on this computer.'
+    :preview.status==='phone_open'?`The reviewed version is open on the ${esc(preview.device||'iPhone')} simulator. Look at the Simulator window.`:'';
   const log=failed&&preview.log_tail?`<details class="preview-log-details"><summary>Show the log</summary><pre class="preview-log">${esc(preview.log_tail)}</pre></details>`:'';
   // Owner, 2026-09-28: when the app will not start here, the card gives the full command to run it yourself.
   const runYourself=failed&&preview.run_yourself?`<p>Or run it yourself:</p><pre class="preview-run" id="run-yourself-${id}">${esc(preview.run_yourself)}</pre><div class="actions"><button type="button" class="secondary" onclick="copyRunYourself(${task})">Copy</button><small>Paste it into Terminal and press Return.</small></div>`:'';
-  return `<div class="release-preview${tone}"><strong>See it running before you decide</strong><p>View app opens the reviewed version (<code>${esc(commit)}</code>) in a new tab, running on this computer only, with your settings.</p>${where}<div class="actions"><button type="button" class="preview-link view-app${starting?' busy':''}" id="view-app-${id}" onclick="viewApp(${task})"${starting?' disabled aria-busy="true"':''}>${starting?'<span class="spin" aria-hidden="true"></span>Starting…':'View app'}</button></div><p class="preview-hint" id="preview-hint-${id}" role="status">${line}</p>${runYourself}${log}</div>`;
+  const intro=phone?`Open on iPhone builds the reviewed version (<code>${esc(commit)}</code>) and opens it on the iPhone simulator on this computer.`
+    :`View app opens the reviewed version (<code>${esc(commit)}</code>) in a new tab, running on this computer only, with your settings.`;
+  const label=phone?'Open on iPhone':'View app';
+  return `<div class="release-preview${tone}"><strong>See it running before you decide</strong><p>${intro}</p>${where}<div class="actions"><button type="button" class="preview-link view-app${starting?' busy':''}" id="view-app-${id}" onclick="viewApp(${task},${phone})"${starting?' disabled aria-busy="true"':''}>${starting?'<span class="spin" aria-hidden="true"></span>Starting…':label}</button></div><p class="preview-hint" id="preview-hint-${id}" role="status">${line}</p>${runYourself}${log}</div>`;
 }
 async function copyRunYourself(task){
   const node=document.getElementById('run-yourself-'+task),hint=el('#preview-hint-'+CSS.escape(task));
@@ -578,23 +585,24 @@ async function releasePreviewNow(task){
   const data=await fetch(apiPath('/api/dashboard'),{cache:'no-store'}).then(response=>response.json());
   return ((data.state||{}).releases||{})[task]?.preview||{};
 }
-async function viewApp(task){
+async function viewApp(task,phone){
   if(viewAppRuns[task])return;
   const hint=()=>el('#preview-hint-'+CSS.escape(task));
   const run=viewAppRuns[task]={started:Date.now()};
-  // Opened inside the click so the browser allows it; pointed at the app once it answers.
-  const tab=window.open('about:blank','_blank');if(tab){try{tab.opener=null;}catch(error){}}
+  // Opened inside the click so the browser allows it; pointed at the app once it answers. A phone app opens on the simulator: no tab.
+  const tab=phone?null:window.open('about:blank','_blank');if(tab){try{tab.opener=null;}catch(error){}}
   try{if(tab){tab.document.title='Starting the app…';tab.document.body.innerHTML='<p style="font:16px -apple-system,system-ui,sans-serif;padding:32px">Starting the app you are reviewing…</p>';}}catch(error){}
   const timer=setInterval(()=>{const node=hint();if(node)node.textContent=viewAppStartingText(run.started);},1000);
   await refresh();
   let outcome={};
   try{
     outcome=await call('/api/releases/'+encodeURIComponent(task)+'/view-app',{});
-    // The worker gives up after its startup timeout (at most 300 s) and records why.
-    while(outcome.status==='starting'&&Date.now()-run.started<330000){
+    // The worker gives up after its startup timeout (at most 300 s) and records why; a phone build may take up to 15 minutes.
+    while(outcome.status==='starting'&&Date.now()-run.started<(phone?930000:330000)){
       await new Promise(resolve=>setTimeout(resolve,1000));
       const preview=await releasePreviewNow(task);
       if(preview.status==='ready'&&preview.url)outcome={status:'ready',url:preview.url};
+      else if(preview.status==='phone_open')outcome={status:'phone_open',device:preview.device};
       else if(preview.status==='failed')outcome={status:'failed'};
     }
   }catch(error){outcome={status:'error',error:error.message};}
@@ -602,7 +610,7 @@ async function viewApp(task){
   delete viewAppRuns[task];
   if(outcome.status==='ready'){
     if(tab&&!tab.closed)tab.location.href=outcome.url;else window.open(outcome.url,'_blank','noopener');
-  }else if(outcome.status==='opened'){if(tab&&!tab.closed)tab.close();}
+  }else if(outcome.status==='opened'||outcome.status==='phone_open'){if(tab&&!tab.closed)tab.close();}
   else if(tab&&!tab.closed){
     // Owner, 2026-10-02: never a window that opens empty and vanishes - it says why.
     let reason=outcome.error||'';
@@ -615,6 +623,7 @@ async function viewApp(task){
   const node=hint();
   if(!node)return;
   if(outcome.status==='opened')node.textContent=`${outcome.app_name||'The app'} is opening on your screen.`;
+  else if(outcome.status==='phone_open')node.textContent=`The reviewed version is open on the ${outcome.device||'iPhone'} simulator. Look at the Simulator window.`;
   else if(outcome.status==='error')node.textContent='The app could not start: '+outcome.error;
   else if(outcome.status==='starting')node.textContent='The app is still starting. Click View app again in a moment.';
 }
