@@ -101,7 +101,7 @@ class OpenOnIphone(unittest.TestCase):
         self.assertIn('iPhone simulator', seen['before']['text'])
 
     def test_a_release_recorded_before_phone_apps_were_known_gets_the_button_too(self):
-        # test567's release was recorded "not an app to open" by the older version.
+        # A release an older version recorded as "not an app to open".
         self.deliver()
         with board.locked_state(self.root) as state:
             state['releases']['TASK']['app_openable'] = False
